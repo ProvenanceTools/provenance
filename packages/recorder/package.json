@@ -2,7 +2,7 @@
   "name": "provenance-recorder",
   "displayName": "Provenance Recorder",
   "description": "Academic integrity telemetry for course assignments.",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "icon": "icon.png",
   "private": true,
   "publisher": "itsgeagle",
