@@ -9,7 +9,8 @@
  * - Student (sid + display_name)
  * - Assignment (assignment_id_str + label)
  * - Score (score_total) + max severity badge
- * - Flag counts (badges by severity)
+ * - Flag counts (badges by severity; click opens that severity's flags)
+ * - Active / Idle time (60s event-gap; em dash if not yet computed)
  * - Top flags (up to 3 heuristic ids)
  * - Validation status
  * - Ingested at (relative time)
@@ -19,7 +20,7 @@
  * Load more: explicit "Load more" button when next_cursor is non-null.
  */
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   createColumnHelper,
   flexRender,
@@ -27,13 +28,23 @@ import {
   useReactTable,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { useQuery } from '@tanstack/react-query';
 import { formatDistanceToNow } from 'date-fns';
 import { Link } from 'react-router-dom';
-import type { SubmissionRow } from '@provenance/shared/api-schemas';
+import { z } from 'zod';
+import { FlagRowSchema, type SubmissionRow } from '@provenance/shared/api-schemas';
 import type { CohortSort } from '../../api/queries.js';
+import { apiFetch } from '../../api/client.js';
 import { useActiveSemester } from '../../api/use-active-semester.js';
 import { RowLink } from '../../components/a11y/RowLink.js';
 import { SortableHeader, type SortDirection } from '../../components/a11y/SortableHeader.js';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../../components/ui/dropdown-menu.js';
+import { formatDuration } from '../../lib/format.js';
 
 // ---------------------------------------------------------------------------
 // Severity helpers
@@ -46,14 +57,90 @@ const SEV_COLOR: Record<string, string> = {
   info: 'bg-gray-100 text-gray-700',
 };
 
-function SeverityBadge({ sev, count }: { sev: string; count: number }) {
+const FlagListResponseSchema = z.object({ flags: z.array(FlagRowSchema) });
+
+type SeverityKey = 'high' | 'medium' | 'low' | 'info';
+
+function flagLabel(heuristicId: string, title: string | undefined): string {
+  if (title !== undefined && title.length > 0) return title;
+  return heuristicId.replace(/_/g, ' ');
+}
+
+export function FlagCountBadge({
+  submissionId,
+  sev,
+  count,
+  basePath,
+  defaultOpen = false,
+}: {
+  submissionId: string;
+  sev: SeverityKey;
+  count: number;
+  basePath: string;
+  /** Test-only: Radix menus don't open from fireEvent.click in jsdom. */
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const query = useQuery({
+    queryKey: ['submission', submissionId, 'flags'],
+    queryFn: async () => {
+      const resp = await apiFetch(
+        `/submissions/${submissionId}/flags`,
+        undefined,
+        FlagListResponseSchema,
+      );
+      return resp.flags;
+    },
+    enabled: open,
+    staleTime: 30 * 1000,
+  });
+
   if (count === 0) return null;
+
+  const matching = (query.data ?? []).filter((f) => f.severity === sev);
+
   return (
-    <span
-      className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${SEV_COLOR[sev] ?? SEV_COLOR['info']}`}
-    >
-      {count}
-    </span>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${SEV_COLOR[sev] ?? SEV_COLOR['info']}`}
+          data-testid={`flag-count-${sev}-${submissionId}`}
+          aria-label={`${count} ${sev} flags`}
+        >
+          {count}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-64 min-w-[12rem] overflow-auto">
+        {query.isPending && (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">Loading…</div>
+        )}
+        {query.isError && (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">Couldn't load flags</div>
+        )}
+        {query.isSuccess && matching.length === 0 && (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">No flags</div>
+        )}
+        {query.isSuccess &&
+          matching.map((f) => {
+            const label = flagLabel(f.heuristic_id, f.title);
+            if (!basePath) {
+              return (
+                <DropdownMenuItem key={f.id} disabled>
+                  {label}
+                </DropdownMenuItem>
+              );
+            }
+            return (
+              <DropdownMenuItem key={f.id} asChild>
+                <Link to={`${basePath}/sub/${submissionId}?tab=overview&flag=${f.heuristic_id}`}>
+                  {label}
+                </Link>
+              </DropdownMenuItem>
+            );
+          })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -234,13 +321,64 @@ export function CohortTable({
         header: 'Flags',
         cell: (info) => {
           const fc = info.getValue();
+          const submissionId = info.row.original.id;
           return (
             <div className="flex items-center gap-1">
-              <SeverityBadge sev="high" count={fc.high} />
-              <SeverityBadge sev="medium" count={fc.medium} />
-              <SeverityBadge sev="low" count={fc.low} />
-              <SeverityBadge sev="info" count={fc.info} />
+              <FlagCountBadge
+                submissionId={submissionId}
+                sev="high"
+                count={fc.high}
+                basePath={basePath}
+              />
+              <FlagCountBadge
+                submissionId={submissionId}
+                sev="medium"
+                count={fc.medium}
+                basePath={basePath}
+              />
+              <FlagCountBadge
+                submissionId={submissionId}
+                sev="low"
+                count={fc.low}
+                basePath={basePath}
+              />
+              <FlagCountBadge
+                submissionId={submissionId}
+                sev="info"
+                count={fc.info}
+                basePath={basePath}
+              />
             </div>
+          );
+        },
+      }),
+      ch.accessor('total_active_ms', {
+        id: 'active',
+        header: () => <span title="Gaps under 60s between events">Active</span>,
+        cell: (info) => {
+          const ms = info.getValue();
+          return (
+            <span
+              className="text-xs tabular-nums text-gray-700"
+              data-testid={`active-time-${info.row.original.id}`}
+            >
+              {ms === null ? '—' : formatDuration(ms)}
+            </span>
+          );
+        },
+      }),
+      ch.accessor('total_idle_ms', {
+        id: 'idle',
+        header: () => <span title="Gaps of 60s or more">Idle</span>,
+        cell: (info) => {
+          const ms = info.getValue();
+          return (
+            <span
+              className="text-xs tabular-nums text-gray-700"
+              data-testid={`idle-time-${info.row.original.id}`}
+            >
+              {ms === null ? '—' : formatDuration(ms)}
+            </span>
           );
         },
       }),

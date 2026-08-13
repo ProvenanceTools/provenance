@@ -466,6 +466,10 @@ export const submissions = pgTable(
     top_flags: jsonb('top_flags')
       .notNull()
       .default(sql`'[]'::jsonb`),
+    // Bundle-level active/idle (60s event-gap), written by computeAndStoreStats.
+    // NULL = not yet written (pre-0021 rows); analyzer shows an em dash.
+    total_active_ms: bigint('total_active_ms', { mode: 'number' }),
+    total_idle_ms: bigint('total_idle_ms', { mode: 'number' }),
     severity_rank: smallint('severity_rank')
       .notNull()
       .generatedAlwaysAs(

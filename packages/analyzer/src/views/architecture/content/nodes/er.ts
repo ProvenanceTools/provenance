@@ -109,7 +109,7 @@ export const nodes: Record<string, ArchNode> = {
   // ── Submissions ───────────────────────────────────────────────────────────
   submissions: {
     title: 'submissions',
-    body: 'A resubmission never overwrites anything. version_index is allocated as the current maximum plus one under a FOR UPDATE lock over the existing (semester, assignment, student) rows, it is part of the unique key, and the older rows have superseded_by_submission_id pointed at the new one. Every attempt therefore stays queryable, and the cohort list simply filters superseded_by_submission_id IS NULL, which is exactly the predicate on the partial index that serves it. That self-reference is the one FK Drizzle cannot declare (the table is not built yet at declaration time), so it lives in the migration, ON DELETE SET NULL.\n\nblob_sha256 is the hash of the bundle as the student submitted it, before source stripping, not of the object actually sitting at blob_object_key. It is the dedup key, it is the stable identity of what was handed in, and loadSubmissionIndex borrows it only as a cache key.\n\nThree columns exist purely so the cohort list can be a single query. flag_counts and top_flags are jsonb denormalizations that the heuristic write path keeps in step with score_total, and severity_rank is GENERATED ALWAYS from score_max_severity (the application never writes it), so "medium and above" is a range predicate on an indexed integer instead of an OR across strings. At fifty thousand submissions the two correlated sub-queries these replaced were the p95.',
+    body: 'A resubmission never overwrites anything. version_index is allocated as the current maximum plus one under a FOR UPDATE lock over the existing (semester, assignment, student) rows, it is part of the unique key, and the older rows have superseded_by_submission_id pointed at the new one. Every attempt therefore stays queryable, and the cohort list simply filters superseded_by_submission_id IS NULL, which is exactly the predicate on the partial index that serves it. That self-reference is the one FK Drizzle cannot declare (the table is not built yet at declaration time), so it lives in the migration, ON DELETE SET NULL.\n\nblob_sha256 is the hash of the bundle as the student submitted it, before source stripping, not of the object actually sitting at blob_object_key. It is the dedup key, it is the stable identity of what was handed in, and loadSubmissionIndex borrows it only as a cache key.\n\nThe columns that exist purely so the cohort list can be a single query are flag_counts and top_flags (jsonb denormalizations that the heuristic write path keeps in step with score_total), severity_rank (GENERATED ALWAYS from score_max_severity, so "medium and above" is a range predicate on an indexed integer instead of an OR across strings), and total_active_ms / total_idle_ms (the 60s event-gap Active/Idle pair computeStats already produced, written by computeAndStoreStats at ingest and recompute). Those two time columns are nullable: pre-0021 rows stay NULL until the next ingest or heuristics recompute, and the analyzer renders an em dash. At fifty thousand submissions the two correlated sub-queries the flag columns replaced were the p95.',
     invariant:
       'version_index is allocated under a row lock. The (semester, assignment, student, version) key means a resubmission adds a row; it never replaces one.',
     links: [
@@ -120,6 +120,10 @@ export const nodes: Record<string, ArchNode> = {
       {
         label: '0014_submissions_denormalized_flags.sql',
         href: `${GH}/packages/server/db/migrations/0014_submissions_denormalized_flags.sql`,
+      },
+      {
+        label: '0021_submissions_active_idle_ms.sql',
+        href: `${GH}/packages/server/db/migrations/0021_submissions_active_idle_ms.sql`,
       },
     ],
   },

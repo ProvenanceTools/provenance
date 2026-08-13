@@ -141,6 +141,14 @@ describe('payloadSummary', () => {
     expect(payloadSummary(event)).toBe('python hw1.py');
   });
 
+  it('terminal.command: appends exit code when present', () => {
+    const event = makeEvent({
+      kind: 'terminal.command',
+      payload: { terminal_id: 'term-1', command: 'python hw1.py', exit_code: 0 },
+    });
+    expect(payloadSummary(event)).toBe('python hw1.py · exit 0');
+  });
+
   it('terminal.command: truncates long commands at 60 chars', () => {
     const cmd = 'python ' + 'x'.repeat(70);
     const event = makeEvent({

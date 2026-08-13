@@ -331,6 +331,8 @@ export const components = {
         'score_max_severity',
         'flag_counts',
         'top_flags',
+        'total_active_ms',
+        'total_idle_ms',
         'validation_status',
         'ingested_at',
         'recorder_version',
@@ -368,6 +370,18 @@ export const components = {
               severity: { $ref: '#/components/schemas/Severity' },
             },
           },
+        },
+        total_active_ms: {
+          type: 'integer',
+          nullable: true,
+          description:
+            'Bundle-level active milliseconds (gaps under 60s). Null until ingest/recompute writes it.',
+        },
+        total_idle_ms: {
+          type: 'integer',
+          nullable: true,
+          description:
+            'Bundle-level idle milliseconds (gaps of 60s or more). Null until ingest/recompute writes it.',
         },
         validation_status: { $ref: '#/components/schemas/ValidationStatus' },
         ingested_at: { $ref: '#/components/schemas/ISODate' },

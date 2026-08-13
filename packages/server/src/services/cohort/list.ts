@@ -72,6 +72,8 @@ export type SubmissionRow = {
   score_max_severity: Severity;
   flag_counts: { info: number; low: number; medium: number; high: number };
   top_flags: { heuristic_id: string; severity: Severity }[];
+  total_active_ms: number | null;
+  total_idle_ms: number | null;
   validation_status: string;
   ingested_at: string;
   recorder_version: string;
@@ -284,6 +286,8 @@ export async function listCohortSubmissions(
       score_max_severity: submissions.score_max_severity,
       flag_counts: submissions.flag_counts,
       top_flags: submissions.top_flags,
+      total_active_ms: submissions.total_active_ms,
+      total_idle_ms: submissions.total_idle_ms,
       validation_status: submissions.validation_status,
       ingested_at: submissions.ingested_at,
       recorder_version: submissions.recorder_version,
@@ -339,6 +343,8 @@ export async function listCohortSubmissions(
     score_max_severity: row.score_max_severity as Severity,
     flag_counts: row.flag_counts as { info: number; low: number; medium: number; high: number },
     top_flags: row.top_flags as { heuristic_id: string; severity: Severity }[],
+    total_active_ms: row.total_active_ms,
+    total_idle_ms: row.total_idle_ms,
     validation_status: row.validation_status,
     ingested_at: row.ingested_at.toISOString(),
     recorder_version: row.recorder_version,

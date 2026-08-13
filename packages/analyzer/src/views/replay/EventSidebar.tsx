@@ -6,8 +6,8 @@
  *
  * Design:
  *   - Uses @tanstack/react-virtual (already a dep from Phase 7's EventList).
- *   - Row format is a one-liner: `#seq kind file? summary` — narrower than
- *     the full timeline EventList (which has wall time + session chip).
+ *   - Row format is a one-liner: `#seq wall kind file? terminal-summary?` —
+ *     narrower than the full timeline EventList (which also has a session chip).
  *   - Auto-scroll: when `currentGlobalIdx` changes, scroll to that index with
  *     align='center'. We track the last auto-scrolled index to avoid fighting
  *     the user's manual scroll (only re-scroll if the current event has moved).
@@ -21,13 +21,14 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { cn } from '@/lib/utils';
 import type { IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import type { EventKind } from '@provenance/log-core';
+import { formatWall, summarizeTerminalCommand } from '@/lib/format.js';
 import { formatGap, type Seam } from './bundle-clock.js';
 
 // ---------------------------------------------------------------------------
-// Row height (narrower than EventList; 30px)
+// Row height (narrower than EventList; 36px to fit wall + optional summary)
 // ---------------------------------------------------------------------------
 
-const ROW_HEIGHT = 30;
+const ROW_HEIGHT = 36;
 
 /** Seam dividers are taller — they carry a label and the offline duration. */
 const SEAM_ROW_HEIGHT = 44;
@@ -101,8 +102,19 @@ interface SidebarRowProps {
   style: React.CSSProperties;
 }
 
+function terminalSummary(event: IndexedEvent): { text: string; title: string } | null {
+  if (event.kind !== 'terminal.command') return null;
+  const payload = event.payload as Record<string, unknown> | null;
+  const text = summarizeTerminalCommand(payload);
+  if (!text) return null;
+  const command =
+    payload !== null && typeof payload['command'] === 'string' ? payload['command'] : text;
+  return { text, title: command };
+}
+
 function SidebarRow({ event, isCurrent, onSeek, style }: SidebarRowProps) {
   const filePart = event.file ? (event.file.split('/').pop() ?? event.file) : '';
+  const term = terminalSummary(event);
 
   return (
     <div
@@ -127,6 +139,11 @@ function SidebarRow({ event, isCurrent, onSeek, style }: SidebarRowProps) {
       {/* seq */}
       <span className="w-10 shrink-0 font-mono text-muted-foreground">#{event.seq}</span>
 
+      {/* wall time */}
+      <span className="w-[72px] shrink-0 font-mono text-[10px] text-muted-foreground">
+        {formatWall(event.wall)}
+      </span>
+
       {/* kind chip */}
       <SidebarKindChip event={event} />
 
@@ -134,6 +151,12 @@ function SidebarRow({ event, isCurrent, onSeek, style }: SidebarRowProps) {
       {filePart && (
         <span className="min-w-0 truncate font-mono text-muted-foreground" title={event.file}>
           {filePart}
+        </span>
+      )}
+
+      {term && (
+        <span className="min-w-0 truncate text-foreground/80" title={term.title}>
+          {term.text}
         </span>
       )}
     </div>

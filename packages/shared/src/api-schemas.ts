@@ -127,6 +127,12 @@ export const SubmissionRowSchema = z.object({
       severity: SeveritySchema,
     }),
   ),
+  /**
+   * Bundle-level active/idle milliseconds (60s event-gap). Null until the
+   * next ingest or heuristics recompute writes them (pre-0021 rows).
+   */
+  total_active_ms: z.number().int().nullable(),
+  total_idle_ms: z.number().int().nullable(),
   validation_status: z.string().nullable(),
   ingested_at: z.string().datetime(),
   recorder_version: z.string().nullable(),

@@ -16,6 +16,7 @@ import { buildSubmissionParams, buildQueryString } from '../../api/queries.js';
 import type { CohortSort } from '../../api/queries.js';
 import type { CohortFilters } from './use-cohort-filters.js';
 import { CohortListResponseSchema, type SubmissionRow } from '@provenance/shared/api-schemas';
+import { formatDuration } from '../../lib/format.js';
 
 const PAGE_LIMIT = 200;
 const MAX_EXPORT_ROWS = 10_000;
@@ -44,6 +45,8 @@ function buildCsv(rows: SubmissionRow[]): string {
     'flags_low',
     'flags_info',
     'top_flags',
+    'active_time',
+    'idle_time',
     'validation_status',
     'ingested_at',
     'recompute_status',
@@ -66,6 +69,8 @@ function buildCsv(rows: SubmissionRow[]): string {
       String(row.flag_counts.low),
       String(row.flag_counts.info),
       topFlagsStr,
+      row.total_active_ms === null ? '' : formatDuration(row.total_active_ms),
+      row.total_idle_ms === null ? '' : formatDuration(row.total_idle_ms),
       row.validation_status ?? '',
       row.ingested_at,
       row.recompute_status,

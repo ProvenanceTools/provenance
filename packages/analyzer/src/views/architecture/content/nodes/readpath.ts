@@ -6,12 +6,16 @@ export const nodes: Record<string, ArchNode> = {
   // ── What the staff member clicked ─────────────────────────────────────────
   r_cohort: {
     title: 'Cohort list',
-    body: 'The one screen that must never touch a bundle. It is a semester’s submissions ranked by score, and it is answered entirely from denormalized columns on the submissions row (flag_counts and top_flags as jsonb, severity_rank as a generated integer), so a page needs no join to flags and no parse of any blob.\n\nThat denormalization exists because it once did the opposite. At fifty thousand rows the per-page flag aggregation and the top-flags window function were the p95; folding their results onto the submission row at write time turned the list back into a single indexed query with keyset pagination, so deep pages stay as cheap as the first.',
+    body: 'The one screen that must never touch a bundle. It is a semester’s submissions ranked by score, and it is answered entirely from denormalized columns on the submissions row (flag_counts and top_flags as jsonb, severity_rank as a generated integer, total_active_ms and total_idle_ms as nullable bigints), so a page needs no join to flags and no parse of any blob.\n\nThat denormalization exists because it once did the opposite. At fifty thousand rows the per-page flag aggregation and the top-flags window function were the p95; folding their results onto the submission row at write time turned the list back into a single indexed query with keyset pagination, so deep pages stay as cheap as the first. Active/Idle follow the same rule: computeStats already had the numbers at ingest, and writing them onto the row is what lets the list show them without opening a bundle. NULL means not yet written; the UI shows an em dash until the next ingest or recompute.',
     links: [
       { label: 'cohort/list.ts', href: `${GH}/packages/server/src/services/cohort/list.ts` },
       {
         label: '0014_submissions_denormalized_flags.sql',
         href: `${GH}/packages/server/db/migrations/0014_submissions_denormalized_flags.sql`,
+      },
+      {
+        label: '0021_submissions_active_idle_ms.sql',
+        href: `${GH}/packages/server/db/migrations/0021_submissions_active_idle_ms.sql`,
       },
     ],
   },

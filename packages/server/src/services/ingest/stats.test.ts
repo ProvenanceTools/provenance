@@ -90,6 +90,57 @@ function makeTwoFileBundle(): Bundle {
   };
 }
 
+/**
+ * Bundle with events but no file-associated kinds — computeStats.perFile is
+ * empty, but active/idle are still defined from the wall-clock gaps.
+ */
+function makeNoFileBundle(): Bundle {
+  const wallBase = 1_700_000_000_000;
+  const sessionId = 'session-0';
+  const allEvents = [
+    {
+      seq: 0,
+      t: 0,
+      wall: new Date(wallBase).toISOString(),
+      kind: 'session.start' as const,
+      data: { session_id: sessionId } as unknown as ParsedSession['events'][number]['data'],
+      prev_hash: 'GENESIS',
+      hash: 'h-0',
+    },
+    {
+      seq: 1,
+      t: 10_000,
+      wall: new Date(wallBase + 10_000).toISOString(),
+      kind: 'session.end' as const,
+      data: { reason: 'closed' } as unknown as ParsedSession['events'][number]['data'],
+      prev_hash: 'h-0',
+      hash: 'h-1',
+    },
+  ];
+
+  const sessions: ParsedSession[] = [
+    {
+      sessionId,
+      events: allEvents,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: synthetic test
+      meta: {} as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: synthetic test
+      firstEvent: allEvents[0] as any,
+    },
+  ];
+
+  return {
+    id: crypto.randomUUID(),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: synthetic test
+    manifest: {} as any,
+    manifestSigHex: '',
+    sessions,
+    sourceFilename: 'test.zip',
+    loadedAt: new Date().toISOString(),
+    submissionFiles: new Map(),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -151,6 +202,56 @@ describe('computeAndStoreStats', () => {
       await computeAndStoreStats(db, submissionId, bundle);
 
       await db.delete(submissions).where(eq(submissions.id, submissionId));
+
+      const cntResult = await db
+        .select({ cnt: count() })
+        .from(per_file_stats)
+        .where(eq(per_file_stats.submission_id, submissionId));
+      expect(cntResult[0]!.cnt).toBe(0);
+    });
+  });
+
+  it('writes total_active_ms and total_idle_ms onto the submission row', async () => {
+    await withTestDb(async (db) => {
+      const submissionId = await seedSubmission(db);
+      const bundle = makeTwoFileBundle();
+      await computeAndStoreStats(db, submissionId, bundle);
+
+      const index = buildIndex(bundle);
+      const expected = computeStats(index);
+
+      const [row] = await db
+        .select({
+          total_active_ms: submissions.total_active_ms,
+          total_idle_ms: submissions.total_idle_ms,
+        })
+        .from(submissions)
+        .where(eq(submissions.id, submissionId));
+      expect(row!.total_active_ms).toBe(expected.totalActiveMs);
+      expect(row!.total_idle_ms).toBe(expected.totalIdleMs);
+    });
+  });
+
+  it('writes times even when the bundle has events but no files', async () => {
+    await withTestDb(async (db) => {
+      const submissionId = await seedSubmission(db);
+      const bundle = makeNoFileBundle();
+      await computeAndStoreStats(db, submissionId, bundle);
+
+      const index = buildIndex(bundle);
+      const expected = computeStats(index);
+
+      const [row] = await db
+        .select({
+          total_active_ms: submissions.total_active_ms,
+          total_idle_ms: submissions.total_idle_ms,
+        })
+        .from(submissions)
+        .where(eq(submissions.id, submissionId));
+      expect(row!.total_active_ms).toBe(expected.totalActiveMs);
+      expect(row!.total_idle_ms).toBe(expected.totalIdleMs);
+      expect(row!.total_active_ms).not.toBeNull();
+      expect(row!.total_idle_ms).not.toBeNull();
 
       const cntResult = await db
         .select({ cnt: count() })

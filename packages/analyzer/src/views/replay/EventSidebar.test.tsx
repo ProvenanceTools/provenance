@@ -13,6 +13,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { EventSidebar } from './EventSidebar.js';
+import { formatWall } from '@/lib/format.js';
 import type { IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import type { Seam } from './bundle-clock.js';
 
@@ -242,5 +243,62 @@ describe('EventSidebar — session seams', () => {
     );
     fireEvent.click(screen.getByTestId('sidebar-row-2'));
     expect(onSeek).toHaveBeenCalledWith(2);
+  });
+});
+
+describe('EventSidebar — wall time and terminal summary', () => {
+  it('renders wall time on each event row', async () => {
+    render(<EventSidebar events={THREE_EVENTS} currentGlobalIdx={-1} onSeek={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-row-0')).toHaveTextContent(
+        formatWall('2026-01-01T00:00:00.000Z'),
+      );
+    });
+  });
+
+  it('renders an em dash for unparseable wall', async () => {
+    const events = [{ ...THREE_EVENTS[0]!, wall: 'not-a-date', globalIdx: 0, seq: 0 }];
+    render(<EventSidebar events={events} currentGlobalIdx={-1} onSeek={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-row-0')).toHaveTextContent('—');
+    });
+  });
+
+  it('shows command and exit code on terminal.command rows', async () => {
+    const events: IndexedEvent[] = [
+      {
+        sessionId: 'sess1',
+        seq: 0,
+        globalIdx: 0,
+        t: 0,
+        wall: '2026-01-01T00:00:00.000Z',
+        kind: 'terminal.command',
+        payload: { terminal_id: 't1', command: 'python hw.py', exit_code: 0 },
+      },
+    ];
+    render(<EventSidebar events={events} currentGlobalIdx={-1} onSeek={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-row-0')).toHaveTextContent('python hw.py · exit 0');
+    });
+  });
+
+  it('omits exit when exit_code is absent', async () => {
+    const events: IndexedEvent[] = [
+      {
+        sessionId: 'sess1',
+        seq: 0,
+        globalIdx: 0,
+        t: 0,
+        wall: '2026-01-01T00:00:00.000Z',
+        kind: 'terminal.command',
+        payload: { terminal_id: 't1', command: 'python hw.py' },
+      },
+    ];
+    render(<EventSidebar events={events} currentGlobalIdx={-1} onSeek={vi.fn()} />);
+    await waitFor(() => {
+      const row = screen.getByTestId('sidebar-row-0');
+      expect(row).toHaveTextContent('python hw.py');
+      expect(row).not.toHaveTextContent('exit');
+    });
   });
 });

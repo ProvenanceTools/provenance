@@ -18,8 +18,8 @@ import { computeStats } from '@provenance/analysis-core/index/stats.js';
 import { reconstructFileWithProvenance } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
 import type { Bundle } from '@provenance/analysis-core/loader/types.js';
 import type { EventIndex, IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
-import { per_file_stats } from '../../db/schema.js';
-import { sql } from 'drizzle-orm';
+import { per_file_stats, submissions } from '../../db/schema.js';
+import { eq, sql } from 'drizzle-orm';
 import type { DrizzleDb } from '../../db/client.js';
 
 function startLengthForFile(events: IndexedEvent[] | undefined): number {
@@ -42,6 +42,17 @@ export async function computeAndStoreStats(
   index: EventIndex = buildIndex(bundle),
 ): Promise<void> {
   const bundleStats = computeStats(index);
+
+  // Always persist bundle-level times, even when there are no per-file rows
+  // (a session with events but no file activity still has Active/Idle).
+  await db
+    .update(submissions)
+    .set({
+      total_active_ms: bundleStats.totalActiveMs,
+      total_idle_ms: bundleStats.totalIdleMs,
+    })
+    .where(eq(submissions.id, submissionId));
+
   if (bundleStats.perFile.size === 0) return;
 
   const rows = Array.from(bundleStats.perFile.values()).map((fs) => {

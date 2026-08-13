@@ -169,6 +169,8 @@ export function makeSubmissionRow(overrides: Partial<SubmissionRow> = {}): Submi
     score_max_severity: 'medium',
     flag_counts: { info: 1, low: 2, medium: 1, high: 0 },
     top_flags: [{ heuristic_id: 'large_paste', severity: 'medium' }],
+    total_active_ms: null,
+    total_idle_ms: null,
     validation_status: 'pass',
     ingested_at: '2025-01-10T12:00:00.000Z',
     recorder_version: '1.2.0',

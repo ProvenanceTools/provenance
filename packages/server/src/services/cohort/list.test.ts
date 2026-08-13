@@ -318,6 +318,9 @@ describe('listCohortSubmissions — protected mode', () => {
 
       const res = await listCohortSubmissions(db, semester.id, {}, 'score_desc', null, 50, false);
       expect(res.items.map((i) => i.student.display_name)).toContain('Zara');
+      // Pre-0021 / not-yet-computed rows stay null until ingest or recompute.
+      expect(res.items[0]!.total_active_ms).toBeNull();
+      expect(res.items[0]!.total_idle_ms).toBeNull();
     });
   });
 

@@ -13,6 +13,7 @@
 import { useRef, useEffect, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { cn } from '@/lib/utils';
+import { formatWall, summarizeTerminalCommand } from '@/lib/format.js';
 import type { IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import type { EventKind } from '@provenance/log-core';
 
@@ -88,10 +89,8 @@ export function payloadSummary(event: IndexedEvent): string {
       const summary = `${oldHash}… → ${newHash}… (diff_size ${diffSize})`;
       return snippet ? `${summary}: ${snippet}${head.length > 40 ? '…' : ''}` : summary;
     }
-    case 'terminal.command': {
-      const cmd = typeof p['command'] === 'string' ? p['command'] : '';
-      return cmd.length > 60 ? cmd.slice(0, 60) + '…' : cmd;
-    }
+    case 'terminal.command':
+      return summarizeTerminalCommand(p);
     case 'session.start': {
       const sid = typeof p['session_id'] === 'string' ? p['session_id'].slice(0, 8) : '';
       return sid ? `session ${sid}…` : '';
@@ -186,24 +185,6 @@ function KindChip({ event }: { event: IndexedEvent }) {
       {label}
     </span>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Wall time formatter
-// ---------------------------------------------------------------------------
-
-function formatWall(wall: string): string {
-  try {
-    const d = new Date(wall);
-    // HH:MM:SS.mmm local time
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    const ss = String(d.getSeconds()).padStart(2, '0');
-    const ms = String(d.getMilliseconds()).padStart(3, '0');
-    return `${hh}:${mm}:${ss}.${ms}`;
-  } catch {
-    return wall.slice(0, 12);
-  }
 }
 
 // ---------------------------------------------------------------------------
