@@ -25,7 +25,9 @@ import { eq, count } from 'drizzle-orm';
 import { withTestDb } from '../../../test/helpers/db.js';
 import { seedSubmission } from '../../../test/helpers/seed-submission.js';
 import { runAndStoreHeuristics } from './run-per-submission.js';
-import { flags, submissions } from '../../db/schema.js';
+import { resolvePerFlag } from './config.js';
+import type { ServerHeuristicConfig } from './config.js';
+import { flags, submissions, heuristic_configs, users } from '../../db/schema.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { loadBundle } from '@provenance/analysis-core/loader/parse-bundle.js';
 import { runValidation } from '@provenance/analysis-core/validation/run-validation.js';
@@ -259,6 +261,105 @@ describe('runAndStoreHeuristics', () => {
         .where(eq(submissions.id, submissionId));
       expect(subResult[0]!.score_total).toBe(0);
       expect(subResult[0]!.score_max_severity).toBe('info');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Missing per_flag entry — ingest side of the ingest/recompute parity rule.
+  //
+  // Mirrors services/scoring/recompute-submission.test.ts. A stored config that
+  // predates a flag id (every production row backfilled by migration 0010
+  // predated `inter_session_external_change` and `submitted_code_match`) must
+  // score that flag as enabled at weight 1.0, exactly as a recompute now does.
+  // -------------------------------------------------------------------------
+  it('missing per_flag entry → flag is stored, enabled at weight 1.0', async () => {
+    await withTestDb(async (db) => {
+      const submissionId = await seedSubmission(db);
+
+      const subRows = await db
+        .select({ semester_id: submissions.semester_id })
+        .from(submissions)
+        .where(eq(submissions.id, submissionId));
+      const semesterId = subRows[0]!.semester_id;
+
+      const uid = crypto.randomUUID();
+      const [author] = await db
+        .insert(users)
+        .values({
+          google_subject: `sub-cfg-${uid}`,
+          email: `cfg-${uid}@test.com`,
+          display_name: 'Cfg Author',
+        })
+        .returning();
+
+      // An active config with NO entry for large_paste at all — the shape a row
+      // written before that heuristic shipped would have. gap_in_heartbeats is
+      // explicitly disabled so the same config also proves the opposite verdict
+      // is still honoured.
+      const storedConfig: ServerHeuristicConfig = {
+        per_flag: {
+          gap_in_heartbeats: { enabled: false, weight: 1.0 },
+          extension_hash_mismatch: { enabled: true, weight: 1.0 },
+        },
+        severity_weights: { info: 0, low: 1, medium: 3, high: 8 },
+        config_format_version: 1,
+      };
+
+      await db.insert(heuristic_configs).values({
+        semester_id: semesterId,
+        version: 1,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: jsonb accepts a JSON-serializable value
+        config: storedConfig as any,
+        set_by: author!.id,
+        is_active: true,
+        note: 'config predating large_paste',
+      });
+
+      const pasteContent = 'x'.repeat(250);
+      const bundle = await makeBundle({
+        sessions: [
+          {
+            events: [
+              {
+                kind: 'paste',
+                data: {
+                  path: '/test/hw1.py',
+                  content: pasteContent,
+                  length: pasteContent.length,
+                  range: {
+                    start: { line: 0, character: 0 },
+                    end: { line: 0, character: 0 },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      });
+      const validationReport = await runValidation(bundle);
+
+      await runAndStoreHeuristics(db, submissionId, semesterId, bundle, validationReport);
+
+      const rows = await db.select().from(flags).where(eq(flags.submission_id, submissionId));
+
+      // Before the fix this test would have passed on the ingest side and
+      // failed on the recompute side — that asymmetry IS the bug. Pinning it
+      // here keeps the two ends from drifting again.
+      const lpFlag = rows.find((f) => f.heuristic_id === 'large_paste');
+      expect(lpFlag).toBeDefined();
+      expect(lpFlag!.weight_at_compute).toBe(1.0);
+      expect(lpFlag!.score_contribution).toBeCloseTo(2.4);
+
+      // Explicit enabled:false is still respected.
+      expect(rows.some((f) => f.heuristic_id === 'gap_in_heartbeats')).toBe(false);
+
+      // Every stored row's verdict matches resolvePerFlag — the same function
+      // the recompute path consults.
+      for (const row of rows) {
+        const resolved = resolvePerFlag(storedConfig, row.heuristic_id);
+        expect(resolved.enabled).toBe(true);
+        expect(row.weight_at_compute).toBe(resolved.weight);
+      }
     });
   });
 

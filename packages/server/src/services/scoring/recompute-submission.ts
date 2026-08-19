@@ -76,6 +76,7 @@ import type { DrizzleDb } from '../../db/client.js';
 import { withTransaction } from '../../db/client.js';
 import type { StorageClient } from '../storage/client.js';
 import type { ServerHeuristicConfig } from '../heuristics/config.js';
+import { resolvePerFlag } from '../heuristics/config.js';
 import { reconstructBundleFromDb } from '../heuristics/reconstruct-bundle.js';
 import { runValidation } from '@provenance/analysis-core/validation/run-validation.js';
 import { runAndStoreValidation } from '../ingest/validation.js';
@@ -147,12 +148,15 @@ export type RecomputeResult = {
 };
 
 // ---------------------------------------------------------------------------
-// Internal: translate Flag[] to DB rows (same logic as run-per-submission.ts)
+// Translate Flag[] to DB rows (same logic as run-per-submission.ts)
+//
+// Exported for unit testing — see recompute-submission.test.ts, which pins the
+// missing-per_flag-entry behaviour without needing a container.
 // ---------------------------------------------------------------------------
 
 type FlagRow = typeof flags.$inferInsert;
 
-function translateFlagsToRows(
+export function translateFlagsToRows(
   rawFlags: ReturnType<typeof runHeuristics>,
   index: ReturnType<typeof buildIndex>,
   submissionId: string,
@@ -164,10 +168,15 @@ function translateFlagsToRows(
   const scoreInputs: Array<{ severity: string; score_contribution: number }> = [];
 
   for (const flag of rawFlags) {
-    const perFlagCfg = config.per_flag[flag.heuristic];
+    // A missing per_flag entry means the stored config predates this flag id,
+    // NOT that staff disabled it — resolvePerFlag supplies the enabled default
+    // and is the same function ingest uses, so the two paths cannot disagree.
+    // This line used to read `if (!perFlagCfg || !perFlagCfg.enabled) continue`,
+    // which silently erased every flag the config had never listed.
+    const perFlagCfg = resolvePerFlag(config, flag.heuristic);
 
     // PRD §10.3: disabled heuristics contribute zero and are not stored.
-    if (!perFlagCfg || !perFlagCfg.enabled) {
+    if (!perFlagCfg.enabled) {
       continue;
     }
 
