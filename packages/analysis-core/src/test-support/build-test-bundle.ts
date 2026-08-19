@@ -81,6 +81,26 @@ export type RollingSealSpec = {
    * that carries BOTH seal shapes.
    */
   alsoClassic?: boolean;
+  /**
+   * Mark each session's rolling seal FINAL — the seal the recorder writes at
+   * `dispose()` over a log that will not grow again. A final seal commits to the
+   * WHOLE file, so an append to it fails `log_bytes_match`; a non-final one
+   * commits to a prefix and honest later growth is not a finding.
+   *
+   * **Defaults to `true`**, because that is what this builder actually
+   * constructs: every session's digests are taken over its FINISHED `.slog` and
+   * `.slog.meta`, which is a state only `dispose()` can seal. Defaulting to
+   * non-final would have the builder emit a manifest whose own contents
+   * contradict its claim — a seal signed mid-session that somehow already knows
+   * the finished bytes.
+   *
+   * Set `false` for the mid-session shape: a seal signed while its session was
+   * still running. Note that on its own that only changes the CLAIM, not the
+   * digests — to get a genuinely unattested tail, tamper the `.slog` afterwards
+   * (as `verify-log-bytes.test.ts` does) or drive the real writer, as
+   * `tools/recorder-seal-conformance.test.ts` does.
+   */
+  final?: boolean;
   tamper?: {
     /** Session indices whose `manifest-<id>.sig` is omitted (unsigned manifest). */
     omitSigFor?: number[];
@@ -726,6 +746,9 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
 
   if (rollingSpec !== undefined) {
     const rTamper = rollingSpec.tamper ?? {};
+    // See RollingSealSpec.final: the digests below are taken over the FINISHED
+    // logs, which only a dispose()-time seal can honestly commit to.
+    const sealIsFinal = rollingSpec.final !== false;
 
     /** Build session i's own rolling manifest. */
     const rollingManifestFor = (i: number): BundleManifest => {
@@ -750,6 +773,10 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
           },
         ],
         submission_files: submissionEntries,
+        // Omitted, never written as `final: false` — a non-final rolling
+        // manifest must stay byte-identical to what 1.2 emitted before this
+        // field existed.
+        ...(sealIsFinal ? { final: true } : {}),
       };
     };
 

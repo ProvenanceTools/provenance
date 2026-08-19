@@ -196,6 +196,10 @@ export type BundleRollingSeal = {
    * absent for a classic or both-shapes bundle is what keeps whole-file equality
    * (and therefore post-seal append detection) at full strength there.
    *
+   * A seal the recorder marked `final` at `dispose()` is the exception: it was
+   * signed over a finished log, so its entry here is computed with whole-file
+   * semantics (`final: true`) and an append past it fails.
+   *
    * See `loader/rolling-coverage.ts` and `validation/verify-log-bytes.ts`.
    */
   coverage?: readonly RollingSealCoverage[];
