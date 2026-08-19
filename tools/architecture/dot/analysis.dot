@@ -72,12 +72,15 @@ digraph analysis {
     bgcolor="#150a10" labeljust="l"
     node [fillcolor="#2a0f1e" color="#e8559c" fontsize=9]
     c1 [label="paste_shared_across_students\nsha256 exact → high · fuzzy line match → medium"]
-    c2 [label="editing_pattern_clone\nanomalously similar timing and file-switch order"]
+    c2 [label="editing_pattern_clone\nJaccard over event-kind 3-grams —\nnot-applicable when either side had a\nkind-stream signal disabled by policy"]
     cx [label="cross_flags + participants" shape=note]
   }
 
   cfg [label="HeuristicConfig\n24 tunable thresholds; per-semester overrides\nlayered over the shipped defaults"
        fillcolor="#0d1c33" color="#4b90f7" fontsize=9]
+
+  pol [label="RECORDED CAPTURE POLICY\nread back out of the bundle's own signed manifest —\nnot out of any server-side setting.\nA heuristic that consumes a DISABLED signal returns\nnot-applicable: never a flag, and never a zero."
+       fillcolor="#1e1830" color="#9d7bf5" fontsize=9]
 
   zip -> unzip
   unzip -> index
@@ -94,6 +97,11 @@ digraph analysis {
   cfg -> hp [label="thresholds" color="#4b90f7" style=dashed]
   cfg -> he [color="#4b90f7" style=dashed]
   cfg -> hi [color="#4b90f7" style=dashed]
+  unzip -> pol [label="the manifest inside\nsession.start" color="#9d7bf5" style=dashed]
+  pol -> hp [label="terminal off ⇒\nno_intermediate_errors\nstands down" color="#9d7bf5" style=dashed]
+  pol -> he [label="⇒ shell_integration_disabled and\nterminal_active_during_external_change\nstand down too" color="#9d7bf5" style=dashed]
+  pol -> hi [label="the recorded heartbeat cadence\nraises the gap threshold" color="#9d7bf5" style=dashed]
+  pol -> c2 [label="a thinned event-kind alphabet\nis not a comparable fingerprint" color="#9d7bf5" style=dashed]
 
   hp -> imove [label="large_paste and\npaste_is_solution only" color="#F97316"]
   imove -> down [label="yes" color="#F97316"]

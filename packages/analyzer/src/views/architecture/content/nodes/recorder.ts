@@ -164,6 +164,39 @@ export const nodes: Record<string, ArchNode> = {
   },
 
   // ── Core — the format contract ────────────────────────────────────────────
+  polic: {
+    title: 'The capture policy',
+    body: 'Resolved once, at session start, from the manifest the recorder has already verified — and only from a 2.0 one. The resolver gates on the format version itself rather than trusting its caller, because below 2.0 the policy block is not inside the signed payload, and honouring one there would hand students exactly the off switch the version gate exists to deny them. A 1.x manifest resolves to everything on at a thirty-second cadence, which is v1.x behaviour unchanged.\n\nResolution is total by construction and returns no Result. A missing block, a malformed value, a number that is not finite, an interval outside the five-second-to-two-minute clamp: each has a defined answer, so there is no failure mode in which the recorder has to decide what to do about a policy it could not read. A course that writes garbage into the interval gets the safe default cadence rather than the floor.',
+    links: [
+      { label: 'policy.ts', href: `${GH}/packages/log-core/src/policy.ts` },
+      {
+        label: 'manifest-loader.ts',
+        href: `${GH}/packages/recorder/src/activation/manifest-loader.ts`,
+      },
+    ],
+  },
+  gate: {
+    title: 'The policy choke point',
+    body: 'One check, inside emit, and that singularity is the design. Gating here rather than at each wiring call site means no code path — present or future — can emit a policy-disabled kind by forgetting a check, which is the failure mode a per-handler gate invites the first time someone adds a listener. The cost on the hot path is a property lookup in a frozen constant map plus a boolean read; floor kinds, doc.change among them, miss the map and return immediately, so the firehose pays essentially nothing.\n\nWhat it can reach is deliberately small. Only selection.change, focus.change, terminal.open and terminal.command have a key at all; every other kind is absent from the map and therefore returns captured unconditionally. There is no "disable everything" state to enter, because the schema cannot express one.',
+    invariant: 'One gate, in emit. A floor kind has no entry in the map and is always captured.',
+    links: [
+      { label: 'session-host.ts', href: `${GH}/packages/recorder/src/session/session-host.ts` },
+      { label: 'policy.ts', href: `${GH}/packages/log-core/src/policy.ts` },
+    ],
+  },
+  drop: {
+    title: 'A suppressed event',
+    body: 'The ordering is the whole point of this box. Suppression happens before the entry is chained, so a dropped event never takes a sequence number and emit returns null instead of an envelope. Dropping after chaining would advance the counter and leave a gap in the sequence — and a gap is precisely what validation check 4 reads as a deleted entry. A course exercising a legitimate configuration option would have manufactured a tampering finding against every student it applied to.\n\nNothing records the drop, and nothing needs to. The effective policy travels into the bundle inside session.start, so the analyzer can already tell that a signal was switched off; a per-event marker would add bytes to the chain to restate a fact the manifest states once.',
+    invariant:
+      'Suppress before chaining. A dropped event consumes no seq, so the log has no hole for check 4 to read as a deletion.',
+    links: [
+      { label: 'session-host.ts', href: `${GH}/packages/recorder/src/session/session-host.ts` },
+      {
+        label: 'verify-seq.ts',
+        href: `${GH}/packages/analysis-core/src/validation/verify-seq.ts`,
+      },
+    ],
+  },
   env: {
     title: 'The envelope',
     body: 'Five fields, and the two time fields are not interchangeable. t is milliseconds since session start taken from a monotonic clock, so it survives the system clock being changed; wall is an ISO 8601 UTC string from the wall clock, so it can be compared against everything outside the session. Conflating them is one of the easiest mistakes to make here and produces a log that is either unorderable or uncorrelatable.\n\nKeeping both is what makes clock manipulation visible rather than merely possible. A separate watcher compares the two clocks once a second and emits clock.skew when they disagree by half a second or more, and validation then checks t and wall for monotonicity independently, with a wall-clock regression forgiven only when a clock.skew event was recorded in the window spanning it. A student who sets the system clock back leaves a log where the two disagree; a student who edits timestamps afterwards breaks the chain instead.',

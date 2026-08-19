@@ -72,6 +72,9 @@ digraph deploy {
   deploy [label="deploy is manual, by hand, over SSH\nGitHub's hosted runners cannot reach instapphost,\nso there is no CI/CD for this environment"
           shape=note fillcolor="#241a0c" color="#F97316" fontsize=9]
 
+  rkey [label="ROOT KEY CONFIG — a PUBLIC key, so it ships in the clear\nserver   PROVENANCE_ROOT_PUBLIC_KEY_HEX  (read at request time)\nbrowser  VITE_ROOT_PUBLIC_KEY_HEX  (baked into the bundle at build)\nUnset is a legitimate state: validation check 2 then reports\nSKIPPED for a 2.0 bundle — never a false pass."
+        shape=note fillcolor="#1e1830" color="#9d7bf5" fontsize=9]
+
   browser -> dns
   gwclient -> dns [label="API token" color="#17bfae"]
   dns -> prox
@@ -91,4 +94,7 @@ digraph deploy {
   dumpc -> hchk [label="ping after each\nnightly pg_dump (/fail on error)" color="#e8559c" style=dashed]
   j1 -> blobs [label="delete expired blobs" color="#F97316" constraint=false]
   deploy -> apic [style=dashed color="#F97316"]
+  rkey -> apic [label="check 2, on the read path" color="#9d7bf5" style=dashed]
+  rkey -> wrkc [label="check 2, at ingest" color="#9d7bf5" style=dashed]
+  rkey -> browser [label="the same value, for /local —\nwhich verifies with no server at all" color="#9d7bf5" style=dashed]
 }

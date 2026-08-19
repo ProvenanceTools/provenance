@@ -49,7 +49,7 @@ digraph readpath {
   pgq -> pg
   pg -> pgq [label="rows" color="#4b90f7" dir=back]
 
-  r_over   -> lsi [label="AND re-parses for\nthe session list" color="#e8559c" style=dashed]
+  r_over   -> lsi [label="AND re-parses for the session list\nand the assignment manifest —\nthe capture policy that was in force" color="#e8559c" style=dashed]
   r_time   -> lsi [color="#e8559c"]
   r_replay -> lsi [color="#e8559c"]
   r_recomp -> lsi [color="#e8559c"]

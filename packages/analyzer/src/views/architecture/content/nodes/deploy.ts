@@ -200,6 +200,16 @@ export const nodes: Record<string, ArchNode> = {
       { label: 'entrypoint.sh', href: `${GH}/deploy/entrypoint.sh` },
     ],
   },
+  rkey: {
+    title: 'The root key configuration',
+    body: 'The same public value in two deployment shapes. The server reads PROVENANCE_ROOT_PUBLIC_KEY_HEX from the environment and hands it to validation check 2 at ingest and on the recompute path; the browser bundle bakes VITE_ROOT_PUBLIC_KEY_HEX in at build time, which is what lets the /local route verify a trust chain with no server involved at all. Neither is a secret — it is the public half of a signature key, and there is nothing here to protect — so shipping it in a client bundle is exactly right rather than a compromise. The env schema accepts 64 lowercase hex or the empty string and nothing in between, so a truncated paste fails at startup rather than at the first bundle.\n\nBoth sides treat unset as a real state rather than an error. With no key configured, check 2 reports skipped for a 2.0 bundle and the roll-up degrades to warn; 1.0 and 1.1 bundles never consult it, because they carry no chain to walk. The alternative — defaulting to some key, or quietly passing the check — would mean an unconfigured deployment reporting bundles as verified that nothing had verified.',
+    invariant:
+      'An unset root key makes check 2 report skipped, never a pass. Absence of the means to verify is reported as absence.',
+    links: [
+      { label: 'root-key.ts (server)', href: `${GH}/packages/server/src/config/root-key.ts` },
+      { label: 'root-key.ts (browser)', href: `${GH}/packages/analyzer/src/lib/root-key.ts` },
+    ],
+  },
 };
 
 /** Self-explanatory labels that deliberately carry no detail panel. */
