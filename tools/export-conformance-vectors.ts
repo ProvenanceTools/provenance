@@ -18,9 +18,10 @@
  * Two independent vector families, selected by flag:
  *
  *   --out           log-core FORMAT vectors: hash chain, ed25519, session key, manifests,
- *                   checkpoint, golden bundle, plus the Manifest 2.0 family (course cert,
- *                   manifest-v2, capture policy). Consumed by JetBrains `core/` and by the
- *                   Neovim `tests/conformance/fixtures/`.
+ *                   checkpoint, golden bundle, the Manifest 2.0 family (course cert,
+ *                   manifest-v2, capture policy), and the S2 identity family (enrollment,
+ *                   student-keys). Consumed by JetBrains `core/` and by the Neovim
+ *                   `tests/conformance/fixtures/`.
  *   --recorder-out  recorder PAYLOAD-BUILDER vectors: the paste and fs.external_change
  *                   inline-content builders. These pin the inline/truncate cap (64 KB of
  *                   UTF-8) and the deliberate unit mismatch between the byte-based gate
@@ -74,8 +75,30 @@ import {
   POLICY_GATED_EVENT_KINDS,
   HEARTBEAT_INTERVAL_MIN_MS,
   HEARTBEAT_INTERVAL_MAX_MS,
+  signEnrollmentCert,
+  signEnrollmentToken,
+  signSessionPubkey,
+  verifyIdentityChain,
+  checkTokenWindow,
+  buildEnrollmentCertSignedPayload,
+  buildEnrollmentTokenSignedPayload,
+  buildSessionPubkeyBindingPayload,
+  ENROLLMENT_FORMAT_VERSION,
+  SESSION_PUBKEY_BINDING_PURPOSE,
+  deriveCourseKeypair,
+  deriveCourseKeySeed,
+  STUDENT_KEY_HKDF_INFO_PREFIX,
+  STUDENT_KEY_HKDF_SALT,
+  STUDENT_KEY_SEED_BYTES,
+  STUDENT_MASTER_SECRET_BYTES,
 } from '@provenance/log-core';
-import type { CourseCert, Manifest } from '@provenance/log-core';
+import type {
+  CourseCert,
+  Manifest,
+  EnrollmentCert,
+  EnrollmentToken,
+  SessionIdentity,
+} from '@provenance/log-core';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 // The recorder's SHIPPED builders, from its build output — deriving the vectors
 // from the real code is the whole point. Requires
@@ -233,6 +256,8 @@ const OTHER_COURSE_PRIV = seed(0x0d);
 const CERT_VALID_FROM = '2026-08-20';
 const CERT_VALID_UNTIL = '2027-01-15';
 const COURSE_ID = 'berkeley-cs61b';
+/** The "other" course, for cross-course forgery and unlinkability vectors. */
+const OTHER_COURSE_ID = 'berkeley-cs61c';
 
 /** The `policy` block used by every 2.0 manifest vector. */
 const V2_POLICY = {
@@ -812,6 +837,358 @@ function buildCapturePolicyVectors(): unknown {
   };
 }
 
+// ---------------------------------------------------------------------------
+// S2 identity vectors (program spec §S2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fixed key seeds for the identity family. Chosen not to collide with any seed
+ * already in use (0x03/0x04/0x05/0x07/0x09 for 1.x, 0x0a-0x0d for Manifest 2.0),
+ * so adding these cannot perturb a byte of the existing output.
+ */
+const ENROLLMENT_PRIV = seed(0x0e);
+const WRONG_ENROLLMENT_PRIV = seed(0x0f);
+const STUDENT_PRIV = seed(0x10);
+const OTHER_STUDENT_PRIV = seed(0x11);
+const IDENTITY_SESSION_PRIV = seed(0x12);
+
+/** Fixed master secrets for the derivation vectors. */
+const MASTER_SECRET_A = seed(0x2a);
+const MASTER_SECRET_B = seed(0x2b);
+
+const STUDENT_REF = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+const TOKEN_ISSUED_AT = '2026-09-01T00:00:00Z';
+const TOKEN_EXPIRES_AT = '2027-01-15';
+const IDENTITY_SESSION_STARTED_AT = '2026-09-08T12:00:00Z';
+
+type UnsignedEnrollmentCert = Omit<EnrollmentCert, 'course_sig'>;
+type UnsignedEnrollmentToken = Omit<EnrollmentToken, 'enrollment_sig'>;
+
+async function makeEnrollmentCert(
+  overrides: Partial<UnsignedEnrollmentCert> = {},
+  coursePriv: Uint8Array = COURSE_PRIV,
+): Promise<EnrollmentCert> {
+  const unsigned: UnsignedEnrollmentCert = {
+    format_version: ENROLLMENT_FORMAT_VERSION,
+    course_id: COURSE_ID,
+    enrollment_pubkey: await pub(ENROLLMENT_PRIV),
+    valid_from: CERT_VALID_FROM,
+    valid_until: CERT_VALID_UNTIL,
+    ...overrides,
+  };
+  return { ...unsigned, course_sig: await signEnrollmentCert(unsigned, coursePriv) };
+}
+
+async function makeEnrollmentToken(
+  overrides: Partial<UnsignedEnrollmentToken> = {},
+  enrollmentPriv: Uint8Array = ENROLLMENT_PRIV,
+): Promise<EnrollmentToken> {
+  const unsigned: UnsignedEnrollmentToken = {
+    format_version: ENROLLMENT_FORMAT_VERSION,
+    student_ref: STUDENT_REF,
+    course_id: COURSE_ID,
+    student_pubkey: await pub(STUDENT_PRIV),
+    issued_at: TOKEN_ISSUED_AT,
+    expires_at: TOKEN_EXPIRES_AT,
+    ...overrides,
+  };
+  return { ...unsigned, enrollment_sig: await signEnrollmentToken(unsigned, enrollmentPriv) };
+}
+
+/**
+ * Vectors for the S2 identity chain: enrollment_cert -> token -> session_pubkey_sig.
+ *
+ * The three `canonical_json` values are the single most useful thing here for a
+ * port, because a canonicalization disagreement surfaces as a readable string
+ * diff rather than as an inscrutable signature failure.
+ */
+async function buildEnrollmentVectors(): Promise<unknown> {
+  const courseCert = await makeCert();
+  const coursePubkeyHex = await pub(COURSE_PRIV);
+  const sessionPubkey = await pub(IDENTITY_SESSION_PRIV);
+
+  const validCert = await makeEnrollmentCert();
+  const validToken = await makeEnrollmentToken();
+
+  const binding = {
+    course_id: COURSE_ID,
+    student_ref: STUDENT_REF,
+    session_pubkey: sessionPubkey,
+  };
+  const validBindingSig = await signSessionPubkey(binding, STUDENT_PRIV);
+
+  const identity = (overrides: Partial<SessionIdentity> = {}): SessionIdentity => ({
+    enrollment: validToken,
+    enrollment_cert: validCert,
+    session_pubkey_sig: validBindingSig,
+    ...overrides,
+  });
+
+  const chainCase = async (
+    name: string,
+    note: string,
+    ident: SessionIdentity,
+    sessionPubkeyHex: string = sessionPubkey,
+  ): Promise<unknown> => {
+    const result = await verifyIdentityChain({
+      identity: ident,
+      session_pubkey: sessionPubkeyHex,
+      course_cert: courseCert,
+      session_started_at: IDENTITY_SESSION_STARTED_AT,
+    });
+    return {
+      name,
+      note,
+      input: {
+        identity: ident,
+        session_pubkey: sessionPubkeyHex,
+        course_cert: courseCert,
+        session_started_at: IDENTITY_SESSION_STARTED_AT,
+      },
+      expected: result.ok
+        ? {
+            ok: true,
+            course_id: result.value.course_id,
+            student_ref: result.value.student_ref,
+            student_pubkey: result.value.student_pubkey,
+            enrollment_pubkey: result.value.enrollment_pubkey,
+            cert_window: result.value.cert_window,
+            token_window: result.value.token_window,
+          }
+        : { ok: false, error: result.error },
+    };
+  };
+
+  // Both signatures genuine: 61B's course key certifies an enrollment key "for
+  // 61C", which then mints a 61C token. Only comparing ids at EVERY link catches it.
+  const crossCourseCert = await makeEnrollmentCert({ course_id: OTHER_COURSE_ID });
+  const crossCourseToken = await makeEnrollmentToken({ course_id: OTHER_COURSE_ID });
+
+  const expiredToken = await makeEnrollmentToken({
+    issued_at: '2025-09-01T00:00:00Z',
+    expires_at: '2025-12-15',
+  });
+  const expiredCert = await makeEnrollmentCert({
+    valid_from: '2020-01-01',
+    valid_until: '2020-12-31',
+  });
+
+  const tokenWindowCase = (name: string, note: string, token: EnrollmentToken, at: string) => ({
+    name,
+    note,
+    input: { issued_at: token.issued_at, expires_at: token.expires_at, at },
+    expected: checkTokenWindow(token, at),
+  });
+
+  return {
+    note:
+      'Enrollment conformance vectors (program spec §S2). The identity chain is ' +
+      'course_cert -> enrollment_cert -> enrollment token -> session_pubkey_sig. The COURSE key ' +
+      'signs the enrollment cert (offline); the ENROLLMENT key, which is the only private key ' +
+      'that lives on a server, signs per-student tokens; the STUDENT per-course key countersigns ' +
+      'the ephemeral session pubkey. A port walks all of it with only the embedded root key. ' +
+      'Every object key in every signed payload is a fixed ASCII identifier and there are no ' +
+      'JSON arrays — student_ref is always a VALUE, never a key. See course-cert.json for why.',
+    course_pubkey_hex: coursePubkeyHex,
+    enrollment_pubkey_hex: await pub(ENROLLMENT_PRIV),
+    wrong_enrollment_pubkey_hex: await pub(WRONG_ENROLLMENT_PRIV),
+    student_pubkey_hex: await pub(STUDENT_PRIV),
+    other_student_pubkey_hex: await pub(OTHER_STUDENT_PRIV),
+    session_pubkey_hex: sessionPubkey,
+    course_cert: courseCert,
+    valid_enrollment_cert: validCert,
+    valid_enrollment_token: validToken,
+    session_pubkey_binding: { ...binding, sig: validBindingSig },
+
+    format_version_note:
+      'Both artifacts carry format_version INSIDE the signed payload, and the chain gates on it ' +
+      'BEFORE any signature work. There is no 1.x identity artifact to grandfather — the field ' +
+      'exists so a future 3.0 cannot be replayed as a 2.0 artifact, which is the S0 downgrade ' +
+      'lesson applied before it bites rather than after.',
+    format_version: ENROLLMENT_FORMAT_VERSION,
+    session_pubkey_binding_purpose: SESSION_PUBKEY_BINDING_PURPOSE,
+
+    canonical_json: {
+      enrollment_cert: new TextDecoder().decode(buildEnrollmentCertSignedPayload(validCert)),
+      enrollment_token: new TextDecoder().decode(buildEnrollmentTokenSignedPayload(validToken)),
+      session_pubkey_binding: new TextDecoder().decode(buildSessionPubkeyBindingPayload(binding)),
+    },
+
+    chain_cases: [
+      await chainCase('valid', 'The whole chain, every link genuine.', identity()),
+      await chainCase(
+        'cert_not_2_0',
+        'Version gate, step 0: an enrollment cert declaring another version is refused before any signature work.',
+        identity({ enrollment_cert: await makeEnrollmentCert({ format_version: '1.0' }) }),
+      ),
+      await chainCase(
+        'token_not_2_0',
+        'Version gate, step 0, token side.',
+        identity({ enrollment: await makeEnrollmentToken({ format_version: '3.0' }) }),
+      ),
+      await chainCase(
+        'cert_signed_by_wrong_course_key',
+        'Step 1: the enrollment cert was signed by a course key the root cert does not name.',
+        identity({ enrollment_cert: await makeEnrollmentCert({}, OTHER_COURSE_PRIV) }),
+      ),
+      await chainCase(
+        'token_signed_by_uncertified_key',
+        'Step 2: token signed by an enrollment key the course never certified.',
+        identity({ enrollment: await makeEnrollmentToken({}, WRONG_ENROLLMENT_PRIV) }),
+      ),
+      await chainCase(
+        'cross_course_forgery',
+        'Step 3, MANDATORY: 61B certifies an enrollment key "for 61C" and it mints a 61C token. ' +
+          'Every signature is genuine; only comparing course_id at every link rejects it.',
+        identity({ enrollment_cert: crossCourseCert, enrollment: crossCourseToken }),
+      ),
+      await chainCase(
+        'session_pubkey_sig_from_another_student',
+        'Step 4: the countersignature came from a different student key.',
+        identity({
+          session_pubkey_sig: await signSessionPubkey(binding, OTHER_STUDENT_PRIV),
+        }),
+      ),
+      await chainCase(
+        'session_pubkey_not_the_countersigned_one',
+        'Step 4: a genuine countersignature lifted onto a different session key.',
+        identity(),
+        await pub(seed(0x13)),
+      ),
+      await chainCase(
+        'expired_token_is_NOT_fatal',
+        'Step 5: an expired token still returns ok, reporting token_window. An expired credential ' +
+          'must never stop a recorder from recording (program spec §4); the analyzer decides.',
+        identity({
+          enrollment: expiredToken,
+          session_pubkey_sig: validBindingSig,
+        }),
+      ),
+      await chainCase(
+        'expired_enrollment_cert_is_NOT_fatal',
+        'Step 5, cert side. Same rule.',
+        identity({ enrollment_cert: expiredCert }),
+      ),
+    ],
+
+    window_note:
+      'Every window is judged against the RELEVANT ISSUE TIME, never wall-clock now, so an ' +
+      'archived bundle still verifies years later in an adjudication. The enrollment cert is ' +
+      "judged against the token's issued_at; the token is judged against the session start. " +
+      'A date-only expires_at is inclusive THROUGH THE END of that day, exactly as ' +
+      'course_cert.valid_until — same resolution rule, implemented once.',
+    token_window_cases: [
+      tokenWindowCase('in_window', 'Mid-semester.', validToken, '2026-10-01T00:00:00Z'),
+      tokenWindowCase(
+        'before_issued',
+        'Session predates issuance.',
+        validToken,
+        '2026-08-25T00:00:00Z',
+      ),
+      tokenWindowCase(
+        'date_only_expiry_covers_that_whole_day',
+        'expires_at 2027-01-15 covers all of Jan 15.',
+        validToken,
+        '2027-01-15T23:59:59Z',
+      ),
+      tokenWindowCase(
+        'date_only_expiry_ends_at_next_midnight',
+        'and expires at the first instant of Jan 16.',
+        validToken,
+        '2027-01-16T00:00:00Z',
+      ),
+      tokenWindowCase(
+        'unparseable',
+        'A bad instant reports unparseable_timestamp rather than throwing.',
+        validToken,
+        'whenever',
+      ),
+    ],
+  };
+}
+
+/**
+ * Vectors pinning student master-secret -> per-course key derivation.
+ *
+ * THE most divergence-prone thing in S2: if three ports derive different bytes,
+ * a student's signature simply will not verify against the public key their
+ * token names, and the failure looks like tampering rather than like a bug. The
+ * HKDF parameters are therefore exported explicitly, alongside worked outputs.
+ */
+async function buildStudentKeyVectors(): Promise<unknown> {
+  const derivation = async (masterSecret: Uint8Array, courseId: string, note: string) => {
+    const kp = await deriveCourseKeypair(masterSecret, courseId);
+    return {
+      note,
+      input: { master_secret_hex: toHex(masterSecret), course_id: courseId },
+      expected: {
+        info_utf8: STUDENT_KEY_HKDF_INFO_PREFIX + courseId,
+        seed_hex: toHex(deriveCourseKeySeed(masterSecret, courseId)),
+        pubkey_hex: kp.publicKeyHex,
+      },
+    };
+  };
+
+  return {
+    note:
+      'Student per-course key derivation (program spec §S2). One master secret per STUDENT, ' +
+      'one derived ed25519 keypair per COURSE. The master secret never leaves the machine and ' +
+      'is never sent to any server; each course therefore sees an unlinkable public key, and ' +
+      'correlating a student across courses requires the master itself. If three ports derive ' +
+      'different bytes here, a student signature will not verify against the pubkey their token ' +
+      'names and the failure will look like tampering — so these values are load-bearing.',
+    algorithm: 'HKDF-SHA256',
+    hkdf_note:
+      'IKM is the 32 RAW BYTES of the master secret (not hex, not base64). The salt is ' +
+      "deliberately NON-EMPTY: HKDF's absent-salt rule (substitute HashLen zeros) and HMAC's " +
+      'own key zero-padding make an empty salt and a 32-zero-byte salt produce the same PRK — ' +
+      'an equivalence that is true but that no port should have to know. Passing concrete bytes ' +
+      'removes the question. The 32-byte output IS the ed25519 seed; ed25519 accepts any 32 ' +
+      'bytes, so there is no rejection sampling or retry loop to agree on.',
+    hkdf_params: {
+      hash: 'SHA-256',
+      ikm: 'the 32 raw bytes of the master secret',
+      salt_utf8: new TextDecoder().decode(STUDENT_KEY_HKDF_SALT),
+      salt_hex: toHex(STUDENT_KEY_HKDF_SALT),
+      info_prefix_utf8: STUDENT_KEY_HKDF_INFO_PREFIX,
+      info_construction: 'UTF-8 bytes of (info_prefix_utf8 + course_id)',
+      output_length_bytes: STUDENT_KEY_SEED_BYTES,
+      output_is: 'the ed25519 secret key (seed)',
+    },
+    master_secret_bytes: STUDENT_MASTER_SECRET_BYTES,
+    derivation_cases: [
+      await derivation(MASTER_SECRET_A, COURSE_ID, 'The baseline derivation.'),
+      await derivation(
+        MASTER_SECRET_A,
+        OTHER_COURSE_ID,
+        'Same student, different course: an UNLINKABLE second key. This is the privacy claim.',
+      ),
+      await derivation(
+        MASTER_SECRET_B,
+        COURSE_ID,
+        'Different student, same course: a different key.',
+      ),
+      await derivation(
+        MASTER_SECRET_A,
+        'cs61b',
+        'Short course id — guards against prefix-concatenation collisions.',
+      ),
+      await derivation(
+        MASTER_SECRET_A,
+        'cs61b-extra',
+        'and the longer id it must not collide with.',
+      ),
+      await derivation(
+        MASTER_SECRET_A,
+        'berkeley-café',
+        'A NON-ASCII course id. Safe here because course_id enters as a VALUE inside the HKDF ' +
+          'info byte string, never as a JSON object key — UTF-8 encoding is unambiguous across ' +
+          'all three languages, whereas object-key ordering is not.',
+      ),
+    ],
+  };
+}
+
 async function main(): Promise<void> {
   const { out, recorderOut } = parseArgs(process.argv.slice(2));
 
@@ -970,6 +1347,12 @@ async function main(): Promise<void> {
 
   // --- 10. capture policy resolution: defaults + heartbeat clamping ---
   writeJson(outDir, 'capture-policy.json', buildCapturePolicyVectors());
+
+  // --- 11. S2 identity: enrollment_cert -> token -> session_pubkey_sig ---
+  writeJson(outDir, 'enrollment.json', await buildEnrollmentVectors());
+
+  // --- 12. S2 student master secret -> per-course key derivation ---
+  writeJson(outDir, 'student-keys.json', await buildStudentKeyVectors());
 
   console.log(`Wrote conformance vectors to ${outDir}`);
 }

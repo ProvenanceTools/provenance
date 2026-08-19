@@ -67,6 +67,44 @@ export {
 } from './course-cert.js';
 export type { CourseCert, CourseCertError, CertWindowStatus } from './course-cert.js';
 
+// Enrollment cert + token (course → enrollment key → student key, S2 identity chain)
+export {
+  parseEnrollmentCert,
+  parseEnrollmentToken,
+  signEnrollmentCert,
+  signEnrollmentToken,
+  signSessionPubkey,
+  verifyEnrollmentCert,
+  verifyEnrollmentToken,
+  verifySessionPubkeySig,
+  verifyIdentityChain,
+  checkTokenWindow,
+  checkEnrollmentCertWindow,
+  buildEnrollmentCertSignedPayload,
+  buildEnrollmentTokenSignedPayload,
+  buildSessionPubkeyBindingPayload,
+  ENROLLMENT_FORMAT_VERSION,
+  SESSION_PUBKEY_BINDING_PURPOSE,
+} from './enrollment.js';
+export type {
+  EnrollmentCert,
+  EnrollmentError,
+  IdentityChainError,
+  IdentityChainOk,
+} from './enrollment.js';
+
+// Student master secret + per-course key derivation (S2)
+export {
+  deriveCourseKeySeed,
+  deriveCourseKeypair,
+  generateStudentMasterSecret,
+  STUDENT_KEY_HKDF_INFO_PREFIX,
+  STUDENT_KEY_HKDF_SALT,
+  STUDENT_KEY_SEED_BYTES,
+  STUDENT_MASTER_SECRET_BYTES,
+} from './student-keys.js';
+export type { StudentCourseKeypair } from './student-keys.js';
+
 // Capture policy (professor-facing capture controls)
 export {
   resolveCapturePolicy,
