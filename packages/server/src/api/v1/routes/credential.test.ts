@@ -605,13 +605,32 @@ describe('POST /identity/credential', () => {
   });
 
   it('does not re-point a roster row that is already linked to someone else', async () => {
-    // The IS NULL guard makes the link write-once. Re-pointing would silently
+    // The IS NULL guard makes the link WRITE-ONCE. Re-pointing would silently
     // re-attribute a student's work.
+    //
+    // The scenario is an address REASSIGNMENT: a roster row is already
+    // attributed to one person, and a different Google account later shows up
+    // carrying the address that roster row happens to list. That is exactly
+    // when a re-point would do the most damage, and exactly when nothing but
+    // the guard prevents it.
     await withDb(async (db) => {
       const chain = await buildChain();
       setEnv({ private_key_hex: chain.institutionPrivHex, cert: chain.cert });
       const semester = await seedSemester(db);
-      const sharedEmail = uniqueEmail();
+      const rosterEmail = uniqueEmail();
+
+      // The incumbent: a student whose OWN sso_email differs from the roster
+      // row's, so only the pre-existing link — not an email match — ties them
+      // together. This makes the assertion deterministic: an unguarded UPDATE
+      // has exactly one candidate to re-point to, the newcomer.
+      const [incumbent] = await db
+        .insert(students)
+        .values({
+          institution_id: INSTITUTION_ID,
+          sso_subject: `sub-incumbent-${counter++}`,
+          sso_email: uniqueEmail(),
+        })
+        .returning();
 
       const [entry] = await db
         .insert(roster_entries)
@@ -619,39 +638,24 @@ describe('POST /identity/credential', () => {
           semester_id: semester.id,
           sid: `sid-${counter++}`,
           display_name: 'S',
-          email: sharedEmail,
+          email: rosterEmail,
+          student_ref: incumbent!.student_ref,
         })
         .returning();
 
-      // First student claims it.
-      const first = await seedUser(db, sharedEmail);
-      const firstBody = await (
-        await createV1App().fetch(credentialRequest(first.sessionId, STUDENT_PUBKEY))
-      ).json();
-
-      // A DIFFERENT Google account that happens to carry the same address in
-      // its users row (distinct google_subject ⇒ distinct student).
-      const [other] = await db
-        .insert(users)
-        .values({
-          google_subject: `sub-other-${counter++}`,
-          email: `other-${counter++}@berkeley.edu`,
-          display_name: 'Other',
-        })
-        .returning();
-      await db
-        .update(users)
-        .set({ email: sharedEmail.replace('@', '+alias@') })
-        .where(eq(users.id, other!.id));
-      const otherSession = await seedSecondSession(db, other!.id);
-      await createV1App().fetch(credentialRequest(otherSession, OTHER_STUDENT_PUBKEY));
+      // The newcomer authenticates with the address the roster row lists.
+      const { sessionId } = await seedUser(db, rosterEmail);
+      const res = await createV1App().fetch(credentialRequest(sessionId, OTHER_STUDENT_PUBKEY));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.student_ref).not.toBe(incumbent!.student_ref);
 
       const [after] = await db
         .select()
         .from(roster_entries)
         .where(eq(roster_entries.id, entry!.id));
-      // Still the first student's ref.
-      expect(after!.student_ref).toBe(firstBody.student_ref);
+      // Still the incumbent's ref — the newcomer did not inherit their work.
+      expect(after!.student_ref).toBe(incumbent!.student_ref);
     });
   });
 
@@ -750,6 +754,37 @@ describe('POST /identity/credential', () => {
 
       // And nothing was allocated.
       const rows = await db.select().from(students).where(eq(students.sso_subject, 'unused'));
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  it('refuses a superadmin in view-as mode', async () => {
+    // Issuing while impersonating would produce signed evidence attributing
+    // work to someone by an OPERATOR's action — exactly what this chain exists
+    // to make impossible.
+    await withDb(async (db) => {
+      const chain = await buildChain();
+      setEnv({ private_key_hex: chain.institutionPrivHex, cert: chain.cert });
+
+      const admin = await seedUser(db, `admin-${counter++}@berkeley.edu`);
+      const victim = await seedUser(db, uniqueEmail());
+      await db.update(users).set({ is_superadmin: true }).where(eq(users.id, admin.user.id));
+      await db
+        .update(sessions)
+        .set({ view_as_user_id: victim.user.id, view_as_started_at: new Date() })
+        .where(eq(sessions.id, admin.sessionId));
+
+      const res = await createV1App().fetch(credentialRequest(admin.sessionId, STUDENT_PUBKEY));
+
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.error.code).toBe('VIEW_AS_READ_ONLY');
+
+      // And nothing was allocated for the impersonated student.
+      const rows = await db
+        .select()
+        .from(students)
+        .where(eq(students.sso_subject, victim.googleSubject));
       expect(rows).toHaveLength(0);
     });
   });

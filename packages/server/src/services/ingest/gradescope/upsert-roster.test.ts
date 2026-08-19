@@ -197,45 +197,46 @@ describe('upsertRosterFromSubmitters', () => {
   });
 
   it('does not re-point a roster row already linked to another student', async () => {
-    // The link is write-once. Re-pointing would silently re-attribute work.
+    // The link is WRITE-ONCE. Re-pointing would silently re-attribute work.
+    //
+    // The incumbent's own sso_email deliberately does NOT match the roster
+    // row's, so only the pre-existing link ties them together and an unguarded
+    // UPDATE would have exactly one candidate to re-point to — making the
+    // assertion deterministic rather than a race between two matching rows.
     await withTestDb(async (db) => {
       const semesterId = await seedSemester(db);
-      const [first] = await db
+      const [incumbent] = await db
         .insert(students)
         .values({
           institution_id: 'berkeley',
-          sso_subject: 'sub-first',
+          sso_subject: 'sub-incumbent',
+          sso_email: 'incumbent@berkeley.edu',
+        })
+        .returning();
+      const [newcomer] = await db
+        .insert(students)
+        .values({
+          institution_id: 'berkeley',
+          sso_subject: 'sub-newcomer',
           sso_email: 'shared@berkeley.edu',
         })
         .returning();
 
-      await upsertRosterFromSubmitters(db, semesterId, [
-        { sid: '400', name: 'Shared', email: 'shared@berkeley.edu' },
-      ]);
-      expect((await getEntry(db, semesterId, '400'))!.student_ref).toBe(first!.student_ref);
-
-      // A second account later claims the same address; the roster row must not
-      // move.
-      await db.delete(students).where(eq(students.student_ref, first!.student_ref));
-      const [second] = await db
-        .insert(students)
-        .values({
-          institution_id: 'berkeley',
-          sso_subject: 'sub-second',
-          sso_email: 'shared@berkeley.edu',
-        })
-        .returning();
+      await db.insert(roster_entries).values({
+        semester_id: semesterId,
+        sid: '400',
+        display_name: 'Shared',
+        email: 'shared@berkeley.edu',
+        student_ref: incumbent!.student_ref,
+      });
 
       await upsertRosterFromSubmitters(db, semesterId, [
         { sid: '400', name: 'Shared', email: 'shared@berkeley.edu' },
       ]);
 
       const row = await getEntry(db, semesterId, '400');
-      // Deleting the first student SET NULL the link (ON DELETE SET NULL), and
-      // the fresh upsert re-linked it to the only remaining match. What must
-      // NOT happen is a silent re-point while the first student still exists —
-      // covered by the credential-route test of the same name.
-      expect(row!.student_ref).toBe(second!.student_ref);
+      expect(row!.student_ref).toBe(incumbent!.student_ref);
+      expect(row!.student_ref).not.toBe(newcomer!.student_ref);
     });
   });
 
