@@ -10,6 +10,11 @@ dist/
 dist-integration/
 dist-perf/
 test-workspace/.provenance/
+test-workspace-policy/.provenance/
+# Scratch file the recorder integration suite edits, so a run never dirties a
+# tracked fixture (test/integration/suite/*.test.ts).
+test-workspace/scratch.py
+test-workspace-policy/scratch.py
 .env
 .claude/
 .superpowers/
