@@ -30,10 +30,10 @@ describe('unzipBundle', () => {
     if (!result.ok) return;
 
     expect(typeof result.value.manifestJson).toBe('string');
-    expect(result.value.manifestJson.length).toBeGreaterThan(0);
+    expect(result.value.manifestJson!.length).toBeGreaterThan(0);
 
     expect(typeof result.value.manifestSigHex).toBe('string');
-    expect(result.value.manifestSigHex.length).toBeGreaterThan(0);
+    expect(result.value.manifestSigHex!.length).toBeGreaterThan(0);
 
     expect(result.value.sessions).toHaveLength(1);
     const s = result.value.sessions[0]!;

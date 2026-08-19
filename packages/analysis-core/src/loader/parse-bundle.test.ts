@@ -36,7 +36,7 @@ describe('loadBundle', () => {
     expect(bundle.manifest.semester).toBe(manifest.semester);
     expect(bundle.manifest.format_version).toBe('1.0');
     expect(typeof bundle.manifestSigHex).toBe('string');
-    expect(bundle.manifestSigHex.length).toBeGreaterThan(0);
+    expect(bundle.manifestSigHex!.length).toBeGreaterThan(0);
   });
 
   it('sourceFilename is propagated to the Bundle', async () => {

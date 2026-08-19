@@ -10,6 +10,14 @@
  * For 1.1 bundles, submission files listed in `manifest.submission_files[].path`
  * are also present at the zip root. These are whitelisted on a two-pass read.
  *
+ * A ROLLING-SEALED bundle (program spec §8) has no `manifest.json` at all.
+ * Instead it carries one `manifest-<session_id>.json` + `manifest-<session_id>.sig`
+ * pair per session, recognized here via log-core's
+ * `parseRollingManifestFilename` — never a locally re-spelled pattern, and
+ * deliberately not matching `manifest.json`. Both shapes are accepted, including
+ * a bundle that carries both; deciding what the rolling files MEAN is
+ * `loader/rolling-seal.ts`'s job, not this module's.
+ *
  * Any other file produces `unexpected_file`. Orphaned .slog (no .meta) or
  * orphaned .meta (no .slog) produce typed errors. Zero .slog files → no_sessions.
  *
@@ -17,9 +25,9 @@
  */
 
 import JSZip from 'jszip';
-import { ok, err } from '@provenance/log-core';
+import { ok, err, parseRollingManifestFilename } from '@provenance/log-core';
 import type { Result } from '@provenance/log-core';
-import type { BundleFiles, LoaderError } from './types.js';
+import type { BundleFiles, LoaderError, RawRollingSealFiles } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -76,6 +84,9 @@ export async function unzipBundle(
 
   let manifestJson: string | null = null;
   let manifestSigHex: string | null = null;
+  /** Rolling seal halves, keyed by the session id in the filename. */
+  const rollingJson = new Map<string, string>();
+  const rollingSig = new Map<string, string>();
   const slogIds = new Set<string>();
   const metaIds = new Set<string>();
   const slogContents = new Map<string, string>();
@@ -101,6 +112,19 @@ export async function unzipBundle(
       continue;
     }
 
+    // `manifest-<session_id>.json` / `.sig` — the rolling seal. The pattern is
+    // log-core's, so recorder and analyzer cannot drift; it does not match
+    // `manifest.json`, which the two branches above already consumed anyway.
+    const rolling = parseRollingManifestFilename(filename);
+    if (rolling !== null) {
+      if (rolling.part === 'json') {
+        rollingJson.set(rolling.sessionId, await zipObject.async('string'));
+      } else {
+        rollingSig.set(rolling.sessionId, (await zipObject.async('string')).trim());
+      }
+      continue;
+    }
+
     const slogMatch = SLOG_RE.exec(filename);
     if (slogMatch !== null) {
       const sessionId = slogMatch[1]!;
@@ -121,11 +145,22 @@ export async function unzipBundle(
     deferred.push([filename, zipObject]);
   }
 
-  if (manifestJson === null) {
-    return err({ kind: 'missing_manifest' });
-  }
+  const rollingSealIds = [...new Set([...rollingJson.keys(), ...rollingSig.keys()])].sort();
 
-  if (manifestSigHex === null) {
+  if (manifestJson === null) {
+    // No classic manifest AND no rolling manifest — nothing seals this bundle.
+    // This is the `no_seal` case, and it is the same error it has always been.
+    //
+    // A stray classic `manifest.sig` with no `manifest.json` is also
+    // `missing_manifest`, rolling seals present or not: a classic signature whose
+    // manifest is gone is exactly what that error names, and it was already a
+    // hard error before the rolling seal existed.
+    if (rollingSealIds.length === 0 || manifestSigHex !== null) {
+      return err({ kind: 'missing_manifest' });
+    }
+  } else if (manifestSigHex === null) {
+    // A classic manifest with no classic signature. The rolling seals cannot
+    // stand in for it — they sign their own sessions, not this manifest.
     return err({ kind: 'missing_signature' });
   }
 
@@ -138,17 +173,31 @@ export async function unzipBundle(
   // deferred entry will trigger unexpected_file (parse-bundle will then surface
   // the manifest error independently).
   // ---------------------------------------------------------------------------
+  // On a rolling-sealed bundle the whitelist is the UNION over every rolling
+  // manifest, since each one lists the files under review as of its own session.
   const submissionPaths = new Set<string>();
-  try {
-    const parsed = JSON.parse(manifestJson) as { submission_files?: Array<{ path?: unknown }> };
-    for (const f of parsed.submission_files ?? []) {
-      if (typeof f?.path === 'string') {
-        submissionPaths.add(f.path);
+  const collectSubmissionPaths = (text: string): void => {
+    try {
+      const parsed = JSON.parse(text) as { submission_files?: Array<{ path?: unknown }> };
+      for (const f of parsed.submission_files ?? []) {
+        if (typeof f?.path === 'string') {
+          submissionPaths.add(f.path);
+        }
       }
+    } catch {
+      // Malformed manifest JSON — parse-bundle will surface invalid_manifest, or
+      // rolling-seal.ts will surface an `invalid_json` defect. Leave this
+      // manifest out of the whitelist.
     }
-  } catch {
-    // Malformed manifest JSON — parse-bundle will surface invalid_manifest.
-    // Leave submissionPaths empty → all deferred entries become unexpected_file.
+  };
+  if (manifestJson !== null) {
+    collectSubmissionPaths(manifestJson);
+  }
+  for (const sessionId of rollingSealIds) {
+    const text = rollingJson.get(sessionId);
+    if (text !== undefined) {
+      collectSubmissionPaths(text);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -195,9 +244,16 @@ export async function unzipBundle(
     metaJson: metaContents.get(sessionId)!,
   }));
 
+  const rollingSeals: RawRollingSealFiles[] = rollingSealIds.map((sessionId) => ({
+    sessionId,
+    manifestJson: rollingJson.get(sessionId) ?? null,
+    sigHex: rollingSig.get(sessionId) ?? null,
+  }));
+
   return ok({
     manifestJson,
     manifestSigHex,
+    rollingSeals,
     sessions,
     submissionFiles,
   });
