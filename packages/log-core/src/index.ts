@@ -36,8 +36,47 @@ export { signCheckpoint, verifyCheckpoint } from './checkpoint-signer.js';
 export type { Checkpoint } from './checkpoint-signer.js';
 
 // Assignment manifest (.provenance-manifest / provenance-manifest)
-export { parseManifest, verifyManifest, signManifest } from './manifest.js';
-export type { Manifest, ManifestError } from './manifest.js';
+export {
+  parseManifest,
+  verifyManifest,
+  signManifest,
+  verifyManifestChain,
+  manifestFormatVersion,
+  MANIFEST_FORMAT_VERSION_LEGACY,
+  MANIFEST_FORMAT_VERSION_2,
+} from './manifest.js';
+export type {
+  Manifest,
+  ManifestError,
+  ManifestChainError,
+  ManifestChainOk,
+  ManifestCollaboration,
+  ManifestSubmission,
+  ManifestScope,
+} from './manifest.js';
+
+// Course certificate (root → course key, Manifest 2.0 trust chain)
+export {
+  parseCourseCert,
+  verifyCourseCert,
+  signCourseCert,
+  checkCertWindow,
+  buildCourseCertSignedPayload,
+  parseIsoInstantMs,
+} from './course-cert.js';
+export type { CourseCert, CourseCertError, CertWindowStatus } from './course-cert.js';
+
+// Capture policy (professor-facing capture controls)
+export {
+  resolveCapturePolicy,
+  isEventKindCaptured,
+  DEFAULT_CAPTURE_POLICY,
+  FLOOR_EVENT_KINDS,
+  POLICY_GATED_EVENT_KINDS,
+  HEARTBEAT_INTERVAL_MIN_MS,
+  HEARTBEAT_INTERVAL_MAX_MS,
+} from './policy.js';
+export type { CapturePolicy, CapturePolicyBlock } from './policy.js';
 
 // Events
 export type {
@@ -47,6 +86,9 @@ export type {
   Position,
   Range,
   DocChangeDelta,
+  HostInfo,
+  EnrollmentToken,
+  SessionIdentity,
   SessionStartPayload,
   SessionHeartbeatPayload,
   SessionResumedPayload,

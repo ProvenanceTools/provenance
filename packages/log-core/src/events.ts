@@ -3,6 +3,8 @@
  * PRD §4.2 (v1 event table) + §4.3 / §4.6 / §4.8 additive events.
  */
 
+import type { Manifest } from './manifest.js';
+
 // ---------------------------------------------------------------------------
 // Shared geometry types
 // ---------------------------------------------------------------------------
@@ -21,6 +23,58 @@ export type Range = {
 // Per-event payload types
 // ---------------------------------------------------------------------------
 
+/**
+ * Editor/host metadata. Replaces the VS Code-shaped `vscode` block in
+ * `session.start` 2.0 (program spec §5).
+ *
+ * provjet and provnvim currently have to pretend into a field named `vscode`,
+ * filling it with editor-generic values because renaming a signed field is a
+ * monorepo-owned format change. `host` un-warps that.
+ */
+export type HostInfo = {
+  editor: 'vscode' | 'jetbrains' | 'neovim';
+  editor_version: string;
+  /**
+   * Editor build/commit identifier. `''` is permitted and expected for VS Code,
+   * whose public extension API does not expose one.
+   */
+  editor_build: string;
+  platform: string;
+};
+
+/**
+ * A course-signed statement that a student pubkey belongs to a student in a
+ * course. Signed by the course key, which the root-signed `course_cert`
+ * authorizes (program spec §2).
+ *
+ * `student_ref` is an **opaque UUID, never a raw SID**. In a shared CS 61B repo
+ * one partner can read the other's `session.start`; the server maps
+ * `student_ref` → `roster_entries.id`, so a partner sees only a UUID.
+ *
+ * TYPES ONLY at this stage. Key derivation, token issuance, and the countersign
+ * flow are S2 — nothing in `log-core` derives or validates these yet.
+ */
+export type EnrollmentToken = {
+  /** Opaque roster reference. Never a student ID number, name, or email. */
+  student_ref: string;
+  course_id: string;
+  /** Hex ed25519 public key of the student's per-course key. */
+  student_pubkey: string;
+  issued_at: string;
+  expires_at: string;
+  /** Hex ed25519 signature by the COURSE key over the token. */
+  course_sig: string;
+};
+
+export type SessionIdentity = {
+  enrollment: EnrollmentToken;
+  /**
+   * The student per-course key's signature over `session_pubkey`. This is the
+   * link that binds an ephemeral session key to a named contributor.
+   */
+  session_pubkey_sig: string;
+};
+
 export type SessionStartPayload = {
   format_version: string;
   session_id: string;
@@ -28,7 +82,14 @@ export type SessionStartPayload = {
   assignment: { id: string; semester: string };
   manifest_sig: string;
   machine_id: string;
-  vscode: {
+  /**
+   * @deprecated Superseded by {@link SessionStartPayload.host} in `session.start` 2.0.
+   *
+   * Retained as an optional field so 1.x bundles keep type-checking on read —
+   * 1.x parsing is supported permanently (program spec §9). 2.0 writers emit
+   * `host` only and omit this.
+   */
+  vscode?: {
     version: string;
     /**
      * VS Code build commit hash (40-char hex, shown in Help → About).
@@ -40,6 +101,22 @@ export type SessionStartPayload = {
   };
   recorder: { version: string; extension_id: string };
   session_pubkey: string;
+
+  // --- 2.0 additions (program spec §5). All optional at the type level so 1.x
+  // --- payloads remain valid; a 2.0 writer populates all three.
+
+  /**
+   * The FULL manifest: signed payload + `sig` + `course_cert`.
+   *
+   * This is what turns validation check 2 into a real check. `verify-session-binding.ts`
+   * today can only compare `manifest_sig` across sessions for equality, because
+   * the signed payload never enters the bundle. Carrying the whole manifest lets
+   * the analyzer walk root → course → manifest → session entirely offline,
+   * trusting nothing from the server.
+   */
+  manifest?: Manifest;
+  identity?: SessionIdentity;
+  host?: HostInfo;
 };
 
 export type SessionHeartbeatPayload = {
