@@ -16,7 +16,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { mswServer } from '../../test-setup.js';
 import { TuningView } from './TuningView.js';
-import { ALL_FLAG_IDS } from '@provenance/analysis-core/heuristics/known-flag-ids.js';
+import {
+  ALL_FLAG_IDS,
+  CROSS_SUBMISSION_HEURISTIC_IDS,
+} from '@provenance/analysis-core/heuristics/known-flag-ids.js';
 import {
   DEFAULT_COURSE_SLUG,
   DEFAULT_SEMESTER_ID,
@@ -216,6 +219,42 @@ describe('TuningView', () => {
     for (const s of allSliders) {
       expect(s).toHaveAccessibleName();
     }
+  });
+
+  it('disables the weight slider for cross-submission heuristics and explains why, while keeping the toggle functional', async () => {
+    // editing_pattern_clone and paste_shared_across_students are cross-submission
+    // heuristics: cross_flags has no score_contribution/weight column and cross
+    // flags feed no score anywhere (only per-submission `flags` rows reach
+    // computeScore). The weight slider for these ids cannot do anything, so it
+    // must be disabled with a visible (non-color-only) explanation. The
+    // enable/disable toggle genuinely works server-side and must stay usable.
+    await renderAndWaitForLoad();
+
+    expect(CROSS_SUBMISSION_HEURISTIC_IDS.length).toBeGreaterThan(0);
+
+    for (const id of CROSS_SUBMISSION_HEURISTIC_IDS) {
+      const slider = screen.getByTestId(`slider-${id}`);
+      expect(slider).toBeDisabled();
+
+      // The explanation must be visible text, not just an attribute or color.
+      const note = screen.getByTestId(`weight-note-${id}`);
+      expect(note).toBeVisible();
+      expect(note).toHaveTextContent(/cross-submission flags are surfaced, not scored/i);
+
+      // The slider must be programmatically associated with the explanation.
+      expect(slider).toHaveAccessibleDescription(/cross-submission flags are surfaced/i);
+
+      // The toggle must remain fully functional.
+      const toggle = screen.getByTestId(`toggle-${id}`);
+      expect(toggle).not.toBeDisabled();
+      expect(toggle).toBeChecked();
+      fireEvent.click(toggle);
+      expect(toggle).not.toBeChecked();
+    }
+
+    // A regular per-submission heuristic must be unaffected.
+    expect(screen.getByTestId('slider-large_paste')).not.toBeDisabled();
+    expect(screen.queryByTestId('weight-note-large_paste')).not.toBeInTheDocument();
   });
 
   it('slider change triggers dry-run after 300ms debounce', async () => {

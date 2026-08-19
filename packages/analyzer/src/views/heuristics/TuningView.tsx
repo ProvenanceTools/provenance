@@ -21,7 +21,10 @@ import { useActiveSemester } from '../../api/use-active-semester.js';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, Label } from 'recharts';
 import { useActiveConfig, useCommitConfig, useDryRunConfig } from '../../api/queries.js';
 import type { HeuristicConfigBody } from '@provenance/shared/api-schemas';
-import { ALL_FLAG_IDS } from '@provenance/analysis-core/heuristics/known-flag-ids.js';
+import {
+  ALL_FLAG_IDS,
+  CROSS_SUBMISSION_HEURISTIC_IDS,
+} from '@provenance/analysis-core/heuristics/known-flag-ids.js';
 import { RecomputeProgress } from './RecomputeProgress.js';
 
 // ---------------------------------------------------------------------------
@@ -36,6 +39,20 @@ import { RecomputeProgress } from './RecomputeProgress.js';
 // ---------------------------------------------------------------------------
 
 const KNOWN_HEURISTIC_IDS = ALL_FLAG_IDS;
+
+// ---------------------------------------------------------------------------
+// Cross-submission heuristics: weight does not apply.
+//
+// `cross_flags` has no `score_contribution`/`weight_at_compute` column, and
+// cross flags feed no score anywhere — only per-submission `flags` rows reach
+// computeScore → submissions.score_total. So for these ids the weight slider
+// cannot do anything; dragging it would let staff believe they'd changed how
+// a cross flag is weighted when nothing downstream reads that value. The
+// enable/disable toggle (per_flag.enabled, honoured by run-cross.ts) is real
+// and stays fully functional. Derived from analysis-core's
+// CROSS_HEURISTIC_REGISTRY via known-flag-ids.ts so a future third cross
+// heuristic inherits this automatically.
+const CROSS_SUBMISSION_HEURISTIC_ID_SET = new Set(CROSS_SUBMISSION_HEURISTIC_IDS);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -246,6 +263,8 @@ export function TuningView() {
         >
           {KNOWN_HEURISTIC_IDS.map((id) => {
             const flagCfg = candidate.per_flag[id] ?? { enabled: true, weight: 1.0 };
+            const isCrossFlag = CROSS_SUBMISSION_HEURISTIC_ID_SET.has(id);
+            const weightNoteId = `tuning-weight-note-${id}`;
             return (
               <div key={id} className="px-4 py-3 border-b border-gray-100">
                 <div className="flex items-center justify-between mb-1">
@@ -275,15 +294,26 @@ export function TuningView() {
                     step={0.1}
                     value={flagCfg.weight}
                     onChange={(e) => handleWeight(id, parseFloat(e.target.value))}
-                    className="flex-1 h-1"
+                    disabled={isCrossFlag}
+                    className="flex-1 h-1 disabled:opacity-50 disabled:cursor-not-allowed"
                     data-testid={`slider-${id}`}
                     aria-labelledby={`tuning-label-${id}`}
                     aria-valuetext={`${flagCfg.weight.toFixed(1)} weight`}
+                    aria-describedby={isCrossFlag ? weightNoteId : undefined}
                   />
                   <span className="text-xs text-gray-500 w-8 text-right">
                     {flagCfg.weight.toFixed(1)}
                   </span>
                 </div>
+                {isCrossFlag && (
+                  <p
+                    id={weightNoteId}
+                    className="mt-1 text-xs text-gray-600"
+                    data-testid={`weight-note-${id}`}
+                  >
+                    Cross-submission flags are surfaced, not scored. Weight does not apply.
+                  </p>
+                )}
               </div>
             );
           })}
