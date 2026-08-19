@@ -389,4 +389,89 @@ describe('writeRollingSeal', () => {
     expect(await fs.readFile(second.manifestPath, 'utf8')).toBe(second.canonicalJson);
     expect(await fs.readFile(second.sigPath, 'utf8')).toBe(second.signatureHex);
   });
+
+  // -------------------------------------------------------------------------
+  // The `final` marker. Only dispose() passes it, and passing it promotes the
+  // reader from prefix to whole-file semantics — so what this module owes is
+  // that the field lands inside the SIGNED bytes and is absent otherwise.
+  // -------------------------------------------------------------------------
+
+  describe('the `final` marker', () => {
+    it('omits `final` entirely by default', async () => {
+      // Every roll but the last: session start and each checkpoint. The bytes
+      // must be exactly what 1.2 emitted before the field existed, because two
+      // other recorder implementations verify against them.
+      const result = await writeRollingSeal(opts());
+      expect(result.kind).toBe('written');
+      if (result.kind !== 'written') return;
+
+      expect(result.canonicalJson).not.toContain('final');
+      expect(JSON.parse(result.canonicalJson)).not.toHaveProperty('final');
+    });
+
+    it('omits `final` when explicitly passed false, rather than writing it', async () => {
+      const result = await writeRollingSeal(opts({ final: false }));
+      if (result.kind !== 'written') throw new Error('expected written');
+      expect(result.canonicalJson).not.toContain('final');
+    });
+
+    it('writes `final: true` when asked, and keeps the rolling-seal rules', async () => {
+      const result = await writeRollingSeal(opts({ final: true }));
+      expect(result.kind).toBe('written');
+      if (result.kind !== 'written') return;
+
+      const parsed = JSON.parse(result.canonicalJson) as unknown;
+      const shape = validateBundleManifestShape(parsed);
+      expect(shape.ok).toBe(true);
+      if (!shape.ok) return;
+
+      expect(shape.value.final).toBe(true);
+      // Still exactly one session, still bound to its filename.
+      expect(validateRollingSessionManifest(shape.value, SESSION_A).ok).toBe(true);
+    });
+
+    it('signs the marker: the on-disk signature covers `final`', async () => {
+      const result = await writeRollingSeal(opts({ final: true }));
+      if (result.kind !== 'written') throw new Error('expected written');
+
+      const json = await fs.readFile(result.manifestPath, 'utf8');
+      const sigHex = await fs.readFile(result.sigPath, 'utf8');
+      const pubkey = hexToBytes(keypair.publicKeyHex);
+
+      // As written, it verifies.
+      expect(await ed.verifyAsync(hexToBytes(sigHex), new TextEncoder().encode(json), pubkey)).toBe(
+        true,
+      );
+
+      // Strip the marker to downgrade the seal back to a prefix commitment,
+      // keeping the signature. This must not verify — otherwise a student could
+      // delete one word and re-open the append hole.
+      const downgraded = JSON.parse(json) as Record<string, unknown>;
+      delete downgraded['final'];
+      const downgradedJson = canonicalize(downgraded);
+      expect(downgradedJson).not.toBe(json);
+      expect(
+        await ed.verifyAsync(hexToBytes(sigHex), new TextEncoder().encode(downgradedJson), pubkey),
+      ).toBe(false);
+    });
+
+    it('changes nothing else about the manifest', async () => {
+      // `final` is the only difference between the two, so a diff of the
+      // canonical bytes is exactly one key. Anything else would mean the
+      // dispose-time seal quietly disagrees with the checkpoint seals.
+      await fs.writeFile(path.join(assignmentRoot, 'hw.py'), 'print(1)\n', 'utf8');
+
+      const nonFinal = await writeRollingSeal(opts());
+      const isFinal = await writeRollingSeal(opts({ final: true }));
+      if (nonFinal.kind !== 'written' || isFinal.kind !== 'written') {
+        throw new Error('expected written');
+      }
+
+      const a = JSON.parse(nonFinal.canonicalJson) as Record<string, unknown>;
+      const b = JSON.parse(isFinal.canonicalJson) as Record<string, unknown>;
+      expect(b['final']).toBe(true);
+      delete b['final'];
+      expect(canonicalize(b)).toBe(canonicalize(a));
+    });
+  });
 });

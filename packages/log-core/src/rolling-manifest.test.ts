@@ -1,13 +1,18 @@
 import { describe, it, expect } from 'vitest';
+import * as ed from '@noble/ed25519';
+import { hexToBytes } from '@noble/hashes/utils.js';
 import {
   ROLLING_MANIFEST_FORMAT_VERSION,
   rollingManifestFilenames,
   parseRollingManifestFilename,
   validateRollingSessionManifest,
   describeRollingManifestError,
+  isFinalRollingSeal,
 } from './rolling-manifest.js';
 import { validateBundleManifestShape } from './bundle.js';
 import type { BundleManifest } from './bundle.js';
+import { signBundleManifest } from './bundle-sign.js';
+import { canonicalize } from './canonical.js';
 
 const SESSION_A = '11111111-1111-4111-8111-111111111111';
 const SESSION_B = '22222222-2222-4222-8222-222222222222';
@@ -202,5 +207,129 @@ describe('validateRollingSessionManifest — the one-file rule', () => {
         actual: SESSION_B,
       }),
     ).toContain(SESSION_B);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The `final` marker — whole-file vs. prefix semantics
+// ---------------------------------------------------------------------------
+
+describe('isFinalRollingSeal', () => {
+  it('is true only for a literal `true`', () => {
+    expect(isFinalRollingSeal(rolling({ final: true }))).toBe(true);
+  });
+
+  it('reads an absent marker as NOT final', () => {
+    // The overwhelmingly common case: every roll but the last one. Reading
+    // absence as final would promote a still-growing log to whole-file
+    // semantics and turn the student's next keystroke into a finding.
+    expect(isFinalRollingSeal(rolling())).toBe(false);
+    expect(isFinalRollingSeal(rolling({ final: false }))).toBe(false);
+  });
+
+  it('falls back to the SAFER prefix reading for any non-boolean value', () => {
+    // A truthy string must not buy whole-file strictness. The shape validator
+    // rejects these outright, but the predicate is the last line of defence and
+    // must not depend on having been called after it.
+    for (const junk of ['true', 1, {}, []]) {
+      expect(isFinalRollingSeal({ final: junk } as unknown as BundleManifest)).toBe(false);
+    }
+  });
+});
+
+describe('validateBundleManifestShape — the `final` marker', () => {
+  it('accepts a rolling manifest with no `final` at all', () => {
+    expect(validateBundleManifestShape(rolling()).ok).toBe(true);
+  });
+
+  it('accepts `final: true` and `final: false`', () => {
+    expect(validateBundleManifestShape(rolling({ final: true })).ok).toBe(true);
+    expect(validateBundleManifestShape(rolling({ final: false })).ok).toBe(true);
+  });
+
+  it('preserves `final` through validation, so canonicalization still covers it', () => {
+    // The validator returns the ORIGINAL object. If it ever started rebuilding
+    // one field at a time, `final` would be dropped silently and every reader
+    // would fall back to prefix semantics without anything failing.
+    const r = validateBundleManifestShape(rolling({ final: true }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.final).toBe(true);
+    expect(isFinalRollingSeal(r.value)).toBe(true);
+  });
+
+  it('rejects a non-boolean `final`', () => {
+    const r = validateBundleManifestShape(rolling({ final: 'true' as unknown as boolean }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toEqual({
+        kind: 'invalid_field',
+        field: 'final',
+        reason: expect.any(String),
+      });
+    }
+  });
+
+  it('tolerates `final` on a classic 1.1 manifest rather than failing check 1', () => {
+    // Meaningless there — a classic seal is already whole-file — but a shape
+    // error would fail the manifest signature check, which is an accusation,
+    // over a field that grants nothing.
+    expect(validateBundleManifestShape(rolling({ format_version: '1.1', final: true })).ok).toBe(
+      true,
+    );
+  });
+});
+
+describe('`final` is inside the SIGNED payload', () => {
+  const privkey = new Uint8Array(32).fill(7);
+
+  it('changes the canonical bytes, so one signature cannot cover both readings', async () => {
+    const nonFinal = await signBundleManifest(rolling(), privkey);
+    const isFinal = await signBundleManifest(rolling({ final: true }), privkey);
+
+    expect(isFinal.canonicalJson).not.toBe(nonFinal.canonicalJson);
+    expect(isFinal.canonicalJson).toContain('"final":true');
+    expect(isFinal.signatureHex).not.toBe(nonFinal.signatureHex);
+  });
+
+  it('omits the key entirely when not final, so 1.2 bytes are unchanged by this feature', async () => {
+    // Two other recorder implementations verify against these canonical bytes.
+    // Writing `final: false` instead of omitting it would be a silent breaking
+    // change to both.
+    const { canonicalJson } = await signBundleManifest(rolling(), privkey);
+    expect(canonicalJson).not.toContain('final');
+  });
+
+  it('STRIPPING `final` from a signed manifest breaks the signature', async () => {
+    const signed = await signBundleManifest(rolling({ final: true }), privkey);
+    const pubkey = await ed.getPublicKeyAsync(privkey);
+    const message = (s: string): Uint8Array => new TextEncoder().encode(s);
+
+    // The seal as written verifies.
+    expect(
+      await ed.verifyAsync(hexToBytes(signed.signatureHex), message(signed.canonicalJson), pubkey),
+    ).toBe(true);
+
+    // Downgrade it to a prefix commitment by deleting the marker while keeping
+    // the signature. This is the attack the field exists to survive.
+    const stripped = canonicalize(rolling());
+    expect(stripped).not.toBe(signed.canonicalJson);
+    expect(await ed.verifyAsync(hexToBytes(signed.signatureHex), message(stripped), pubkey)).toBe(
+      false,
+    );
+  });
+
+  it('ADDING `final` to a non-final signed manifest breaks the signature', async () => {
+    const signed = await signBundleManifest(rolling(), privkey);
+    const pubkey = await ed.getPublicKeyAsync(privkey);
+    const forged = canonicalize(rolling({ final: true }));
+
+    expect(
+      await ed.verifyAsync(
+        hexToBytes(signed.signatureHex),
+        new TextEncoder().encode(forged),
+        pubkey,
+      ),
+    ).toBe(false);
   });
 });

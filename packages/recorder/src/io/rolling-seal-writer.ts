@@ -21,6 +21,20 @@
  *      public half is recorded in `session.start`. Check 1 verifies a rolling
  *      seal against exactly one pubkey, so signing with anything else fails.
  *
+ * ## The `final` marker
+ *
+ * Every roll but one is taken while the log is still growing, so its digests
+ * commit to a PREFIX and a reader must not treat later bytes as tampering. The
+ * exception is the roll `dispose()` takes after `session.end` is emitted and the
+ * writer flushed: that log is finished, and saying so — `final: true`, inside
+ * the signed payload — is what lets the reader enforce WHOLE-FILE equality and
+ * catch an entry appended after the session ended.
+ *
+ * The claim is the caller's to make, because only the caller knows the ordering.
+ * This module just records it. Passing `final` from a checkpoint would assert
+ * that a live log is finished and turn the student's next keystroke into a
+ * finding, so exactly one call site sets it.
+ *
  * ## What this module must never touch
  *
  * `manifest.json` / `manifest.sig`. Those are the classic seal, written only by
@@ -94,6 +108,21 @@ export type RollingSealOptions = {
    * checkpoint would be the pathological version of this feature.
    */
   extensionHash: string;
+  /**
+   * Mark this seal FINAL — the last one this session will ever get, so its
+   * digests commit to the WHOLE log rather than to a prefix.
+   *
+   * Set by exactly ONE caller: the `dispose()`-time roll in
+   * `session/session-registry.ts`, which runs after `session.end` has been
+   * emitted, the writer flushed and the pending checkpoint drained. That is the
+   * only moment at which the claim is true.
+   *
+   * Never set it on the session-start roll or on a checkpoint roll. Doing so
+   * would assert that a log which is about to keep growing is finished, and the
+   * reader would then read the student's own next keystroke as an append past a
+   * final seal — a manufactured finding against someone still working.
+   */
+  final?: boolean;
   /** Injectable fs for the atomic write, so tests can force rename failures. */
   _fs?: AtomicWriteFs;
 };
@@ -179,6 +208,7 @@ export async function writeRollingSeal(opts: RollingSealOptions): Promise<Rollin
     sessionPrivkey,
     extensionHash,
   } = opts;
+  const isFinal = opts.final === true;
 
   try {
     // Step 1: hashes of this session's own log files, as they are right now.
@@ -208,6 +238,12 @@ export async function writeRollingSeal(opts: RollingSealOptions): Promise<Rollin
         },
       ],
       submission_files: submissionFiles,
+      // OMITTED entirely unless final, never written as `final: false`. A
+      // non-final rolling manifest must stay byte-identical to what 1.2 emitted
+      // before this field existed: the canonical bytes are the signed message,
+      // and they are pinned by cross-language conformance vectors that two other
+      // recorder implementations verify against.
+      ...(isFinal ? { final: true } : {}),
     };
 
     // Step 4: sign with THIS session's key.

@@ -25,7 +25,13 @@
  * (validation/verify-manifest-sig.ts). The loader checks structure only.
  */
 
-import { validateBundleManifestShape, sha256Hex, ok, err } from '@provenance/log-core';
+import {
+  validateBundleManifestShape,
+  sha256Hex,
+  ok,
+  err,
+  isFinalRollingSeal,
+} from '@provenance/log-core';
 import type { BundleManifest, Result } from '@provenance/log-core';
 import { unzipBundle } from './unzip.js';
 import { parseSession } from './parse-session.js';
@@ -34,7 +40,7 @@ import {
   reconcileRollingSealsWithSessions,
   synthesizeRollingUnionManifest,
 } from './rolling-seal.js';
-import { computeSlogCoverage, computeMetaCoverage } from './rolling-coverage.js';
+import { computeSlogCoverage, computeMetaCoverage, wholeFileCoverage } from './rolling-coverage.js';
 import type { RollingSealCoverage } from './rolling-coverage.js';
 import type {
   Bundle,
@@ -225,10 +231,22 @@ export async function loadBundle(
         const files = filesBySession.get(seal.sessionId);
         if (files === undefined) continue; // no_session_log — reported as a defect
         const entry = seal.manifest.sessions[0];
+        // A FINAL seal (written by dispose() over a finished, flushed log, and
+        // signed) commits to the whole file, so it skips the prefix search
+        // entirely and an append past it fails. Everything else is still
+        // growing when it is signed and keeps prefix semantics — the difference
+        // between catching a post-session append and accusing a student whose
+        // editor is still open. See loader/rolling-coverage.ts.
+        const final = isFinalRollingSeal(seal.manifest);
         coverage.push({
           sessionId: seal.sessionId,
-          slog: computeSlogCoverage(files.slogText, files.slogSha256, entry.slog_sha256),
-          meta: computeMetaCoverage(files.metaJson, files.metaSha256, entry.meta_sha256),
+          final,
+          slog: final
+            ? wholeFileCoverage(files.slogSha256, entry.slog_sha256)
+            : computeSlogCoverage(files.slogText, files.slogSha256, entry.slog_sha256),
+          meta: final
+            ? wholeFileCoverage(files.metaSha256, entry.meta_sha256)
+            : computeMetaCoverage(files.metaJson, files.metaSha256, entry.meta_sha256),
         });
       }
     }

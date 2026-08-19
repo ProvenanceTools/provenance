@@ -70,6 +70,26 @@ export type BundleManifest = {
    * Absent (undefined) on legacy 1.0 bundles — read as `submission_files ?? []`.
    */
   submission_files?: ReadonlyArray<SubmissionFileEntry>;
+  /**
+   * ROLLING seals (1.2) only: this seal is the LAST one its session will ever
+   * get, so `slog_sha256` / `meta_sha256` commit to the WHOLE file rather than
+   * to a prefix. See `rolling-manifest.ts` for the full argument.
+   *
+   * Written only by the recorder's `dispose()`-time roll, after `session.end`
+   * has been emitted and the writer flushed — i.e. at the one moment the log is
+   * provably finished. Absent everywhere else, and absent is NOT a finding: a
+   * session killed by a crash, a power cut, a full disk or a `git checkout`
+   * that removed `.provenance/` simply never gets one, and those students have
+   * done nothing wrong.
+   *
+   * Being inside this object is the point: `signBundleManifest` canonicalizes
+   * the whole manifest, so `final` is covered by the signature and cannot be
+   * added, flipped or stripped without the session's private key.
+   *
+   * Meaningless on 1.0 / 1.1, which are sealed once over a finished log and
+   * therefore already carry whole-file semantics. Readers ignore it there.
+   */
+  final?: boolean;
 };
 
 /**
@@ -292,6 +312,18 @@ export function validateBundleManifestShape(
         }
       }
     }
+  }
+
+  // `final` (1.2 rolling seals). Optional everywhere, but when present it must
+  // be a real boolean: a reader that decides whole-file vs. prefix semantics off
+  // this field must never be steered by a truthy string.
+  //
+  // Deliberately NOT rejected on 1.0 / 1.1. It is meaningless there (a classic
+  // seal is taken once over a finished log and is already whole-file), and a
+  // shape error would fail check 1 — an accusation — over a field that grants
+  // nothing. Readers ignore it outside 1.2.
+  if (obj['final'] !== undefined && typeof obj['final'] !== 'boolean') {
+    return err({ kind: 'invalid_field', field: 'final', reason: 'must be a boolean when present' });
   }
 
   return ok(value as BundleManifest);
