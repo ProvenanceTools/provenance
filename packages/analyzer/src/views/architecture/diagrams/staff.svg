@@ -311,7 +311,7 @@
 <g id="node22" class="node">
 <title>tune</title>
 <path stroke-width="1.3" d="M1802.52,-179.84C1802.52,-179.84 1659.48,-179.84 1659.48,-179.84 1654.08,-179.84 1648.66,-174.43 1648.66,-169.02 1648.66,-169.02 1648.66,-158.2 1648.66,-158.2 1648.66,-152.79 1654.08,-147.38 1659.48,-147.38 1659.48,-147.38 1802.52,-147.38 1802.52,-147.38 1807.92,-147.38 1813.34,-152.79 1813.34,-158.2 1813.34,-158.2 1813.34,-169.02 1813.34,-169.02 1813.34,-174.43 1807.92,-179.84 1802.52,-179.84" class="f-ana s-ana"/>
-<text xml:space="preserve" text-anchor="middle" x="1731" y="-164.34" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">/tuning — 26 flag weights</text>
+<text xml:space="preserve" text-anchor="middle" x="1731" y="-164.34" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">/tuning — 29 flag weights</text>
 <text xml:space="preserve" text-anchor="middle" x="1731" y="-154.59" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">(0.0–2.0) + on/off, not thresholds</text>
 </g>
 
