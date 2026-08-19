@@ -49,6 +49,7 @@ import {
   SemesterListResponseSchema,
   AuditListResponseSchema,
   GradescopeIngestResponseSchema,
+  EnrollmentResponseSchema,
 } from '@provenance/shared/api-schemas';
 import type {
   Membership,
@@ -1090,6 +1091,46 @@ export function useRevokeToken() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.myTokens });
     },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Student enrollment (program spec §5a — S2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mutation: POST /semesters/:semesterId/enrollment — mint this student's
+ * enrollment token.
+ *
+ * The one call in this file made by a student rather than by course staff. Two
+ * deliberate omissions:
+ *
+ *  - **No `onSuccess` invalidation.** Nothing in the query cache describes an
+ *    enrollment; a student can read no endpoint that would change. The minted
+ *    token lives in component state and is shown once, exactly like the API
+ *    token secret in `useCreateToken`.
+ *  - **No retry, and no wrapper query.** Minting is not idempotent from the
+ *    server's point of view (it writes a `student_enrollments` row and
+ *    supersedes any previous key), so a silent retry would churn rows behind a
+ *    student who pressed the button once. `useMutation` does not retry by
+ *    default; this comment is here so nobody adds one.
+ *
+ * The response is validated against `EnrollmentResponseSchema` before it
+ * reaches the view, so a truncated or altered body fails here rather than being
+ * handed to a student as a token to paste.
+ */
+export function useMintEnrollment(semesterId: string) {
+  return useMutation({
+    mutationFn: (studentPubkey: string) =>
+      apiFetch(
+        `/semesters/${semesterId}/enrollment`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ student_pubkey: studentPubkey }),
+        },
+        EnrollmentResponseSchema,
+      ),
   });
 }
 
