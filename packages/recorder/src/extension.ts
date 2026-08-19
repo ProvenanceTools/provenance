@@ -38,7 +38,7 @@ import {
 import type { EnrollmentCommandDeps } from './commands/enrollment.js';
 import { startSession, SessionRegistry } from './session/session-registry.js';
 import type { ActiveSession, HeartbeatVscodeDeps } from './session/session-registry.js';
-import { resolveOwnerRoot } from './session/session-router.js';
+import { isRepoOwnedByRoot, resolveOwnerRoot } from './session/session-router.js';
 import type { Manifest } from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
@@ -340,6 +340,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             fsPath,
             found.map((f) => f.root),
           ) === root,
+        // A repository root is an ANCESTOR of the assignment root it serves, so
+        // the containment predicate above can never match it — see
+        // isRepoOwnedByRoot and spec §3 S14(a).
+        isRepoOwnedByThisRoot: (repoRootFsPath: string) =>
+          isRepoOwnedByRoot(
+            repoRootFsPath,
+            root,
+            found.map((f) => f.root),
+          ),
       });
       context.subscriptions.push(...session.ownDisposables);
       session.ownDisposables.length = 0;
@@ -390,6 +399,10 @@ async function rescan(
         extensionDistPath,
         secrets: context.secrets,
         isOwnedByThisRoot: (fsPath: string) => resolveOwnerRoot(fsPath, allRoots) === root,
+        // See the activation call site: a repository root is an ancestor of the
+        // assignment root, which `resolveOwnerRoot` cannot express.
+        isRepoOwnedByThisRoot: (repoRootFsPath: string) =>
+          isRepoOwnedByRoot(repoRootFsPath, root, allRoots),
       });
       context.subscriptions.push(...session.ownDisposables);
       session.ownDisposables.length = 0;

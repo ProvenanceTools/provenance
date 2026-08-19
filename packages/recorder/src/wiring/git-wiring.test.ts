@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import * as path from 'node:path';
 import type * as vscode from 'vscode';
 import { startGitWiring } from './git-wiring.js';
+import { isRepoOwnedByRoot, resolveOwnerRoot } from '../session/session-router.js';
 import { ExplanationTagger } from '../events/explanation-tags.js';
 
 // ---------------------------------------------------------------------------
@@ -216,7 +218,7 @@ describe('rootUri-based ownership routing', () => {
             getAPI: () => ({ repositories: [repo], onDidOpenRepository: () => ({ dispose() {} }) }),
           },
         }) as unknown as import('vscode').Extension<unknown>,
-      isOwnedByThisRoot: (fsPath) => fsPath === '/ws/cats',
+      isRepoOwnedByThisRoot: (fsPath) => fsPath === '/ws/cats',
     });
     fireChange('def');
     await wiring.settled();
@@ -234,13 +236,113 @@ describe('rootUri-based ownership routing', () => {
             getAPI: () => ({ repositories: [repo], onDidOpenRepository: () => ({ dispose() {} }) }),
           },
         }) as unknown as import('vscode').Extension<unknown>,
-      isOwnedByThisRoot: (fsPath) => fsPath === '/ws/cats',
+      isRepoOwnedByThisRoot: (fsPath) => fsPath === '/ws/cats',
     });
     fireChange('def');
     expect(emit).not.toHaveBeenCalled();
   });
 
-  it('defaults to owning everything when isOwnedByThisRoot is omitted (regression)', async () => {
+  // -------------------------------------------------------------------------
+  // Nested assignment inside a shared repository — the layout 61B/61C actually
+  // ship, and the one for which git capture was silently 100% off.
+  //
+  // These wire the REAL predicate rather than a hand-written lambda, because the
+  // defect was never in git-wiring's own logic: it was in which predicate the
+  // caller handed it. A test that fakes the predicate cannot catch that.
+  // -------------------------------------------------------------------------
+
+  function makeExtension(repo: unknown) {
+    return {
+      exports: {
+        getAPI: () => ({ repositories: [repo], onDidOpenRepository: () => ({ dispose() {} }) }),
+      },
+    } as unknown as import('vscode').Extension<unknown>;
+  }
+
+  const REPO_ROOT = path.join('/ws', 'cs61b-repo');
+  const PROJ1 = path.join(REPO_ROOT, 'proj1');
+  const PROJ2 = path.join(REPO_ROOT, 'proj2');
+
+  it('emits git.event when the assignment root is NESTED inside the repo root', async () => {
+    const emit = vi.fn();
+    const { repo, fireChange } = makeRepo(REPO_ROOT, 'abc');
+    const wiring = startGitWiring({
+      emit,
+      getGitExtension: () => makeExtension(repo),
+      isRepoOwnedByThisRoot: (p) => isRepoOwnedByRoot(p, PROJ2, [PROJ1, PROJ2]),
+    });
+    fireChange('def');
+    await wiring.settled();
+    expect(emit).toHaveBeenCalledOnce();
+  });
+
+  it('is the exact call that dropped every git.event before the fix', async () => {
+    // Reproduces the shipped wiring: `resolveOwnerRoot(repoRoot, roots) === root`.
+    // A repo root is an ANCESTOR of the assignment, so no root contains it, the
+    // comparison is `null === PROJ2`, and the handler returns early.
+    const emit = vi.fn();
+    const { repo, fireChange } = makeRepo(REPO_ROOT, 'abc');
+    const wiring = startGitWiring({
+      emit,
+      getGitExtension: () => makeExtension(repo),
+      isRepoOwnedByThisRoot: (p) => resolveOwnerRoot(p, [PROJ1, PROJ2]) === PROJ2,
+    });
+    fireChange('def');
+    await wiring.settled();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('emits into every concurrently-recording assignment under the one repo', async () => {
+    const emitProj1 = vi.fn();
+    const emitProj2 = vi.fn();
+    const a = makeRepo(REPO_ROOT, 'abc');
+    const b = makeRepo(REPO_ROOT, 'abc');
+    const w1 = startGitWiring({
+      emit: emitProj1,
+      getGitExtension: () => makeExtension(a.repo),
+      isRepoOwnedByThisRoot: (p) => isRepoOwnedByRoot(p, PROJ1, [PROJ1, PROJ2]),
+    });
+    const w2 = startGitWiring({
+      emit: emitProj2,
+      getGitExtension: () => makeExtension(b.repo),
+      isRepoOwnedByThisRoot: (p) => isRepoOwnedByRoot(p, PROJ2, [PROJ1, PROJ2]),
+    });
+    a.fireChange('def');
+    b.fireChange('def');
+    await Promise.all([w1.settled(), w2.settled()]);
+    expect(emitProj1).toHaveBeenCalledOnce();
+    expect(emitProj2).toHaveBeenCalledOnce();
+  });
+
+  it('still drops an UNRELATED repository the session does not own', async () => {
+    // The reason the check exists. Widening ownership to ancestors must not
+    // widen it to "any repository open in the window".
+    const emit = vi.fn();
+    const { repo, fireChange } = makeRepo(path.join('/ws', 'unrelated-repo'), 'abc');
+    const wiring = startGitWiring({
+      emit,
+      getGitExtension: () => makeExtension(repo),
+      isRepoOwnedByThisRoot: (p) => isRepoOwnedByRoot(p, PROJ2, [PROJ1, PROJ2]),
+    });
+    fireChange('def');
+    await wiring.settled();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('still drops a SIBLING assignment folder that is its own repository', async () => {
+    const emit = vi.fn();
+    const { repo, fireChange } = makeRepo(PROJ1, 'abc');
+    const wiring = startGitWiring({
+      emit,
+      getGitExtension: () => makeExtension(repo),
+      isRepoOwnedByThisRoot: (p) => isRepoOwnedByRoot(p, PROJ2, [PROJ1, PROJ2]),
+    });
+    fireChange('def');
+    await wiring.settled();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('defaults to owning everything when isRepoOwnedByThisRoot is omitted (regression)', async () => {
     const emit = vi.fn();
     const { repo, fireChange } = makeRepo('/ws/hw03', 'abc');
     const wiring = startGitWiring({
@@ -564,7 +666,7 @@ describe('startGitWiring — commit graph (program spec S5)', () => {
     const wiring = startGitWiring({
       emit,
       getGitExtension: () => graphExtension(g.repo),
-      isOwnedByThisRoot: (fsPath) => fsPath === '/ws/mine',
+      isRepoOwnedByThisRoot: (fsPath) => fsPath === '/ws/mine',
     });
 
     g.setHead('b'.repeat(40), 'main');
