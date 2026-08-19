@@ -190,7 +190,7 @@ describe('createSessionHost — capture policy', () => {
 
     expect(entries.map((e) => e.kind)).toEqual(['doc.save', 'doc.save']);
     // A suppressed event must never consume a seq — the chain has to stay
-    // contiguous or validation check 3 reports a fabricated deletion.
+    // contiguous or validation check 4 (seq_gaps) reports a fabricated deletion.
     expect(entries.map((e) => e.seq)).toEqual([0, 1]);
     expect(host.seq).toBe(2);
     expect(validateChain(entries).ok).toBe(true);

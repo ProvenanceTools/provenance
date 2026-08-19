@@ -97,7 +97,7 @@ export function createSessionHost(deps: SessionHostDeps): SessionHost {
       // immediately. No parsing, no verification, no allocation.
       //
       // Suppression happens BEFORE chainEntry, so a dropped event consumes no seq.
-      // Dropping after chaining would leave a hole that validation check 3 reads as
+      // Dropping after chaining would leave a hole that validation check 4 (seq_gaps) reads as
       // a deleted entry.
       if (!isEventKindCaptured(kind, capturePolicy)) {
         return null;
