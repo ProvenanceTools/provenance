@@ -18,6 +18,7 @@ export * from './heuristics/run-heuristics.js';
 export * from './heuristics/config.js';
 export * from './heuristics/types.js';
 export * from './heuristics/candidate-pastes.js';
+export * from './heuristics/known-flag-ids.js';
 export * from './heuristics/cross/features.js';
 export * from './heuristics/cross/run-cross-heuristics.js';
 export * from './heuristics/cross/types.js';

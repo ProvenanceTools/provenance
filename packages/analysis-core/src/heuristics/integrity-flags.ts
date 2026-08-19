@@ -39,7 +39,9 @@ type CheckMeta = {
   fallbackDescription: string;
 };
 
-const CHECK_META: Partial<Record<ValidationCheckId, CheckMeta>> = {
+// Exported so known-flag-ids.ts can derive the canonical integrity-flag id
+// list from it, rather than a hand-maintained duplicate.
+export const CHECK_META: Partial<Record<ValidationCheckId, CheckMeta>> = {
   manifest_sig: {
     heuristic: 'manifest_sig_invalid',
     title: 'Manifest signature verification failed',

@@ -45,9 +45,13 @@ import { interSessionExternalChangeHeuristic } from './inter-session-external-ch
 //
 // The registry order is the documented evaluation order. Phase 17 heuristics
 // follow Phase 16 in the registry (environment before integrity ordering).
+//
+// Exported (not just used locally) so known-flag-ids.ts can derive the
+// canonical per-submission heuristic id list from it, rather than a
+// hand-maintained duplicate — see known-flag-ids.ts.
 // ---------------------------------------------------------------------------
 
-const HEURISTIC_REGISTRY: Heuristic[] = [
+export const HEURISTIC_REGISTRY: Heuristic[] = [
   // Phase 4 — v1 core
   largePasteHeuristic,
   externalEditsHeuristic,

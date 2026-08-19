@@ -21,39 +21,21 @@ import { useActiveSemester } from '../../api/use-active-semester.js';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, Label } from 'recharts';
 import { useActiveConfig, useCommitConfig, useDryRunConfig } from '../../api/queries.js';
 import type { HeuristicConfigBody } from '@provenance/shared/api-schemas';
+import { ALL_FLAG_IDS } from '@provenance/analysis-core/heuristics/known-flag-ids.js';
 import { RecomputeProgress } from './RecomputeProgress.js';
 
 // ---------------------------------------------------------------------------
-// All known heuristic IDs (from Phase 13a)
+// All known heuristic/flag IDs.
+//
+// A 2026-08 audit found this list had hand-drifted from the real set (it was
+// missing `inter_session_external_change`) while looking internally
+// consistent. Derived from analysis-core's known-flag-ids.ts — the single
+// source of truth for every id the engine can produce — instead of a
+// hand-maintained duplicate, so it cannot drift again. See
+// heuristics-doc-sync.test.ts for the regression guard on docs/heuristics.md.
 // ---------------------------------------------------------------------------
 
-const KNOWN_HEURISTIC_IDS = [
-  'large_paste',
-  'external_edits',
-  'low_typing_high_output',
-  'chain_broken',
-  'paste_is_solution',
-  'mass_external_replacement',
-  'time_to_first_save_anomaly',
-  'idle_then_complete',
-  'no_intermediate_errors',
-  'paste_matches_known_source',
-  'ai_extension_active',
-  'extension_hash_mismatch',
-  'extension_set_changed_mid_assignment',
-  'clock_jumps',
-  'gap_in_heartbeats',
-  'manifest_sig_invalid',
-  'session_binding_invalid',
-  'monotonic_t_regression',
-  'monotonic_wall_regression',
-  'shell_integration_disabled',
-  'terminal_active_during_external_change',
-  'multiple_sessions_overlap',
-  'editing_pattern_clone',
-  'paste_shared_across_students',
-  'submitted_code_match',
-] as const;
+const KNOWN_HEURISTIC_IDS = ALL_FLAG_IDS;
 
 // ---------------------------------------------------------------------------
 // Helpers

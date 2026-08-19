@@ -16,6 +16,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { mswServer } from '../../test-setup.js';
 import { TuningView } from './TuningView.js';
+import { ALL_FLAG_IDS } from '@provenance/analysis-core/heuristics/known-flag-ids.js';
 import {
   DEFAULT_COURSE_SLUG,
   DEFAULT_SEMESTER_ID,
@@ -181,6 +182,21 @@ describe('TuningView', () => {
     await renderAndWaitForLoad();
     expect(screen.getByTestId('slider-large_paste')).toBeInTheDocument();
     expect(screen.getByTestId('toggle-large_paste')).toBeInTheDocument();
+  });
+
+  it('renders exactly one row per known flag id — the full ALL_FLAG_IDS set, no more, no less', async () => {
+    // Regression guard for the 2026-08 audit finding: TuningView used to
+    // hand-maintain its own id list, which silently drifted (it was missing
+    // `inter_session_external_change`). It now imports ALL_FLAG_IDS
+    // directly, so this asserts the render surface actually reflects that
+    // canonical list — not just that the import exists.
+    await renderAndWaitForLoad();
+    expect(ALL_FLAG_IDS).toHaveLength(26);
+    for (const id of ALL_FLAG_IDS) {
+      expect(screen.getByTestId(`slider-${id}`)).toBeInTheDocument();
+      expect(screen.getByTestId(`toggle-${id}`)).toBeInTheDocument();
+    }
+    expect(screen.getAllByRole('slider')).toHaveLength(ALL_FLAG_IDS.length);
   });
 
   it('gives each weight slider and enable checkbox an accessible name', async () => {

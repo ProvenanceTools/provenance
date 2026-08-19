@@ -25,9 +25,12 @@ import { editingPatternCloneHeuristic } from './editing-pattern-clone.js';
 
 // ---------------------------------------------------------------------------
 // Registry
+//
+// Exported so known-flag-ids.ts can derive the canonical cross-submission
+// heuristic id list from it, rather than a hand-maintained duplicate.
 // ---------------------------------------------------------------------------
 
-const CROSS_HEURISTIC_REGISTRY: CrossHeuristic[] = [
+export const CROSS_HEURISTIC_REGISTRY: CrossHeuristic[] = [
   pasteSharedAcrossStudentsHeuristic,
   editingPatternCloneHeuristic,
 ];
