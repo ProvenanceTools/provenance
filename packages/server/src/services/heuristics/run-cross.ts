@@ -25,6 +25,15 @@
  * singletonKey=semesterId, this ensures at most one cross-job runs per semester
  * at any time. See V32 for the rationale.
  *
+ * ## Per-flag config
+ *
+ * The semester's active ServerHeuristicConfig gates which cross heuristics may
+ * store rows, through the same `resolvePerFlag` accessor the per-submission
+ * path uses (`enabled: false` → not stored; a missing entry → enabled at
+ * weight 1.0). Combined with the DELETE-then-INSERT contract below, disabling a
+ * cross heuristic removes the rows earlier passes wrote for it on the next run
+ * — matching what a per-submission recompute does to a disabled flag's rows.
+ *
  * ## Memory: compact features, not full bundles
  *
  * Cross-heuristics consume CrossSubmissionFeatures (paste records + a bounded
@@ -51,14 +60,18 @@
 import { eq, isNull, and } from 'drizzle-orm';
 import { sql } from 'drizzle-orm';
 import { runCrossHeuristics } from '@provenance/analysis-core/heuristics/cross/run-cross-heuristics.js';
-import type { CrossSubmissionFeatures } from '@provenance/analysis-core/heuristics/cross/types.js';
+import type {
+  CrossFlag,
+  CrossSubmissionFeatures,
+} from '@provenance/analysis-core/heuristics/cross/types.js';
 import { cross_flags, cross_flag_participants, submissions } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import { withTransaction } from '../../db/client.js';
 import type { StorageClient } from '../storage/client.js';
 import { loadSubmissionIndex } from '../bundle/load-index.js';
 import { extractCrossFeaturesFromIndex } from './extract-cross-features.js';
-import { getActiveConfig } from './config.js';
+import { getActiveConfig, resolvePerFlag, DEFAULT_SERVER_CONFIG } from './config.js';
+import type { ServerHeuristicConfig } from './config.js';
 
 // ---------------------------------------------------------------------------
 // Return type
@@ -68,6 +81,114 @@ export type RunCrossResult = {
   flag_count: number;
   participant_count: number;
 };
+
+type CrossFlagRow = typeof cross_flags.$inferInsert;
+type ParticipantRow = typeof cross_flag_participants.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// CrossFlag[] → DB rows
+//
+// Exported for unit testing — see run-cross.test.ts, which pins the per_flag
+// gating without needing a container.
+// ---------------------------------------------------------------------------
+
+/**
+ * Translate the cross-heuristic output into cross_flags + cross_flag_participants
+ * rows, applying the semester's server-side per_flag config.
+ *
+ * This is the cross-path counterpart of `translateFlagsToRows` in
+ * services/scoring/recompute-submission.ts, and deliberately makes the same
+ * three decisions it does:
+ *
+ *   - `enabled: false` → the flag is not stored (PRD §10.3).
+ *   - A MISSING per_flag entry → enabled at weight 1.0, via `resolvePerFlag`.
+ *     Absence means the stored config predates the flag id, not that staff
+ *     suppressed it; suppression is always written explicitly.
+ *   - The gate is applied AFTER the heuristics run, on the emitted flags, so
+ *     enabling and disabling an id cannot change what the other ids see.
+ *
+ * The filter runs here rather than by skipping registry entries inside
+ * `runCrossHeuristics` because the config is a server concern and
+ * analysis-core is isomorphic — the browser-only /local route runs the same
+ * registry with no server config at all.
+ *
+ * ## Weight
+ *
+ * `weight` is resolved and returned per row but has nowhere to be applied:
+ * `cross_flags` has no `score_contribution`/`weight_at_compute` column and a
+ * cross flag contributes to no score anywhere (only per-submission `flags`
+ * feed `submissions.score_total`). Wiring the weight through would mean
+ * deciding whether — and into whose score — a cross flag counts, which is a
+ * product decision, not a coding one. See the note in the tuning UI discussion
+ * in the report; today the weight slider for the two cross ids is inert by
+ * omission rather than by accident.
+ */
+export function translateCrossFlagsToRows(
+  crossFlags: CrossFlag[],
+  semesterId: string,
+  bundleIdToSubmissionId: ReadonlyMap<string, string>,
+  globalIdxBySeqKeyByBundle: ReadonlyMap<string, ReadonlyMap<string, number>>,
+  config: ServerHeuristicConfig,
+  configVersion: number,
+): Array<{ flagRow: CrossFlagRow; participants: ParticipantRow[] }> {
+  const rows: Array<{ flagRow: CrossFlagRow; participants: ParticipantRow[] }> = [];
+
+  for (const cf of crossFlags) {
+    const perFlagCfg = resolvePerFlag(config, cf.heuristic);
+
+    // PRD §10.3: disabled heuristics contribute zero and are not stored.
+    if (!perFlagCfg.enabled) {
+      continue;
+    }
+
+    const flagId = crypto.randomUUID();
+
+    const flagRow: CrossFlagRow = {
+      id: flagId,
+      semester_id: semesterId,
+      heuristic_id: cf.heuristic,
+      severity: cf.severity,
+      confidence: cf.confidence,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: jsonb
+      detail: (cf.detail ?? {}) as any,
+      heuristic_config_version: configVersion,
+    };
+
+    const participants: ParticipantRow[] = [];
+    for (const bundleId of cf.bundleIds) {
+      const submissionId = bundleIdToSubmissionId.get(bundleId);
+      if (!submissionId) {
+        // Should not happen: CrossFlag.bundleIds come from the bundles we built.
+        continue;
+      }
+
+      // Translate seqKeys to globalIdx values via the per-bundle seqKey→globalIdx
+      // map built during feature extraction (covers pastes + representatives).
+      const globalIdxBySeqKey = globalIdxBySeqKeyByBundle.get(bundleId);
+      const seqKeys = cf.eventsPerBundle[bundleId] ?? [];
+      const globalIdxs: number[] = [];
+
+      if (globalIdxBySeqKey) {
+        for (const seqKey of seqKeys) {
+          const globalIdx = globalIdxBySeqKey.get(seqKey);
+          if (globalIdx !== undefined) {
+            globalIdxs.push(globalIdx);
+          }
+        }
+      }
+
+      participants.push({
+        cross_flag_id: flagId,
+        submission_id: submissionId,
+        supporting_seqs: globalIdxs,
+      });
+    }
+
+    rows.push({ flagRow, participants });
+  }
+
+  return rows;
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -92,12 +213,21 @@ export async function runAndStoreCrossHeuristics(
   semesterId: string,
 ): Promise<RunCrossResult> {
   // -------------------------------------------------------------------------
-  // Step 1: Get active heuristic config version for the semester.
+  // Step 1: Get the active heuristic config for the semester.
   //
-  // Needed for heuristic_config_version column on cross_flags rows.
-  // Falls back to DEFAULT_SERVER_CONFIG version 0 if no active config.
+  // Supplies BOTH the heuristic_config_version stamped on cross_flags rows and
+  // the per_flag gate applied in translateCrossFlagsToRows. Until 2026-08 only
+  // `.version` was read here, so the analyzer's on/off toggle for the two cross
+  // heuristics was inert — they fired and stored rows no matter what staff set.
+  //
+  // getActiveConfig returns the row already passed through
+  // normalizeStoredConfig, so a config written before a flag id existed reads
+  // back with that id at the default entry. Falls back to DEFAULT_SERVER_CONFIG
+  // (everything enabled at weight 1.0) at version 0 when the semester has no
+  // active config at all.
   // -------------------------------------------------------------------------
   const activeConfig = await getActiveConfig(db, semesterId);
+  const config = activeConfig?.config ?? DEFAULT_SERVER_CONFIG;
   const configVersion = activeConfig?.version ?? 0;
 
   // -------------------------------------------------------------------------
@@ -172,58 +302,19 @@ export async function runAndStoreCrossHeuristics(
   // seqKey → globalIdx translation: CrossFlag.eventsPerBundle[bundleId] is
   // `${sessionId}:${seq}[]`. We look up each seqKey in the bundle's EventIndex
   // to get the globalIdx (same pattern as per-submission flags in Phase 12/V28).
+  //
+  // The per_flag gate lives in translateCrossFlagsToRows: a heuristic the
+  // semester's config disables produces no row here, so the DELETE-then-INSERT
+  // below also clears any rows a previous, still-enabled pass wrote for it.
   // -------------------------------------------------------------------------
-  type CrossFlagRow = typeof cross_flags.$inferInsert;
-  type ParticipantRow = typeof cross_flag_participants.$inferInsert;
-
-  const crossFlagRows: Array<{ flagRow: CrossFlagRow; participants: ParticipantRow[] }> = [];
-
-  for (const cf of crossFlags) {
-    const flagId = crypto.randomUUID();
-
-    const flagRow: CrossFlagRow = {
-      id: flagId,
-      semester_id: semesterId,
-      heuristic_id: cf.heuristic,
-      severity: cf.severity,
-      confidence: cf.confidence,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: jsonb
-      detail: (cf.detail ?? {}) as any,
-      heuristic_config_version: configVersion,
-    };
-
-    const participants: ParticipantRow[] = [];
-    for (const bundleId of cf.bundleIds) {
-      const submissionId = bundleIdToSubmissionId.get(bundleId);
-      if (!submissionId) {
-        // Should not happen: CrossFlag.bundleIds come from the bundles we built.
-        continue;
-      }
-
-      // Translate seqKeys to globalIdx values via the per-bundle seqKey→globalIdx
-      // map built during feature extraction (covers pastes + representatives).
-      const globalIdxBySeqKey = globalIdxBySeqKeyByBundle.get(bundleId);
-      const seqKeys = cf.eventsPerBundle[bundleId] ?? [];
-      const globalIdxs: number[] = [];
-
-      if (globalIdxBySeqKey) {
-        for (const seqKey of seqKeys) {
-          const globalIdx = globalIdxBySeqKey.get(seqKey);
-          if (globalIdx !== undefined) {
-            globalIdxs.push(globalIdx);
-          }
-        }
-      }
-
-      participants.push({
-        cross_flag_id: flagId,
-        submission_id: submissionId,
-        supporting_seqs: globalIdxs,
-      });
-    }
-
-    crossFlagRows.push({ flagRow, participants });
-  }
+  const crossFlagRows = translateCrossFlagsToRows(
+    crossFlags,
+    semesterId,
+    bundleIdToSubmissionId,
+    globalIdxBySeqKeyByBundle,
+    config,
+    configVersion,
+  );
 
   // -------------------------------------------------------------------------
   // Step 6: Atomically replace cross_flags for the semester.
