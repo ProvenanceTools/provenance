@@ -113,14 +113,28 @@ export type ManifestChainError =
   /**
    * Step 0: the manifest is not 2.0, so there is no trust chain to walk.
    *
-   * This gate is a security control, not a convenience. At 1.x, `course_id`,
+   * The attack this belongs to is the 1.x downgrade: at 1.x, `course_id`,
    * `collaboration`, `submission`, `scope`, and `policy` are NOT in the signed
-   * payload. Without this check a student holding any legitimately-issued 1.x
-   * manifest from their own course could staple on that course's (public)
-   * certificate, add a matching `course_id` to satisfy step 3, and staple on an
-   * arbitrary unsigned `policy` — and the whole chain would return ok. That
-   * would let a student turn capture off, which is exactly what the policy block
-   * living inside the signed payload exists to prevent.
+   * payload, so a student holding a legitimately-issued 1.x manifest from their
+   * own course could staple on that course's (public) certificate, a matching
+   * `course_id` to satisfy step 3, and an arbitrary unsigned `policy` — every
+   * individual signature still verifying.
+   *
+   * **This step is not what stops that, and the layering is worth stating
+   * exactly.** The stapled fields never survive to be trusted, because
+   * {@link parseManifestValue} returns early for a non-2.0 `format_version` and
+   * the object it returns carries only the four 1.x fields plus `sig`. Any
+   * reader that goes through it — `readSessionManifests` in `analysis-core`
+   * before a bundle's chain is walked, and this function's own internal
+   * re-validation before either signature is checked — is therefore looking at
+   * a manifest with no `course_cert`, no `course_id` and no `policy` at all.
+   * Remove step 0 and the walk does not succeed; it fails at
+   * `missing_course_cert`, and the capture policy is gone either way.
+   *
+   * What step 0 buys is the honest error. `missing_course_cert` about a manifest
+   * that plainly carries one reads as a bug in the analyzer rather than as a
+   * refused downgrade, and staff adjudicating a case need the true cause. Keep
+   * it: cheap, first, and correct where the fallback is merely safe.
    */
   | { kind: 'not_manifest_2_0'; format_version: string }
   | { kind: 'missing_course_cert' }
@@ -603,11 +617,12 @@ export async function verifyManifestChain(
   manifest: Manifest,
   rootPubkeyHex: string,
 ): Promise<Result<ManifestChainOk, ManifestChainError>> {
-  // Step 0 — the chain exists only at 2.0. Refusing a 1.x manifest here closes a
-  // downgrade attack: at 1.x, course_id / collaboration / submission / scope /
-  // policy are all OUTSIDE the signed payload, so a student could staple their
-  // course's public cert and a capture-disabling policy onto a genuinely signed
-  // 1.x manifest and walk the chain successfully. See ManifestChainError.
+  // Step 0 — the chain exists only at 2.0. This is the OUTER layer of the
+  // defence against the 1.x downgrade attack; the inner one is
+  // parseManifestValue, which strips course_cert / course_id / policy off any
+  // non-2.0 manifest, so the walk would fail at missing_course_cert even
+  // without this. Step 0 is what makes the refusal say what it means. See
+  // ManifestChainError.
   const declaredVersion = manifestFormatVersion(manifest);
   if (declaredVersion !== MANIFEST_FORMAT_VERSION_2) {
     return err({ kind: 'not_manifest_2_0', format_version: declaredVersion });
