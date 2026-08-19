@@ -48,7 +48,7 @@ import { NGRAM_SIZE } from './features.js';
  * fields off `paste` / `fs.external_change` payloads without removing the
  * events, so the kind stream is untouched.
  */
-const KIND_STREAM_SIGNALS = ['selection_change', 'focus_change', 'terminal', 'doc_open_close'];
+const KIND_STREAM_SIGNALS = ['selection_change', 'focus_change', 'terminal'];
 
 /**
  * Does this submission's recorded capture policy distort the kind-stream

@@ -281,7 +281,6 @@ describe('startSession — capture policy', () => {
         selection_change: false,
         focus_change: false,
         terminal: false,
-        doc_open_close: false,
         inline_content: false,
       }),
     );
@@ -292,6 +291,8 @@ describe('startSession — capture policy', () => {
       range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
       was_selection: true,
     });
+    // doc.open is on the hard floor — no policy key can switch it off, because
+    // its `content` is the reconstruction seed.
     session.sessionHost.emit('doc.open', { path: 'hw.py', sha256: 'd'.repeat(64), line_count: 1 });
     session.sessionHost.emit('terminal.command', { terminal_id: 't1', command: 'ls' });
     session.sessionHost.emit('doc.change', { path: 'hw.py', deltas: [], source: 'typed' });
@@ -306,8 +307,8 @@ describe('startSession — capture policy', () => {
     expect(kinds).toContain('doc.change');
     expect(kinds).toContain('session.start');
     expect(kinds).toContain('session.end');
+    expect(kinds).toContain('doc.open');
     expect(kinds).not.toContain('selection.change');
-    expect(kinds).not.toContain('doc.open');
     expect(kinds).not.toContain('terminal.command');
 
     // The dropped events must leave no seq gap, or validation check 3 reads the

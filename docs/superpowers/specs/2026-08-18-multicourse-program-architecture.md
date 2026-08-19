@@ -235,7 +235,6 @@ a professor can turn capture down, a student cannot turn it off.
     "selection_change":      true,
     "focus_change":          true,
     "terminal":              true,
-    "doc_open_close":        true,
     "inline_content":        true,     // paste + fs.external_change content snippets
     "heartbeat_interval_ms": 30000     // clamp [5000, 120000]
   }
@@ -246,15 +245,32 @@ a professor can turn capture down, a student cannot turn it off.
 never be disabled**, because validation checks 3–8 and the integrity story depend
 on them:
 
-`session.start`, `session.end`, `session.resumed`, `doc.change`, `doc.save`,
-`paste`, `paste.anomaly`, `fs.external_change`, `git.event`, `clock.skew`,
-`chain.broken`, `ext.snapshot`, `ext.activate`, `recorder.degraded`,
-`recorder.recovered_from_corruption`, `session.heartbeat`
+`session.start`, `session.end`, `session.resumed`, `doc.open`, `doc.close`,
+`doc.change`, `doc.save`, `paste`, `paste.anomaly`, `fs.external_change`,
+`git.event`, `clock.skew`, `chain.broken`, `ext.snapshot`, `ext.activate`,
+`recorder.degraded`, `recorder.recovered_from_corruption`, `session.heartbeat`
 
 The floor is enforced by the schema itself: floor events simply have no key in
 `policy.capture`. `session.heartbeat` is on the floor because bundle-level
 Active/Idle and the `gap_in_heartbeats` heuristic depend on it — only its interval
 is tunable.
+
+**Where the floor is drawn — the general rule.** _The floor is defined by what
+reconstruction and validation depend on, not by privacy sensitivity._ A signal
+being sensitive is an argument **for** giving it a knob; a signal being
+load-bearing is a **veto** on one. Nothing critical to reconstruction may be
+disableable by capture policy. Apply that test before adding any key to
+`policy.capture`.
+
+`doc.open` and `doc.close` are the worked example. There was briefly a
+`doc_open_close` key, and it was removed: `DocOpenPayload.content` is the
+**reconstruction seed** that `reconstruct-file.ts` starts from, so switching
+`doc.open` off breaks file reconstruction, replay, and the Source tab for the
+entire cohort — with nothing warning the course it had done that. Sensitivity
+did not save it. `DocClosePayload` is `{ path }` only: no content, no
+reconstruction role, negligible privacy exposure, so a knob governing a bare
+path is surface for nothing. Both are floor. A manifest still carrying a
+`doc_open_close` key resolves it as an unknown key — ignored, never a gate.
 
 **The absence-vs-disabled rule.** The effective policy MUST travel into the bundle,
 because otherwise the analyzer cannot distinguish "this student produced no

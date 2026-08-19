@@ -25,7 +25,6 @@ describe('resolveCapturePolicy defaults', () => {
       selection_change: true,
       focus_change: true,
       terminal: true,
-      doc_open_close: true,
       inline_content: true,
       heartbeat_interval_ms: 30_000,
     });
@@ -69,7 +68,6 @@ describe('resolveCapturePolicy defaults', () => {
           selection_change: false,
           focus_change: false,
           terminal: false,
-          doc_open_close: false,
           inline_content: false,
         },
       }),
@@ -77,7 +75,6 @@ describe('resolveCapturePolicy defaults', () => {
       selection_change: false,
       focus_change: false,
       terminal: false,
-      doc_open_close: false,
       inline_content: false,
       heartbeat_interval_ms: 30_000,
     });
@@ -87,6 +84,18 @@ describe('resolveCapturePolicy defaults', () => {
     expect(
       resolveCapturePolicy({ capture: { future_signal: true, selection_change: false } as never }),
     ).toEqual({ ...DEFAULT_CAPTURE_POLICY, selection_change: false });
+  });
+
+  it('ignores a retired doc_open_close key rather than resurrecting the knob', () => {
+    // doc_open_close was removed in the 2.0 spec revision: doc.open carries the
+    // reconstruction seed, so it is floor. A manifest still carrying the key is
+    // just an unknown key — it must not reappear on the resolved policy, and it
+    // must not switch doc.open/doc.close off.
+    const resolved = resolveCapturePolicy({ capture: { doc_open_close: false } as never });
+    expect(resolved).toEqual(DEFAULT_CAPTURE_POLICY);
+    expect(resolved).not.toHaveProperty('doc_open_close');
+    expect(isEventKindCaptured('doc.open', resolved)).toBe(true);
+    expect(isEventKindCaptured('doc.close', resolved)).toBe(true);
   });
 });
 
@@ -148,13 +157,7 @@ describe('the hard floor', () => {
     // The stated property of the schema, exercised rather than asserted
     // structurally: drive every combination of every boolean knob and confirm no
     // floor kind ever reads as uncaptured.
-    const knobs = [
-      'selection_change',
-      'focus_change',
-      'terminal',
-      'doc_open_close',
-      'inline_content',
-    ] as const;
+    const knobs = ['selection_change', 'focus_change', 'terminal', 'inline_content'] as const;
     for (let mask = 0; mask < 1 << knobs.length; mask++) {
       const capture: Record<string, boolean> = {};
       knobs.forEach((knob, i) => {
@@ -199,6 +202,18 @@ describe('the hard floor', () => {
     expect(FLOOR_EVENT_KINDS).toContain('session.heartbeat');
     expect(Object.keys(POLICY_GATED_EVENT_KINDS)).not.toContain('session.heartbeat');
   });
+
+  it('keeps doc.open and doc.close on the floor — doc.open is the reconstruction seed', () => {
+    // The rule the floor is drawn by: what reconstruction and validation DEPEND
+    // on, not what is privacy-sensitive. DocOpenPayload.content seeds
+    // reconstruct-file, so a knob switching it off would break file
+    // reconstruction, replay, and the Source tab for a whole cohort — silently.
+    // doc.close follows it because a payload of `{ path }` is surface for nothing.
+    expect(FLOOR_EVENT_KINDS).toContain('doc.open');
+    expect(FLOOR_EVENT_KINDS).toContain('doc.close');
+    expect(Object.keys(POLICY_GATED_EVENT_KINDS)).not.toContain('doc.open');
+    expect(Object.keys(POLICY_GATED_EVENT_KINDS)).not.toContain('doc.close');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -210,7 +225,6 @@ describe('isEventKindCaptured', () => {
     selection_change: false,
     focus_change: false,
     terminal: false,
-    doc_open_close: false,
     inline_content: false,
     heartbeat_interval_ms: 5_000,
   };
@@ -222,8 +236,6 @@ describe('isEventKindCaptured', () => {
   });
 
   it.each([
-    ['doc.open', 'doc_open_close'],
-    ['doc.close', 'doc_open_close'],
     ['selection.change', 'selection_change'],
     ['focus.change', 'focus_change'],
     ['terminal.open', 'terminal'],

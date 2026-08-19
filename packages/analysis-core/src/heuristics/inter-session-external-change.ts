@@ -36,7 +36,6 @@ import type { Bundle } from '../loader/types.js';
 import { reconstructFileWithProvenance } from '../index/reconstruct-file-provenance.js';
 import type { Flag, Heuristic, Severity } from './types.js';
 import type { HeuristicConfig } from './config.js';
-import { isSignalCaptured } from '../manifest/bundle-manifest.js';
 
 const CONFIDENCE = 0.85;
 
@@ -85,12 +84,7 @@ function filesTouchedInSession(sessionEvents: IndexedEvent[]): Set<string> {
 // Heuristic
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
-  // Absence-vs-disabled (program spec §4). The comparison needs the next
-  // session's first doc.open content as ground truth; with doc.open capture
-  // switched off there is no next-session anchor at all.
-  if (!isSignalCaptured(bundle, 'doc_open_close')) return [];
-
+function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[] {
   const { highSeverityCharsChanged } = config.interSessionExternalChange;
 
   // bySessionId iteration order = session-start chronological order

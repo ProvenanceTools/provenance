@@ -165,7 +165,6 @@ describe('createSessionHost — capture policy', () => {
     selection_change: false,
     focus_change: false,
     terminal: false,
-    doc_open_close: false,
     inline_content: false,
     heartbeat_interval_ms: 30_000,
   };
@@ -186,8 +185,6 @@ describe('createSessionHost — capture policy', () => {
     // Every one of these is switched off.
     host.emit('selection.change', SELECTION);
     host.emit('focus.change', { gained: false });
-    host.emit('doc.open', { path: 'hw.py', sha256: 'a'.repeat(64), line_count: 1 });
-    host.emit('doc.close', { path: 'hw.py' });
     host.emit('terminal.open', { terminal_id: 't1', shell: 'zsh', shell_integration: true });
     host.emit('terminal.command', { terminal_id: 't1', command: 'ls' });
     host.emit('doc.save', { path: 'hw.py', sha256: 'b'.repeat(64) });
@@ -215,7 +212,16 @@ describe('createSessionHost — capture policy', () => {
     }
     host.emit('doc.change', { path: 'hw.py', deltas: [], source: 'typed' });
     host.emit('session.heartbeat', { focused: true, active_file: 'hw.py', idle_since_ms: 0 });
-    expect(entries.map((e) => e.kind)).toEqual(['doc.change', 'session.heartbeat']);
+    // doc.open / doc.close are floor: `doc.open.content` is the reconstruction
+    // seed, and DocClosePayload is `{ path }` — nothing worth a knob.
+    host.emit('doc.open', { path: 'hw.py', sha256: 'a'.repeat(64), line_count: 1 });
+    host.emit('doc.close', { path: 'hw.py' });
+    expect(entries.map((e) => e.kind)).toEqual([
+      'doc.change',
+      'session.heartbeat',
+      'doc.open',
+      'doc.close',
+    ]);
   });
 
   it('gates each kind independently', () => {

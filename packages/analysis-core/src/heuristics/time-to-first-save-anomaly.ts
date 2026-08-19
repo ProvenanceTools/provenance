@@ -36,7 +36,6 @@ import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
-import { isSignalCaptured } from '../manifest/bundle-manifest.js';
 import { reconstructFileWithProvenance } from '../index/reconstruct-file-provenance.js';
 
 // ---------------------------------------------------------------------------
@@ -51,13 +50,7 @@ function flagId(seqKey: string, idx: number): string {
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
-  // Absence-vs-disabled (program spec §4). The whole heuristic is anchored on
-  // doc.open; with that capture switched off there is nothing to measure from,
-  // and reporting "no anomalies" would state a finding the evidence cannot
-  // support.
-  if (!isSignalCaptured(bundle, 'doc_open_close')) return [];
-
+function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[] {
   const { anomalySeconds, minChars } = config.timeToFirstSaveAnomaly;
   const anomalyMs = anomalySeconds * 1000;
 

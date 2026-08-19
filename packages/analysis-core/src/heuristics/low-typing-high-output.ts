@@ -49,10 +49,12 @@
  *
  * ## Capture-policy audit (program spec §4)
  *
- * This heuristic reads `doc.open`, which a course can switch off via
- * `policy.capture.doc_open_close`, and it is nonetheless NOT policy-gated —
- * deliberately, and the reason is worth recording so the next audit does not
- * "fix" it.
+ * This heuristic reads `doc.open`, and is NOT policy-gated. `doc.open` is on the
+ * hard floor — no `policy.capture` key can switch it off, precisely because
+ * `doc.open.content` is the reconstruction seed. But the reasoning below is
+ * worth keeping even so, because it is what makes this heuristic robust to
+ * `doc.open` simply being MISSING (a 1.x recorder that never opened the file, a
+ * truncated log), which no policy rule prevents.
  *
  * `doc.open.content` is both the heuristic's `startLength` anchor AND the seed
  * `reconstructFile` starts from. Removing it therefore removes the skeleton

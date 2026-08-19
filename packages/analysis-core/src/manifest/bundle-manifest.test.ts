@@ -82,7 +82,7 @@ describe('resolveBundleCapturePolicy', () => {
     expect(resolved.source).toBe('manifest_2_0');
     expect(resolved.effective.selection_change).toBe(false);
     expect(resolved.effective.terminal).toBe(false);
-    expect(resolved.effective.doc_open_close).toBe(true);
+    expect(resolved.effective.focus_change).toBe(true);
     expect(resolved.effective.heartbeat_interval_ms).toBe(90_000);
     expect(resolved.disabledSignals).toEqual(['selection_change', 'terminal']);
   });
@@ -92,7 +92,7 @@ describe('resolveBundleCapturePolicy', () => {
     const permissive = await buildManifest2({ keys, policy: { capture: {} } });
     const strict = await buildManifest2({
       keys,
-      policy: { capture: { doc_open_close: false, heartbeat_interval_ms: 120_000 } },
+      policy: { capture: { focus_change: false, heartbeat_interval_ms: 120_000 } },
     });
     const bundle = await load(
       await buildTestBundle({
@@ -104,7 +104,7 @@ describe('resolveBundleCapturePolicy', () => {
     );
     const resolved = resolveBundleCapturePolicy(bundle);
     // Disabled anywhere → treated as disabled everywhere: absence is explained.
-    expect(resolved.effective.doc_open_close).toBe(false);
+    expect(resolved.effective.focus_change).toBe(false);
     // Longest interval wins so interval-derived thresholds stay permissive.
     expect(resolved.effective.heartbeat_interval_ms).toBe(120_000);
   });
@@ -112,7 +112,7 @@ describe('resolveBundleCapturePolicy', () => {
   it('isSignalCaptured / bundleHeartbeatIntervalMs are 1.x-safe', async () => {
     const bundle = await load(await buildTestBundle({ sessions: [{}] }));
     expect(isSignalCaptured(bundle, 'terminal')).toBe(true);
-    expect(isSignalCaptured(bundle, 'doc_open_close')).toBe(true);
+    expect(isSignalCaptured(bundle, 'inline_content')).toBe(true);
     expect(bundleHeartbeatIntervalMs(bundle)).toBe(30_000);
   });
 });

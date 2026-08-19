@@ -130,19 +130,13 @@ export function readSessionManifests(bundle: Bundle): SessionManifestBinding[] {
 // ---------------------------------------------------------------------------
 
 /** The boolean capture signals a course policy can switch off (spec §4). */
-export type CaptureSignal =
-  | 'selection_change'
-  | 'focus_change'
-  | 'terminal'
-  | 'doc_open_close'
-  | 'inline_content';
+export type CaptureSignal = 'selection_change' | 'focus_change' | 'terminal' | 'inline_content';
 
 /** Fixed order, so `disabledSignals` is deterministic for snapshots and UI. */
 export const CAPTURE_SIGNALS: readonly CaptureSignal[] = [
   'selection_change',
   'focus_change',
   'terminal',
-  'doc_open_close',
   'inline_content',
 ];
 

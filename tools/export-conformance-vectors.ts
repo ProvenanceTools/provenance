@@ -240,7 +240,6 @@ const V2_POLICY = {
     selection_change: true,
     focus_change: true,
     terminal: true,
-    doc_open_close: true,
     inline_content: true,
     heartbeat_interval_ms: 30000,
   },
@@ -543,7 +542,6 @@ async function buildManifestV2Vectors(): Promise<unknown> {
         selection_change: false,
         focus_change: false,
         terminal: false,
-        doc_open_close: false,
         inline_content: false,
         heartbeat_interval_ms: 120000,
       },
@@ -722,7 +720,12 @@ function buildCapturePolicyVectors(): unknown {
       'in policy.capture, so "off" is not expressible. session.heartbeat is on the floor ' +
       'because bundle-level Active/Idle and the gap_in_heartbeats heuristic need it — only ' +
       'its interval is tunable. paste.anomaly is on the floor by the same schema rule even ' +
-      'though the program spec’s prose list omits it.',
+      'though the program spec’s prose list omits it. doc.open and doc.close are on the floor ' +
+      'too: DocOpenPayload.content is the reconstruction seed, so a knob switching it off ' +
+      'would break reconstruction, replay, and the Source tab for a whole cohort, and ' +
+      'DocClosePayload is { path } only. The general rule: the floor is defined by what ' +
+      'reconstruction and validation DEPEND on, not by privacy sensitivity — sensitivity is ' +
+      'an argument FOR a knob, load-bearing is a VETO on one.',
     floor_event_kinds: [...FLOOR_EVENT_KINDS],
     policy_gated_event_kinds: POLICY_GATED_EVENT_KINDS,
     absence_vs_disabled_note:
@@ -744,7 +747,6 @@ function buildCapturePolicyVectors(): unknown {
           selection_change: false,
           focus_change: false,
           terminal: false,
-          doc_open_close: false,
           inline_content: false,
         },
       }),
@@ -757,6 +759,14 @@ function buildCapturePolicyVectors(): unknown {
         'unknown_key_ignored',
         'Forward compatibility: an unrecognised capture key is ignored, not an error.',
         { capture: { future_signal: true, terminal: false } },
+      ),
+      policyCase(
+        'retired_doc_open_close_key_ignored',
+        'doc_open_close was briefly a capture key and was REMOVED — doc.open carries the ' +
+          'reconstruction seed, so it is floor. A manifest still carrying the key must treat ' +
+          'it as an unknown key: it must not appear on the resolved policy and must not ' +
+          'suppress doc.open or doc.close.',
+        { capture: { doc_open_close: false } },
       ),
       policyCase('heartbeat_below_floor', 'Clamped UP to 5000.', {
         capture: { heartbeat_interval_ms: 1000 },

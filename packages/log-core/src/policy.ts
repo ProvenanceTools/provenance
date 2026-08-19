@@ -12,7 +12,6 @@
  *     "selection_change":      true,
  *     "focus_change":          true,
  *     "terminal":              true,
- *     "doc_open_close":        true,
  *     "inline_content":        true,   // paste + fs.external_change content snippets
  *     "heartbeat_interval_ms": 30000   // clamped to [5000, 120000]
  *   }
@@ -27,6 +26,16 @@
  * way to express "off" for it. {@link FLOOR_EVENT_KINDS} is that set written out
  * so an implementation can assert it, and {@link POLICY_GATED_EVENT_KINDS} is
  * its complement — the only kinds a policy can reach.
+ *
+ * ## Where the floor is drawn
+ *
+ * **The floor is defined by what reconstruction and validation depend on, not by
+ * privacy sensitivity.** A signal being sensitive is an argument *for* giving it
+ * a knob; a signal being load-bearing is a *veto* on one. Nothing critical to
+ * reconstruction may be disableable by capture policy — if it were, a course
+ * could switch off file reconstruction, replay, and the Source tab for its whole
+ * cohort with nothing warning it that it had. Apply that test before adding any
+ * key here.
  *
  * ## The absence-vs-disabled rule
  *
@@ -67,7 +76,6 @@ export type CapturePolicyBlock = {
     selection_change?: boolean;
     focus_change?: boolean;
     terminal?: boolean;
-    doc_open_close?: boolean;
     inline_content?: boolean;
     heartbeat_interval_ms?: number;
   };
@@ -81,8 +89,6 @@ export type CapturePolicy = {
   focus_change: boolean;
   /** Capture `terminal.open` and `terminal.command` events. */
   terminal: boolean;
-  /** Capture `doc.open` and `doc.close` events. */
-  doc_open_close: boolean;
   /**
    * Inline content snippets in `paste` and `fs.external_change` payloads.
    * Not an event gate — the events themselves are on the floor; this controls
@@ -106,7 +112,6 @@ export const DEFAULT_CAPTURE_POLICY: CapturePolicy = {
   selection_change: true,
   focus_change: true,
   terminal: true,
-  doc_open_close: true,
   inline_content: true,
   heartbeat_interval_ms: 30_000,
 };
@@ -131,12 +136,24 @@ export const HEARTBEAT_INTERVAL_MAX_MS = 120_000;
  * `paste.anomaly` is on the floor by the schema rule (it has no
  * `policy.capture` key) even though program spec §4's prose list omits it. It is
  * a paste-integrity signal, so floor is the correct and safe reading.
+ *
+ * `doc.open` and `doc.close` are here — there was briefly a `doc_open_close`
+ * knob, and it was removed. `DocOpenPayload.content` is the **reconstruction
+ * seed**: `reconstruct-file.ts` starts from it, so switching `doc.open` off
+ * breaks file reconstruction, replay, and the Source tab for the entire cohort,
+ * with nothing telling the course it had done that. That makes it load-bearing,
+ * and load-bearing vetoes a knob regardless of how sensitive the signal is.
+ * `DocClosePayload` is `{ path }` only — no content, no reconstruction role, and
+ * so negligible privacy exposure: a knob governing a bare path is surface for
+ * nothing. Both are floor.
  */
 export const FLOOR_EVENT_KINDS = [
   'session.start',
   'session.end',
   'session.resumed',
   'session.heartbeat',
+  'doc.open',
+  'doc.close',
   'doc.change',
   'doc.save',
   'paste',
@@ -159,8 +176,6 @@ export const FLOOR_EVENT_KINDS = [
  * `policy.test.ts` asserts that at compile time.
  */
 export const POLICY_GATED_EVENT_KINDS = {
-  'doc.open': 'doc_open_close',
-  'doc.close': 'doc_open_close',
   'selection.change': 'selection_change',
   'focus.change': 'focus_change',
   'terminal.open': 'terminal',
@@ -216,7 +231,6 @@ export function resolveCapturePolicy(block?: CapturePolicyBlock | unknown): Capt
     selection_change: resolveBool(c['selection_change'], DEFAULT_CAPTURE_POLICY.selection_change),
     focus_change: resolveBool(c['focus_change'], DEFAULT_CAPTURE_POLICY.focus_change),
     terminal: resolveBool(c['terminal'], DEFAULT_CAPTURE_POLICY.terminal),
-    doc_open_close: resolveBool(c['doc_open_close'], DEFAULT_CAPTURE_POLICY.doc_open_close),
     inline_content: resolveBool(c['inline_content'], DEFAULT_CAPTURE_POLICY.inline_content),
     heartbeat_interval_ms: resolveHeartbeatInterval(c['heartbeat_interval_ms']),
   };

@@ -282,7 +282,6 @@ this file at the workspace root the students will open:
       "selection_change": true,
       "focus_change": true,
       "terminal": true,
-      "doc_open_close": true,
       "inline_content": true,
       "heartbeat_interval_ms": 30000
     }

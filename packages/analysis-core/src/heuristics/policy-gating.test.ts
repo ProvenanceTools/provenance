@@ -65,17 +65,35 @@ async function buildAndIndex(sessions: SessionSpec[]) {
 }
 
 // ---------------------------------------------------------------------------
-// doc_open_close
+// doc.open / doc.close are FLOOR — there is no knob to disable them
 // ---------------------------------------------------------------------------
 
-describe('doc_open_close disabled', () => {
+describe('doc.open is on the floor', () => {
   /**
-   * The gated half of each pair keeps the doc.open events in the stream. That
-   * is the point: the SIGNED policy is what decides, not what happens to be in
-   * the log. A recorder that emits a gated event anyway - or a hand-edited
-   * stream - must not be able to re-enable a heuristic the course turned off.
+   * `doc_open_close` was briefly a `policy.capture` key and was removed:
+   * `DocOpenPayload.content` is the reconstruction seed, so disabling it would
+   * break reconstruction, replay, and the Source tab for a whole cohort. The
+   * floor is drawn by what reconstruction and validation DEPEND on, not by
+   * privacy sensitivity.
+   *
+   * These two heuristics used to return not-applicable under that knob. The
+   * gates are gone, so the property to pin is the opposite one: a course that
+   * turns every knob it still has off - and even one that writes the retired
+   * key, which resolves as an unknown key - cannot switch these heuristics off.
    */
-  it('time_to_first_save_anomaly: not-applicable with doc.open off', async () => {
+  const ALL_KNOBS_OFF: CapturePolicyBlock = {
+    capture: {
+      selection_change: false,
+      focus_change: false,
+      terminal: false,
+      inline_content: false,
+      // Retired key, deliberately present: an unknown key must be ignored, not
+      // resurrect the gate.
+      doc_open_close: false,
+    } as NonNullable<CapturePolicyBlock['capture']>,
+  };
+
+  it('time_to_first_save_anomaly: still flags under a policy with every knob off', async () => {
     const sessions: SessionSpec[] = [
       {
         events: [
@@ -102,15 +120,17 @@ describe('doc_open_close disabled', () => {
         ],
       },
     ];
-    const { legacy, gated } = await buildPair(sessions, { capture: { doc_open_close: false } });
+    const { legacy, gated } = await buildPair(sessions, ALL_KNOBS_OFF);
 
-    expect(
-      timeToFirstSaveAnomalyHeuristic.run(legacy.index, legacy.bundle, config).length,
-    ).toBeGreaterThan(0);
-    expect(timeToFirstSaveAnomalyHeuristic.run(gated.index, gated.bundle, config)).toEqual([]);
+    const legacyFlags = timeToFirstSaveAnomalyHeuristic.run(legacy.index, legacy.bundle, config);
+    expect(legacyFlags.length).toBeGreaterThan(0);
+    // Byte-identical verdict: no policy input reaches this heuristic any more.
+    expect(timeToFirstSaveAnomalyHeuristic.run(gated.index, gated.bundle, config)).toHaveLength(
+      legacyFlags.length,
+    );
   });
 
-  it('inter_session_external_change: not-applicable with doc.open off', async () => {
+  it('inter_session_external_change: still flags under a policy with every knob off', async () => {
     const sessions: SessionSpec[] = [
       {
         events: [
@@ -147,19 +167,24 @@ describe('doc_open_close disabled', () => {
         ],
       },
     ];
-    const { legacy, gated } = await buildPair(sessions, { capture: { doc_open_close: false } });
+    const { legacy, gated } = await buildPair(sessions, ALL_KNOBS_OFF);
 
-    expect(
-      interSessionExternalChangeHeuristic.run(legacy.index, legacy.bundle, config).length,
-    ).toBeGreaterThan(0);
-    expect(interSessionExternalChangeHeuristic.run(gated.index, gated.bundle, config)).toEqual([]);
+    const legacyFlags = interSessionExternalChangeHeuristic.run(
+      legacy.index,
+      legacy.bundle,
+      config,
+    );
+    expect(legacyFlags.length).toBeGreaterThan(0);
+    expect(interSessionExternalChangeHeuristic.run(gated.index, gated.bundle, config)).toHaveLength(
+      legacyFlags.length,
+    );
   });
 
   /**
-   * low_typing_high_output reads doc.open and is deliberately NOT gated - see
-   * the audit note in its module docstring. `doc.open.content` is both the
-   * startLength anchor and the reconstruction seed, so its absence cancels out
-   * of `finalLength - startLength` instead of inflating it. This pins that
+   * low_typing_high_output reads doc.open and was never gated - see the audit
+   * note in its module docstring. `doc.open.content` is both the startLength
+   * anchor and the reconstruction seed, so its absence cancels out of
+   * `finalLength - startLength` instead of inflating it. This pins that
    * reasoning: strip every doc.open and the verdict does not move.
    */
   it('low_typing_high_output: dropping doc.open does not inflate the ratio', async () => {
