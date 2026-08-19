@@ -162,6 +162,13 @@
       "when": 1787961600000,
       "tag": "0024_student_enrollment",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788134400000,
+      "tag": "0025_students_institution_identity",
+      "breakpoints": true
     }
   ]
 }

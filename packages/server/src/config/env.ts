@@ -232,6 +232,37 @@ const rawEnvSchema = z.object({
    * legitimate state: every semester predating S2 is in it.
    */
   PROVENANCE_ENROLLMENT_KEYS: jsonObjectStr,
+  /**
+   * The server's INSTITUTION key material — identity `format_version` 2.1.
+   *
+   * A single JSON object (there is one institution key, not one per semester):
+   *
+   *   { "private_key_hex": "<64 hex>", "cert": { … } }
+   *
+   * where `cert` is the `institution_cert` signed offline by the ROOT key.
+   *
+   * **This supersedes `PROVENANCE_ENROLLMENT_KEYS` as the highest-value secret
+   * the server holds.** The institution private key can mint a credential
+   * binding ANY public key to ANY `student_ref` at that institution — i.e.
+   * forge attribution — for as long as the certificate's window runs, and
+   * unlike the enrollment key its blast radius is the whole institution rather
+   * than one course. It still cannot sign a manifest (that needs the offline
+   * course key) and cannot reach another institution (`institution_id` is
+   * inside both signed payloads and every verifier cross-checks them).
+   *
+   * Same handling as the enrollment keys and for the same reason: the
+   * environment, never Postgres, because database dumps travel (nightly
+   * backups, the restore drill in `docs/admin-guide.md` §7).
+   *
+   * Only the shape is checked here, and the failure message deliberately does
+   * NOT echo the value. Certificate shape, version, and the fact that the
+   * private key actually matches `cert.institution_pubkey` are validated in
+   * `config/institution-keys.ts`, which never logs either half.
+   *
+   * Unset means "this deployment issues no student credentials", a legitimate
+   * state for any deployment that has not adopted 2.1 identity.
+   */
+  PROVENANCE_INSTITUTION_KEY: jsonObjectStr,
   // Storage quota watched by the hourly quota-check cron (default 1 TiB).
   STORAGE_QUOTA_BYTES: intStr(1099511627776),
   STORAGE_QUOTA_WARN_PCT: intStr(80),

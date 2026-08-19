@@ -259,6 +259,19 @@ export const roster_entries = pgTable(
       .notNull()
       .default(sql`'{}'`),
     protected_index: integer('protected_index'),
+    /**
+     * The global institution-scoped `students.student_ref` this roster row
+     * belongs to, or NULL when no 2.1 credential holder matches its email yet.
+     *
+     * The link lives HERE, on the roster side, so that deleting a roster row
+     * cannot destroy an identity an archived bundle still needs — see migration
+     * 0025. Many roster rows (one per semester a student appears in) point at
+     * one student, so two roster rows matching one SSO identity is the normal
+     * case, not the 2.0-era `roster_ambiguous` conflict.
+     */
+    student_ref: uuid('student_ref').references(() => students.student_ref, {
+      onDelete: 'set null',
+    }),
     created_at: timestamp('created_at', { withTimezone: true })
       .notNull()
       .default(sql`now()`),
@@ -270,6 +283,7 @@ export const roster_entries = pgTable(
     unique('roster_entries_semester_sid_key').on(t.semester_id, t.sid),
     index('roster_entries_semester_id_idx').on(t.semester_id),
     unique('roster_entries_semester_protected_index_key').on(t.semester_id, t.protected_index),
+    index('roster_entries_student_ref_idx').on(t.student_ref),
   ],
 );
 
@@ -980,9 +994,80 @@ export const student_enrollments = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// students  (identity format_version 2.1 — institution-scoped identity)
+// ---------------------------------------------------------------------------
+
+/**
+ * One row per human, per institution: the global opaque `student_ref` and the
+ * single long-lived public key that 2.1 student credentials are issued over.
+ * See migration 0025 for the full rationale; the load-bearing points are:
+ *
+ *  - a row is allocatable with NO roster row in existence. That is the entire
+ *    point of the redesign: rosters are populated by the Gradescope ingest
+ *    path, which runs only AFTER a student submits, so requiring a roster match
+ *    to mint (2.0's `not_on_roster`) meant a student could not obtain an
+ *    identity before their first submission. Roster membership is a question
+ *    answered later, not a precondition of having an identity.
+ *  - keyed on (`institution_id`, `sso_subject`) — the Google `sub` claim, not
+ *    the email. `sub` is stable across an email change and has no case
+ *    ambiguity; keying on a mutable attribute is how one person acquires two
+ *    refs and their sessions split into two apparent contributors.
+ *  - `student_ref` is a random UUID, never derived from the SSO subject, an
+ *    SID, or an email, because it travels in `session.start.identity` where a
+ *    project partner can read it.
+ *  - the `issued_at` / `expires_at` / `issue_count` columns are bookkeeping,
+ *    never enforcement. The 2.1 chain verifies entirely from inside the bundle
+ *    and consults no server, so re-issuing overwrites them without orphaning
+ *    the credential already in a student's hands — it stays valid until its own
+ *    signed `expires_at`, which is what lets an archived bundle verify years on.
+ *
+ * This does NOT replace `student_refs`. That table holds the per-semester,
+ * course-scoped 2.0 refs and stays live forever so archived bundles keep
+ * resolving; there is no join key between the two (2.0 is keyed by roster SID,
+ * 2.1 by SSO subject) and no correct row-level migration between them.
+ */
+export const students = pgTable(
+  'students',
+  {
+    student_ref: uuid('student_ref')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    institution_id: text('institution_id').notNull(),
+    /** The Google `sub` claim — stable, authenticated, opaque. */
+    sso_subject: text('sso_subject').notNull(),
+    /** The authenticated email, kept only to link roster rows by (lower()ed). */
+    sso_email: text('sso_email').notNull(),
+    /** The student's single long-lived ed25519 PUBLIC key. NULL before first issue. */
+    student_pubkey: text('student_pubkey'),
+    issued_at: timestamp('issued_at', { withTimezone: true }),
+    expires_at: timestamp('expires_at', { withTimezone: true }),
+    issue_count: integer('issue_count').notNull().default(0),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+    updated_at: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    unique('students_institution_sso_subject_key').on(t.institution_id, t.sso_subject),
+    // students_institution_email_lower_idx is a functional index
+    // (institution_id, LOWER(sso_email)) defined in migration 0025; Drizzle
+    // cannot express functional indexes in the schema.
+    check(
+      'students_student_pubkey_check',
+      sql`${t.student_pubkey} IS NULL OR ${t.student_pubkey} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check('students_issue_count_check', sql`${t.issue_count} >= 0`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Re-exported for convenience
 // ---------------------------------------------------------------------------
 
+export type Student = typeof students.$inferSelect;
+export type NewStudent = typeof students.$inferInsert;
 export type StudentRef = typeof student_refs.$inferSelect;
 export type NewStudentRef = typeof student_refs.$inferInsert;
 export type StudentEnrollment = typeof student_enrollments.$inferSelect;

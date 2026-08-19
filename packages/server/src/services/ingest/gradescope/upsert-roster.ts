@@ -16,11 +16,64 @@
  * required display_name.
  */
 
-import { and, eq, inArray, sql } from 'drizzle-orm';
-import { roster_entries } from '../../../db/schema.js';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { roster_entries, students } from '../../../db/schema.js';
 import type { DrizzleDb } from '../../../db/client.js';
 import type { GradescopeSubmitter } from './parse-metadata.js';
 import { assignMissingProtectedIndices } from '../../protected-index.js';
+
+// ---------------------------------------------------------------------------
+// Roster ↔ student linking
+// ---------------------------------------------------------------------------
+
+/**
+ * Point every still-unlinked roster row in this semester at the `students` row
+ * whose SSO email matches, case-insensitively.
+ *
+ * Identity 2.1 (`packages/log-core/src/institution.ts`). The link lives on the
+ * ROSTER side, so this write can never damage an identity: deleting a roster
+ * row later drops the link, not the `students` row, and a `student_ref` read
+ * out of an archived bundle still resolves.
+ *
+ * Emails that match more than one `students` row cannot occur — `students` is
+ * unique on (institution_id, sso_subject) and a single Google account owns one
+ * address at one institution — but the subquery is written to take the single
+ * matching ref rather than to error, so a hand-edited database cannot wedge
+ * ingest.
+ *
+ * The converse (one student matching several roster rows) is the NORMAL case:
+ * a student appears on a Fall roster and again on a Spring one, and both rows
+ * point at the same ref. That is a plain many-to-one, not the 2.0-era
+ * `roster_ambiguous` conflict, because the ref is derived from the SSO subject
+ * rather than from a roster row.
+ */
+export async function linkNewRosterEntriesToStudents(
+  db: DrizzleDb,
+  semesterId: string,
+): Promise<number> {
+  const linked = await db
+    .update(roster_entries)
+    .set({
+      student_ref: sql`(
+        SELECT ${students.student_ref} FROM ${students}
+        WHERE lower(${students.sso_email}) = lower(${roster_entries.email})
+        LIMIT 1
+      )`,
+    })
+    .where(
+      and(
+        eq(roster_entries.semester_id, semesterId),
+        isNull(roster_entries.student_ref),
+        sql`${roster_entries.email} IS NOT NULL`,
+        sql`EXISTS (
+          SELECT 1 FROM ${students}
+          WHERE lower(${students.sso_email}) = lower(${roster_entries.email})
+        )`,
+      ),
+    )
+    .returning({ id: roster_entries.id });
+  return linked.length;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -96,6 +149,20 @@ export async function upsertRosterFromSubmitters(
     if (added > 0) {
       await assignMissingProtectedIndices(tx, semesterId);
     }
+
+    // Link the rows just written to any student who has ALREADY obtained a 2.1
+    // credential, matching on lower(email) in both directions.
+    //
+    // This is the "student enrolls, then submits" case — the normal one. The
+    // mirror call in `issueStudentCredential` handles "student submits, then
+    // enrolls". Both are the same idempotent write, so the order of the two
+    // events cannot change the outcome.
+    //
+    // The `IS NULL` guard makes the link write-once: an already-attributed
+    // roster row is never re-pointed at a different student by a later commit
+    // that happens to reuse an address, because re-pointing would silently
+    // re-attribute that student's work.
+    await linkNewRosterEntriesToStudents(tx, semesterId);
 
     return { added, updated };
   });
