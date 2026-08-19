@@ -242,6 +242,18 @@ describe('KNOWN_HEURISTIC_IDS vs analysis-core ALL_FLAG_IDS', () => {
     expect(KNOWN_HEURISTIC_IDS.has('submitted_code_match')).toBe(true);
   });
 
+  it('includes the three bundle-level tamper detections added 2026-08', () => {
+    // log_bytes_match / checkpoint_chain_valid / manifest_downgrade are NOT
+    // among the PRD §5.4 eight — they ride on ValidationReport.bundleDetections
+    // — but they route through CHECK_META and are ordinary tunable Flag rows.
+    // If they were missing here, validateConfig would 422 every staff PUT that
+    // included them, and the tuning UI would offer a control the server
+    // rejects.
+    expect(KNOWN_HEURISTIC_IDS.has('log_bytes_match')).toBe(true);
+    expect(KNOWN_HEURISTIC_IDS.has('checkpoint_chain_valid')).toBe(true);
+    expect(KNOWN_HEURISTIC_IDS.has('manifest_downgrade')).toBe(true);
+  });
+
   it('DEFAULT_SERVER_CONFIG covers every analysis-core flag id and nothing else', () => {
     for (const id of ALL_FLAG_IDS) {
       expect(DEFAULT_SERVER_CONFIG.per_flag[id]).toBeDefined();
@@ -293,6 +305,85 @@ describe('resolvePerFlag', () => {
     const cfg = legacy24Config();
     resolvePerFlag(cfg, 'submitted_code_match');
     expect(cfg.per_flag['submitted_code_match']).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ingest and recompute must agree about the three new ids
+// ---------------------------------------------------------------------------
+
+/**
+ * The exact failure this guards against already happened once, to
+ * `submitted_code_match`: it fired and scored at ingest, then vanished on the
+ * first recompute because the two paths disagreed about what a MISSING
+ * `per_flag` entry means. Recompute runs on every config commit, so the flag
+ * disappeared the moment any staff member touched any weight. Migration 0022
+ * backfilled the rows; `resolvePerFlag` is what keeps it from recurring.
+ *
+ * Every stored `heuristic_configs` row written before today predates these
+ * three ids, so all three are in exactly the position `submitted_code_match`
+ * was in. These assertions pin the invariant that makes that safe: BOTH
+ * `run-per-submission.ts` (ingest) and `recompute-submission.ts` (recompute)
+ * resolve a per-flag entry through this one function, so a missing entry means
+ * enabled-at-1.0 on both paths and cannot mean different things on each.
+ */
+describe('the three 2026-08 bundle-level detections survive a stale stored config', () => {
+  const NEW_IDS = ['log_bytes_match', 'checkpoint_chain_valid', 'manifest_downgrade'] as const;
+
+  /** A stored row written before the three ids existed. */
+  function preDetectionConfig(): ServerHeuristicConfig {
+    const perFlag: ServerHeuristicConfig['per_flag'] = {};
+    for (const id of ALL_FLAG_IDS) {
+      if ((NEW_IDS as readonly string[]).includes(id)) continue;
+      perFlag[id] = { enabled: true, weight: 1.0 };
+    }
+    return {
+      per_flag: perFlag,
+      severity_weights: { info: 0, low: 1, medium: 3, high: 8 },
+      config_format_version: 1,
+    };
+  }
+
+  it('resolves each new id to enabled at weight 1.0, not dropped', () => {
+    const cfg = preDetectionConfig();
+    for (const id of NEW_IDS) {
+      expect(cfg.per_flag[id]).toBeUndefined();
+      expect(resolvePerFlag(cfg, id)).toEqual(DEFAULT_PER_FLAG_ENTRY);
+      expect(resolvePerFlag(cfg, id).enabled).toBe(true);
+      expect(resolvePerFlag(cfg, id).weight).toBe(1.0);
+    }
+  });
+
+  it('resolves identically no matter how many times it is called (recompute is idempotent)', () => {
+    const cfg = preDetectionConfig();
+    for (const id of NEW_IDS) {
+      const first = resolvePerFlag(cfg, id);
+      const second = resolvePerFlag(cfg, id);
+      const third = resolvePerFlag(cfg, id);
+      expect(second).toEqual(first);
+      expect(third).toEqual(first);
+      // And the stale row is still stale — nothing was written back.
+      expect(cfg.per_flag[id]).toBeUndefined();
+    }
+  });
+
+  it('normalizeStoredConfig materializes the three ids so a staff PUT round-trips', () => {
+    // Without this the analyzer would GET a 26-entry config, PUT it back, and
+    // validateConfig would 422 it for the three entries the row could not have
+    // contained when it was written.
+    const normalized = normalizeStoredConfig(preDetectionConfig());
+    for (const id of NEW_IDS) {
+      expect(normalized.per_flag[id]).toEqual(DEFAULT_PER_FLAG_ENTRY);
+    }
+    expect(validateConfig(normalized).ok).toBe(true);
+  });
+
+  it('an explicit staff disable is still honoured for the new ids', () => {
+    const cfg = preDetectionConfig();
+    cfg.per_flag['log_bytes_match'] = { enabled: false, weight: 1.0 };
+    expect(resolvePerFlag(cfg, 'log_bytes_match').enabled).toBe(false);
+    // ...and the other two are untouched.
+    expect(resolvePerFlag(cfg, 'checkpoint_chain_valid').enabled).toBe(true);
   });
 });
 
