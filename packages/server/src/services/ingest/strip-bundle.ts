@@ -3,9 +3,13 @@
  *
  * The Gradescope/recorder bundle contains, at the zip root:
  *   - manifest.json, manifest.sig       (the signed manifest + signature)
+ *   - manifest-<session_id>.json/.sig   (the ROLLING seal, git-submitted bundles)
  *   - session-<uuid>.slog               (NDJSON event logs)
  *   - session-<uuid>.slog.meta          (per-session meta)
  *   - the student's submitted source files
+ *
+ * A bundle carries the classic seal, the rolling seal, or (rarely) both. Both
+ * are preserved verbatim; see {@link isProvenanceEntry}.
  *
  * After ingest has computed everything from the in-memory full bundle (stats,
  * validation incl. hash-chain + manifest-signature verification and check 8
@@ -14,8 +18,9 @@
  * event stream in the `.slog` logs. This strips the source bytes and keeps only
  * the provenance entries.
  *
- * IMPORTANT: the signed `manifest.json` / `manifest.sig` are copied verbatim and
- * never modified — the manifest still lists the (now-absent) submission_files
+ * IMPORTANT: the signed manifest files (classic `manifest.json` / `manifest.sig`
+ * and every rolling `manifest-<session_id>.json` / `.sig`) are copied verbatim
+ * and never modified — the manifest still lists the (now-absent) submission_files
  * with their hashes, so the bundle remains fully signature- and chain-verifiable
  * (validation checks 1–7). Check 8 (submitted_code_match) is also re-runnable
  * against the stripped bundle as of 2026-07 — its tamper sub-check is gated on
@@ -35,13 +40,28 @@
  */
 
 import JSZip from 'jszip';
+import { parseRollingManifestFilename } from '@provenance/log-core';
 import { writeDeflateZip, type ZipEntryInput } from './zip-writer.js';
 
-/** True for the entries that make up a provenance-only bundle. */
+/**
+ * True for the entries that make up a provenance-only bundle.
+ *
+ * `manifest-<session_id>.json` / `.sig` — the ROLLING seal (program spec §8) —
+ * are provenance entries too, and dropping them would be catastrophic: a
+ * git-submitted bundle has NO classic `manifest.json`, so the rolling pair is
+ * the only thing sealing it. Stripping it out would leave a bundle that the
+ * loader rejects as `missing_manifest` and that can never be re-verified —
+ * silently destroying the signature on every stored git submission.
+ *
+ * The pattern comes from log-core so recorder, loader and this allowlist cannot
+ * drift; it deliberately does not match `manifest.json` (already matched above)
+ * nor a decoy like `manifest-notes.json`.
+ */
 export function isProvenanceEntry(name: string): boolean {
   return (
     name === 'manifest.json' ||
     name === 'manifest.sig' ||
+    parseRollingManifestFilename(name) !== null ||
     name.endsWith('.slog') ||
     name.endsWith('.slog.meta')
   );
@@ -49,7 +69,8 @@ export function isProvenanceEntry(name: string): boolean {
 
 /**
  * Return a new ZIP containing only the provenance entries of `zipBytes`
- * (manifest.json, manifest.sig, *.slog, *.slog.meta). Source files are dropped.
+ * (manifest.json, manifest.sig, manifest-<session_id>.json/.sig, *.slog,
+ * *.slog.meta). Source files are dropped.
  *
  * JSZip reads the input so entry bytes are extracted verbatim (source entries
  * are never inflated — `.async` is only called on provenance entries); the
