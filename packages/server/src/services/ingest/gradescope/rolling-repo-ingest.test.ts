@@ -174,6 +174,73 @@ describe('git-native ingest of a rolling-sealed repo', () => {
     });
   });
 
+  /**
+   * The classic sealed upload must be byte-for-byte unaffected by any of this.
+   * A classic bundle carries zero `manifest-<id>` files, so every rolling branch
+   * added to selection, identity and stripping is inert on this path.
+   */
+  it('regression: a classic sealed submission ingests exactly as before', async () => {
+    const { zipBuffer } = await buildTestBundle({
+      assignmentId: 'hw10',
+      semester: 'fa2026',
+      sessions: [{ eventCount: 6 }, { eventCount: 6 }],
+      submissionFiles: [{ path: 'hw10.py', status: 'present', content: 'x = 1\n' }],
+    });
+    const files = new Map<string, Uint8Array>();
+    const inner = await JSZip.loadAsync(zipBuffer);
+    for (const [name, obj] of Object.entries(inner.files)) {
+      if (obj.dir) continue;
+      files.set(
+        PROVENANCE_FILE.test(name) ? `.provenance/${name}` : name,
+        await obj.async('uint8array'),
+      );
+    }
+
+    // One root scope, self-identified from the classic manifest.
+    const discovered = discoverRepoScopes(files);
+    expect(discovered.ok).toBe(true);
+    if (!discovered.ok) return;
+    expect(discovered.unusable).toEqual([]);
+    expect(discovered.scopes.length).toBe(1);
+    const scope = discovered.scopes[0]!;
+    expect(scope.scopePath).toBe('');
+    expect(scope.declaredAssignmentId).toBe('hw10');
+    expect(scope.declaredSemester).toBe('fa2026');
+
+    // Classic seal selected; no rolling entry invented.
+    const names = scope.entries.map((e) => e.name);
+    expect(names).toContain('manifest.json');
+    expect(names).toContain('manifest.sig');
+    expect(names).toContain('hw10.py');
+    expect(names.filter((n) => n.startsWith('manifest-'))).toEqual([]);
+
+    // Stripping keeps exactly the classic four-pattern set — nothing more.
+    const zip = await zipBundleEntries(scope.entries);
+    const stored = await stripBundleSourceFiles(new Uint8Array(zip));
+    const storedNames = Object.keys((await JSZip.loadAsync(stored)).files).sort();
+    expect(storedNames).toEqual(
+      storedNames.filter(
+        (n) =>
+          n === 'manifest.json' ||
+          n === 'manifest.sig' ||
+          n.endsWith('.slog') ||
+          n.endsWith('.slog.meta'),
+      ),
+    );
+    expect(storedNames).toContain('manifest.json');
+    expect(storedNames).toContain('manifest.sig');
+    expect(storedNames).not.toContain('hw10.py');
+
+    // And it still verifies as a classic bundle.
+    const loaded = await loadBundle(stored.buffer as ArrayBuffer, 'stored.zip');
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.value.manifestSigHex).not.toBeNull();
+    const report = await runValidation(loaded.value);
+    expect(report.checks.find((c) => c.id === 'manifest_sig')?.status).toBe('pass');
+    expect(report.checks.find((c) => c.id === 'chain_integrity')?.status).toBe('pass');
+  });
+
   it('the stored (stripped) bundle of a git submission still validates', async () => {
     const files = await buildRollingRepo();
     const zip = await scopeBundleZip(files);
