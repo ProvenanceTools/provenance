@@ -381,14 +381,22 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
    * Rewrite the rolling seal. Never throws and never rejects: a seal failure
    * must not abort the checkpoint that carries it, and must never stop
    * recording. Recording is more important than sealing.
+   *
+   * `final` marks the seal as the LAST this session will get, which promotes the
+   * reader from prefix to whole-file semantics. ONLY dispose() may pass it, and
+   * only after session.end has been emitted, the writer flushed and the pending
+   * checkpoint drained — see the call site. Every other roll leaves it off,
+   * because the log is still growing and claiming otherwise would make the
+   * student's next keystroke look like an append past a finished seal.
    */
-  function rewriteRollingSeal(): Promise<void> {
+  function rewriteRollingSeal(opts?: { final?: boolean }): Promise<void> {
     if (!rollingSealEnabled) return Promise.resolve();
-    rollingSealChain = rollingSealChain.then(() => rollingSealOnce());
+    const isFinal = opts?.final === true;
+    rollingSealChain = rollingSealChain.then(() => rollingSealOnce(isFinal));
     return rollingSealChain;
   }
 
-  async function rollingSealOnce(): Promise<void> {
+  async function rollingSealOnce(isFinal: boolean): Promise<void> {
     try {
       const result = await writeRollingSeal({
         provenanceDir,
@@ -401,6 +409,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
         filesUnderReview: manifest.files_under_review,
         sessionPrivkey: keypair.privateKey,
         extensionHash: await getExtensionHashOnce(),
+        ...(isFinal ? { final: true } : {}),
       });
       if (result.kind === 'error') {
         // Degrade exactly like every other non-fatal write problem: surface it
@@ -707,8 +716,25 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     //
     // Awaiting rewriteRollingSeal() also drains any checkpoint seal still in
     // flight, since both share rollingSealChain.
+    //
+    // `final: true` is claimable HERE AND ONLY HERE, and only because of the
+    // three awaits above: session.end is emitted, the writer is flushed and
+    // closed, and the last checkpoint has landed in the `.meta`. Nothing can
+    // append to either file after this point, so the digests about to be signed
+    // are whole-file commitments rather than prefixes, and a reader is entitled
+    // to fail an append against them.
+    //
+    // The claim is made only on a path that actually reached here. Every way a
+    // session can die without a clean dispose — a crash, a power cut, a full
+    // disk, a read-only checkout, `.provenance/` removed by a `git checkout` —
+    // simply leaves the last non-final seal in place, which a reader treats as a
+    // prefix commitment with a reported unattested tail. That is a coverage gap,
+    // not a tamper finding, and it is why finality is claimed explicitly here
+    // rather than inferred by the reader from a trailing `session.end` entry:
+    // `session.end` lives in the log, and the log's completeness is the very
+    // thing in question.
     try {
-      await rewriteRollingSeal();
+      await rewriteRollingSeal({ final: true });
     } catch {
       // Ignore — best effort. rewriteRollingSeal does not reject anyway.
     }
