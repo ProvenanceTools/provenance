@@ -120,7 +120,8 @@ The product specs live in `docs/`. The recorder spec is `docs/prd.md`; the analy
 Workspace-wide (run from repo root):
 
 - `npm run build` — build all packages.
-- `npm run test` — run all Vitest suites (~1200+ tests; server integration tests spin up ephemeral Postgres/MinIO via testcontainers, so Docker must be running).
+- `npm run test` — run the **workspace** Vitest suites (~1200+ tests; server integration tests spin up ephemeral Postgres/MinIO via testcontainers, so Docker must be running). Note this is `--workspaces`, so it does **not** cover `tools/` — see `test:tools`.
+- `npm run test:tools` — run the `tools/` suites (course-keypair / cert-minting / manifest-signing, and the recorder→analyzer seal conformance gate). `tools/` is not an npm workspace, so these are invisible to `npm run test`; they ran under nothing at all until a root `vitest.config.ts` was added, deliberately scoped to `tools/**` so a bare `vitest` cannot wander into the server's testcontainers suites.
 - `npm run typecheck` — `tsc --noEmit` across the workspace.
 - `npm run lint` — ESLint (only the `src/` trees of the five packages) + Prettier check.
 - `npm run package:recorder` — build the dev-key VSIX for local install.
