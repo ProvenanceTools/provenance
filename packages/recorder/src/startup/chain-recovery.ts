@@ -44,6 +44,67 @@
  *   inspects the quarantined file directly. PRD §4.6 documents this as the canonical
  *   behavior. `chain.broken` remains in the event type system but is reserved for any
  *   future case where the live session detects its own chain breaking mid-stream.
+ *
+ * Decision — OWNERSHIP. `.provenance/` is not necessarily ours.
+ *   (git-collaboration spec §2 A4, §3 S9/S19/S22; worklist Tier 0.1 + 0.2.)
+ *
+ *   In CS 61B/61C two partners share one git repo, so both recorders write into the
+ *   SAME committed `.provenance/` directory. Everything above was written under the
+ *   assumption that every `.slog` in that directory is ours. It is not, and the two
+ *   consequences were live defects:
+ *
+ *     1. The most-recent `.slog` — very possibly the PARTNER'S, because a partner
+ *        whose editor is open right now has no `session.end` and a fresh clone has
+ *        no local memory — was RENAMED to `<slog>.corrupt-<ISO>` whenever it failed
+ *        to read, parse, or validate. `sealBundle` excludes `.corrupt-` files, so
+ *        that rename removes the partner's evidence from the submission entirely.
+ *        Because `.provenance/` is committed, git history shows the INNOCENT
+ *        student performing the deletion. It is also a free attack: flip one byte
+ *        of your partner's log and their own partner's tooling erases it for you.
+ *
+ *     2. `prev_session_id` pointed at whichever session had the latest
+ *        `session.start.wall` regardless of author, so a "contributor's session
+ *        chain" could link to a stranger — which makes the deletion detector of
+ *        program spec §7 mechanism 1 ("a missing middle session is visible from
+ *        the next one's back-pointer") not merely useless but actively false.
+ *
+ *   The only cross-session identity signal that exists is
+ *   `session.start.identity.enrollment.student_ref` (program spec §5a). It is NOT
+ *   `machine_id` — that is salted with the session id (`recorder-context.ts`) and
+ *   can never match across sessions — and it is NOT `session_pubkey`, which is a
+ *   fresh ephemeral keypair per session. Ownership is therefore decided by
+ *   `student_ref`, and only by `student_ref`.
+ *
+ *   Three classes, from this recorder's own ref and the candidate's:
+ *
+ *     own          both present and equal          → eligible: may be linked AND quarantined
+ *     foreign      both present and different, OR  → NEVER touched. Not selected, not
+ *                  we have none and it has one       renamed, not linked, not even read past
+ *                                                    its first line.
+ *     unattributed neither has one, or we have    → eligible ONLY when this recorder is
+ *                  one and it does not              itself unattributed (see below)
+ *
+ *   Why `unattributed` is eligible only for an unattributed recorder: when nothing
+ *   in the directory carries an identity, the directory is indistinguishable from a
+ *   solo one, and refusing to act would silently turn off crash recovery for every
+ *   student who has not enrolled — a behaviour change well beyond fixing a bug.
+ *   When THIS recorder does hold an identity, an unattributed file is a file we
+ *   cannot prove is ours, so we leave it alone: losing a back-pointer costs a link,
+ *   whereas renaming someone's only record costs the evidence.
+ *
+ *   KNOWN RESIDUAL GAP, stated rather than papered over: when *neither* partner has
+ *   enrolled, every file in the directory is `unattributed` and no signal exists that
+ *   could separate them. Both defects remain reachable in that configuration. Closing
+ *   it requires enrollment (program spec §5a) or peer witnessing (spec §5.5, Tier 4.1,
+ *   which is gated on an unanswered CPHS question, §8.5). Nothing in this module can.
+ *
+ *   NOT FIXED HERE, deliberately: `prev_session_id` is still set only on the dangling
+ *   path, so removing a cleanly-ended session is still undetectable by §7 mechanism 1.
+ *   Spec §3 S9 calls that "a real hole and it predates this program", but Tier 0.2
+ *   scopes this change to ownership, and linking on clean end reverses a documented
+ *   product decision (see "Decision — prev_session_id linkage" above) and changes the
+ *   analyzer's session graph for solo students too. That is a product call, not a
+ *   coding one.
  */
 
 import { parseEntries, validateChain } from '@provenance/log-core';
@@ -70,26 +131,81 @@ export type RecoveryDeps = {
   listSlogFiles: (dir: string) => Promise<string[]>;
   /** Returns current Date (for quarantine timestamp). */
   now: () => Date;
+  /**
+   * `identity.enrollment.student_ref` of the session that is STARTING, or null
+   * when this recorder holds no verifying enrollment for this course.
+   *
+   * This is the whole ownership signal — see "Decision — OWNERSHIP" above.
+   * Optional, and absent means null, so callers and tests that predate the
+   * enrollment work keep exactly the behaviour they had.
+   */
+  ownStudentRef?: string | null;
 };
+
+/**
+ * How a `.slog` in `.provenance/` relates to the session that is starting.
+ * See "Decision — OWNERSHIP" in the module docstring for the full table.
+ */
+export type SlogOwnership = 'own' | 'foreign' | 'unattributed';
+
+/**
+ * Classify a candidate `.slog` from the two `student_ref`s.
+ *
+ * Note the asymmetric `foreign` case: when this recorder has NO identity and the
+ * candidate HAS one, the candidate is foreign rather than unattributed. We cannot
+ * claim to be a contributor we cannot name, and the cost of being wrong is
+ * asymmetric — misclassifying our own pre-enrollment log as foreign loses a
+ * back-pointer, while misclassifying a partner's log as ours destroys it.
+ */
+export function classifySlogOwnership(
+  ownStudentRef: string | null,
+  candidateStudentRef: string | null,
+): SlogOwnership {
+  // A candidate that names nobody can never be PROVEN ours, whoever we are.
+  if (candidateStudentRef === null) return 'unattributed';
+  if (ownStudentRef === null) return 'foreign';
+  return candidateStudentRef === ownStudentRef ? 'own' : 'foreign';
+}
+
+/**
+ * May this recorder select, link to, and (if corrupt) quarantine a candidate of
+ * the given class?
+ *
+ * `own` always. `foreign` never. `unattributed` only when this recorder is itself
+ * unattributed, because only then is the directory indistinguishable from a solo
+ * one and today's behaviour the honest default.
+ */
+function isEligible(ownership: SlogOwnership, ownStudentRef: string | null): boolean {
+  if (ownership === 'own') return true;
+  if (ownership === 'foreign') return false;
+  return ownStudentRef === null;
+}
 
 // ---------------------------------------------------------------------------
 // Choosing the previous session
 // ---------------------------------------------------------------------------
 
 /**
- * Extract the `session.start` wall clock (as ms since epoch) from a .slog's
- * first line. Returns null when the file doesn't start with a parseable
- * `session.start` — such a file is not a usable ordering candidate, and the
- * existing corrupt-handling path deals with it if it ends up being chosen.
+ * The two facts we need off a .slog's FIRST LINE: when its session started, and
+ * whose session it claims to be.
+ *
+ * Only the first line is parsed — this runs once per file at startup and must not
+ * become proportional to log size. `student_ref` sits in `session.start`, which is
+ * always seq 0, so one line is enough.
+ *
+ * Returns null when the file doesn't start with a parseable `session.start`. Such
+ * a file is not a usable ordering candidate; the corrupt-handling path deals with
+ * it if it ends up being chosen, and its ownership is `unattributed` because a
+ * file we cannot read cannot tell us whose it is.
  */
-function parseSessionStartWall(text: string): number | null {
+function parseSessionStartHead(text: string): { wall: number; studentRef: string | null } | null {
   const newlineIdx = text.indexOf('\n');
   const firstLine = newlineIdx === -1 ? text : text.slice(0, newlineIdx);
   if (firstLine.trim().length === 0) return null;
 
-  let entry: { kind?: unknown; wall?: unknown };
+  let entry: { kind?: unknown; wall?: unknown; data?: unknown };
   try {
-    entry = JSON.parse(firstLine) as { kind?: unknown; wall?: unknown };
+    entry = JSON.parse(firstLine) as { kind?: unknown; wall?: unknown; data?: unknown };
   } catch {
     return null;
   }
@@ -97,42 +213,98 @@ function parseSessionStartWall(text: string): number | null {
   if (entry.kind !== 'session.start' || typeof entry.wall !== 'string') return null;
 
   const wall = Date.parse(entry.wall);
-  return Number.isNaN(wall) ? null : wall;
+  if (Number.isNaN(wall)) return null;
+
+  return { wall, studentRef: extractStudentRef(entry.data) };
 }
 
 /**
- * Pick the .slog whose session.start wall is latest, returning it along with
- * the text already read (so the caller doesn't re-read it).
+ * Pull `data.identity.enrollment.student_ref` out of an untyped `session.start`
+ * payload, or null when any hop is missing or the wrong shape.
  *
- * Returns null when no file yields a parseable session.start — the caller then
- * falls back to the alphabetically last file so the corrupt/quarantine path
- * still runs.
- *
- * Reads are sequential, not Promise.all: only one file's text is held at a
- * time besides the current best.
+ * Narrowed by hand rather than by a schema: 1.x payloads have no `identity` at
+ * all, this runs on a file written by a possibly-different recorder version, and
+ * "absent" must never become "throws".
  */
-async function chooseMostRecentSlog(
+function extractStudentRef(data: unknown): string | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const identity = (data as Record<string, unknown>)['identity'];
+  if (typeof identity !== 'object' || identity === null) return null;
+  const enrollment = (identity as Record<string, unknown>)['enrollment'];
+  if (typeof enrollment !== 'object' || enrollment === null) return null;
+  const ref = (enrollment as Record<string, unknown>)['student_ref'];
+  return typeof ref === 'string' && ref.length > 0 ? ref : null;
+}
+
+/** One `.slog` in the directory, after the single first-line read. */
+type SlogCandidate = {
+  filename: string;
+  ownership: SlogOwnership;
+  /** Retained only for the current best, so a large directory is not held in memory. */
+  text: string | null;
+  wall: number | null;
+};
+
+/**
+ * Scan the directory once and pick the ELIGIBLE `.slog` whose session.start wall
+ * is latest, returning it with the text already read (so the caller doesn't
+ * re-read it).
+ *
+ * `eligibleFallback` is the alphabetically last eligible filename, used when no
+ * eligible file yields a parseable session.start so that the corrupt/quarantine
+ * path still runs on something we are allowed to touch.
+ *
+ * Wall clock is used ONLY to order sessions that are already known to be the same
+ * contributor's, which is the narrowest defensible use of it (spec §5.2 L3): it is
+ * a display-grade primitive even between one person's two machines. The
+ * authoritative fix is the signed per-contributor session ordinal (spec Tier 4.2),
+ * which is a `session.start` format change and therefore out of scope here.
+ *
+ * Reads are sequential, not Promise.all: only one file's text is held at a time
+ * besides the current best.
+ */
+async function chooseMostRecentOwnSlog(
   slogFiles: string[],
   provenanceDir: string,
   readSlogFile: RecoveryDeps['readSlogFile'],
-): Promise<{ filename: string; text: string } | null> {
-  let best: { filename: string; text: string; wall: number } | null = null;
+  ownStudentRef: string | null,
+): Promise<{ best: { filename: string; text: string } | null; eligibleFallback: string | null }> {
+  let best: (SlogCandidate & { text: string; wall: number }) | null = null;
+  let eligibleFallback: string | null = null;
 
   for (const filename of slogFiles) {
     const read = await readSlogFile(`${provenanceDir}/${filename}`);
-    if (!read.ok) continue;
 
-    const wall = parseSessionStartWall(read.text);
-    if (wall === null) continue;
+    // An unreadable file tells us nothing about whose it is.
+    const head = read.ok ? parseSessionStartHead(read.text) : null;
+    const ownership = classifySlogOwnership(ownStudentRef, head?.studentRef ?? null);
+
+    // A foreign session is dropped HERE, before anything else can happen to it:
+    // never selected, never linked, never renamed. That is the whole of Tier 0.1
+    // and 0.2 — everything downstream operates on our own sessions only.
+    if (!isEligible(ownership, ownStudentRef)) continue;
+
+    // slogFiles arrives sorted, so the last eligible one seen is the
+    // alphabetically last eligible one.
+    eligibleFallback = filename;
+
+    if (!read.ok || head === null) continue;
 
     // Ties (two sessions starting in the same millisecond) fall back to
     // filename order, so the choice stays deterministic.
-    if (best === null || wall > best.wall || (wall === best.wall && filename > best.filename)) {
-      best = { filename, text: read.text, wall };
+    if (
+      best === null ||
+      head.wall > best.wall ||
+      (head.wall === best.wall && filename > best.filename)
+    ) {
+      best = { filename, text: read.text, wall: head.wall, ownership };
     }
   }
 
-  return best === null ? null : { filename: best.filename, text: best.text };
+  return {
+    best: best === null ? null : { filename: best.filename, text: best.text },
+    eligibleFallback,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -143,12 +315,16 @@ async function chooseMostRecentSlog(
  * Inspect the provenanceDir for a previous session and return a recovery decision.
  *
  * Side effects:
- *   - If the chain is invalid: renames the slog to <slog>.corrupt-<ISO> (quarantine).
+ *   - If the chain is invalid: renames the slog to <slog>.corrupt-<ISO> (quarantine)
+ *     — but ONLY for a `.slog` this recorder is entitled to touch. A file belonging
+ *     to another contributor is never read past its first line, never selected,
+ *     never linked, and never renamed. See "Decision — OWNERSHIP".
  *
  * Returns RecoveryDecision — callers decide what to do (e.g. set prev_session_id).
  */
 export async function recoverPreviousSession(deps: RecoveryDeps): Promise<RecoveryDecision> {
   const { provenanceDir, readSlogFile, rename, listSlogFiles, now } = deps;
+  const ownStudentRef = deps.ownStudentRef ?? null;
 
   // List all .slog files.
   const filenames = await listSlogFiles(provenanceDir);
@@ -158,14 +334,22 @@ export async function recoverPreviousSession(deps: RecoveryDeps): Promise<Recove
     return { kind: 'clean_start' };
   }
 
-  // Most recent by session.start wall — see module-level comment for rationale.
-  const selected = await chooseMostRecentSlog(slogFiles, provenanceDir, readSlogFile);
+  // Most recent ELIGIBLE session by session.start wall — see the module-level
+  // "Decision — OWNERSHIP" comment. A partner's `.slog` never reaches this point.
+  const { best: selected, eligibleFallback } = await chooseMostRecentOwnSlog(
+    slogFiles,
+    provenanceDir,
+    readSlogFile,
+    ownStudentRef,
+  );
 
-  // No file yielded a parseable session.start: fall back to the alphabetically
-  // last one so the corrupt/quarantine path below still runs on something.
-  const chosen = selected?.filename ?? slogFiles[slogFiles.length - 1];
-  if (chosen === undefined) {
-    // Should never happen given length > 0, but satisfies noUncheckedIndexedAccess.
+  // No eligible file yielded a parseable session.start: fall back to the
+  // alphabetically last ELIGIBLE one so the corrupt/quarantine path below still
+  // runs on something we are entitled to touch. When nothing is eligible — the
+  // whole directory belongs to other contributors — we start clean and leave
+  // every one of their files exactly where it is.
+  const chosen = selected?.filename ?? eligibleFallback;
+  if (chosen === null || chosen === undefined) {
     return { kind: 'clean_start' };
   }
 
