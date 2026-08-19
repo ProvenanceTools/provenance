@@ -18,7 +18,8 @@
  * Two independent vector families, selected by flag:
  *
  *   --out           log-core FORMAT vectors: hash chain, ed25519, session key, manifests,
- *                   checkpoint, golden bundle. Consumed by JetBrains `core/` and by the
+ *                   checkpoint, golden bundle, plus the Manifest 2.0 family (course cert,
+ *                   manifest-v2, capture policy). Consumed by JetBrains `core/` and by the
  *                   Neovim `tests/conformance/fixtures/`.
  *   --recorder-out  recorder PAYLOAD-BUILDER vectors: the paste and fs.external_change
  *                   inline-content builders. These pin the inline/truncate cap (64 KB of
@@ -58,7 +59,22 @@ import {
   signManifest,
   signBundleManifest,
   signCheckpoint,
+  canonicalize,
+  parseManifest,
+  verifyManifest,
+  verifyManifestChain,
+  signCourseCert,
+  verifyCourseCert,
+  checkCertWindow,
+  buildCourseCertSignedPayload,
+  resolveCapturePolicy,
+  DEFAULT_CAPTURE_POLICY,
+  FLOOR_EVENT_KINDS,
+  POLICY_GATED_EVENT_KINDS,
+  HEARTBEAT_INTERVAL_MIN_MS,
+  HEARTBEAT_INTERVAL_MAX_MS,
 } from '@provenance/log-core';
+import type { CourseCert, Manifest } from '@provenance/log-core';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 // The recorder's SHIPPED builders, from its build output — deriving the vectors
 // from the real code is the whole point. Requires
@@ -196,6 +212,452 @@ function writeRecorderVectors(outDir: string): void {
       expected: buildPastePayload(input),
     })),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Manifest 2.0 vectors (program spec §2–§4)
+// docs/superpowers/specs/2026-08-18-multicourse-program-architecture.md
+// ---------------------------------------------------------------------------
+
+/**
+ * Fixed key seeds for the 2.0 families. Chosen not to collide with the seeds the
+ * 1.x vectors already use (0x03/0x04/0x05/0x07/0x09), so adding these cannot
+ * perturb a byte of the existing output.
+ */
+const ROOT_PRIV = seed(0x0a);
+const COURSE_PRIV = seed(0x0b);
+const WRONG_ROOT_PRIV = seed(0x0c);
+const OTHER_COURSE_PRIV = seed(0x0d);
+
+const CERT_VALID_FROM = '2026-08-20';
+const CERT_VALID_UNTIL = '2027-01-15';
+const COURSE_ID = 'berkeley-cs61b';
+
+/** The `policy` block used by every 2.0 manifest vector. */
+const V2_POLICY = {
+  capture: {
+    selection_change: true,
+    focus_change: true,
+    terminal: true,
+    doc_open_close: true,
+    inline_content: true,
+    heartbeat_interval_ms: 30000,
+  },
+};
+
+type UnsignedCert = Omit<CourseCert, 'root_sig'>;
+
+async function makeCert(
+  overrides: Partial<UnsignedCert> = {},
+  rootPriv: Uint8Array = ROOT_PRIV,
+): Promise<CourseCert> {
+  const unsigned: UnsignedCert = {
+    course_id: COURSE_ID,
+    course_pubkey: await pub(COURSE_PRIV),
+    valid_from: CERT_VALID_FROM,
+    valid_until: CERT_VALID_UNTIL,
+    ...overrides,
+  };
+  return { ...unsigned, root_sig: await signCourseCert(unsigned, rootPriv) };
+}
+
+/**
+ * Vectors for `verifyCourseCert` (chain step 1) and `checkCertWindow` (step 4).
+ *
+ * `canonical_json` is the exact byte string the ROOT key signed — the single
+ * most useful value for a port, because a canonicalization disagreement shows up
+ * here rather than as an inscrutable signature failure.
+ */
+async function buildCourseCertVectors(): Promise<unknown> {
+  const rootPubkeyHex = await pub(ROOT_PRIV);
+  const wrongRootPubkeyHex = await pub(WRONG_ROOT_PRIV);
+
+  const validCert = await makeCert();
+  const certSignedByWrongRoot = await makeCert({}, WRONG_ROOT_PRIV);
+
+  // Tampered AFTER signing: the sig is genuine but no longer covers the bytes.
+  const tamperedCourseId: CourseCert = { ...validCert, course_id: 'berkeley-cs61c' };
+  const tamperedValidUntil: CourseCert = { ...validCert, valid_until: '2099-01-01' };
+
+  const verifyCase = async (
+    name: string,
+    note: string,
+    cert: CourseCert,
+    pubkeyHex: string,
+  ): Promise<unknown> => ({
+    name,
+    note,
+    input: { cert, root_pubkey_hex: pubkeyHex },
+    expected: { valid: (await verifyCourseCert(cert, pubkeyHex)).ok },
+  });
+
+  const windowCase = (name: string, note: string, cert: CourseCert, issuedAt: string): unknown => ({
+    name,
+    note,
+    input: {
+      valid_from: cert.valid_from,
+      valid_until: cert.valid_until,
+      issued_at: issuedAt,
+    },
+    expected: checkCertWindow(cert, issuedAt),
+  });
+
+  const ancient = await makeCert({ valid_from: '1999-01-01', valid_until: '1999-12-31' });
+
+  return {
+    note:
+      'Course-certificate conformance vectors (program spec §2/§3). The ROOT key signs ' +
+      'the cert MINUS root_sig; log-core never hardcodes the root public key, it is always ' +
+      'a parameter, so a port must accept it as one too. All keys in the signed payload are ' +
+      'fixed ASCII identifiers: a non-ASCII key would sort differently under a bytewise Lua ' +
+      'JCS than under a UTF-16 code-unit JS/Kotlin JCS and silently break cross-verification.',
+    root_pubkey_hex: rootPubkeyHex,
+    wrong_root_pubkey_hex: wrongRootPubkeyHex,
+    course_pubkey_hex: await pub(COURSE_PRIV),
+    valid_cert: validCert,
+    canonical_json: new TextDecoder().decode(buildCourseCertSignedPayload(validCert)),
+    verify_cases: [
+      await verifyCase(
+        'valid',
+        'Genuine cert under the matching root key.',
+        validCert,
+        rootPubkeyHex,
+      ),
+      await verifyCase(
+        'bad_root_sig',
+        'Cert signed by a DIFFERENT root key. Chain step 1 must fail; do not activate.',
+        certSignedByWrongRoot,
+        rootPubkeyHex,
+      ),
+      await verifyCase(
+        'root_key_is_a_parameter',
+        'The same cert verifies under whichever root actually signed it — proof the root key is never hardcoded.',
+        certSignedByWrongRoot,
+        wrongRootPubkeyHex,
+      ),
+      await verifyCase(
+        'tampered_course_id',
+        'course_id edited after signing. The cert is what binds a course key to a course id, so this must fail.',
+        tamperedCourseId,
+        rootPubkeyHex,
+      ),
+      await verifyCase(
+        'tampered_valid_until',
+        'Window extended after signing — the classic "make my expired cert live forever" edit.',
+        tamperedValidUntil,
+        rootPubkeyHex,
+      ),
+    ],
+    window_note:
+      'The window is evaluated against manifest.issued_at, NEVER against wall-clock now: a Fall ' +
+      '2026 bundle must still verify in 2028 for an adjudication case. Both bounds are ' +
+      'INCLUSIVE, and a date-only bound is the instant of UTC midnight that day (so ' +
+      'valid_until "2027-01-15" expires at 2027-01-15T00:00:00Z). An out-of-window result is ' +
+      'NOT fatal — it never invalidates a signature; the caller decides.',
+    window_cases: [
+      windowCase('inside', 'Ordinary mid-semester manifest.', validCert, '2026-09-08T00:00:00Z'),
+      windowCase('at_valid_from', 'Lower bound is inclusive.', validCert, '2026-08-20T00:00:00Z'),
+      windowCase('at_valid_until', 'Upper bound is inclusive.', validCert, '2027-01-15T00:00:00Z'),
+      windowCase(
+        'before_valid_from',
+        'One second before the window opens.',
+        validCert,
+        '2026-08-19T23:59:59Z',
+      ),
+      windowCase(
+        'after_valid_until',
+        'One millisecond past the window. Non-fatal: the recorder still records and stamps the expiry.',
+        validCert,
+        '2027-01-15T00:00:00.001Z',
+      ),
+      windowCase(
+        'expired_long_ago_but_contemporaneous',
+        'Cert lapsed decades ago in wall-clock terms, yet the manifest was issued inside it. Must be in_window — this is the test that catches an implementation using now() instead of issued_at.',
+        ancient,
+        '1999-06-15T00:00:00Z',
+      ),
+      windowCase(
+        'unparseable_issued_at',
+        'Reported distinctly rather than guessed at.',
+        validCert,
+        'sometime last fall',
+      ),
+    ],
+  };
+}
+
+/**
+ * Vectors for Manifest 2.0 parsing and `verifyManifestChain`.
+ *
+ * The two highest-value entries here are `legacy_no_format_version` (a missing
+ * `format_version` MUST default to '1.0' and parse, or every archived submission
+ * breaks) and the `course_id_mismatch` case (both signatures verify and the
+ * manifest is still a forgery).
+ */
+async function buildManifestV2Vectors(): Promise<unknown> {
+  const rootPubkeyHex = await pub(ROOT_PRIV);
+  const coursePubkeyHex = await pub(COURSE_PRIV);
+  const cert = await makeCert();
+
+  const makeManifest = async (
+    overrides: Partial<Manifest> = {},
+    coursePriv: Uint8Array = COURSE_PRIV,
+  ): Promise<Manifest> => {
+    const unsigned: Omit<Manifest, 'sig'> = {
+      format_version: '2.0',
+      course_id: COURSE_ID,
+      assignment_id: 'proj2',
+      semester: 'fa26',
+      issued_at: '2026-09-08T00:00:00Z',
+      files_under_review: ['src/Main.java'],
+      collaboration: 'solo',
+      submission: 'bundle',
+      scope: 'directory',
+      policy: V2_POLICY,
+      course_cert: cert,
+      ...overrides,
+    };
+    return { ...unsigned, sig: await signManifest(unsigned, coursePriv) };
+  };
+
+  const valid = await makeManifest();
+
+  // Genuine cert, genuine course signature — and still a forgery, because the
+  // manifest claims a course the cert does not cover.
+  const courseIdMismatch = await makeManifest({ course_id: 'berkeley-cs61c' });
+  // Signed by a course key the cert does not vouch for.
+  const wrongCourseKey = await makeManifest({}, OTHER_COURSE_PRIV);
+  // Payload edited after signing.
+  const tamperedPayload: Manifest = { ...valid, files_under_review: ['src/Sneaky.java'] };
+  // Cert not signed by the root.
+  const badRootSig = await makeManifest({ course_cert: await makeCert({}, WRONG_ROOT_PRIV) });
+  // Issued after the cert lapsed: chain still OK, window reports the expiry.
+  const expiredWindow = await makeManifest({ issued_at: '2027-06-01T00:00:00Z' });
+
+  const chainOutcome = (
+    result: Awaited<ReturnType<typeof verifyManifestChain>>,
+  ): Record<string, unknown> => {
+    if (result.ok) {
+      return { ok: true, course_id: result.value.course_id, window: result.value.window };
+    }
+    return { ok: false, ...result.error };
+  };
+
+  const chainCase = async (name: string, note: string, manifest: Manifest): Promise<unknown> => ({
+    name,
+    note,
+    input: { manifest, root_pubkey_hex: rootPubkeyHex },
+    expected: chainOutcome(await verifyManifestChain(manifest, rootPubkeyHex)),
+  });
+
+  // A 1.x manifest — no format_version field at all. Reuses the exact fields and
+  // course key already pinned by manifest.json, so the sig below is the SAME hex
+  // that file has always carried.
+  const legacyFields = {
+    assignment_id: 'hw3',
+    semester: 'fa25',
+    issued_at: '2026-07-14T00:00:00Z',
+    files_under_review: ['src/main.py', 'src/util.py'],
+  };
+  const legacyManifest = { ...legacyFields, sig: await signManifest(legacyFields, seed(9)) };
+  const legacyParsed = parseManifest(JSON.stringify(legacyManifest));
+
+  return {
+    note:
+      'Manifest 2.0 conformance vectors (program spec §3). Two independent signature scopes ' +
+      'live in one file: a COURSE-signed payload and a ROOT-signed course_cert that ' +
+      'authorizes the course key. buildSignedPayload excludes sig AND course_cert — the ' +
+      'course does not sign its own certificate.',
+    root_pubkey_hex: rootPubkeyHex,
+    course_pubkey_hex: coursePubkeyHex,
+    other_course_pubkey_hex: await pub(OTHER_COURSE_PRIV),
+
+    legacy_no_format_version: {
+      note:
+        'MANDATORY. A 1.x manifest has no format_version field, so 1.x is identified by its ' +
+        'ABSENCE. A parser MUST default a missing format_version to "1.0" and parse ' +
+        'successfully — never reject. Rejecting it would break every archived submission, ' +
+        'which is precisely the adjudication case this whole program exists to serve. ' +
+        'The sig below is byte-identical to the one in manifest.json: adding the 2.0 fields ' +
+        'did not move the 1.x signed payload by a single byte.',
+      manifest_json: JSON.stringify(legacyManifest),
+      course_pubkey_hex: await pub(seed(9)),
+      canonical_json: canonicalize(legacyFields),
+      expected: {
+        parses: legacyParsed.ok,
+        format_version: legacyParsed.ok ? legacyParsed.value.format_version : null,
+        sig_verifies: (await verifyManifest(legacyManifest, await pub(seed(9)))).ok,
+      },
+    },
+
+    legacy_explicit_1_0: {
+      note:
+        'An explicit format_version of "1.0" canonicalizes to the same four legacy fields — ' +
+        'format_version itself is NOT in the 1.x signed payload. Same sig as above.',
+      manifest: { ...legacyManifest, format_version: '1.0' },
+      expected: { sig: await signManifest({ ...legacyFields, format_version: '1.0' }, seed(9)) },
+    },
+
+    valid_2_0: {
+      note:
+        'A complete 2.0 manifest. canonical_json is the exact byte string the COURSE key ' +
+        'signed; note the absence of both sig and course_cert. Every key is a fixed ASCII ' +
+        'identifier — never a course id, path, or other user-derived string promoted to a ' +
+        'key — because a bytewise-sorting Lua JCS and a UTF-16-sorting JS/Kotlin JCS agree ' +
+        'only for ASCII. files_under_review is the only array in the signed payload.',
+      manifest: valid,
+      canonical_json: canonicalize({
+        format_version: '2.0',
+        course_id: COURSE_ID,
+        assignment_id: 'proj2',
+        semester: 'fa26',
+        issued_at: '2026-09-08T00:00:00Z',
+        files_under_review: ['src/Main.java'],
+        collaboration: 'solo',
+        submission: 'bundle',
+        scope: 'directory',
+        policy: V2_POLICY,
+      }),
+    },
+
+    chain_note:
+      'The four verification steps run IN THIS ORDER and the order is load-bearing: ' +
+      '(1) course_cert minus root_sig against the embedded root pubkey; ' +
+      '(2) payload minus sig and course_cert against course_cert.course_pubkey; ' +
+      '(3) manifest.course_id === course_cert.course_id; ' +
+      '(4) issued_at within [valid_from, valid_until] — non-fatal, reported not thrown.',
+    chain_cases: [
+      await chainCase('valid', 'Root -> cert -> manifest all agree.', valid),
+      await chainCase(
+        'bad_root_sig',
+        'Step 1 fails: the cert is not root-signed. Do not activate.',
+        badRootSig,
+      ),
+      await chainCase(
+        'wrong_course_key',
+        'Step 2 fails: signed by a course key the cert does not vouch for.',
+        wrongCourseKey,
+      ),
+      await chainCase(
+        'tampered_payload',
+        'Step 2 fails: files_under_review edited after signing.',
+        tamperedPayload,
+      ),
+      await chainCase(
+        'course_id_mismatch',
+        'MANDATORY. Step 3 fails. Both signatures are GENUINE: the cert really is root-signed for berkeley-cs61b, and the payload really is signed by the key that cert authorizes. Only comparing manifest.course_id to course_cert.course_id catches it. Skip step 3 and 61B’s key can forge a 61C manifest.',
+        courseIdMismatch,
+      ),
+      await chainCase(
+        'issued_at_after_valid_until',
+        'Step 4. NOT an error: the chain succeeds and the expiry is reported on the result. A course letting a cert lapse mid-semester must not silently stop recording for a whole class.',
+        expiredWindow,
+      ),
+      await chainCase(
+        'missing_course_cert',
+        'A 1.x manifest has no cert to chain.',
+        legacyManifest as Manifest,
+      ),
+    ],
+  };
+}
+
+/**
+ * Vectors for `resolveCapturePolicy` (program spec §4).
+ *
+ * Also exports the hard floor, which is the part a port is most likely to get
+ * wrong: floor kinds have no key in `policy.capture` BY DESIGN, so the schema
+ * itself is the enforcement mechanism and there is no "off" to express.
+ */
+function buildCapturePolicyVectors(): unknown {
+  const policyCase = (name: string, note: string, input: unknown): unknown => ({
+    name,
+    note,
+    input,
+    expected: resolveCapturePolicy(input),
+  });
+
+  return {
+    note:
+      'Capture-policy resolution (program spec §4). The policy block lives INSIDE the ' +
+      'course-signed manifest payload, which is the point: a professor can turn capture down, ' +
+      'a student cannot turn it off. Every capture key is a fixed ASCII identifier and must ' +
+      'stay that way — see course-cert.json for why.',
+    defaults: DEFAULT_CAPTURE_POLICY,
+    heartbeat_clamp: {
+      min_ms: HEARTBEAT_INTERVAL_MIN_MS,
+      max_ms: HEARTBEAT_INTERVAL_MAX_MS,
+    },
+    floor_note:
+      'Event kinds that can NEVER be disabled, because validation checks 3-8 and the ' +
+      'integrity story depend on them. Enforced by the SCHEMA: a floor kind simply has no key ' +
+      'in policy.capture, so "off" is not expressible. session.heartbeat is on the floor ' +
+      'because bundle-level Active/Idle and the gap_in_heartbeats heuristic need it — only ' +
+      'its interval is tunable. paste.anomaly is on the floor by the same schema rule even ' +
+      'though the program spec’s prose list omits it.',
+    floor_event_kinds: [...FLOOR_EVENT_KINDS],
+    policy_gated_event_kinds: POLICY_GATED_EVENT_KINDS,
+    absence_vs_disabled_note:
+      'The effective policy MUST travel into the bundle (it does, inside the manifest carried ' +
+      'by session.start). Without it an analyzer cannot tell "this student produced no ' +
+      'selection.change events" from "this course disabled selection.change", and heuristics ' +
+      'mis-fire on the difference.',
+    cases: [
+      policyCase(
+        'absent_block',
+        'A 1.x manifest has no policy at all and must resolve to the v1.x capture set: everything on, 30s heartbeat.',
+        null,
+      ),
+      policyCase('empty_block', 'A policy object with no capture key.', {}),
+      policyCase('empty_capture', 'An empty capture object.', { capture: {} }),
+      policyCase('all_on', 'Everything explicitly enabled.', V2_POLICY),
+      policyCase('all_off', 'Every optional signal disabled. Floor kinds are unaffected.', {
+        capture: {
+          selection_change: false,
+          focus_change: false,
+          terminal: false,
+          doc_open_close: false,
+          inline_content: false,
+        },
+      }),
+      policyCase(
+        'partial_falls_back_per_key',
+        'Only the keys the course specified move; the rest take defaults.',
+        { capture: { selection_change: false } },
+      ),
+      policyCase(
+        'unknown_key_ignored',
+        'Forward compatibility: an unrecognised capture key is ignored, not an error.',
+        { capture: { future_signal: true, terminal: false } },
+      ),
+      policyCase('heartbeat_below_floor', 'Clamped UP to 5000.', {
+        capture: { heartbeat_interval_ms: 1000 },
+      }),
+      policyCase('heartbeat_at_floor', 'Boundary is inclusive.', {
+        capture: { heartbeat_interval_ms: 5000 },
+      }),
+      policyCase('heartbeat_in_range', 'Passed through unchanged.', {
+        capture: { heartbeat_interval_ms: 45000 },
+      }),
+      policyCase('heartbeat_at_ceiling', 'Boundary is inclusive.', {
+        capture: { heartbeat_interval_ms: 120000 },
+      }),
+      policyCase('heartbeat_above_ceiling', 'Clamped DOWN to 120000.', {
+        capture: { heartbeat_interval_ms: 999999 },
+      }),
+      policyCase('heartbeat_zero', 'Clamped up to the floor, not treated as "disabled".', {
+        capture: { heartbeat_interval_ms: 0 },
+      }),
+      policyCase(
+        'heartbeat_non_number',
+        'Falls back to the DEFAULT (30000), not to the floor — clamping a non-number is meaningless and a course that wrote garbage should get the safe cadence.',
+        { capture: { heartbeat_interval_ms: '10000' } },
+      ),
+      policyCase('non_boolean_flag', 'Falls back to the default for that key.', {
+        capture: { terminal: 'off' },
+      }),
+    ],
+  };
 }
 
 async function main(): Promise<void> {
@@ -347,6 +809,15 @@ async function main(): Promise<void> {
     manifest: golden.manifest,
     session_pubkey_hex: await pub(fromHex(golden.sessionPrivkeyHex)),
   });
+
+  // --- 8. course certificate: root -> course key (Manifest 2.0 trust chain) ---
+  writeJson(outDir, 'course-cert.json', await buildCourseCertVectors());
+
+  // --- 9. Manifest 2.0: format_version defaulting + the four-step chain ---
+  writeJson(outDir, 'manifest-v2.json', await buildManifestV2Vectors());
+
+  // --- 10. capture policy resolution: defaults + heartbeat clamping ---
+  writeJson(outDir, 'capture-policy.json', buildCapturePolicyVectors());
 
   console.log(`Wrote conformance vectors to ${outDir}`);
 }
