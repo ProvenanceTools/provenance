@@ -241,7 +241,7 @@ export const nodes: Record<string, ArchNode> = {
   },
   reparse: {
     title: 'loadSubmissionIndex',
-    body: 'Every read path that needs the raw event stream (the events API, replay, file reconstruction, per-submission recompute, cross-flag feature extraction) unzips the stored bundle and rebuilds its index on demand. Nothing about the events is precomputed into rows.\n\nThe trade is deliberate. Materialised events cost storage permanently and are read for a small fraction of submissions; re-parsing costs CPU only for the submissions someone actually opens, and the parse is memoized in a small process-local LRU. The cache key includes the bundle’s sha256, not just the submission id, so a re-ingested or superseded blob can never serve a stale parse and no cross-process invalidation is needed. Re-parsing works against the stripped bundle because reconstruction derives file content from the log, never from stored source bytes.',
+    body: 'Every read path that needs the raw event stream (the events API, replay, file reconstruction, per-submission recompute, cross-flag feature extraction) unzips the stored bundle and rebuilds its index on demand. Nothing about the events is precomputed into rows.\n\nThe trade is deliberate. Materialised events cost storage permanently and are read for a small fraction of submissions; re-parsing costs CPU only for the submissions someone actually opens, and the parse is memoized in a small process-local LRU. The cache key includes the bundle’s sha256, not just the submission id, so a re-ingested or superseded blob can never serve a stale parse and no cross-process invalidation is needed. Re-parsing works against the stripped bundle because reconstruction derives file content from the log, never from stored source bytes.\n\nTwo crypto verdicts are established here rather than at the callers, and cached with the parse: the Manifest 2.0 trust chain, and contributor resolution — which contributor produced each session, from session.start.identity alone. Both take the deployment’s root public key as a parameter. A deployment with no root key still serves every submission; identified sessions then read “we could not check” rather than “we checked and it failed”, and a session with no identity block stays blamelessly unattributed.',
     links: [
       {
         label: 'load-index.ts',
@@ -250,6 +250,10 @@ export const nodes: Record<string, ArchNode> = {
       {
         label: 'reconstruct-file-provenance.ts',
         href: `${GH}/packages/analysis-core/src/index/reconstruct-file-provenance.ts`,
+      },
+      {
+        label: 'resolve-contributors.ts',
+        href: `${GH}/packages/analysis-core/src/identity/resolve-contributors.ts`,
       },
     ],
   },

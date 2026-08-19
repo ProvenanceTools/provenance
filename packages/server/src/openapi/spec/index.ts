@@ -77,8 +77,10 @@ export const openApiSpec = {
     {
       name: 'Enrollment',
       description:
-        'Student-facing enrollment token minting (program spec §5a). The only route on this ' +
-        'server intended for students rather than course staff.',
+        'Student-facing credential issuance (identity 2.1). The only route on this ' +
+        'server intended for students rather than course staff. The 2.0 sibling, ' +
+        'POST /semesters/{semesterId}/enrollment, was retired before it shipped; ' +
+        'identity 2.0 verification is unaffected and stays supported forever.',
     },
     { name: 'Assignments', description: 'Assignment labels and stats' },
     { name: 'Ingest', description: 'File ingest pipeline' },

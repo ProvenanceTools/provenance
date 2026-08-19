@@ -36,7 +36,8 @@ import React, {
 import { loadBundle, parseBundles } from '@provenance/analysis-core/loader/parse-bundle.js';
 import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
 import { runValidation } from '@provenance/analysis-core/validation/run-validation.js';
-import { localValidationOptions } from '../lib/root-key.js';
+import { establishBundleContributors } from '@provenance/analysis-core/identity/resolve-contributors.js';
+import { getRootPublicKeyHex, localValidationOptions } from '../lib/root-key.js';
 import { runHeuristics } from '@provenance/analysis-core/heuristics/run-heuristics.js';
 import type {
   Bundle,
@@ -166,6 +167,14 @@ export function BundleProvider({ children }: { children: ReactNode }) {
       const idx = buildIndex(bundle);
 
       setLoadingStage('validate');
+      // Stamp "who produced this session?" onto the bundle before anything
+      // reads it. `/local` runs entirely in-browser with no server, so this is
+      // the ONLY place the stamp can be established here. Unset
+      // VITE_ROOT_PUBLIC_KEY_HEX is a supported state: every identified session
+      // then reads `unverifiable / no_root_key`, which is "we could not check",
+      // not "we checked and it failed", and a bundle with no identity block
+      // stays blamelessly `unattributed`.
+      await establishBundleContributors(bundle, getRootPublicKeyHex());
       const report = await runValidation(bundle, localValidationOptions());
 
       setLoadingStage('heuristics');
@@ -257,6 +266,9 @@ export function BundleProvider({ children }: { children: ReactNode }) {
         const idx = buildIndex(bundle);
 
         setLoadingStage('validate');
+        // Per bundle, never shared: the stamp is a property of THIS bundle and
+        // merging two would attribute one student's sessions to another.
+        await establishBundleContributors(bundle, getRootPublicKeyHex());
         const report = await runValidation(bundle, localValidationOptions());
 
         setLoadingStage('heuristics');
