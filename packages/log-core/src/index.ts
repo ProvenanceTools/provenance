@@ -29,6 +29,10 @@ export {
 } from './rolling-manifest.js';
 export type { RollingSessionManifest, RollingManifestError } from './rolling-manifest.js';
 
+// Prefix digests — reading a rolling seal's log commitment as the PREFIX
+// commitment it actually is. See prefix-digest.ts.
+export { findSha256PrefixLength } from './prefix-digest.js';
+
 // Bundle manifest signing (shared by recorder seal + seed tooling)
 export { signBundleManifest } from './bundle-sign.js';
 export type { SignedBundleManifest } from './bundle-sign.js';

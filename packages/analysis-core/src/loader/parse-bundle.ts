@@ -34,6 +34,8 @@ import {
   reconcileRollingSealsWithSessions,
   synthesizeRollingUnionManifest,
 } from './rolling-seal.js';
+import { computeSlogCoverage, computeMetaCoverage } from './rolling-coverage.js';
+import type { RollingSealCoverage } from './rolling-coverage.js';
 import type {
   Bundle,
   BundleRollingSeal,
@@ -203,7 +205,40 @@ export async function loadBundle(
       defects.push(...synthesized.defects);
     }
 
-    rollingSeal = { seals: rollingValidation.seals, defects };
+    // Every build hash any seal reported, so the extension-hash allowlist can
+    // check all of them rather than only the one the union scalar kept.
+    const observedExtensionHashes = [
+      ...new Set(rollingValidation.seals.map((s) => s.manifest.extension_hash)),
+    ].sort();
+
+    // Prefix coverage, computed ONLY when the union manifest is the one the rest
+    // of analysis-core will read. A rolling seal is rewritten as its session
+    // grows, so its digests commit to a prefix; a classic seal is taken once
+    // over a finished log and commits to the whole file. A both-shapes bundle
+    // uses the classic manifest, so it keeps whole-file equality — and keeps
+    // catching a post-seal append at full strength. See rolling-coverage.ts.
+    let coverage: RollingSealCoverage[] | undefined;
+    if (classicManifest === null) {
+      const filesBySession = new Map(sessionFiles.map((f) => [f.sessionId, f]));
+      coverage = [];
+      for (const seal of rollingValidation.seals) {
+        const files = filesBySession.get(seal.sessionId);
+        if (files === undefined) continue; // no_session_log — reported as a defect
+        const entry = seal.manifest.sessions[0];
+        coverage.push({
+          sessionId: seal.sessionId,
+          slog: computeSlogCoverage(files.slogText, files.slogSha256, entry.slog_sha256),
+          meta: computeMetaCoverage(files.metaJson, files.metaSha256, entry.meta_sha256),
+        });
+      }
+    }
+
+    rollingSeal = {
+      seals: rollingValidation.seals,
+      defects,
+      observedExtensionHashes,
+      ...(coverage !== undefined ? { coverage } : {}),
+    };
   }
 
   // ---------------------------------------------------------------------------
