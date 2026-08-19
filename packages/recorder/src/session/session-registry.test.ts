@@ -2,9 +2,18 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { createHash } from 'node:crypto';
 import * as ed from '@noble/ed25519';
-import { bytesToHex } from '@noble/hashes/utils.js';
-import { FixedClock, parseEntries, validateChain, canonicalize } from '@provenance/log-core';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
+import {
+  FixedClock,
+  parseEntries,
+  validateChain,
+  canonicalize,
+  rollingManifestFilenames,
+  validateBundleManifestShape,
+  validateRollingSessionManifest,
+} from '@provenance/log-core';
 import type { Manifest } from '@provenance/log-core';
 import { startSession, SessionRegistry } from './session-registry.js';
 import type { ActiveSession } from './session-registry.js';
@@ -381,5 +390,260 @@ describe('startSession — capture policy', () => {
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     expect(parsed.value.map((e) => e.kind)).toContain('selection.change');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The ROLLING SEAL, wired into the live session (program spec §8).
+// ---------------------------------------------------------------------------
+
+describe('startSession — rolling seal', () => {
+  let tmpDir: string;
+  let assignmentRoot: string;
+  let provenanceDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'provenance-rolling-'));
+    assignmentRoot = path.join(tmpDir, 'workspace');
+    provenanceDir = path.join(tmpDir, 'provenance');
+    await fs.mkdir(assignmentRoot, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function start(root: string = assignmentRoot): Promise<ActiveSession> {
+    const manifest = await signedManifest({
+      assignment_id: 'hw03',
+      semester: 'fa26',
+      issued_at: '2026-09-15T00:00:00Z',
+      files_under_review: ['hw.py'],
+    });
+    return startSession({
+      assignmentRoot: root,
+      manifest,
+      extension: makeExtension(),
+      vscodeVersion: '1.97.0',
+      platform: 'darwin-arm64',
+      clock: new FixedClock(0, new Date('2026-01-01T00:00:00.000Z')),
+      provenanceDirOverride: provenanceDir,
+    });
+  }
+
+  /** The session_id recorded in session.start — the id the analyzer keys on. */
+  async function sessionIdOf(session: ActiveSession): Promise<string> {
+    // The writer buffers (PRD §4.7), so session.start is not on disk until a flush.
+    await session.writer.flush();
+    const parsed = parseEntries(await fs.readFile(session.slogPath, 'utf8'));
+    if (!parsed.ok) throw new Error('slog did not parse');
+    return (parsed.value[0]!.data as { session_id: string }).session_id;
+  }
+
+  /** Emit enough hard-floor events to cross CHECKPOINT_INTERVAL (100). */
+  function emitPastCheckpoint(session: ActiveSession, count = 120): void {
+    for (let i = 0; i < count; i++) {
+      session.sessionHost.emit('doc.open', {
+        path: 'hw.py',
+        sha256: 'd'.repeat(64),
+        line_count: 1,
+      });
+    }
+  }
+
+  it('seals a session that never reaches a checkpoint (zero events past session.start)', async () => {
+    const session = await start();
+    const sessionId = await sessionIdOf(session);
+
+    // No dispose yet: the seal must already be on disk from session start, or a
+    // short git-submitted session would be committed with nothing covering it.
+    const names = rollingManifestFilenames(sessionId);
+    const entries = await fs.readdir(provenanceDir);
+    expect(entries).toContain(names.json);
+    expect(entries).toContain(names.sig);
+
+    await session.dispose();
+  });
+
+  it('names the manifest after session.start.session_id, not the .slog filename uuid', async () => {
+    const session = await start();
+    const sessionId = await sessionIdOf(session);
+    await session.dispose();
+
+    // These genuinely differ in the recorder — the .slog gets its own uuid.
+    const slogFileUuid = path.basename(session.slogPath).replace(/^session-|\.slog$/g, '');
+    expect(slogFileUuid).not.toBe(sessionId);
+
+    // The analyzer reconciles seals against session.start ids, so the manifest
+    // must be named after that one.
+    const entries = await fs.readdir(provenanceDir);
+    expect(entries).toContain(`manifest-${sessionId}.json`);
+    expect(entries).not.toContain(`manifest-${slogFileUuid}.json`);
+  });
+
+  it('the sealed manifest obeys the rolling-seal rules and verifies against the session key', async () => {
+    const session = await start();
+    const sessionId = await sessionIdOf(session);
+    await session.dispose();
+
+    const json = await fs.readFile(path.join(provenanceDir, `manifest-${sessionId}.json`), 'utf8');
+    const sigHex = await fs.readFile(path.join(provenanceDir, `manifest-${sessionId}.sig`), 'utf8');
+
+    const shape = validateBundleManifestShape(JSON.parse(json));
+    expect(shape.ok).toBe(true);
+    if (!shape.ok) return;
+    expect(validateRollingSessionManifest(shape.value, sessionId).ok).toBe(true);
+
+    // Signed by THIS session's key — the same one whose pubkey is in session.start.
+    expect(
+      await ed.verifyAsync(
+        hexToBytes(sigHex),
+        new TextEncoder().encode(json),
+        hexToBytes(session.sessionKeypair.publicKeyHex),
+      ),
+    ).toBe(true);
+  });
+
+  it('rewrites the seal on a checkpoint, tracking the growing .slog', async () => {
+    const session = await start();
+    const sessionId = await sessionIdOf(session);
+    const manifestPath = path.join(provenanceDir, `manifest-${sessionId}.json`);
+    const atStart = await fs.readFile(manifestPath, 'utf8');
+
+    emitPastCheckpoint(session);
+    await session.writer.flush();
+    await session.getPendingCheckpoint();
+
+    const afterCheckpoint = await fs.readFile(manifestPath, 'utf8');
+    expect(afterCheckpoint).not.toBe(atStart);
+
+    // Still exactly one session, still bound to its filename.
+    const shape = validateBundleManifestShape(JSON.parse(afterCheckpoint));
+    expect(shape.ok).toBe(true);
+    if (!shape.ok) return;
+    expect(validateRollingSessionManifest(shape.value, sessionId).ok).toBe(true);
+
+    await session.dispose();
+  });
+
+  it('the final seal after dispose() covers the fully flushed .slog', async () => {
+    const session = await start();
+    const sessionId = await sessionIdOf(session);
+    await session.dispose();
+
+    const json = await fs.readFile(path.join(provenanceDir, `manifest-${sessionId}.json`), 'utf8');
+    const manifest = JSON.parse(json) as { sessions: Array<{ slog_sha256: string }> };
+
+    // dispose() emits session.end, flushes the writer, drains the checkpoint and
+    // only then re-seals — so the recorded hash is of the final .slog bytes.
+    const slogBytes = await fs.readFile(session.slogPath);
+    expect(manifest.sessions[0]!.slog_sha256).toBe(
+      createHash('sha256').update(slogBytes).digest('hex'),
+    );
+
+    const parsed = parseEntries(slogBytes.toString('utf8'));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value[parsed.value.length - 1]!.kind).toBe('session.end');
+  });
+
+  it('never writes manifest.json or manifest.sig, and leaves no temp files', async () => {
+    const session = await start();
+    emitPastCheckpoint(session);
+    await session.writer.flush();
+    await session.getPendingCheckpoint();
+    await session.dispose();
+
+    const entries = await fs.readdir(provenanceDir);
+    expect(entries).not.toContain('manifest.json');
+    expect(entries).not.toContain('manifest.sig');
+    expect(entries.filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('keeps recording when the seal cannot be written (degraded, never fatal)', async () => {
+    const session = await start();
+
+    // Simulate a `git checkout` removing .provenance/ out from under a live
+    // session. The SessionWriter's fd survives the unlink and keeps chaining;
+    // the seal has nowhere to land. Recording must win.
+    await fs.rm(provenanceDir, { recursive: true, force: true });
+
+    const entries = [];
+    for (let i = 0; i < 120; i++) {
+      entries.push(
+        session.sessionHost.emit('doc.open', {
+          path: 'hw.py',
+          sha256: 'd'.repeat(64),
+          line_count: 1,
+        }),
+      );
+    }
+
+    // Every event was still accepted and chained — the seal failure did not
+    // interrupt, degrade or short-circuit the event path.
+    expect(entries.every((e) => e !== null)).toBe(true);
+    const seqs = entries.map((e) => e!.seq);
+    expect(seqs).toEqual([...seqs].sort((x, y) => x - y));
+    expect(new Set(seqs).size).toBe(120);
+    // Each entry still links to the one before it — the hash chain never
+    // faltered while the seal was failing underneath it.
+    for (let i = 1; i < entries.length; i++) {
+      expect(entries[i]!.prev_hash).toBe(entries[i - 1]!.hash);
+      expect(entries[i]!.seq).toBe(entries[i - 1]!.seq + 1);
+    }
+
+    // Neither the checkpoint chain nor teardown rejects.
+    await expect(session.getPendingCheckpoint()).resolves.toBeUndefined();
+    await expect(session.dispose()).resolves.toBeUndefined();
+
+    // And the seal never resurrected the directory git deleted.
+    await expect(fs.stat(provenanceDir)).rejects.toThrow(/ENOENT/);
+  });
+
+  it('two sessions sharing one .provenance/ seal to disjoint paths', async () => {
+    const rootA = path.join(tmpDir, 'partner-a');
+    const rootB = path.join(tmpDir, 'partner-b');
+    await fs.mkdir(rootA, { recursive: true });
+    await fs.mkdir(rootB, { recursive: true });
+
+    // Both partners' recorders share ONE .provenance/ — the 61B group case.
+    // A is flushed before B starts on purpose: B's chain recovery reads every
+    // .slog in the shared directory at startup, and an unflushed (still empty)
+    // one reads as corrupt and gets quarantined. That interaction predates the
+    // rolling seal and belongs to the git-collaboration workstream; it is
+    // sidestepped here so this test measures only seal-path disjointness.
+    const a = await start(rootA);
+    const idA = await sessionIdOf(a);
+    const b = await start(rootB);
+    const idB = await sessionIdOf(b);
+    expect(idA).not.toBe(idB);
+
+    await a.dispose();
+    await b.dispose();
+
+    // Add-only: both seals present, neither clobbered.
+    const entries = await fs.readdir(provenanceDir);
+    for (const id of [idA, idB]) {
+      expect(entries).toContain(`manifest-${id}.json`);
+      expect(entries).toContain(`manifest-${id}.sig`);
+    }
+
+    // Each seal verifies against its OWN session's key, and only its own.
+    for (const [id, mine, theirs] of [
+      [idA, a, b],
+      [idB, b, a],
+    ] as const) {
+      const json = await fs.readFile(path.join(provenanceDir, `manifest-${id}.json`), 'utf8');
+      const sig = hexToBytes(
+        await fs.readFile(path.join(provenanceDir, `manifest-${id}.sig`), 'utf8'),
+      );
+      const msg = new TextEncoder().encode(json);
+      expect(await ed.verifyAsync(sig, msg, hexToBytes(mine.sessionKeypair.publicKeyHex))).toBe(
+        true,
+      );
+      expect(await ed.verifyAsync(sig, msg, hexToBytes(theirs.sessionKeypair.publicKeyHex))).toBe(
+        false,
+      );
+    }
   });
 });
