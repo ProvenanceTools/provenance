@@ -34,10 +34,25 @@ export function HomeView() {
   }
 
   if (!semesters || semesters.length === 0) {
+    // Everyone without a membership lands here, and that is now two different
+    // people: a staff member awaiting an invite, and a STUDENT who followed a
+    // link into the analyzer. The student has exactly one thing to do here, and
+    // no other page lists it, so the dead end names it.
     return (
-      <div className="flex flex-1 items-center justify-center py-16">
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
         <p className="text-sm text-muted-foreground" data-testid="no-semesters-message">
           Ask an admin to invite you.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Enrolling in a course?{' '}
+          <Link
+            to="/enroll"
+            className="text-primary underline-offset-4 hover:underline"
+            data-testid="enroll-link"
+          >
+            Get your enrollment token
+          </Link>
+          .
         </p>
       </div>
     );
