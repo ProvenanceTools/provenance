@@ -60,10 +60,17 @@ Four keys, three signature relationships. This is the spine of the program.
   course_cert             { course_id, course_pubkey, valid_from, valid_until }
         │ authorizes
         ▼
-  course keypair          (course staff; signs manifests AND enrollment tokens)
+  course keypair          (course staff; OFFLINE; signs manifests AND enrollment certs)
         │ signs                          │ signs
         ▼                                ▼
-  .provenance-manifest            enrollment token
+  .provenance-manifest            enrollment_cert
+                                  { course_id, enrollment_pubkey, valid_from, valid_until }
+                                         │ authorizes
+                                         ▼
+                                  enrollment keypair  (ON THE SERVER — the only
+                                         │ signs        private key that is)
+                                         ▼
+                                  enrollment token
                                   { student_ref, course_id, student_pubkey, ... }
                                          │ authorizes
                                          ▼
@@ -72,6 +79,12 @@ Four keys, three signature relationships. This is the spine of the program.
                                          ▼
                                   session_pubkey  (existing ephemeral session key)
 ```
+
+The course key does **not** sign enrollment tokens directly: it is offline, and
+minting per-student tokens is an on-demand server operation. The
+`enrollment_cert` layer resolves that without putting the course key on a
+server. Full detail — payloads, derivation, flow, and what the server holds
+versus what stays offline — is in **§5a**.
 
 Fixed decisions:
 
@@ -329,12 +342,24 @@ ignore what they do not know.
 manifest: Manifest; // the FULL manifest: payload + sig + course_cert
 identity: {
   enrollment: {
-    // signed by the course key
+    // signed by the ENROLLMENT key, not the course key — see §5a
+    format_version: string; // '2.0'; gated before the chain is walked
     student_ref: string; // opaque UUID, never a raw SID
     course_id: string;
     student_pubkey: string;
     issued_at: string;
     expires_at: string;
+    enrollment_sig: string;
+  }
+  enrollment_cert: {
+    // the course's authorization for whichever key signed `enrollment`.
+    // Travels BESIDE the token, outside the payload that signs it — same
+    // logic as course_cert inside a manifest.
+    format_version: string;
+    course_id: string;
+    enrollment_pubkey: string;
+    valid_from: string;
+    valid_until: string;
     course_sig: string;
   }
   session_pubkey_sig: string; // student per-course key's sig over session_pubkey
@@ -358,6 +383,202 @@ Two consequences worth stating:
 - **`vscode` → `host` un-warps the payload.** provjet and provnvim currently have
   to pretend into a VS Code-shaped field. `vscode` is retained as a deprecated
   alias on read for 1.x bundles; 2.0 writers emit `host` only.
+
+---
+
+## 5a. S2 — student identity and enrollment
+
+Implemented in `packages/log-core/src/enrollment.ts` and
+`packages/log-core/src/student-keys.ts`, minted by
+`tools/mint-enrollment-cert.ts`, pinned by the `enrollment.json` and
+`student-keys.json` conformance vectors.
+
+### The problem
+
+An enrollment token binds a student's per-course public key to a roster
+identity, and must be signed by the course. But the course's manifest-signing key
+is deliberately **offline** — that is most of what `course_cert` buys. Minting a
+token per student per semester is an on-demand server operation, so putting the
+course key on a server to do it would defeat the design.
+
+### The solution — an enrollment subkey, structurally parallel to root→course
+
+```
+  root keypair          (offline; signs course certs only)
+       │ signs
+       ▼
+  course_cert           { course_id, course_pubkey, valid_from, valid_until }
+       │ authorizes
+       ▼
+  course keypair        (OFFLINE; signs manifests AND enrollment certs)
+       │ signs
+       ▼
+  enrollment_cert       { format_version, course_id, enrollment_pubkey,
+                          valid_from, valid_until } + course_sig
+       │ authorizes
+       ▼
+  enrollment keypair    ◄── LIVES ON THE SERVER. The only private key that does.
+       │ signs
+       ▼
+  enrollment token      { format_version, student_ref, course_id,
+                          student_pubkey, issued_at, expires_at } + enrollment_sig
+       │ authorizes
+       ▼
+  student per-course key (derived on the student's machine)
+       │ countersigns
+       ▼
+  session_pubkey        (the existing ephemeral session key)
+```
+
+Verifying a student's identity offline is therefore: root → `course_cert` →
+`enrollment_cert` → enrollment token → `session_pubkey_sig`. **A recorder walks
+all of it with only the embedded root public key.** Nothing is fetched; nothing
+from the server is trusted.
+
+**What each key compromise costs.** An attacker holding the enrollment key can
+mint tokens for one course, for as long as that cert's window runs. They cannot
+sign a manifest, cannot touch another course, and cannot outlive the window.
+Recovery is a fresh `enrollment_cert` for a new key — an offline operation the
+course already performs. Taking the course key would be far worse, which is
+exactly why it does not go on a server.
+
+### What the server holds vs. what stays offline
+
+| Key                    | Where it lives                       | Signs                          |
+| ---------------------- | ------------------------------------ | ------------------------------ |
+| root private key       | offline, maintainer-held             | `course_cert` only             |
+| course private key     | **offline**, course staff            | manifests, `enrollment_cert`   |
+| enrollment private key | **on the server** — the only one     | enrollment tokens, per student |
+| student master secret  | student's machine; never transmitted | nothing directly (see below)   |
+| student per-course key | derived on the student's machine     | `session_pubkey`               |
+
+The server never sees a student master secret and never sees a per-course private
+key. It receives only a per-course **public** key to bind into a token.
+
+### Exact signed payloads
+
+Each is RFC 8785 (JCS) canonical JSON over the artifact **minus its signature
+field**. Every object key is a fixed ASCII identifier; there are **no arrays**;
+`student_ref` is always a VALUE.
+
+`enrollment_cert`, signed by the COURSE key into `course_sig`:
+
+```
+{"course_id":…,"enrollment_pubkey":…,"format_version":"2.0","valid_from":…,"valid_until":…}
+```
+
+enrollment token, signed by the ENROLLMENT key into `enrollment_sig`:
+
+```
+{"course_id":…,"expires_at":…,"format_version":"2.0","issued_at":…,"student_pubkey":…,"student_ref":…}
+```
+
+`session_pubkey_sig`, signed by the STUDENT per-course key:
+
+```
+{"course_id":…,"purpose":"provenance-session-pubkey-binding-v1","session_pubkey":…,"student_ref":…}
+```
+
+The binding payload is a structured object rather than the bare `session_pubkey`
+hex for two reasons: a fixed `purpose` tag gives domain separation, so this
+message cannot be confused with any other thing the student key may later sign;
+and including `course_id` and `student_ref` makes the countersignature itself
+assert _which student, in which course_ adopted this session key, rather than
+taking those on trust from elsewhere in the payload.
+
+### Key derivation — one master secret, per-course keys
+
+```
+HKDF-SHA256(
+  IKM  = the 32 RAW BYTES of the student master secret,
+  salt = UTF-8 "provenance-student-key-v1"          (25 bytes, deliberately NON-EMPTY),
+  info = UTF-8 ("provenance-student-key-v1:" + course_id),
+  L    = 32
+)  →  32 bytes, used directly as the ed25519 seed
+```
+
+One thing for a student to hold and back up; each course sees an **unlinkable**
+public key; cross-course correlation requires the master, which never leaves the
+machine. Re-deriving on a new machine needs only the master secret, so there is
+no server-side key escrow to breach.
+
+Three details are load-bearing across the three ports:
+
+- The salt is **non-empty on purpose.** HKDF's absent-salt rule (substitute
+  HashLen zero bytes) combined with HMAC's own key zero-padding makes an empty
+  salt and a 32-zero-byte salt produce the same PRK — true, but a thing no port
+  should have to know. Passing concrete bytes removes the question.
+- The 32-byte output **is** the ed25519 seed. ed25519 accepts any 32 bytes, so
+  there is no rejection sampling or retry loop for three implementations to agree
+  on.
+- `course_id` enters as a **value** inside the `info` byte string, never as a
+  JSON object key, so a non-ASCII `course_id` is safe here — UTF-8 encoding is
+  unambiguous, whereas object-key ordering is not (see §2). Pinned by a vector.
+
+### Verification order
+
+Identical in all three recorders, and the order is load-bearing:
+
+0. **Assert `format_version === "2.0"` on BOTH the cert and the token before
+   walking anything.** Both carry it inside their signed payloads. There is no
+   1.x identity artifact to grandfather; the field exists so a future 3.0 cannot
+   be replayed as a 2.0 artifact — the §3 downgrade lesson applied before it
+   bites rather than after.
+   0b. **Validate both shapes before any signature work.** `canonicalize` omits
+   keys whose value is `undefined`, so an artifact missing a required field would
+   otherwise sign and verify cleanly while carrying nothing there.
+1. `enrollment_cert` minus `course_sig` → verify against
+   `course_cert.course_pubkey`.
+2. Token minus `enrollment_sig` → verify against
+   `enrollment_cert.enrollment_pubkey`.
+3. **Assert `token.course_id === enrollment_cert.course_id === course_cert.course_id`.**
+   Not a formality, and the reason all three are compared: without it 61B's
+   course key can certify an enrollment key "for 61C", that key mints a 61C
+   token, and steps 1 and 2 both pass because every signature is genuine. A
+   cross-course forgery must be impossible, not merely unlikely. Mandatory
+   conformance vector.
+4. `session_pubkey_sig` → verify against `token.student_pubkey` over the binding
+   payload for this exact session pubkey.
+5. Validity windows. **NON-FATAL**, exactly as for `course_cert` (§4).
+
+`verifyIdentityChain` takes the `course_cert` as an already-root-verified trust
+anchor and does not re-verify it — precisely as `verifyCourseCert` takes the root
+public key as a parameter. Passing an unverified cert makes every result
+meaningless, because an attacker supplying the cert supplies `course_pubkey` too.
+
+**Windows are evaluated against the relevant issue time, never wall-clock now**,
+so archived bundles still verify years later: the enrollment cert is judged
+against the **token's `issued_at`** ("was this key authorized when it minted the
+token"), and the token against the **session start** ("was this student enrolled
+when they did this work"). A date-only `expires_at` is inclusive through the end
+of that day, the same asymmetric resolution as `course_cert.valid_until`.
+
+### Enrollment flow
+
+1. Course staff generate an enrollment keypair **on the server**; only its public
+   half leaves.
+2. Offline, with the course key: `tools/mint-enrollment-cert.ts` produces an
+   `enrollment_cert` for that pubkey and a one-semester window. The course key
+   goes back offline. The tool self-verifies before writing.
+3. The student generates a master secret once (`generateStudentMasterSecret`) and
+   derives a per-course keypair (`deriveCourseKeypair`). The private half never
+   leaves the machine.
+4. The student presents the per-course **public** key; the server authenticates
+   them, maps them to a `roster_entries.id`, and mints a token signed by the
+   enrollment key. `student_ref` is the **opaque UUID**, never a raw SID — in a
+   shared 61B repo a partner reads your `session.start` and must see only a UUID.
+5. At session start the recorder countersigns `session_pubkey` with the student's
+   per-course key and writes `{ enrollment, enrollment_cert, session_pubkey_sig }`
+   into `session.start.identity`.
+
+### Revocation
+
+Server-side only, and it must key on **`enrollment_pubkey`** and on
+**`student_ref`**, never on a certificate or token identity: both travel outside
+any payload that binds to them, so the holder chooses which copy ships. An
+offline recorder cannot learn about revocation without breaking recorder PRD NG2.
+Mitigation for the offline gap is short windows. A real, accepted limitation —
+the same one §2 records for `course_cert`.
 
 ---
 
