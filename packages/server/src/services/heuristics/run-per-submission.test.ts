@@ -102,6 +102,8 @@ function makeSyntheticBundle(totalEvents: number): Bundle {
         events: envs,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: synthetic test
         meta: {} as any,
+        slogSha256: 'a'.repeat(64),
+        metaSha256: 'b'.repeat(64),
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: synthetic test
         firstEvent: envs[0] as any,
       },

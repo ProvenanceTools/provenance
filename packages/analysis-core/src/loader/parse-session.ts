@@ -35,11 +35,17 @@ function isSessionStart(
  *
  * @param slogText  Raw NDJSON text of the .slog file.
  * @param metaJson  Raw JSON text of the .slog.meta file.
+ * @param hashes    Hex sha256 of the two files' bytes as they sat in the ZIP,
+ *                  computed by the unzipper before decoding. Carried through
+ *                  verbatim so `validation/verify-log-bytes.ts` can compare them
+ *                  against the signed manifest's commitments; this function
+ *                  never recomputes or second-guesses them.
  * @returns A typed ParsedSession, or a SessionParseError describing the failure.
  */
 export function parseSession(
   slogText: string,
   metaJson: string,
+  hashes: { slogSha256: string; metaSha256: string },
 ): Result<ParsedSession, SessionParseError> {
   // ---------------------------------------------------------------------------
   // 1. Parse NDJSON entries.
@@ -117,6 +123,8 @@ export function parseSession(
     sessionId: slogSessionId,
     events,
     meta,
+    slogSha256: hashes.slogSha256,
+    metaSha256: hashes.metaSha256,
     firstEvent,
   });
 }

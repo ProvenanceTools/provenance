@@ -95,6 +95,10 @@ function makeBundle(opts: {
     sessionId: 's1',
     events: allEvents,
     meta: fakeMeta,
+    // Check 8 does not read the log-byte digests; they are required by the type
+    // and carried through from the loader (see verify-log-bytes.ts).
+    slogSha256: 'a'.repeat(64),
+    metaSha256: 'b'.repeat(64),
     firstEvent: allEvents[0] as ParsedSession['firstEvent'],
   };
 

@@ -148,7 +148,9 @@ export async function loadBundle(
   // in step 4 imposes the final order.
   // ---------------------------------------------------------------------------
   const sessionResults = await Promise.all(
-    sessionFiles.map(({ slogText, metaJson }) => parseSession(slogText, metaJson)),
+    sessionFiles.map(({ slogText, metaJson, slogSha256, metaSha256 }) =>
+      parseSession(slogText, metaJson, { slogSha256, metaSha256 }),
+    ),
   );
 
   // Collect results — fail fast on the first error.

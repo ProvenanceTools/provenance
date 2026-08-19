@@ -267,6 +267,8 @@ export function makeMinimalBundle(): Bundle {
         sessionId: 'abc',
         events: [],
         meta: {} as never,
+        slogSha256: 'a'.repeat(64),
+        metaSha256: 'b'.repeat(64),
         firstEvent: {
           seq: 0,
           kind: 'session.start',
