@@ -905,6 +905,91 @@ export const components = {
         verdict: { type: 'string', enum: ['match', 'mismatch', 'unknown'] },
       },
     },
+
+    // -------------------------------------------------------------------------
+    // Student enrollment (program spec §5a — S2 identity chain)
+    // -------------------------------------------------------------------------
+    EnrollmentRequest: {
+      type: 'object',
+      required: ['student_pubkey'],
+      properties: {
+        student_pubkey: {
+          type: 'string',
+          pattern: '^[0-9a-f]{64}$',
+          description:
+            "The student's per-course ed25519 PUBLIC key, printed by the recorder. " +
+            'The private half and the master secret it derives from never leave the ' +
+            "student's machine.",
+        },
+      },
+    },
+    EnrollmentCert: {
+      type: 'object',
+      description:
+        'Course-signed authorization for the server-held enrollment key. Travels beside ' +
+        'the token, not inside it, because an issuer does not sign its own authorization.',
+      required: [
+        'format_version',
+        'course_id',
+        'enrollment_pubkey',
+        'valid_from',
+        'valid_until',
+        'course_sig',
+      ],
+      properties: {
+        format_version: { type: 'string', example: '2.0' },
+        course_id: { type: 'string', example: 'berkeley-cs61b' },
+        enrollment_pubkey: { type: 'string', pattern: '^[0-9a-f]{64}$' },
+        valid_from: { type: 'string', example: '2026-08-20' },
+        valid_until: { type: 'string', example: '2027-01-15' },
+        course_sig: { type: 'string', pattern: '^[0-9a-f]{128}$' },
+      },
+    },
+    EnrollmentToken: {
+      type: 'object',
+      description:
+        'Enrollment-signed statement binding a student public key to an opaque roster reference.',
+      required: [
+        'format_version',
+        'student_ref',
+        'course_id',
+        'student_pubkey',
+        'issued_at',
+        'expires_at',
+        'enrollment_sig',
+      ],
+      properties: {
+        format_version: { type: 'string', example: '2.0' },
+        student_ref: {
+          type: 'string',
+          format: 'uuid',
+          description:
+            'Opaque roster reference. Never an SID, name, or email — it travels in the log ' +
+            'where a project partner can read it.',
+        },
+        course_id: { type: 'string' },
+        student_pubkey: { type: 'string', pattern: '^[0-9a-f]{64}$' },
+        issued_at: { type: 'string' },
+        expires_at: { type: 'string' },
+        enrollment_sig: { type: 'string', pattern: '^[0-9a-f]{128}$' },
+      },
+    },
+    EnrollmentResponse: {
+      type: 'object',
+      required: ['enrollment', 'enrollment_cert', 'course_id', 'student_ref', 'reissued'],
+      properties: {
+        enrollment: { $ref: '#/components/schemas/EnrollmentToken' },
+        enrollment_cert: { $ref: '#/components/schemas/EnrollmentCert' },
+        course_id: { type: 'string' },
+        student_ref: { type: 'string', format: 'uuid' },
+        reissued: {
+          type: 'boolean',
+          description:
+            'True when this public key was already enrolled and the server re-issued for it ' +
+            '(the "second machine, same master secret" case).',
+        },
+      },
+    },
   },
 
   securitySchemes: {

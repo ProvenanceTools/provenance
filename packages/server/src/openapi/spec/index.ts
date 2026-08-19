@@ -27,6 +27,7 @@ import { components } from './components.js';
 import { authPaths } from './paths-auth.js';
 import { coursesPaths } from './paths-courses.js';
 import { rosterMembersPaths } from './paths-roster-members.js';
+import { enrollmentPaths } from './paths-enrollment.js';
 import { ingestPaths } from './paths-ingest.js';
 import { cohortPaths } from './paths-cohort.js';
 import { submissionsPaths } from './paths-submissions.js';
@@ -73,6 +74,12 @@ export const openApiSpec = {
     { name: 'Semesters', description: 'Semester management' },
     { name: 'Members', description: 'Semester membership and invitations' },
     { name: 'Roster', description: 'Student roster management' },
+    {
+      name: 'Enrollment',
+      description:
+        'Student-facing enrollment token minting (program spec §5a). The only route on this ' +
+        'server intended for students rather than course staff.',
+    },
     { name: 'Assignments', description: 'Assignment labels and stats' },
     { name: 'Ingest', description: 'File ingest pipeline' },
     { name: 'Unmatched', description: 'Unmatched file tray' },
@@ -88,6 +95,7 @@ export const openApiSpec = {
     ...authPaths,
     ...coursesPaths,
     ...rosterMembersPaths,
+    ...enrollmentPaths,
     ...ingestPaths,
     ...cohortPaths,
     ...submissionsPaths,

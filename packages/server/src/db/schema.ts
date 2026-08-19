@@ -897,9 +897,96 @@ export const cross_flag_participants = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// student_refs / student_enrollments  (program spec §5a — S2 identity)
+// ---------------------------------------------------------------------------
+
+/**
+ * The opaque `student_ref` ↔ roster mapping. See migration 0024 for the full
+ * rationale; the load-bearing points are:
+ *
+ *  - `student_ref` is a random UUID, never derived from an SID or an email,
+ *    because it travels in `session.start.identity` where a project partner
+ *    can read it.
+ *  - it is keyed on (semester_id, sid), so a student enrolling from a second
+ *    machine — or re-added by a roster commit — gets the SAME ref back and
+ *    their sessions do not fragment into two apparent contributors.
+ *  - `roster_entry_id` is a nullable convenience pointer (ON DELETE SET NULL):
+ *    deleting a roster row must not destroy the mapping an archived bundle
+ *    still needs.
+ */
+export const student_refs = pgTable(
+  'student_refs',
+  {
+    student_ref: uuid('student_ref')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    semester_id: uuid('semester_id')
+      .notNull()
+      .references(() => semesters.id, { onDelete: 'cascade' }),
+    roster_entry_id: uuid('roster_entry_id').references(() => roster_entries.id, {
+      onDelete: 'set null',
+    }),
+    sid: text('sid').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    unique('student_refs_semester_id_sid_key').on(t.semester_id, t.sid),
+    index('student_refs_roster_entry_idx').on(t.roster_entry_id),
+  ],
+);
+
+/**
+ * Which student PUBLIC keys have been bound to a `student_ref`, and when.
+ *
+ * Public material only. `superseded_at` records that a newer key was minted
+ * for the same student; it is bookkeeping, not enforcement — an issued token
+ * stays valid until `expires_at` so that an archived bundle signed under a
+ * superseded key still verifies during an adjudication.
+ */
+export const student_enrollments = pgTable(
+  'student_enrollments',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    student_ref: uuid('student_ref')
+      .notNull()
+      .references(() => student_refs.student_ref, { onDelete: 'cascade' }),
+    /** ed25519 public key of the server-held enrollment key that signed the token. */
+    enrollment_pubkey: text('enrollment_pubkey').notNull(),
+    /** The student's per-course ed25519 PUBLIC key, 64 lowercase hex. */
+    student_pubkey: text('student_pubkey').notNull(),
+    issued_at: timestamp('issued_at', { withTimezone: true }).notNull(),
+    expires_at: timestamp('expires_at', { withTimezone: true }).notNull(),
+    issue_count: integer('issue_count').notNull().default(1),
+    superseded_at: timestamp('superseded_at', { withTimezone: true }),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    unique('student_enrollments_ref_pubkey_key').on(t.student_ref, t.student_pubkey),
+    index('student_enrollments_student_ref_idx').on(t.student_ref),
+    index('student_enrollments_enrollment_pubkey_idx').on(t.enrollment_pubkey),
+    check('student_enrollments_student_pubkey_check', sql`${t.student_pubkey} ~ '^[0-9a-f]{64}$'`),
+    check(
+      'student_enrollments_enrollment_pubkey_check',
+      sql`${t.enrollment_pubkey} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check('student_enrollments_issue_count_check', sql`${t.issue_count} > 0`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Re-exported for convenience
 // ---------------------------------------------------------------------------
 
+export type StudentRef = typeof student_refs.$inferSelect;
+export type NewStudentRef = typeof student_refs.$inferInsert;
+export type StudentEnrollment = typeof student_enrollments.$inferSelect;
+export type NewStudentEnrollment = typeof student_enrollments.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Session = typeof sessions.$inferSelect;

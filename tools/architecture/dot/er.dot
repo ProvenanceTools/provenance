@@ -28,6 +28,14 @@ digraph er {
     roster    [label="roster_entries"]
   }
 
+  subgraph cluster_enroll {
+    label="  STUDENT IDENTITY (S2)  " fontsize=9.5 fontcolor="#9d7bf5" color="#2e2450"
+    penwidth=1.5 style=rounded bgcolor="#0e0b18" labeljust="l"
+    node [fillcolor="#1e1830" color="#9d7bf5"]
+    srefs  [label="student_refs\nopaque uuid ← (semester, sid)"]
+    senr   [label="student_enrollments\nPUBLIC keys only"]
+  }
+
   subgraph cluster_sub {
     label="  SUBMISSIONS  " fontsize=9.5 fontcolor="#3fbf62" color="#153c25"
     penwidth=1.5 style=rounded bgcolor="#0a130d" labeljust="l"
@@ -79,6 +87,9 @@ digraph er {
   semesters -> ijobs
   assignments -> submissions
   roster -> submissions [label="matched to"]
+  semesters -> srefs
+  roster -> srefs [label="soft link\nSET NULL" style=dashed]
+  srefs -> senr
   submissions -> stats
   submissions -> valres  [label="1:1"]
   submissions -> flags

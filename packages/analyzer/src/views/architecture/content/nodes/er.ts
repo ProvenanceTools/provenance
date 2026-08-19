@@ -106,6 +106,30 @@ export const nodes: Record<string, ArchNode> = {
     ],
   },
 
+  // ── Student identity (S2) ─────────────────────────────────────────────────
+  srefs: {
+    title: 'student_refs',
+    body: 'The mapping from an opaque student_ref to a person, and the only place that mapping exists. student_ref is written into session.start.identity and therefore travels in every log a project partner can read, so it is a random uuid rather than anything derived from a student id, a name, or an email: a partner opening a shared 61B repo sees a uuid and nothing else.\n\nIt is keyed on (semester_id, sid) rather than on roster_entries.id, and that is what makes it stable. A student enrolling from a second machine gets the same ref back, so their sessions do not fragment into two apparent contributors; a roster commit that deletes and re-adds them hands back the original ref too.\n\nroster_entry_id is therefore a convenience pointer and is ON DELETE SET NULL, not CASCADE. Deleting a roster row must not destroy the mapping, because an archived bundle years later still names this ref and an adjudication has to resolve it. The denormalised sid is what survives.',
+    links: [
+      {
+        label: '0024_student_enrollment.sql',
+        href: `${GH}/packages/server/db/migrations/0024_student_enrollment.sql`,
+      },
+      { label: 'mint.ts', href: `${GH}/packages/server/src/services/enrollment/mint.ts` },
+    ],
+  },
+  senr: {
+    title: 'student_enrollments',
+    body: 'Which student PUBLIC keys have been bound to a student_ref, and when. There is no private key in this table and none in this database: the server’s one private key, the per-course enrollment signing key, lives in PROVENANCE_ENROLLMENT_KEYS in the environment, deliberately outside Postgres because database dumps travel.\n\nOne row per (student_ref, student_pubkey). Re-enrolling from a second machine with the same master secret re-derives the same key and so increments issue_count on the existing row rather than creating a contributor.\n\nsuperseded_at records that a newer key was minted for the same student — the lost-master-secret case. It is bookkeeping, not enforcement, and cannot be otherwise: the identity chain is verified entirely from inside a bundle and consults no server, so a bundle signed under a superseded key still verifies years later. That is the property the whole program exists for. Revocation an offline recorder could honour would need a network call, which recorder PRD NG2 forbids; the controls that do bite are the token’s expiry and rotation of the enrollment certificate by the offline course key.',
+    links: [
+      {
+        label: 'enrollment-keys.ts',
+        href: `${GH}/packages/server/src/config/enrollment-keys.ts`,
+      },
+      { label: 'enrollment.ts (log-core)', href: `${GH}/packages/log-core/src/enrollment.ts` },
+    ],
+  },
+
   // ── Submissions ───────────────────────────────────────────────────────────
   submissions: {
     title: 'submissions',

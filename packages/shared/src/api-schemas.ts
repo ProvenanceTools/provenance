@@ -1141,3 +1141,75 @@ export const SubmittedFileContentSchema = z.object({
   verdict: z.enum(['match', 'mismatch', 'unknown']),
 });
 export type SubmittedFileContent = z.infer<typeof SubmittedFileContentSchema>;
+
+// ---------------------------------------------------------------------------
+// Student enrollment (program spec §5a — S2 identity chain)
+// ---------------------------------------------------------------------------
+
+/**
+ * The student's per-course ed25519 PUBLIC key, printed by the recorder's
+ * enrollment command. 64 lowercase hex characters.
+ *
+ * Only the public half is ever transmitted: the master secret it is derived
+ * from, and the per-course private key, never leave the student's machine.
+ */
+export const StudentPubkeySchema = z.string().regex(/^[0-9a-f]{64}$/);
+
+export const EnrollmentRequestSchema = z.object({
+  student_pubkey: StudentPubkeySchema,
+});
+export type EnrollmentRequest = z.infer<typeof EnrollmentRequestSchema>;
+
+/**
+ * A course-signed authorization for the server's enrollment key. Mirrors
+ * `EnrollmentCert` in `@provenance/log-core`; redeclared here because the HTTP
+ * contract is validated with Zod at the boundary and must not depend on
+ * log-core's structural types.
+ */
+export const EnrollmentCertSchema = z.object({
+  format_version: z.string(),
+  course_id: z.string(),
+  enrollment_pubkey: z.string().regex(/^[0-9a-f]{64}$/),
+  valid_from: z.string(),
+  valid_until: z.string(),
+  course_sig: z.string().regex(/^[0-9a-f]{128}$/),
+});
+export type EnrollmentCertPayload = z.infer<typeof EnrollmentCertSchema>;
+
+/** An enrollment-signed statement binding a student public key to a roster identity. */
+export const EnrollmentTokenSchema = z.object({
+  format_version: z.string(),
+  /** Opaque roster reference. Never an SID, name, or email. */
+  student_ref: z.string(),
+  course_id: z.string(),
+  student_pubkey: z.string().regex(/^[0-9a-f]{64}$/),
+  issued_at: z.string(),
+  expires_at: z.string(),
+  enrollment_sig: z.string().regex(/^[0-9a-f]{128}$/),
+});
+export type EnrollmentTokenPayload = z.infer<typeof EnrollmentTokenSchema>;
+
+/**
+ * What the student pastes back into the recorder.
+ *
+ * `enrollment` and `enrollment_cert` together are two of the three fields of
+ * `session.start.identity`; the recorder supplies the third
+ * (`session_pubkey_sig`) itself at session start. The certificate travels
+ * BESIDE the token rather than inside it for the same reason `course_cert`
+ * travels inside a manifest: an issuer does not sign its own authorization,
+ * and one bundled blob cannot be separated from what it authorizes.
+ */
+export const EnrollmentResponseSchema = z.object({
+  enrollment: EnrollmentTokenSchema,
+  enrollment_cert: EnrollmentCertSchema,
+  /** Echoed for display; always equal to `enrollment.course_id`. */
+  course_id: z.string(),
+  /** Echoed for display; always equal to `enrollment.student_ref`. */
+  student_ref: z.string(),
+  /**
+   * True when this public key had already been enrolled and the server simply
+   * re-issued for it — the "second machine, same master secret" case.
+   */
+  reissued: z.boolean(),
+});
+export type EnrollmentResponse = z.infer<typeof EnrollmentResponseSchema>;

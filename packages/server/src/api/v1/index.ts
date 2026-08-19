@@ -34,6 +34,7 @@ import { createCoursesRouter } from './routes/courses.js';
 import { createSemestersRouter } from './routes/semesters.js';
 import { createMembersRouter } from './routes/members.js';
 import { createRosterRouter } from './routes/roster.js';
+import { createEnrollmentRouter } from './routes/enrollment.js';
 import { createIngestRouter } from './routes/ingest.js';
 import { createHeuristicConfigRouter } from './routes/heuristic-config.js';
 import { createUnmatchedRouter } from './routes/unmatched.js';
@@ -86,6 +87,15 @@ export function createV1App(): Hono {
   // Members + invitations routes.
   // Paths: /semesters/:semesterId/members and /semesters/:semesterId/invitations/:id
   app.route('/', createMembersRouter());
+
+  // Student enrollment (program spec §5a — S2).
+  // Path: /semesters/:semesterId/enrollment (POST)
+  //
+  // The ONLY route a student — as opposed to course staff — can reach. It is
+  // mounted before the roster/ingest/cohort routers purely for readability;
+  // paths do not overlap. Authorization is roster membership, not `memberships`,
+  // so it deliberately does NOT use requireAuth.
+  app.route('/', createEnrollmentRouter());
 
   // Roster routes.
   // Paths: /semesters/:semesterId/roster (GET, POST :upload, POST :commit, PATCH /:id)

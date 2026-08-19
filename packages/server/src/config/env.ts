@@ -47,6 +47,36 @@ const jsonStringArray = z.string().transform((v, ctx) => {
   return parsed as string[];
 });
 
+/**
+ * A JSON object literal, kept as its raw string.
+ *
+ * Unlike {@link jsonStringArray} the failure message never quotes the value:
+ * the only consumer is `PROVENANCE_ENROLLMENT_KEYS`, which carries private
+ * keys, and a config error is printed to stderr on a failed boot.
+ */
+const jsonObjectStr = z
+  .string()
+  .optional()
+  .transform((v) => v ?? '{}')
+  .superRefine((v, ctx) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(v);
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Expected a JSON object (value withheld: it carries private keys)',
+      });
+      return;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Expected a JSON object (value withheld: it carries private keys)',
+      });
+    }
+  });
+
 // ---------------------------------------------------------------------------
 // Raw schema (all strings, as they arrive from process.env)
 // ---------------------------------------------------------------------------
@@ -170,6 +200,38 @@ const rawEnvSchema = z.object({
     .string()
     .regex(/^([0-9a-f]{64})?$/, 'must be 64 lowercase hex chars, or empty')
     .default(''),
+  /**
+   * Per-semester ENROLLMENT key material (program spec §5a). A JSON object:
+   *
+   *   { "<semester uuid>": { "private_key_hex": "<64 hex>", "cert": { … } } }
+   *
+   * where `cert` is the `enrollment_cert` minted offline by
+   * `tools/mint-enrollment-cert.ts` with the course key.
+   *
+   * **This is the highest-value secret the server holds.** The enrollment
+   * private key can mint a token binding ANY public key to ANY student on that
+   * course's roster — i.e. forge attribution — for as long as the certificate's
+   * window runs. It cannot sign a manifest and cannot reach another course, and
+   * recovery is a fresh `enrollment_cert` for a new key, but within that blast
+   * radius it is total.
+   *
+   * It therefore lives in the environment, alongside every other secret this
+   * server holds (`AUTH_COOKIE_SIGNING_SECRET`, `BLOB_URL_SIGNING_SECRET`, the
+   * OAuth client secret), and deliberately NOT in Postgres: database dumps
+   * travel (nightly backups, the restore drill in `docs/admin-guide.md` §7),
+   * and the one secret whose theft forges student identity should not be in
+   * them.
+   *
+   * Only the shape is checked here, and the failure message deliberately does
+   * NOT echo the value — unlike the other JSON env vars, whose parse errors
+   * quote what they were given. Everything else (certificate shape, that the
+   * private key actually matches `cert.enrollment_pubkey`) is validated in
+   * `config/enrollment-keys.ts`, which never logs either half.
+   *
+   * Unset means "this deployment mints no enrollment tokens", which is a
+   * legitimate state: every semester predating S2 is in it.
+   */
+  PROVENANCE_ENROLLMENT_KEYS: jsonObjectStr,
   // Storage quota watched by the hourly quota-check cron (default 1 TiB).
   STORAGE_QUOTA_BYTES: intStr(1099511627776),
   STORAGE_QUOTA_WARN_PCT: intStr(80),

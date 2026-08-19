@@ -585,6 +585,7 @@ Document the time taken and any issues found. Update this runbook if needed.
 | `SMTP_FROM`                        | No         | `provenance@example.edu`                            | From address for invitation emails                                             |
 | `LOG_LEVEL`                        | No         | `info`                                              | Pino log level: `trace`, `debug`, `info`, `warn`, `error`                      |
 | `PROVENANCE_ROOT_PUBLIC_KEY_HEX`   | No         | —                                                   | Hex ed25519 ROOT public key for the Manifest 2.0 trust chain. See below.       |
+| `PROVENANCE_ENROLLMENT_KEYS`       | No         | `{}`                                                | Per-semester enrollment signing keys. **Secret.** See below.                   |
 
 ### The Manifest 2.0 root public key
 
@@ -608,6 +609,60 @@ The analyzer front end takes the same key at build time as
 `VITE_ROOT_PUBLIC_KEY_HEX`, which is what lets the standalone `/local` route
 verify a chain in the browser. It is a public key — baking it into the client
 bundle is intended.
+
+### The enrollment signing keys
+
+`PROVENANCE_ENROLLMENT_KEYS` holds the **only private key this server has**. It
+is a JSON object keyed by semester id:
+
+```json
+{
+  "<semester uuid>": {
+    "private_key_hex": "<64 hex — the enrollment PRIVATE key>",
+    "cert": {
+      "format_version": "2.0",
+      "course_id": "berkeley-cs61b",
+      "enrollment_pubkey": "<64 hex>",
+      "valid_from": "2026-08-20",
+      "valid_until": "2027-01-15",
+      "course_sig": "<128 hex>"
+    }
+  }
+}
+```
+
+The `cert` is the `enrollment_cert` minted offline with the course key by
+`tools/mint-enrollment-cert.ts`. Generate the enrollment keypair on the server,
+carry only its **public** half to the offline machine that holds the course key,
+mint the certificate there, and bring the certificate back. The course key never
+touches this host.
+
+**Treat this variable the way you treat the OAuth client secret, or more
+carefully.** Whoever holds an enrollment private key can mint a token binding
+any public key to any student on that course's roster — that is, forge
+attribution — for as long as the certificate's window runs. They cannot sign an
+assignment manifest (that needs the offline course key) and cannot touch another
+course (`course_id` is inside the signed certificate and every verifier
+cross-checks all three links of the chain), but inside that blast radius the
+compromise is total.
+
+It is deliberately **not** stored in Postgres. Database dumps travel — nightly
+backups, the restore drill in §7, a copy on an operator's laptop — and the one
+secret whose theft forges student identity should not ride along in them. What
+the database holds is public only: `student_refs` (the opaque uuid ↔ roster
+mapping) and `student_enrollments` (which student public keys have been bound).
+
+**If it leaks:** mint a fresh `enrollment_cert` for a newly generated keypair
+with `tools/mint-enrollment-cert.ts`, replace this variable, and restart. Tokens
+minted under the old key stay valid until they expire — they must, because
+bundles already recorded under them have to keep verifying — so shorten the new
+certificate's window if the exposure window matters. There is no offline
+revocation: a recorder cannot learn about it without a network call, which
+recorder PRD NG2 forbids. Short certificate windows are the mitigation.
+
+Leaving it unset is a supported state: a semester with no entry simply returns
+`503 ENROLLMENT_UNAVAILABLE` from `POST /semesters/{id}/enrollment`, which is
+correct for every semester predating the S2 identity chain.
 
 ---
 
