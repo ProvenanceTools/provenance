@@ -39,7 +39,10 @@ The product specs live in `docs/`. The recorder spec is `docs/prd.md`; the analy
 
   How: edit the relevant `tools/architecture/dot/*.dot`, run
   `python3 tools/architecture/build_diagrams.py` (needs Graphviz — dev-time only),
-  then update `content/nodes.ts` and `content/sections.ts`. The
+  then author the node detail in `content/nodes/<diagram>.ts`, keyed by the BARE
+  dot node name. Do **not** hand-edit `content/nodes.ts` — it is a derived barrel
+  that prefixes each key with its diagram id. Plate titles, captions, and bands
+  live in `layout.ts` (there is no `content/sections.ts`). The
   `nodes.coverage.test.ts` suite fails if a diagram gains a node with no detail,
   or keeps metadata for a node that no longer exists — so a stale page is a
   **failing test**, not a silent regression.
