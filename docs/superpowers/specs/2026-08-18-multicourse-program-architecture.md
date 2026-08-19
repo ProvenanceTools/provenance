@@ -75,9 +75,26 @@ Four keys, three signature relationships. This is the spine of the program.
 
 Fixed decisions:
 
-- **The recorder embeds the root public key only.** `COURSE_PUBLIC_KEY_HEX` is
-  replaced by `ROOT_PUBLIC_KEY_HEX`. `tools/embed-course-key.ts` and the
-  `build:prod` key-embedding step are retired — one build serves every course.
+- **The recorder embeds the root public key, plus one grandfathered legacy course
+  key.** `COURSE_PUBLIC_KEY_HEX` is replaced by `ROOT_PUBLIC_KEY_HEX`, and 2.0
+  verification chains through it exclusively. But Manifest 1.x files already in
+  the field were signed directly by the OLD course key, have no `course_cert`, and
+  will never be reissued — verifying them against the root key fails closed, i.e.
+  silent non-activation. `LEGACY_COURSE_PUBLIC_KEY_HEX`
+  (`packages/recorder/src/activation/legacy-course-public-key.ts`) grandfathers
+  that one key back in: `manifest-loader.ts` routes by `format_version` — 2.0 to
+  `ROOT_PUBLIC_KEY_HEX`, 1.x to `LEGACY_COURSE_PUBLIC_KEY_HEX`. `tools/embed-course-key.ts`
+  is retired in favor of `tools/embed-root-key.ts`, which embeds both constants —
+  the root one from `PROVENANCE_ROOT_PUBLIC_KEY_HEX` (required) and the legacy one
+  from `PROVENANCE_LEGACY_COURSE_PUBLIC_KEY_HEX` (optional: a deployment build with
+  the var unset simply keeps the dev legacy key, harmless once no 1.x manifest is
+  left in the field). This is a second trust anchor purely as a bridge — it exists
+  only until every course has re-issued its manifests as 2.0, which is exactly what
+  the root-key hierarchy exists to make unnecessary. Once that migration is
+  complete for every course with 1.x manifests still needing verification, delete
+  `legacy-course-public-key.ts`, its `course-keys.ts` re-export, the 1.x-routing
+  branch in `manifest-loader.ts`, and the legacy-key embedding step in
+  `tools/embed-root-key.ts` in one PR.
 - **`course_cert` travels inline in `.provenance-manifest`**, outside the
   course-signed payload. One file to discover, one to distribute, no chance of the
   two being separated by a copy or a `.gitignore`.
@@ -371,6 +388,24 @@ Non-negotiable ordering for the format bump:
 Never the reverse. **1.x parsing is supported permanently** — archived submissions
 must still validate years later, which is precisely the adjudication case that
 justifies this program.
+
+The legacy course-key grandfathering (§2) enables a safe deployment ordering for
+switching a course's manifests to 2.0 without a recording gap:
+
+1. Ship all three recorders built against a version that accepts **both** 1.x
+   (via `LEGACY_COURSE_PUBLIC_KEY_HEX`) **and** 2.0 (via `ROOT_PUBLIC_KEY_HEX`).
+   Every currently-issued 1.x manifest keeps activating throughout.
+2. Confirm adoption — the new recorder build is what students actually have
+   installed, and it is verifiably reading 2.0 manifests where issued.
+3. Switch manifest issuance to 2.0 (root-signed `course_cert` + course-signed
+   payload) for that course.
+4. Only once no course has 1.x manifests left that still need verifying, drop
+   `LEGACY_COURSE_PUBLIC_KEY_HEX` in a later recorder release (see §2's removal
+   condition) — stop supplying `PROVENANCE_LEGACY_COURSE_PUBLIC_KEY_HEX` to
+   `tools/embed-root-key.ts` and delete the constant and its routing branch.
+
+Steps 1-3 can run per-course on independent timelines; step 4 is a one-time,
+whole-program cutover once every course has cleared step 3.
 
 ---
 

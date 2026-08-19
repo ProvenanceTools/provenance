@@ -9,8 +9,12 @@
  *    the inline `course_cert`, the certified course key signs the payload, and the
  *    two `course_id`s must agree. The manifest's `policy` block is inside the
  *    course-signed payload, so only this path may be trusted to carry one.
- *  - **1.x** — the legacy `verifyManifest` path against the embedded key, byte for
- *    byte as it has always worked. 1.x support is permanent (program spec §9).
+ *  - **1.x** — the legacy `verifyManifest` path, byte for byte as it has always
+ *    worked, against the grandfathered `LEGACY_COURSE_PUBLIC_KEY_HEX` — 1.x
+ *    manifests were signed by the old course key, not the root key, and never
+ *    will be reissued for submissions already in the field. 1.x support is
+ *    permanent (program spec §9); the legacy key itself is not — see
+ *    legacy-course-public-key.ts for its removal condition.
  *
  * The version gate is a security control, not a formality: at 1.x, `course_id` and
  * `policy` are NOT in the signed payload, so a student holding a genuinely signed
@@ -39,7 +43,7 @@ import type {
   CertWindowStatus,
   Result,
 } from '@provenance/log-core';
-import { ROOT_PUBLIC_KEY_HEX } from './course-keys.js';
+import { ROOT_PUBLIC_KEY_HEX, LEGACY_COURSE_PUBLIC_KEY_HEX } from './course-keys.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -81,9 +85,13 @@ export const MANIFEST_FILE_NAMES = ['.provenance-manifest', 'provenance-manifest
  *
  * @param workspaceFolder  The workspace folder (or folder-like directory) to look in.
  * @param pubkeyHex        Optional override for the embedded verification key (used in
- *                         tests). Defaults to ROOT_PUBLIC_KEY_HEX. At 2.0 this is the root
- *                         key the `course_cert` must chain to; at 1.x it is the key the
- *                         payload signature is checked against directly.
+ *                         tests). When omitted, the key is chosen by `format_version`:
+ *                         ROOT_PUBLIC_KEY_HEX at 2.0 (the key the `course_cert` must
+ *                         chain to) and the grandfathered LEGACY_COURSE_PUBLIC_KEY_HEX
+ *                         at 1.x (the key the payload signature is checked against
+ *                         directly — see legacy-course-public-key.ts). An explicit
+ *                         override, when given, is used as-is on whichever path the
+ *                         manifest's version selects.
  *
  * On any error, returns a Result<never, ActivationError> describing what went wrong.
  * Callers should silently exit on any error (PRD §4.1).
@@ -93,7 +101,7 @@ export type FolderLike = { uri: { fsPath: string } };
 
 export async function loadAndVerifyManifest(
   workspaceFolder: FolderLike,
-  pubkeyHex: string = ROOT_PUBLIC_KEY_HEX,
+  pubkeyHex?: string,
 ): Promise<Result<Manifest, ActivationError>> {
   // Step 1: Read the file. Try each candidate name in precedence order; only
   // treat the manifest as missing if none of them exist.
@@ -126,9 +134,11 @@ export async function loadAndVerifyManifest(
   }
   const manifest = parseResult.value;
 
-  // Step 3: Verify, on the path this manifest's version selects.
+  // Step 3: Verify, on the path this manifest's version selects. An explicit
+  // pubkeyHex override (tests) applies on whichever path is taken; absent an
+  // override, each path has its own trust anchor — they are NOT interchangeable.
   if (isManifest2(manifest)) {
-    const chain = await verifyManifestChain(manifest, pubkeyHex);
+    const chain = await verifyManifestChain(manifest, pubkeyHex ?? ROOT_PUBLIC_KEY_HEX);
     if (!chain.ok) {
       return { ok: false, error: { kind: 'manifest_chain_invalid', detail: chain.error } };
     }
@@ -138,7 +148,7 @@ export async function loadAndVerifyManifest(
     return { ok: true, value: manifest };
   }
 
-  const verifyResult = await verifyManifest(manifest, pubkeyHex);
+  const verifyResult = await verifyManifest(manifest, pubkeyHex ?? LEGACY_COURSE_PUBLIC_KEY_HEX);
   if (!verifyResult.ok) {
     return { ok: false, error: { kind: 'manifest_signature_invalid' } };
   }

@@ -52,7 +52,9 @@ export type ActivateDeps = {
    * Override for the embedded manifest-verification key (tests inject a test
    * keypair's pubkey). At Manifest 2.0 this is the ROOT key the inline
    * `course_cert` must chain to; at 1.x it is the key the payload signature is
-   * checked against directly. Defaults to ROOT_PUBLIC_KEY_HEX.
+   * checked against directly. Defaults, per format_version, to ROOT_PUBLIC_KEY_HEX
+   * at 2.0 and the grandfathered LEGACY_COURSE_PUBLIC_KEY_HEX at 1.x — see
+   * manifest-loader.ts.
    */
   pubkeyHex?: string;
   /** Override for the .provenance/ directory path (tests inject a tmp dir). */

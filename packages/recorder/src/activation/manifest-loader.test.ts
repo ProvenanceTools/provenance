@@ -18,6 +18,7 @@ import {
   resolveVerifiedCapturePolicy,
   verifiedCertWindow,
 } from './manifest-loader.js';
+import { ROOT_PUBLIC_KEY_HEX, LEGACY_COURSE_PUBLIC_KEY_HEX } from './course-keys.js';
 
 // We also need to produce a canonicalized payload for signing (same logic as log-core).
 import {
@@ -575,5 +576,135 @@ describe('loadAndVerifyManifest — Manifest 2.0 trust chain', () => {
     if (!result.ok) {
       expect(result.error.kind).toBe('manifest_signature_invalid');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Legacy course key grandfathering — default routing with NO pubkeyHex override
+// (program spec §2, §9; packages/recorder/src/activation/legacy-course-public-key.ts)
+//
+// Every other test in this file passes an explicit pubkeyHex override, which was
+// always used as-is on whichever path the manifest's version selects — that part of
+// loadAndVerifyManifest is unchanged. These tests instead call it with NO override,
+// exercising the actual default routing: 2.0 -> ROOT_PUBLIC_KEY_HEX,
+// 1.x -> LEGACY_COURSE_PUBLIC_KEY_HEX. That requires signing against the real
+// embedded dev keys, so they use the checked-in dev private keys (deliberately
+// public/insecure — see .notes/dev-keypair.json and .notes/dev-root-keypair.json)
+// that pair with the ROOT_PUBLIC_KEY_HEX / LEGACY_COURSE_PUBLIC_KEY_HEX constants.
+// ---------------------------------------------------------------------------
+
+describe('loadAndVerifyManifest — legacy course key grandfathering (default routing)', () => {
+  let tmpDir: string;
+
+  // From .notes/dev-keypair.json — pairs with LEGACY_COURSE_PUBLIC_KEY_HEX.
+  const DEV_LEGACY_COURSE_PRIVATE_KEY_HEX =
+    'dbe2e454747b182cfe68ec58816d70e3b7cebbbb7ae303a1550090fa2e276ccf';
+  // From .notes/dev-root-keypair.json — pairs with ROOT_PUBLIC_KEY_HEX.
+  const DEV_ROOT_PRIVATE_KEY_HEX =
+    '50aa5bf96ade428c6f68645b5fc3eedbc8e0c74985a9f0e437bf0e41452ef38b';
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'provenance-test-legacy-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function write(manifest: unknown): Promise<import('vscode').WorkspaceFolder> {
+    await fs.writeFile(path.join(tmpDir, '.provenance-manifest'), JSON.stringify(manifest), 'utf8');
+    return makeWorkspaceFolder(tmpDir);
+  }
+
+  it('activates a 1.x manifest signed by the legacy course key, with no override', async () => {
+    const manifestData = {
+      assignment_id: 'hw03',
+      semester: 'fa26',
+      issued_at: '2026-09-15T00:00:00Z',
+      files_under_review: ['hw03.py'],
+    };
+    const sigHex = await signManifest(manifestData, DEV_LEGACY_COURSE_PRIVATE_KEY_HEX);
+    const folder = await write({ ...manifestData, sig: sigHex });
+
+    const result = await loadAndVerifyManifest(folder);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.format_version).toBe('1.0');
+      expect(result.value.assignment_id).toBe('hw03');
+    }
+  });
+
+  it('does NOT activate a 1.x manifest signed by the root key, with no override', async () => {
+    const manifestData = {
+      assignment_id: 'hw03',
+      semester: 'fa26',
+      issued_at: '2026-09-15T00:00:00Z',
+      files_under_review: ['hw03.py'],
+    };
+    // Signed by the ROOT key, not the legacy course key. The 1.x path must reject
+    // this: the root key never signs a manifest, and a 1.x manifest's own routing
+    // default is the legacy course key, not the root key.
+    const sigHex = await signManifest(manifestData, DEV_ROOT_PRIVATE_KEY_HEX);
+    const folder = await write({ ...manifestData, sig: sigHex });
+
+    const result = await loadAndVerifyManifest(folder);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe('manifest_signature_invalid');
+    }
+  });
+
+  it('still activates a 2.0 manifest via the root-key chain, with no override', async () => {
+    const course = { priv: ed.utils.randomSecretKey() };
+    const coursePub = bytesToHex(await ed.getPublicKeyAsync(course.priv));
+    const certBody = {
+      course_id: 'berkeley-cs61b',
+      course_pubkey: coursePub,
+      valid_from: '2026-08-20',
+      valid_until: '2027-01-15',
+    };
+    const rootSig = await signCourseCert(certBody, hexToBytes(DEV_ROOT_PRIVATE_KEY_HEX));
+    const payload = {
+      format_version: '2.0',
+      assignment_id: 'proj2',
+      semester: 'fa26',
+      issued_at: '2026-09-08T00:00:00Z',
+      files_under_review: ['proj2.py'],
+      course_id: 'berkeley-cs61b',
+      collaboration: 'solo' as const,
+      submission: 'bundle' as const,
+      scope: 'directory' as const,
+      policy: {
+        capture: {
+          selection_change: true,
+          focus_change: true,
+          terminal: true,
+          doc_open_close: true,
+          inline_content: true,
+          heartbeat_interval_ms: 30000,
+        },
+      },
+      course_cert: { ...certBody, root_sig: rootSig },
+    };
+    const sig = await coreSignManifest(payload, course.priv);
+    const folder = await write({ ...payload, sig });
+
+    const result = await loadAndVerifyManifest(folder);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.format_version).toBe('2.0');
+      expect(result.value.course_id).toBe('berkeley-cs61b');
+    }
+  });
+
+  it('sanity-checks the dev private keys against the embedded public constants', async () => {
+    // Guards the three tests above against silent bit-rot if either dev keypair file
+    // is ever rotated without updating the hardcoded privkeys here.
+    const legacyPub = bytesToHex(
+      await ed.getPublicKeyAsync(hexToBytes(DEV_LEGACY_COURSE_PRIVATE_KEY_HEX)),
+    );
+    expect(legacyPub).toBe(LEGACY_COURSE_PUBLIC_KEY_HEX);
+    const rootPub = bytesToHex(await ed.getPublicKeyAsync(hexToBytes(DEV_ROOT_PRIVATE_KEY_HEX)));
+    expect(rootPub).toBe(ROOT_PUBLIC_KEY_HEX);
   });
 });
