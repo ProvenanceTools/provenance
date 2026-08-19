@@ -26,7 +26,7 @@ Severity / confidence semantics:
 From Manifest 2.0 on, a course can turn individual capture signals down via the
 signed `policy.capture` block (program spec
 [§4](./superpowers/specs/2026-08-18-multicourse-program-architecture.md)):
-`selection_change`, `focus_change`, `terminal`, `inline_content`, and the
+`selection_change`, `focus_change`, `terminal`, and the
 `heartbeat_interval_ms` cadence. The effective policy
 travels into the bundle inside `session.start.data.manifest`, so the analyzer
 can tell "this student produced no `terminal.open` events" from "this course
@@ -47,6 +47,17 @@ hand-edited log cannot re-enable a heuristic the course turned off.
 
 Every 1.0/1.1 bundle resolves to the default policy (everything on, 30 s
 heartbeat), so archived submissions score exactly as they always did.
+
+Paste and external-change **content** is on the hard floor too. There was
+briefly an `inline_content` key that stripped the `content` / `new_content`
+snippets while leaving the events, and it was removed because it worked in the
+one direction a knob must not: `internal_move` matches a paste against the
+student's own prior typed code and a match **downgrades** `large_paste`, so
+stripping the content disables an _exculpatory_ check and leaves genuine
+self-relocations at full severity. `large_paste`, `paste_is_solution`,
+`paste_matches_known_source`, and `paste_shared_across_students` are therefore
+ungated: the only thing that withholds paste content from them is the recorder's
+64 KB inline size cap, which is a payload guard, not a policy.
 
 `doc.open` and `doc.close` are on the hard floor and have no `policy.capture`
 key, so **no heuristic reading them is gated**. `time_to_first_save_anomaly` and

@@ -235,7 +235,6 @@ a professor can turn capture down, a student cannot turn it off.
     "selection_change":      true,
     "focus_change":          true,
     "terminal":              true,
-    "inline_content":        true,     // paste + fs.external_change content snippets
     "heartbeat_interval_ms": 30000     // clamp [5000, 120000]
   }
 }
@@ -255,22 +254,44 @@ The floor is enforced by the schema itself: floor events simply have no key in
 Active/Idle and the `gap_in_heartbeats` heuristic depend on it — only its interval
 is tunable.
 
-**Where the floor is drawn — the general rule.** _The floor is defined by what
-reconstruction and validation depend on, not by privacy sensitivity._ A signal
-being sensitive is an argument **for** giving it a knob; a signal being
-load-bearing is a **veto** on one. Nothing critical to reconstruction may be
-disableable by capture policy. Apply that test before adding any key to
-`policy.capture`.
+**Where the floor is drawn — the general rule.** _A signal whose absence degrades
+correctness — rather than merely detail — must not be a policy knob._ The floor is
+defined by what reconstruction, validation, and the heuristics' **exculpatory**
+checks depend on, not by privacy sensitivity. A signal being sensitive is an
+argument **for** giving it a knob; a signal being load-bearing is a **veto** on
+one. Apply that test before adding any key to `policy.capture`.
 
-`doc.open` and `doc.close` are the worked example. There was briefly a
+`doc.open` and `doc.close` are the first worked example. There was briefly a
 `doc_open_close` key, and it was removed: `DocOpenPayload.content` is the
 **reconstruction seed** that `reconstruct-file.ts` starts from, so switching
 `doc.open` off breaks file reconstruction, replay, and the Source tab for the
 entire cohort — with nothing warning the course it had done that. Sensitivity
 did not save it. `DocClosePayload` is `{ path }` only: no content, no
 reconstruction role, negligible privacy exposure, so a knob governing a bare
-path is surface for nothing. Both are floor. A manifest still carrying a
-`doc_open_close` key resolves it as an unknown key — ignored, never a gate.
+path is surface for nothing. Both are floor.
+
+`inline_content` is the second, and it extends the rule in the direction that
+matters most. It gated the `content` / `new_content` snippets on `paste` and
+`fs.external_change` — it removed no events, only payload detail, so on the
+surface it looked like the safest knob in the block. It was the opposite. Every
+other knob makes the system see less evidence **against** a student; this one
+made it see less evidence **for** one. `internal_move` matches a paste's inline
+content against the student's own prior typed code, and a match **downgrades**
+`large_paste` — it is how the system recognises a student cutting their own
+helper out of one file and pasting it into another, which is entirely
+legitimate. With the content stripped that exculpatory check cannot run and
+`internal_move` falls back to `unknown`, which callers treat as a full-severity
+external paste. **A course being able to make the system more likely to falsely
+accuse its own students is not a legitimate configuration**, so this is not a
+knob. Paste and external-change content is floor.
+
+Note the separate mechanism that stays: content above the recorder's **64 KB
+inline cap** is still truncated to head/tail plus a hash. That is a payload-size
+guard on what enters the hash chain, not a policy, and `internal_move` still
+cannot classify an over-cap paste — pre-existing and correct.
+
+A manifest still carrying a `doc_open_close` or `inline_content` key resolves it
+as an unknown key — ignored, never a gate.
 
 **The absence-vs-disabled rule.** The effective policy MUST travel into the bundle,
 because otherwise the analyzer cannot distinguish "this student produced no

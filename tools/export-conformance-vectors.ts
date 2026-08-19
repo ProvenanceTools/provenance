@@ -240,7 +240,6 @@ const V2_POLICY = {
     selection_change: true,
     focus_change: true,
     terminal: true,
-    inline_content: true,
     heartbeat_interval_ms: 30000,
   },
 };
@@ -542,7 +541,6 @@ async function buildManifestV2Vectors(): Promise<unknown> {
         selection_change: false,
         focus_change: false,
         terminal: false,
-        inline_content: false,
         heartbeat_interval_ms: 120000,
       },
     },
@@ -723,9 +721,12 @@ function buildCapturePolicyVectors(): unknown {
       'though the program spec’s prose list omits it. doc.open and doc.close are on the floor ' +
       'too: DocOpenPayload.content is the reconstruction seed, so a knob switching it off ' +
       'would break reconstruction, replay, and the Source tab for a whole cohort, and ' +
-      'DocClosePayload is { path } only. The general rule: the floor is defined by what ' +
-      'reconstruction and validation DEPEND on, not by privacy sensitivity — sensitivity is ' +
-      'an argument FOR a knob, load-bearing is a VETO on one.',
+      'DocClosePayload is { path } only. paste and fs.external_change content is floor too: ' +
+      'the inline_content knob that stripped it was removed because internal_move needs that ' +
+      'content to DOWNGRADE large_paste. The general rule: a signal whose absence degrades ' +
+      'CORRECTNESS rather than merely detail must not be a knob — sensitivity is an argument ' +
+      'FOR a knob, load-bearing is a VETO on one. The 64 KB inline size cap is a separate ' +
+      'payload-size guard and is unaffected.',
     floor_event_kinds: [...FLOOR_EVENT_KINDS],
     policy_gated_event_kinds: POLICY_GATED_EVENT_KINDS,
     absence_vs_disabled_note:
@@ -747,7 +748,6 @@ function buildCapturePolicyVectors(): unknown {
           selection_change: false,
           focus_change: false,
           terminal: false,
-          inline_content: false,
         },
       }),
       policyCase(
@@ -767,6 +767,20 @@ function buildCapturePolicyVectors(): unknown {
           'it as an unknown key: it must not appear on the resolved policy and must not ' +
           'suppress doc.open or doc.close.',
         { capture: { doc_open_close: false } },
+      ),
+      policyCase(
+        'retired_inline_content_key_ignored',
+        'inline_content was briefly a capture key and was REMOVED. It stripped the content ' +
+          'fields off paste and fs.external_change payloads without removing the events, and ' +
+          "that is precisely why it had to go: internal_move reads a paste's inline content " +
+          "to match it against the student's own prior typed code, and a match DOWNGRADES " +
+          'large_paste. Strip the content and that exculpatory check cannot run, so a genuine ' +
+          'self-relocation keeps full severity on a flag used in academic-integrity ' +
+          'proceedings — a course must not be able to make the system more accusatory. A ' +
+          'manifest still carrying the key must treat it as an unknown key. NOTE the 64 KB ' +
+          'inline size cap is a separate, unaffected mechanism: over-cap content is still ' +
+          'truncated to head/tail.',
+        { capture: { inline_content: false } },
       ),
       policyCase('heartbeat_below_floor', 'Clamped UP to 5000.', {
         capture: { heartbeat_interval_ms: 1000 },
