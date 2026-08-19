@@ -6,9 +6,13 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import {
   deriveCourseKeySeed,
   deriveCourseKeypair,
+  deriveStudentKeySeed,
+  deriveStudentKeypair,
   generateStudentMasterSecret,
   STUDENT_KEY_HKDF_INFO_PREFIX,
+  STUDENT_KEY_HKDF_INFO,
   STUDENT_KEY_HKDF_SALT,
+  STUDENT_KEY_SEED_BYTES,
   STUDENT_MASTER_SECRET_BYTES,
 } from './student-keys.js';
 
@@ -122,6 +126,89 @@ describe('deriveCourseKeypair', () => {
   it('is deterministic across calls', async () => {
     const a = await deriveCourseKeypair(MASTER_A, 'berkeley-cs61b');
     const b = await deriveCourseKeypair(MASTER_A, 'berkeley-cs61b');
+    expect(a.publicKeyHex).toBe(b.publicKeyHex);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The CURRENT derivation: one global student key, fixed info
+// ---------------------------------------------------------------------------
+
+describe('deriveStudentKeySeed', () => {
+  it('pins the fixed info string exactly', () => {
+    // Three ports derive against this literal. A change here is a silent
+    // cross-repo divergence, not a refactor.
+    expect(STUDENT_KEY_HKDF_INFO).toBe('provenance-student-key-v2');
+  });
+
+  it('carries NO user-derived component, so the UTF-8 encoding hazard cannot arise', () => {
+    // The v1 prefix concatenates a course_id, and a port encoding that as
+    // US_ASCII rather than UTF-8 silently derives a different key with no error
+    // — it bit provjet once. Nothing is concatenated onto v2, and the constant is
+    // pure ASCII, so there is nothing left to get wrong.
+    expect(STUDENT_KEY_HKDF_INFO.endsWith(':')).toBe(false);
+    // eslint-disable-next-line no-control-regex
+    expect(/^[\x00-\x7f]*$/.test(STUDENT_KEY_HKDF_INFO)).toBe(true);
+  });
+
+  it('equals HKDF-SHA256(ikm=master, salt=SALT, info=INFO, L=32) computed independently', () => {
+    // Recomputed from the primitives rather than from the implementation, so
+    // this fails if any parameter drifts.
+    const expected = hkdf(
+      sha256,
+      MASTER_A,
+      STUDENT_KEY_HKDF_SALT,
+      new TextEncoder().encode(STUDENT_KEY_HKDF_INFO),
+      STUDENT_KEY_SEED_BYTES,
+    );
+    expect(bytesToHex(deriveStudentKeySeed(MASTER_A))).toBe(bytesToHex(expected));
+  });
+
+  it('is deterministic', () => {
+    expect(bytesToHex(deriveStudentKeySeed(MASTER_A))).toBe(
+      bytesToHex(deriveStudentKeySeed(MASTER_A)),
+    );
+  });
+
+  it('returns 32 bytes, used directly as the ed25519 seed', () => {
+    expect(deriveStudentKeySeed(MASTER_A).length).toBe(STUDENT_KEY_SEED_BYTES);
+  });
+
+  it('gives different students different keys', () => {
+    expect(bytesToHex(deriveStudentKeySeed(MASTER_A))).not.toBe(
+      bytesToHex(deriveStudentKeySeed(MASTER_B)),
+    );
+  });
+
+  it('is UNRELATED to the legacy per-course derivation from the same master', () => {
+    // Different info, so a student's existing course keys are untouched and an
+    // archived bundle keeps verifying against the pubkey its token names.
+    const global = bytesToHex(deriveStudentKeySeed(MASTER_A));
+    for (const courseId of ['berkeley-cs61b', 'berkeley-cs61c', '']) {
+      if (courseId === '') continue;
+      expect(global).not.toBe(bytesToHex(deriveCourseKeySeed(MASTER_A, courseId)));
+    }
+  });
+
+  it('rejects a master secret of the wrong length', () => {
+    expect(() => deriveStudentKeySeed(new Uint8Array(31))).toThrow(TypeError);
+    expect(() => deriveStudentKeySeed(new Uint8Array(33))).toThrow(TypeError);
+  });
+});
+
+describe('deriveStudentKeypair', () => {
+  it('returns the seed verbatim as the private key, with its ed25519 public key', async () => {
+    const kp = await deriveStudentKeypair(MASTER_A);
+    const seed = deriveStudentKeySeed(MASTER_A);
+    expect(bytesToHex(kp.privateKey)).toBe(bytesToHex(seed));
+    expect(kp.publicKeyHex).toBe(bytesToHex(await ed.getPublicKeyAsync(seed)));
+  });
+
+  it('gives a student ONE key across every course', async () => {
+    // The whole point of the change: no course_id enters the derivation, so
+    // there is nothing to vary and nothing to obtain a second time.
+    const a = await deriveStudentKeypair(MASTER_A);
+    const b = await deriveStudentKeypair(MASTER_A);
     expect(a.publicKeyHex).toBe(b.publicKeyHex);
   });
 });

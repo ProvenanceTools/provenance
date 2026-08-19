@@ -107,12 +107,39 @@ export type {
   IdentityChainOk,
 } from './enrollment.js';
 
-// Student master secret + per-course key derivation (S2)
+// Institution cert + student credential (root → institution key → student key).
+// The CURRENT identity chain; `enrollment.ts` above is the legacy course-scoped
+// one, kept live forever for archived bundles.
+export {
+  parseInstitutionCert,
+  parseStudentCredential,
+  signInstitutionCert,
+  signStudentCredential,
+  signStudentSessionBinding,
+  verifyInstitutionCert,
+  verifyStudentCredential,
+  verifyStudentSessionBinding,
+  checkInstitutionCertWindow,
+  checkCredentialWindow,
+  buildInstitutionCertSignedPayload,
+  buildStudentCredentialSignedPayload,
+  buildStudentSessionBindingPayload,
+  INSTITUTION_IDENTITY_FORMAT_VERSION,
+  STUDENT_SESSION_BINDING_PURPOSE,
+} from './institution.js';
+export type { InstitutionCert, StudentCredential, InstitutionError } from './institution.js';
+
+// Student master secret + key derivation (S2).
+// `deriveStudentKey*` is the current global derivation; `deriveCourseKey*` is the
+// legacy per-course one, retained for archived material.
 export {
   deriveCourseKeySeed,
   deriveCourseKeypair,
+  deriveStudentKeySeed,
+  deriveStudentKeypair,
   generateStudentMasterSecret,
   STUDENT_KEY_HKDF_INFO_PREFIX,
+  STUDENT_KEY_HKDF_INFO,
   STUDENT_KEY_HKDF_SALT,
   STUDENT_KEY_SEED_BYTES,
   STUDENT_MASTER_SECRET_BYTES,
