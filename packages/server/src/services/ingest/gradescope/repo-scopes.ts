@@ -44,6 +44,7 @@
  * Pure: bytes in, bytes out. No DB, no storage, no clock.
  */
 
+import { parseRollingManifestFilename } from '@provenance/log-core';
 import { selectBundleEntries, type BundleEntry } from './build-bundle-zip.js';
 
 // ---------------------------------------------------------------------------
@@ -125,12 +126,14 @@ export interface RepoScope {
 /**
  * A scope that exists but will not become a submission.
  *
- * - `no_seal` — a `.provenance/` with no `manifest.json`. This is the NORMAL
- *   state of a git-submitted scope today: nothing runs the seal command, so
- *   there is no signed manifest and the bundle loader cannot accept it. It is
- *   reported per-scope rather than dropped, so a repo never vanishes from
- *   ingest without a record. The rolling seal (written by the recorder as the
- *   student works) is what will eventually make these ingestable.
+ * - `no_seal` — a `.provenance/` sealed by NOTHING: no classic `manifest.json`
+ *   and no rolling `manifest-<session_id>.json` either. A git-submitted scope
+ *   is no longer in this bucket — the recorder's rolling seal (program spec §8)
+ *   seals it as the student works, with no seal command, so it is accepted like
+ *   any other scope. What remains here is a genuinely unsealed directory, which
+ *   the loader cannot accept and which no signature covers. It is reported
+ *   per-scope rather than dropped, so a repo never vanishes from ingest without
+ *   a record.
  * - `scope_excluded` — `mode: 'path'` and the scope's directory did not match
  *   `path_glob`.
  * - `ambiguous_scope` — `on_multiple: 'error'` and more than one scope declared
@@ -187,6 +190,36 @@ function declaredIdentity(manifestBytes: Uint8Array): {
     // Malformed manifest — the parse phase surfaces invalid_manifest later.
     return { assignmentId: null, semester: null };
   }
+}
+
+/**
+ * The scope's self-declared identity, from whichever seal shape it carries.
+ *
+ * A classic scope declares it once, in `manifest.json`. A ROLLING-sealed scope
+ * (program spec §8) has no `manifest.json` at all — its identity lives in every
+ * `manifest-<session_id>.json`, each of which declares the same
+ * `assignment_id` / `semester` in a well-formed bundle. The lowest session id
+ * wins, which both keeps the result deterministic and matches
+ * `synthesizeRollingUnionManifest`'s "first seal supplies the scalars" rule on
+ * the read side. Seals that disagree are real evidence, and the read side
+ * reports them as a `divergent_scope` defect — reconciling them here would hide
+ * exactly the thing an integrity tool exists to notice.
+ */
+function scopeIdentity(entries: readonly BundleEntry[]): {
+  assignmentId: string | null;
+  semester: string | null;
+} {
+  const classic = entries.find((e) => e.name === MANIFEST_JSON);
+  if (classic !== undefined) return declaredIdentity(classic.data);
+
+  const rolling = entries
+    .filter((e) => parseRollingManifestFilename(e.name)?.part === 'json')
+    .sort((a, b) => (a.name < b.name ? -1 : 1));
+  for (const entry of rolling) {
+    const identity = declaredIdentity(entry.data);
+    if (identity.assignmentId !== null) return identity;
+  }
+  return { assignmentId: null, semester: null };
 }
 
 /**
@@ -287,16 +320,13 @@ export function discoverRepoScopes(files: Map<string, Uint8Array>): DiscoverRepo
 
     const selected = selectBundleEntries(sub);
     if (!selected.ok) {
-      // A `.provenance/` with no manifest.json: the git case, pre rolling-seal.
+      // A `.provenance/` carrying neither a classic `manifest.json` nor any
+      // rolling `manifest-<session_id>.json`: nothing seals it at all.
       unusable.push({ scopePath: prefix, reason: 'no_seal' });
       continue;
     }
 
-    const manifestEntry = selected.entries.find((e) => e.name === MANIFEST_JSON);
-    const identity =
-      manifestEntry === undefined
-        ? { assignmentId: null, semester: null }
-        : declaredIdentity(manifestEntry.data);
+    const identity = scopeIdentity(selected.entries);
 
     scopes.push({
       scopePath: prefix,

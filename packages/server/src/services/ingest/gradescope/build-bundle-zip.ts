@@ -23,6 +23,7 @@
  */
 
 import JSZip from 'jszip';
+import { parseRollingManifestFilename } from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -40,7 +41,7 @@ const SLOG_META_RE = /^session-[0-9a-fA-F-]+\.slog\.meta$/;
 
 export type BuildBundleZipResult =
   | { ok: true; data: ArrayBuffer }
-  /** The folder has no manifest.json — it is not a provenance bundle. */
+  /** The folder carries no manifest at all (classic or rolling) — not a bundle. */
   | { ok: false; reason: 'no_manifest' };
 
 /** One flat bundle-root entry, ready to be zipped. */
@@ -68,27 +69,35 @@ function toBundlePath(relPath: string): string {
   return relPath.startsWith(PROVENANCE_PREFIX) ? relPath.slice(PROVENANCE_PREFIX.length) : relPath;
 }
 
+/**
+ * A recognized provenance file, classic or rolling.
+ *
+ * `manifest-<session_id>.json` / `.sig` is the ROLLING seal (program spec §8):
+ * a git-submitted scope has no classic `manifest.json`, and these files are the
+ * only thing sealing it, so they must survive selection. The pattern is
+ * log-core's — never re-spelled locally — and deliberately does not match
+ * `manifest.json` (handled above) or a decoy like `manifest-notes.json`.
+ */
 function isProvenanceFile(bundlePath: string): boolean {
   return (
     bundlePath === MANIFEST_JSON ||
     bundlePath === MANIFEST_SIG ||
+    parseRollingManifestFilename(bundlePath) !== null ||
     SLOG_RE.test(bundlePath) ||
     SLOG_META_RE.test(bundlePath)
   );
 }
 
-/** Best-effort read of submission_files[].path from raw manifest JSON. */
-function submissionPathsFromManifest(manifestJson: string): Set<string> {
-  const paths = new Set<string>();
+/** Best-effort read of submission_files[].path from raw manifest JSON, into `into`. */
+function collectSubmissionPaths(manifestJson: string, into: Set<string>): void {
   try {
     const parsed = JSON.parse(manifestJson) as { submission_files?: Array<{ path?: unknown }> };
     for (const f of parsed.submission_files ?? []) {
-      if (typeof f?.path === 'string') paths.add(f.path);
+      if (typeof f?.path === 'string') into.add(f.path);
     }
   } catch {
     // Malformed manifest — the parse phase will surface invalid_manifest later.
   }
-  return paths;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +141,8 @@ export async function buildBundleZipFromFiles(
 export function selectBundleEntries(files: Map<string, Uint8Array>): SelectBundleEntriesResult {
   const candidates = new Map<string, Uint8Array>();
   let manifestJsonBytes: Uint8Array | null = null;
+  /** Rolling-seal `manifest-<session_id>.json` bytes, keyed by session id. */
+  const rollingManifestJson = new Map<string, Uint8Array>();
 
   for (const [rel, bytes] of files) {
     if (rel.length === 0 || isJunkPath(rel)) continue;
@@ -147,13 +158,38 @@ export function selectBundleEntries(files: Map<string, Uint8Array>): SelectBundl
     if (bundlePath === MANIFEST_JSON && (isStripped || manifestJsonBytes === null)) {
       manifestJsonBytes = bytes;
     }
+
+    const rolling = parseRollingManifestFilename(bundlePath);
+    if (rolling !== null && rolling.part === 'json') {
+      if (isStripped || !rollingManifestJson.has(rolling.sessionId)) {
+        rollingManifestJson.set(rolling.sessionId, bytes);
+      }
+    }
   }
 
-  if (manifestJsonBytes === null) {
+  // A scope is sealed by the classic manifest OR by at least one rolling
+  // manifest (program spec §8). A git-submitted scope only ever has the latter,
+  // and requiring `manifest.json` here is what used to discard it outright.
+  if (manifestJsonBytes === null && rollingManifestJson.size === 0) {
     return { ok: false, reason: 'no_manifest' };
   }
 
-  const submissionPaths = submissionPathsFromManifest(new TextDecoder().decode(manifestJsonBytes));
+  // The whitelist is the UNION over every manifest present: each rolling
+  // manifest lists the files under review as of its own session, so a file
+  // touched only in session 2 is named only by session 2's manifest. This
+  // mirrors `loader/unzip.ts`, which builds the same union on the read side.
+  // Session ids are visited in sorted order so the result is deterministic
+  // regardless of the input map's iteration order.
+  const submissionPaths = new Set<string>();
+  if (manifestJsonBytes !== null) {
+    collectSubmissionPaths(new TextDecoder().decode(manifestJsonBytes), submissionPaths);
+  }
+  for (const sessionId of [...rollingManifestJson.keys()].sort()) {
+    collectSubmissionPaths(
+      new TextDecoder().decode(rollingManifestJson.get(sessionId)!),
+      submissionPaths,
+    );
+  }
 
   const entries: BundleEntry[] = [];
   for (const [bundlePath, bytes] of candidates) {
