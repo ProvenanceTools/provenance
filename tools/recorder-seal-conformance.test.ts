@@ -1479,7 +1479,9 @@ async function openLiveSession(opts: {
       clock.advance(1000);
       const saved = host.emit('doc.save', { path: f.path, sha256: sha256OfString(final) });
       if (saved !== null) {
-        await meta.appendCheckpoint(await signCheckpoint(saved.seq, saved.hash, keypair.privateKey));
+        await meta.appendCheckpoint(
+          await signCheckpoint(saved.seq, saved.hash, keypair.privateKey),
+        );
       }
     },
 
