@@ -7,6 +7,7 @@ export * from './loader/rolling-seal.js';
 export * from './loader/types.js';
 export * from './manifest/bundle-manifest.js';
 export * from './identity/resolve-contributors.js';
+export * from './git/observed-dag.js';
 export * from './validation/run-validation.js';
 export * from './validation/check-types.js';
 export * from './validation/verify-submitted-code.js';
