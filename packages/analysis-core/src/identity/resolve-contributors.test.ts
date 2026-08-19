@@ -476,6 +476,23 @@ describe('no root public key configured', () => {
     const resolved = await resolveBundleContributors(bundle);
     expect(resolved.counts).toEqual({ attributed: 0, unverifiable: 1, unattributed: 1 });
   });
+
+  it('leaves an all-unenrolled cohort entirely blameless on an unconfigured deployment', async () => {
+    // A misconfigured deployment must not convert a class of students who never
+    // enrolled into a page of identity findings.
+    const bundle = await loadWith([
+      { sessionPubkeyHex: (await sessionKey(0)).pubkeyHex },
+      { sessionPubkeyHex: (await sessionKey(1)).pubkeyHex },
+      { sessionPubkeyHex: (await sessionKey(2)).pubkeyHex },
+    ]);
+
+    const resolved = await resolveBundleContributors(bundle);
+    expect(resolved.rootKeyConfigured).toBe(false);
+    expect(resolved.counts).toEqual({ attributed: 0, unverifiable: 0, unattributed: 3 });
+    for (const verdict of resolved.bySession.values()) {
+      expect(verdict.kind).toBe('unattributed');
+    }
+  });
 });
 
 describe('no trust anchor for an archived 2.0 identity', () => {

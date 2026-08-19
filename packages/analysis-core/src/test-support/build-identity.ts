@@ -191,9 +191,7 @@ export type BuildCourseIdentityOpts = {
 };
 
 /** Mint a fully-signed legacy 2.0 `session.start.identity` block. */
-export async function buildCourseIdentity(
-  opts: BuildCourseIdentityOpts,
-): Promise<SessionIdentity> {
+export async function buildCourseIdentity(opts: BuildCourseIdentityOpts): Promise<SessionIdentity> {
   const {
     keys,
     coursePrivkey,

@@ -161,7 +161,9 @@ export function describeIdentityChainError(error: IdentityChainError): string {
       return 'student credential does not verify against the root-certified institution public key';
     case 'institution_mismatch':
       return `identity links disagree on institution: credential ${error.credential_institution_id}, cert ${error.cert_institution_id}, anchor ${error.anchor_institution_id}${
-        error.pubkey_mismatch ? ' (travelling cert names a different institution key than the anchor)' : ''
+        error.pubkey_mismatch
+          ? ' (travelling cert names a different institution key than the anchor)'
+          : ''
       }`;
     case 'invalid_session_pubkey':
       return 'session.start carries no usable session_pubkey for the identity binding';
@@ -376,12 +378,7 @@ async function resolveSessionContributor(
   return {
     kind: 'attributed',
     sessionId,
-    contributorKey: attributedContributorKey(
-      ok.identity_version,
-      scope,
-      scopeId,
-      ok.student_ref,
-    ),
+    contributorKey: attributedContributorKey(ok.identity_version, scope, scopeId, ok.student_ref),
     studentRef: ok.student_ref,
     identityVersion: ok.identity_version,
     scope,
