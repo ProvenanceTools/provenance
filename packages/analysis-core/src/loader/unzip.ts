@@ -45,9 +45,9 @@ import type { BundleFiles, LoaderError, RawRollingSealFiles } from './types.js';
  * caller downstream parses this text, so a silently-dropped BOM would be a
  * behaviour change unrelated to this module's job.
  */
-async function readLogFile(
-  zipObject: { async(type: 'uint8array'): Promise<Uint8Array> },
-): Promise<{ text: string; sha256: string }> {
+async function readLogFile(zipObject: {
+  async(type: 'uint8array'): Promise<Uint8Array>;
+}): Promise<{ text: string; sha256: string }> {
   const bytes = await zipObject.async('uint8array');
   return {
     text: new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes),

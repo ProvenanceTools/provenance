@@ -194,7 +194,7 @@ describe('TuningView', () => {
     // directly, so this asserts the render surface actually reflects that
     // canonical list — not just that the import exists.
     await renderAndWaitForLoad();
-    expect(ALL_FLAG_IDS).toHaveLength(26);
+    expect(ALL_FLAG_IDS).toHaveLength(29);
     for (const id of ALL_FLAG_IDS) {
       expect(screen.getByTestId(`slider-${id}`)).toBeInTheDocument();
       expect(screen.getByTestId(`toggle-${id}`)).toBeInTheDocument();

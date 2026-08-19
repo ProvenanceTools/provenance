@@ -64,7 +64,7 @@ describe('docs/heuristics.md heuristic-id sync', () => {
     expect(missing).toEqual([]);
   });
 
-  it('the true heuristic/flag count is 26', () => {
-    expect(ALL_FLAG_IDS).toHaveLength(26);
+  it('the true heuristic/flag count is 29', () => {
+    expect(ALL_FLAG_IDS).toHaveLength(29);
   });
 });
