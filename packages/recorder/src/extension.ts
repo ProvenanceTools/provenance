@@ -102,6 +102,7 @@ export function fallbackActivationMessage(error: ActivationError): string {
         'and try again.'
       );
     case 'manifest_signature_invalid':
+    case 'manifest_chain_invalid':
     case 'manifest_parse_error':
       return (
         'This folder\'s ".provenance-manifest" could not be verified, so Provenance ' +

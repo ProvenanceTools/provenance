@@ -13,10 +13,19 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 
 // We need to import the function under test AND inject our own pubkey.
 // loadAndVerifyManifest accepts an optional pubkeyHex argument, which we use here.
-import { loadAndVerifyManifest } from './manifest-loader.js';
+import {
+  loadAndVerifyManifest,
+  resolveVerifiedCapturePolicy,
+  verifiedCertWindow,
+} from './manifest-loader.js';
 
 // We also need to produce a canonicalized payload for signing (same logic as log-core).
-import { canonicalize } from '@provenance/log-core';
+import {
+  canonicalize,
+  signCourseCert,
+  signManifest as coreSignManifest,
+  DEFAULT_CAPTURE_POLICY,
+} from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
 // Test keypair generation helpers (inline — no log-core crypto, just noble + node)
@@ -289,6 +298,282 @@ describe('loadAndVerifyManifest', () => {
     if (!result.ok) {
       // Reading a directory as a file on Node produces EISDIR or similar.
       expect(['manifest_read_error', 'manifest_parse_error']).toContain(result.error.kind);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Manifest 2.0 — two-level trust chain (program spec §3)
+// ---------------------------------------------------------------------------
+
+describe('loadAndVerifyManifest — Manifest 2.0 trust chain', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'provenance-test-2-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function keypair(): Promise<{ pub: string; priv: Uint8Array }> {
+    const secretKey = ed.utils.randomSecretKey();
+    const publicKey = await ed.getPublicKeyAsync(secretKey);
+    return { pub: bytesToHex(publicKey), priv: secretKey };
+  }
+
+  /** Build a fully-signed 2.0 manifest: root signs the cert, course signs the payload. */
+  async function buildV2Manifest(opts: {
+    rootPrivkey: Uint8Array;
+    coursePrivkey: Uint8Array;
+    coursePubkeyHex: string;
+    courseId?: string;
+    certCourseId?: string;
+    issuedAt?: string;
+    policy?: Record<string, unknown>;
+  }): Promise<Record<string, unknown>> {
+    const certBody = {
+      course_id: opts.certCourseId ?? opts.courseId ?? 'berkeley-cs61b',
+      course_pubkey: opts.coursePubkeyHex,
+      valid_from: '2026-08-20',
+      valid_until: '2027-01-15',
+    };
+    const rootSig = await signCourseCert(certBody, opts.rootPrivkey);
+
+    const payload = {
+      format_version: '2.0',
+      assignment_id: 'proj2',
+      semester: 'fa26',
+      issued_at: opts.issuedAt ?? '2026-09-08T00:00:00Z',
+      files_under_review: ['proj2.py'],
+      course_id: opts.courseId ?? 'berkeley-cs61b',
+      collaboration: 'solo' as const,
+      submission: 'bundle' as const,
+      scope: 'directory' as const,
+      policy: opts.policy ?? {
+        capture: {
+          selection_change: true,
+          focus_change: true,
+          terminal: true,
+          doc_open_close: true,
+          inline_content: true,
+          heartbeat_interval_ms: 30000,
+        },
+      },
+      course_cert: { ...certBody, root_sig: rootSig },
+    };
+    const sig = await coreSignManifest(payload, opts.coursePrivkey);
+    return { ...payload, sig };
+  }
+
+  async function write(manifest: unknown): Promise<import('vscode').WorkspaceFolder> {
+    await fs.writeFile(path.join(tmpDir, '.provenance-manifest'), JSON.stringify(manifest), 'utf8');
+    return makeWorkspaceFolder(tmpDir);
+  }
+
+  it('activates on a fully valid 2.0 chain, verified against the ROOT key', async () => {
+    const root = await keypair();
+    const course = await keypair();
+    const folder = await write(
+      await buildV2Manifest({
+        rootPrivkey: root.priv,
+        coursePrivkey: course.priv,
+        coursePubkeyHex: course.pub,
+      }),
+    );
+
+    const result = await loadAndVerifyManifest(folder, root.pub);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.format_version).toBe('2.0');
+      expect(result.value.course_id).toBe('berkeley-cs61b');
+      expect(result.value.course_cert?.course_pubkey).toBe(course.pub);
+    }
+  });
+
+  it('refuses a 2.0 manifest whose cert is not signed by the embedded root key', async () => {
+    const root = await keypair();
+    const impostorRoot = await keypair();
+    const course = await keypair();
+    const folder = await write(
+      await buildV2Manifest({
+        rootPrivkey: impostorRoot.priv,
+        coursePrivkey: course.priv,
+        coursePubkeyHex: course.pub,
+      }),
+    );
+
+    const result = await loadAndVerifyManifest(folder, root.pub);
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.error.kind === 'manifest_chain_invalid') {
+      expect(result.error.detail.kind).toBe('invalid_root_signature');
+    } else {
+      expect.unreachable('expected manifest_chain_invalid');
+    }
+  });
+
+  it('refuses a 2.0 manifest whose payload was not signed by the certified course key', async () => {
+    const root = await keypair();
+    const course = await keypair();
+    const otherCourse = await keypair();
+    // The cert vouches for `course`, but `otherCourse` signed the payload.
+    const folder = await write(
+      await buildV2Manifest({
+        rootPrivkey: root.priv,
+        coursePrivkey: otherCourse.priv,
+        coursePubkeyHex: course.pub,
+      }),
+    );
+
+    const result = await loadAndVerifyManifest(folder, root.pub);
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.error.kind === 'manifest_chain_invalid') {
+      expect(result.error.detail.kind).toBe('invalid_course_signature');
+    } else {
+      expect.unreachable('expected manifest_chain_invalid');
+    }
+  });
+
+  it('refuses a 2.0 manifest that claims a course its cert does not cover', async () => {
+    const root = await keypair();
+    const course = await keypair();
+    const folder = await write(
+      await buildV2Manifest({
+        rootPrivkey: root.priv,
+        coursePrivkey: course.priv,
+        coursePubkeyHex: course.pub,
+        courseId: 'berkeley-cs61c',
+        certCourseId: 'berkeley-cs61b',
+      }),
+    );
+
+    const result = await loadAndVerifyManifest(folder, root.pub);
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.error.kind === 'manifest_chain_invalid') {
+      expect(result.error.detail.kind).toBe('course_id_mismatch');
+    } else {
+      expect.unreachable('expected manifest_chain_invalid');
+    }
+  });
+
+  it('STILL ACTIVATES when the cert window has lapsed (program spec §4)', async () => {
+    const root = await keypair();
+    const course = await keypair();
+    const folder = await write(
+      await buildV2Manifest({
+        rootPrivkey: root.priv,
+        coursePrivkey: course.priv,
+        coursePubkeyHex: course.pub,
+        // A year past valid_until.
+        issuedAt: '2028-03-01T00:00:00Z',
+      }),
+    );
+
+    const result = await loadAndVerifyManifest(folder, root.pub);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(verifiedCertWindow(result.value)).toEqual({
+        in_window: false,
+        reason: 'after_valid_until',
+      });
+    }
+  });
+
+  it('resolves the signed capture policy for a chain-verified 2.0 manifest', async () => {
+    const root = await keypair();
+    const course = await keypair();
+    const folder = await write(
+      await buildV2Manifest({
+        rootPrivkey: root.priv,
+        coursePrivkey: course.priv,
+        coursePubkeyHex: course.pub,
+        policy: {
+          capture: {
+            selection_change: false,
+            focus_change: false,
+            terminal: false,
+            doc_open_close: false,
+            inline_content: false,
+            heartbeat_interval_ms: 1_000,
+          },
+        },
+      }),
+    );
+
+    const result = await loadAndVerifyManifest(folder, root.pub);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(resolveVerifiedCapturePolicy(result.value)).toEqual({
+        selection_change: false,
+        focus_change: false,
+        terminal: false,
+        doc_open_close: false,
+        inline_content: false,
+        // Clamped up from 1000 to the [5000, 120000] floor.
+        heartbeat_interval_ms: 5_000,
+      });
+    }
+  });
+
+  it('ignores a policy stapled onto a 1.x manifest (the downgrade off-switch)', async () => {
+    // A 1.x manifest signs only the four legacy fields, so a student can staple on
+    // any `policy` block they like and the signature still verifies. It must never
+    // be honoured — program spec §3 step 0.
+    const { pubkeyHex, privkeyHex } = await generateTestKeypair();
+    const manifestData = {
+      assignment_id: 'hw03',
+      semester: 'fa26',
+      issued_at: '2026-09-15T00:00:00Z',
+      files_under_review: ['hw03.py'],
+    };
+    const sigHex = await signManifest(manifestData, privkeyHex);
+    const folder = await write({
+      ...manifestData,
+      sig: sigHex,
+      policy: { capture: { selection_change: false, terminal: false, inline_content: false } },
+    });
+
+    const result = await loadAndVerifyManifest(folder, pubkeyHex);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.format_version).toBe('1.0');
+      expect(resolveVerifiedCapturePolicy(result.value)).toEqual(DEFAULT_CAPTURE_POLICY);
+      expect(verifiedCertWindow(result.value)).toBeNull();
+    }
+  });
+
+  it('refuses a 1.x manifest with a stapled course_cert (no chain below 2.0)', async () => {
+    // Step 0 in reverse: stapling a genuine, root-signed cert onto a 1.x manifest
+    // must not buy chain trust. The 1.x path verifies against the embedded key
+    // only, and the embedded key is the ROOT key, which never signs a manifest.
+    const root = await keypair();
+    const course = await keypair();
+    const certBody = {
+      course_id: 'berkeley-cs61b',
+      course_pubkey: course.pub,
+      valid_from: '2026-08-20',
+      valid_until: '2027-01-15',
+    };
+    const rootSig = await signCourseCert(certBody, root.priv);
+
+    const manifestData = {
+      assignment_id: 'hw03',
+      semester: 'fa26',
+      issued_at: '2026-09-15T00:00:00Z',
+      files_under_review: ['hw03.py'],
+    };
+    const sigHex = await signManifest(manifestData, bytesToHex(course.priv));
+    const folder = await write({
+      ...manifestData,
+      sig: sigHex,
+      course_cert: { ...certBody, root_sig: rootSig },
+    });
+
+    const result = await loadAndVerifyManifest(folder, root.pub);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe('manifest_signature_invalid');
     }
   });
 });

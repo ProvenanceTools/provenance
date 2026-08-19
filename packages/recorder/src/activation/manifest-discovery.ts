@@ -32,6 +32,12 @@ export type DiscoveryDeps = {
    * so this seam only needs the include pattern from us.
    */
   findFiles: (include: string, exclude: string) => Promise<readonly { fsPath: string }[]>;
+  /**
+   * Override for the embedded verification key (tests). Defaults to
+   * ROOT_PUBLIC_KEY_HEX inside loadAndVerifyManifest. At Manifest 2.0 this is the
+   * root key the inline `course_cert` must chain to; at 1.x it is the key the
+   * payload signature is checked against directly.
+   */
   pubkeyHex?: string;
 };
 
