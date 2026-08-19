@@ -172,7 +172,7 @@ describe('buildRecorderContext', () => {
       vscodeVersion: '1.97.0',
       platform: 'darwin-arm64',
     });
-    expect(ctx.vscode.version).toBe('1.97.0');
+    expect(ctx.vscode?.version).toBe('1.97.0');
   });
 
   it('sets vscode.platform from the injected platform', () => {
@@ -183,7 +183,7 @@ describe('buildRecorderContext', () => {
       vscodeVersion: '1.97.0',
       platform: 'win32-x64',
     });
-    expect(ctx.vscode.platform).toBe('win32-x64');
+    expect(ctx.vscode?.platform).toBe('win32-x64');
   });
 
   it('sets recorder.version from extension.packageJSON.version', () => {
@@ -257,6 +257,87 @@ describe('buildRecorderContext', () => {
       vscodeVersion: '1.97.0',
       platform: 'darwin-arm64',
     });
-    expect(typeof ctx.vscode.commit).toBe('string');
+    expect(typeof ctx.vscode?.commit).toBe('string');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// session.start 2.0 (program spec §5)
+// ---------------------------------------------------------------------------
+
+const TEST_MANIFEST_V2: Manifest = {
+  format_version: '2.0',
+  assignment_id: 'proj2',
+  semester: 'fa26',
+  issued_at: '2026-09-08T00:00:00Z',
+  files_under_review: ['proj2.py'],
+  sig: 'b'.repeat(128),
+  course_id: 'berkeley-cs61b',
+  collaboration: 'solo',
+  submission: 'bundle',
+  scope: 'directory',
+  policy: { capture: { selection_change: false, heartbeat_interval_ms: 45_000 } },
+  course_cert: {
+    course_id: 'berkeley-cs61b',
+    course_pubkey: 'c'.repeat(64),
+    valid_from: '2026-08-20',
+    valid_until: '2027-01-15',
+    root_sig: 'd'.repeat(128),
+  },
+};
+
+function build(manifest: Manifest): ReturnType<typeof buildRecorderContext> {
+  return buildRecorderContext({
+    manifest,
+    prevSessionId: null,
+    extension: makeExtension({ version: '1.2.0', publisher: 'itsgeagle', name: 'recorder' }),
+    vscodeVersion: '1.97.0',
+    platform: 'darwin-arm64',
+  });
+}
+
+describe('buildRecorderContext — session.start 2.0', () => {
+  it('carries the FULL manifest, payload + sig + course_cert', () => {
+    const ctx = build(TEST_MANIFEST_V2);
+    // Not just equal-looking: the analyzer re-verifies root -> cert -> payload
+    // offline from exactly these bytes, so every signed field must survive.
+    expect(ctx.manifest).toEqual(TEST_MANIFEST_V2);
+    expect(ctx.manifest?.course_cert?.root_sig).toBe('d'.repeat(128));
+    expect(ctx.manifest?.policy).toEqual({
+      capture: { selection_change: false, heartbeat_interval_ms: 45_000 },
+    });
+  });
+
+  it('carries a 1.x manifest verbatim too, so check 2 works for legacy bundles', () => {
+    const ctx = build(TEST_MANIFEST);
+    expect(ctx.manifest).toEqual(TEST_MANIFEST);
+    expect(ctx.manifest?.course_cert).toBeUndefined();
+  });
+
+  it('emits the host block with editor "vscode"', () => {
+    const ctx = build(TEST_MANIFEST_V2);
+    expect(ctx.host).toEqual({
+      editor: 'vscode',
+      editor_version: '1.97.0',
+      // '' is permitted and expected: the VS Code extension API exposes no build id.
+      editor_build: '',
+      platform: 'darwin-arm64',
+    });
+  });
+
+  it('retains manifest_sig and the deprecated vscode block so 1.x readers still work', () => {
+    const ctx = build(TEST_MANIFEST_V2);
+    expect(ctx.manifest_sig).toBe(TEST_MANIFEST_V2.sig);
+    expect(ctx.vscode).toEqual({ version: '1.97.0', commit: '', platform: 'darwin-arm64' });
+  });
+
+  it('does NOT emit identity — enrollment keys are S2 and do not exist yet', () => {
+    const ctx = build(TEST_MANIFEST_V2);
+    expect(ctx.identity).toBeUndefined();
+    expect(Object.hasOwn(ctx, 'identity')).toBe(false);
+  });
+
+  it('keeps format_version at "1.0" — the 2.0 additions are purely additive', () => {
+    expect(build(TEST_MANIFEST_V2).format_version).toBe('1.0');
   });
 });
