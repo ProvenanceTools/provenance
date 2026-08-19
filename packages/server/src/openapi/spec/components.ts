@@ -1049,8 +1049,7 @@ export const components = {
         student_pubkey: { type: 'string', pattern: '^[0-9a-f]{64}$' },
         issued_at: {
           type: 'string',
-          description:
-            "Also the instant the institution cert's validity window is judged against.",
+          description: "Also the instant the institution cert's validity window is judged against.",
         },
         expires_at: { type: 'string' },
         institution_sig: { type: 'string', pattern: '^[0-9a-f]{128}$' },

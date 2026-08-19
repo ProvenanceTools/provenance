@@ -147,9 +147,7 @@ describe('parseInstitutionKey', () => {
     const { cert } = await makeMaterial();
     const badSecret = 'THIS-IS-THE-SECRET-THAT-MUST-NOT-APPEAR';
 
-    const result = parseInstitutionKey(
-      JSON.stringify({ private_key_hex: badSecret, cert }),
-    );
+    const result = parseInstitutionKey(JSON.stringify({ private_key_hex: badSecret, cert }));
 
     expect(result.ok).toBe(false);
     if (result.ok) return;

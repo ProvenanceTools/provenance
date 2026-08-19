@@ -435,10 +435,7 @@ describe('POST /identity/credential', () => {
       // Even a DIFFERENT key (the "lost my master secret" case) must not fork.
       await createV1App().fetch(credentialRequest(s3, OTHER_STUDENT_PUBKEY));
 
-      const rows = await db
-        .select()
-        .from(students)
-        .where(eq(students.sso_subject, googleSubject));
+      const rows = await db.select().from(students).where(eq(students.sso_subject, googleSubject));
 
       expect(rows).toHaveLength(1);
       expect(rows[0]!.issue_count).toBe(3);
@@ -595,10 +592,7 @@ describe('POST /identity/credential', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       for (const row of inserted) {
-        const [after] = await db
-          .select()
-          .from(roster_entries)
-          .where(eq(roster_entries.id, row.id));
+        const [after] = await db.select().from(roster_entries).where(eq(roster_entries.id, row.id));
         expect(after!.student_ref).toBe(body.student_ref);
       }
     });
