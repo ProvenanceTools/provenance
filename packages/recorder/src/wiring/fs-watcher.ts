@@ -150,7 +150,7 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
           }
 
           const diff_size = Math.abs(onDiskContent.length - expected.content.length);
-          const explanation = explanationTagger?.consume();
+          const explanation = explanationTagger?.consume(relativePath);
 
           const payload: FsExternalChangeData = {
             path: relativePath,
@@ -195,7 +195,7 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
             if (newHash === existing.hash) return;
             if (existing.hasRecentHash(newHash)) return;
             const diff_size = Math.abs(onDiskContent.length - existing.content.length);
-            const explanation = explanationTagger?.consume();
+            const explanation = explanationTagger?.consume(relativePath);
             emit({
               path: relativePath,
               operation: 'modify',
@@ -210,7 +210,7 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
           }
 
           // No prior baseline — pure create.
-          const explanation = explanationTagger?.consume();
+          const explanation = explanationTagger?.consume(relativePath);
           emit({
             path: relativePath,
             operation: 'create',
@@ -235,7 +235,7 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
       if (expected === undefined) {
         // File was never opened/known; nothing to compare against. Emit a
         // delete with empty old_hash so the timeline still shows the event.
-        const explanation = explanationTagger?.consume();
+        const explanation = explanationTagger?.consume(relativePath);
         emit({
           path: relativePath,
           operation: 'delete',
@@ -246,7 +246,7 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
         });
         return;
       }
-      const explanation = explanationTagger?.consume();
+      const explanation = explanationTagger?.consume(relativePath);
       emit({
         path: relativePath,
         operation: 'delete',

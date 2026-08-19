@@ -9,6 +9,13 @@ import { loadBundle } from '../loader/parse-bundle.js';
 import { buildTestBundle } from '../test-support/build-test-bundle.js';
 import { DEFAULT_HEURISTIC_CONFIG } from './config.js';
 import type { EventSpec } from '../test-support/build-test-bundle.js';
+import {
+  buildIdentityKeys,
+  buildInstitutionIdentity,
+  seededKeypair,
+} from '../test-support/build-identity.js';
+import type { IdentityTestKeys } from '../test-support/build-identity.js';
+import { establishBundleContributors } from '../identity/resolve-contributors.js';
 
 const cfg = DEFAULT_HEURISTIC_CONFIG;
 
@@ -135,5 +142,167 @@ describe('inter_session_external_change', () => {
     });
     const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
     expect(flags).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contributor scoping (Tier 3.3)
+//
+// This heuristic can only support "the file changed while MY recorder was off".
+// Across two partners it was reporting a difference that is guaranteed by
+// construction — different person, different machine, different working tree —
+// at confidence 0.85, on every partner commit. Suppression is permitted ONLY
+// where both sides resolve to verified, distinct contributors.
+// ---------------------------------------------------------------------------
+
+describe('inter_session_external_change — contributor scoping', () => {
+  const ALICE = '9c8e1a70-2f2b-4c55-8f1e-6b4a0d9c7e21';
+  const BOB = '3a1d0e55-8c44-4b2a-a7f0-11c9d2e3f4a5';
+
+  let cachedKeys: IdentityTestKeys | null = null;
+  async function keys(): Promise<IdentityTestKeys> {
+    cachedKeys ??= await buildIdentityKeys();
+    return cachedKeys;
+  }
+
+  type Who = { studentRef: string } | 'anonymous';
+
+  /**
+   * Build a bundle from a list of (contributor, events) sessions and stamp it.
+   * `stamp: false` leaves the bundle unstamped, which is how a caller that
+   * forgot to establish contributors sees the world.
+   */
+  async function buildAttributed(
+    specs: Array<{ who: Who; events: EventSpec[] }>,
+    opts?: { stamp?: boolean },
+  ) {
+    const k = await keys();
+    const sessions = [];
+    for (let i = 0; i < specs.length; i++) {
+      const spec = specs[i]!;
+      const sk = await seededKeypair(0x60 + i);
+      sessions.push({
+        events: spec.events,
+        sessionStart: {
+          session_pubkey: sk.pubkeyHex,
+          ...(spec.who === 'anonymous'
+            ? {}
+            : {
+                identity: await buildInstitutionIdentity({
+                  keys: k,
+                  sessionPubkeyHex: sk.pubkeyHex,
+                  studentRef: spec.who.studentRef,
+                }),
+              }),
+        },
+      });
+    }
+    const { zipBuffer } = await buildTestBundle({ sessions });
+    const result = await loadBundle(new Blob([zipBuffer]), 'test.zip');
+    if (!result.ok) throw new Error(`Bundle load failed: ${JSON.stringify(result.error)}`);
+    const bundle = result.value;
+    const resolved =
+      opts?.stamp === false ? null : await establishBundleContributors(bundle, k.root.pubkeyHex);
+    return { index: buildIndex(bundle), bundle, resolved };
+  }
+
+  // Alice ends her session with this; the partner's commit then lands on top.
+  const ALICE_FINAL = 'def foo():\n    return 1\n';
+  const AFTER_PARTNER_COMMIT = ALICE_FINAL + 'def bar():\n    return 2\n';
+
+  it("does NOT flag a partner's commit landing between contributor A's sessions", async () => {
+    // Wall order: Alice, Bob (who commits his own work), Alice again. Both
+    // consecutive pairs cross contributors, so neither is a claim about Alice.
+    const { index, bundle, resolved } = await buildAttributed([
+      { who: { studentRef: ALICE }, events: sessionThat('hw1.py', '', ALICE_FINAL) },
+      {
+        who: { studentRef: BOB },
+        events: sessionThat('hw1.py', AFTER_PARTNER_COMMIT, 'x = 3\n'),
+      },
+      {
+        who: { studentRef: ALICE },
+        events: sessionThat('hw1.py', AFTER_PARTNER_COMMIT + 'x = 3\n', '\n'),
+      },
+    ]);
+    expect(resolved!.counts).toEqual({ attributed: 3, unverifiable: 0, unattributed: 0 });
+
+    const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(0);
+  });
+
+  it('does NOT flag a straight two-partner handoff', async () => {
+    const { index, bundle, resolved } = await buildAttributed([
+      { who: { studentRef: ALICE }, events: sessionThat('hw1.py', '', ALICE_FINAL) },
+      { who: { studentRef: BOB }, events: sessionThat('hw1.py', AFTER_PARTNER_COMMIT, '\n') },
+    ]);
+    expect(resolved!.counts).toEqual({ attributed: 2, unverifiable: 0, unattributed: 0 });
+
+    const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(0);
+  });
+
+  it("STILL flags divergence between one contributor's own consecutive sessions", async () => {
+    // The real signal: Alice's file changed under an editor that was not
+    // recording, between two of HER sessions.
+    const { index, bundle, resolved } = await buildAttributed([
+      { who: { studentRef: ALICE }, events: sessionThat('hw1.py', '', ALICE_FINAL) },
+      {
+        who: { studentRef: ALICE },
+        events: sessionThat('hw1.py', ALICE_FINAL + 'print("oops")\n', '\n'),
+      },
+    ]);
+    expect(resolved!.contributors).toHaveLength(1);
+
+    const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(1);
+    const f = flags[0]!;
+    expect(f.severity).toBe('medium');
+    expect(f.confidence).toBeCloseTo(0.85);
+    expect(f.detail!['contributor_comparison']).toBe('same');
+    expect(f.description).toContain('same verified contributor');
+  });
+
+  it('STILL flags when one side is unattributed', async () => {
+    const { index, bundle, resolved } = await buildAttributed([
+      { who: { studentRef: ALICE }, events: sessionThat('hw1.py', '', ALICE_FINAL) },
+      { who: 'anonymous', events: sessionThat('hw1.py', ALICE_FINAL + 'print("x")\n', '\n') },
+    ]);
+    expect(resolved!.counts).toEqual({ attributed: 1, unverifiable: 0, unattributed: 1 });
+
+    const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.detail!['contributor_comparison']).toBe('unknown');
+  });
+
+  it('STILL flags when BOTH sides are unattributed — singleton keys must not read as "different people"', async () => {
+    const { index, bundle, resolved } = await buildAttributed([
+      { who: 'anonymous', events: sessionThat('hw1.py', '', ALICE_FINAL) },
+      { who: 'anonymous', events: sessionThat('hw1.py', ALICE_FINAL + 'print("x")\n', '\n') },
+    ]);
+    // Distinct singleton keys — a direct key compare would suppress here.
+    expect(resolved!.contributors).toHaveLength(2);
+    expect(resolved!.contributors[0]!.key).not.toBe(resolved!.contributors[1]!.key);
+
+    const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.detail!['contributor_comparison']).toBe('unknown');
+  });
+
+  it('an UNSTAMPED bundle behaves exactly as it did before Tier 3.3', async () => {
+    // Two DIFFERENT verified partners — but nobody stamped the bundle, so every
+    // session reads unattributed and the pre-3.3 comparison is preserved. A
+    // caller that forgets to stamp must lose no findings.
+    const { index, bundle } = await buildAttributed(
+      [
+        { who: { studentRef: ALICE }, events: sessionThat('hw1.py', '', ALICE_FINAL) },
+        { who: { studentRef: BOB }, events: sessionThat('hw1.py', AFTER_PARTNER_COMMIT, '\n') },
+      ],
+      { stamp: false },
+    );
+    expect(bundle.contributors).toBeUndefined();
+
+    const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.detail!['contributor_comparison']).toBe('unknown');
   });
 });
