@@ -461,6 +461,19 @@ implementation discovered later in an OSC case.
 
 Every mandatory rule in §2–§5 above must have a corresponding vector.
 
+**Conformance vectors and per-recorder fixtures are different things — never merge
+them.** A vector is generated, shared, and must be byte-identical across all three
+repos. A _legacy-anchor fixture_ is a 1.x manifest signed with **that repo's own**
+legacy key (§2), so the shared generator can never own it. provnvim learned this the
+hard way: one file was serving both roles, and regenerating it correctly as a vector
+silently destroyed the end-to-end proof that the embedded legacy key still activates
+1.x manifests — the single path grandfathering exists to protect. Keep them in
+separate files, in separate directories, with the reason written down.
+
+Store a legacy fixture as a **bare manifest object with no public key beside it**, so
+no test can pass an override and accidentally prove something weaker: `active` must
+be reachable only through the embedded constant.
+
 ---
 
 ## 11. Open decisions requiring explicit approval
