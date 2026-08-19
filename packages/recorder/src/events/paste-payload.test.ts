@@ -121,4 +121,33 @@ describe('buildPastePayload', () => {
     expect(result.content).toBe('');
     expect(result.content_head).toBeUndefined();
   });
+
+  // --- policy.capture.inline_content = false (program spec §4) ---------------
+
+  it('omits the inline snippet when inline content is disabled, keeping length + sha256', () => {
+    const text = 'def solve(): return 42';
+    const gated = buildPastePayload(text, false);
+    const ungated = buildPastePayload(text, true);
+
+    expect(gated.content).toBeUndefined();
+    expect(gated.content_head).toBeUndefined();
+    expect(gated.content_tail).toBeUndefined();
+    // The paste event itself is on the FLOOR — only the snippet is suppressed, so
+    // the paste heuristics keep their size and identity signals.
+    expect(gated.length).toBe(ungated.length);
+    expect(gated.sha256).toBe(ungated.sha256);
+  });
+
+  it('omits head/tail too when the paste is over the cap and inline content is disabled', () => {
+    const big = 'z'.repeat(MAX_INLINE_BYTES + 10);
+    const gated = buildPastePayload(big, false);
+    expect(gated.content).toBeUndefined();
+    expect(gated.content_head).toBeUndefined();
+    expect(gated.content_tail).toBeUndefined();
+    expect(gated.length).toBe(MAX_INLINE_BYTES + 10);
+  });
+
+  it('inlines by default, so a 1.x manifest is unaffected', () => {
+    expect(buildPastePayload('hello').content).toBe('hello');
+  });
 });

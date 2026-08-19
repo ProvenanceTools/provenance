@@ -13,8 +13,10 @@
  * Limitations:
  *  - We cannot verify the status bar item directly (VS Code's test API doesn't
  *    expose status bar items; it's a known gap in the API).
- *  - The .provenance-manifest in test-workspace must be signed with the dev keypair
- *    whose public key matches COURSE_PUBLIC_KEY_HEX in course-keys.ts.
+ *  - The .provenance-manifest in test-workspace is a Manifest 2.0 file: its
+ *    course_cert must be signed by the dev root keypair whose public key matches
+ *    ROOT_PUBLIC_KEY_HEX in course-keys.ts, and its payload by the dev course key
+ *    that cert vouches for.
  */
 
 import * as vscode from 'vscode';

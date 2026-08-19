@@ -1,5 +1,6 @@
 /**
- * Gathers PRD §5.1 session.start payload fields.
+ * Gathers PRD §5.1 session.start payload fields, plus the program spec §5
+ * `session.start` 2.0 additions (`manifest`, `host`).
  * Pure(ish) function — dependencies are injected for testability.
  * CLAUDE.md: "test the event-to-log-entry transformation as a pure function,
  * separately from the VS Code wiring."
@@ -50,6 +51,10 @@ function computeMachineId(sessionId: string): string {
  * Build a RecorderContext (= SessionStartPayload) from injected dependencies.
  *
  * @param manifest          The verified `.provenance-manifest`/`provenance-manifest` file.
+ *                          MUST already have passed activation/manifest-loader.ts — it is
+ *                          emitted verbatim into `session.start` (program spec §5), so an
+ *                          unverified manifest here would put an unverified trust chain
+ *                          into a signed log.
  * @param prevSessionId     The previous session's id if continuing after a crash, else null.
  * @param extension         The recorder's own VS Code Extension object (for version/id).
  * @param vscodeVersion     vscode.version string injected for testability.
@@ -92,6 +97,35 @@ export function buildRecorderContext(args: {
     },
     manifest_sig: manifest.sig,
     machine_id: machineId,
+    // The FULL manifest — signed payload + sig + course_cert (program spec §5).
+    // This is what turns validation check 2 into a real check: today
+    // verify-session-binding.ts can only compare manifest_sig across sessions for
+    // equality, because the signed payload never enters the bundle. Carrying the
+    // whole manifest lets the analyzer walk root -> course -> manifest -> session
+    // entirely offline, trusting nothing from the server, and it is also how the
+    // certificate's validity window reaches the analyzer: an expired cert does not
+    // stop the recorder (spec §4), so `course_cert` + `issued_at` travelling here
+    // are what let the analyzer re-run checkCertWindow and decide for itself.
+    //
+    // Emitted for 1.x manifests too. It is additive, and a 1.x manifest's parsed
+    // form carries no 2.0-only fields, so nothing unsigned can ride along.
+    manifest,
+    // `host` replaces the VS Code-shaped `vscode` block (program spec §5). `vscode`
+    // is retained below, populated, so 1.x readers keep working through the
+    // reader-before-writer migration; a later change drops it.
+    host: {
+      editor: 'vscode',
+      editor_version: vscodeVersion,
+      // '' is permitted and expected here: the VS Code public extension API exposes
+      // no build/commit identifier. Analyzers must accept the empty string.
+      editor_build: '',
+      platform,
+    },
+    // NOTE: `identity` is deliberately NOT emitted. Enrollment tokens and the
+    // student per-course key are sub-project S2 and do not exist yet; the field is
+    // optional at the type level precisely so this step could land first. Emitting
+    // a placeholder would put an unsigned, unverifiable identity claim into a
+    // signed chain, which is worse than emitting nothing.
     vscode: {
       version: vscodeVersion,
       // vscode.version is the only publicly available version string in the extension API.

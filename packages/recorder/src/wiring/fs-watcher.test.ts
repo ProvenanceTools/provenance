@@ -212,6 +212,47 @@ describe('startFsWatcher', () => {
     expect(payload.new_content_size).toBe(newContent.length);
   });
 
+  it('policy.capture.inline_content=false: still emits, without the file bytes', async () => {
+    // fs.external_change is on the hard floor, so the event fires either way —
+    // only the on-disk bytes are withheld. Program spec §4.
+    capturedWatchers.length = 0;
+    const originalContent = 'def foo(): pass';
+    const newContent = 'def foo(): return 42  # edited externally';
+    const registry = makeRegistry(['hw.py']);
+    registry.getOrCreate('hw.py', originalContent);
+
+    const emit = vi.fn();
+    const now = 10000;
+
+    startFsWatcher({
+      assignmentRoot: '/workspace',
+      filesUnderReview: ['hw.py'],
+      registry,
+      emit,
+      getLastDocChangeAt: () => now - 5000,
+      getLastSaveAt: () => -Infinity,
+      getNow: () => now,
+      readFile: vi.fn().mockResolvedValue(newContent),
+      recentDocChangeToleranceMs: 250,
+      inlineContent: false,
+    });
+
+    getWatchers()
+      .find((w) => (w.pattern as { pattern: string }).pattern === 'hw.py')
+      ?.changeHandler?.({ fsPath: '/workspace/hw.py' });
+
+    await flushPromises();
+    expect(emit).toHaveBeenCalledOnce();
+
+    const payload = emit.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.new_content).toBeUndefined();
+    expect(payload.new_content_head).toBeUndefined();
+    expect(payload.new_content_tail).toBeUndefined();
+    // The hashes and size survive, so the external-change heuristics keep working.
+    expect(payload.new_hash).toBe(sha256Hex(newContent));
+    expect(payload.new_content_size).toBe(newContent.length);
+  });
+
   it('does NOT emit when change is within tolerance of the last doc.save', async () => {
     capturedWatchers.length = 0;
     const registry = makeRegistry(['hw.py']);

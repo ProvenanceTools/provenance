@@ -46,6 +46,7 @@ import { computeExtensionHash } from '../commands/extension-hash.js';
 import { DiskFullHandler } from '../failure/disk-full-handler.js';
 import { makeAssignmentRelativePath } from './assignment-relative-path.js';
 import { resolveOwnerRoot } from './session-router.js';
+import { resolveVerifiedCapturePolicy } from '../activation/manifest-loader.js';
 import type { LargeInsertCounter } from '../wiring/doc-wiring.js';
 
 // ---------------------------------------------------------------------------
@@ -176,6 +177,18 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   const prevSessionId: string | null =
     recovery.kind === 'previous_session_dangling' ? recovery.prevSessionId : null;
 
+  // Step 3b-bis: Resolve the course's capture policy from the ALREADY-VERIFIED
+  // manifest (program spec §4). Resolved exactly once, here, and passed down as
+  // plain booleans: nothing on the event path may re-parse or re-verify anything,
+  // because `doc.change` fires per keystroke.
+  //
+  // A 1.x manifest, or a 2.0 manifest whose course specified nothing, resolves to
+  // DEFAULT_CAPTURE_POLICY — everything on, 30s heartbeat — i.e. exactly today's
+  // behaviour. resolveVerifiedCapturePolicy gates on the format version itself, so
+  // a `policy` block stapled onto a 1.x manifest (where it is NOT signed) can never
+  // be honoured.
+  const capturePolicy = resolveVerifiedCapturePolicy(manifest);
+
   // Step 3c: Generate the session keypair.
   const keypair = await generateSessionKeypair();
 
@@ -248,6 +261,8 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   const sessionHost = createSessionHost({
     sessionId: recorderContext.session_id,
     clock,
+    // The single choke point for policy-gated event kinds — see session-host.ts.
+    capturePolicy,
     onEntry: (entry: HashedEnvelope) => {
       // Route through disk-full handler.
       // If degraded: critical entries go to the ring; non-critical are dropped.
@@ -290,6 +305,10 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   const hbDeps = deps.heartbeatDeps ?? defaultHeartbeatDeps();
   const heartbeat = startHeartbeat({
     ...hbDeps,
+    // policy.capture.heartbeat_interval_ms, already clamped to [5000, 120000] by
+    // resolveCapturePolicy. session.heartbeat is on the hard floor — only its
+    // cadence is tunable.
+    intervalMs: capturePolicy.heartbeat_interval_ms,
     getNow: () => clock.now(),
     // Wall-clock source for suspend/resume detection (PRD §4.2 addendum). Deliberately
     // Date.now(), not clock.now() — see heartbeat.ts for why this must be wall-clock.
@@ -364,6 +383,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     readFile: prodReadFile,
     readFileSync: prodReadFileSync,
     explanationTagger,
+    inlineContent: capturePolicy.inline_content,
     isOwnedByThisRoot,
   });
   ownDisposables.push(docWiring);
@@ -380,6 +400,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     getNow: () => clock.now(),
     readFile: prodReadFile,
     explanationTagger,
+    inlineContent: capturePolicy.inline_content,
   });
   ownDisposables.push(fsWatcher);
 
