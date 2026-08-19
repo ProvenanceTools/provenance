@@ -17,6 +17,9 @@ import type {
   SessionStartPayload,
 } from '@provenance/log-core';
 import type { RollingSealCoverage } from './rolling-coverage.js';
+// Type-only, and `identity/types.ts` imports nothing from this directory, so the
+// stamp below costs no runtime cycle.
+import type { BundleContributors } from '../identity/types.js';
 
 export type { RollingSealCoverage, SealCoverage } from './rolling-coverage.js';
 
@@ -262,6 +265,19 @@ export type Bundle = {
    * with a root public key says otherwise.
    */
   capturePolicyTrust?: CapturePolicyTrust;
+  /**
+   * Contributor verdict per session, stamped by `establishBundleContributors`
+   * (`identity/resolve-contributors.ts`). Deliberately mutable and deliberately
+   * absent from the loader's output, for the same reason as
+   * {@link Bundle.capturePolicyTrust}: `loadBundle` does no signature work, so a
+   * freshly parsed bundle has no attributions until something holding a root
+   * public key resolves them.
+   *
+   * `undefined` reads as fully `unattributed` through `contributorOf` — the
+   * direction that keeps the contributor-gated heuristics firing rather than
+   * silently suppressing them.
+   */
+  contributors?: BundleContributors;
   /**
    * The bundle's manifest.
    *
