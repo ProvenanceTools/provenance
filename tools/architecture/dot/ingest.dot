@@ -57,7 +57,7 @@ digraph ingest {
     bgcolor="#0a130d" labeljust="l"
     node [fillcolor="#0d2416" color="#3fbf62" fontsize=9.5]
     stats [label="per-file statistics"]
-    val   [label="8 validation checks\nincluding check 8, which needs\nthe submitted bytes"]
+    val   [label="8 validation checks\ncheck 2 walks the trust chain against the\nconfigured ROOT public key — unset ⇒ skipped\ncheck 8 needs the submitted bytes"]
     heur  [label="18 heuristics + integrity flags\nlifted from failed checks"]
   }
 

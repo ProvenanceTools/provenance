@@ -1,369 +1,416 @@
-<svg width="1902pt" height="1481pt"
- viewBox="0.00 0.00 1902.00 1481.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(21.6 1459.85)">
+<svg width="1902pt" height="1664pt"
+ viewBox="0.00 0.00 1902.00 1664.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(21.6 1642.55)">
 <title>recorder</title>
 <g id="clust1" class="cluster">
 
-<path stroke-width="1.5" d="M20,-1344.54C20,-1344.54 1839,-1344.54 1839,-1344.54 1845,-1344.54 1851,-1350.54 1851,-1356.54 1851,-1356.54 1851,-1418.25 1851,-1418.25 1851,-1424.25 1845,-1430.25 1839,-1430.25 1839,-1430.25 20,-1430.25 20,-1430.25 14,-1430.25 8,-1424.25 8,-1418.25 8,-1418.25 8,-1356.54 8,-1356.54 8,-1350.54 14,-1344.54 20,-1344.54" class="f-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="219.25" y="-1417.23" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-rec"> &#160;HOST EVENT SOURCES — the only layer that differs between VS Code, IntelliJ and Neovim &#160;</text>
+<path stroke-width="1.5" d="M20,-1527.24C20,-1527.24 1839,-1527.24 1839,-1527.24 1845,-1527.24 1851,-1533.24 1851,-1539.24 1851,-1539.24 1851,-1600.95 1851,-1600.95 1851,-1606.95 1845,-1612.95 1839,-1612.95 1839,-1612.95 20,-1612.95 20,-1612.95 14,-1612.95 8,-1606.95 8,-1600.95 8,-1600.95 8,-1539.24 8,-1539.24 8,-1533.24 14,-1527.24 20,-1527.24" class="f-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="219.25" y="-1599.92" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-rec"> &#160;HOST EVENT SOURCES — the only layer that differs between VS Code, IntelliJ and Neovim &#160;</text>
 </g>
 <g id="clust2" class="cluster">
 
-<path stroke-width="1.5" d="M558,-881.28C558,-881.28 973,-881.28 973,-881.28 979,-881.28 985,-887.28 985,-893.28 985,-893.28 985,-1272.29 985,-1272.29 985,-1278.29 979,-1284.29 973,-1284.29 973,-1284.29 558,-1284.29 558,-1284.29 552,-1284.29 546,-1278.29 546,-1272.29 546,-1272.29 546,-893.28 546,-893.28 546,-887.28 552,-881.28 558,-881.28" class="f-uix s-uix"/>
-<text xml:space="preserve" text-anchor="middle" x="632" y="-1271.27" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-uix"> &#160;DETECTION &amp; CLASSIFICATION &#160;</text>
+<path stroke-width="1.5" d="M558,-1063.98C558,-1063.98 973,-1063.98 973,-1063.98 979,-1063.98 985,-1069.98 985,-1075.98 985,-1075.98 985,-1454.99 985,-1454.99 985,-1460.99 979,-1466.99 973,-1466.99 973,-1466.99 558,-1466.99 558,-1466.99 552,-1466.99 546,-1460.99 546,-1454.99 546,-1454.99 546,-1075.98 546,-1075.98 546,-1069.98 552,-1063.98 558,-1063.98" class="f-uix s-uix"/>
+<text xml:space="preserve" text-anchor="middle" x="632" y="-1453.96" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-uix"> &#160;DETECTION &amp; CLASSIFICATION &#160;</text>
 </g>
 <g id="clust3" class="cluster">
 
-<path stroke-width="1.5" d="M775,-740.57C775,-740.57 987,-740.57 987,-740.57 993,-740.57 999,-746.57 999,-752.57 999,-752.57 999,-816.53 999,-816.53 999,-822.53 993,-828.53 987,-828.53 987,-828.53 775,-828.53 775,-828.53 769,-828.53 763,-822.53 763,-816.53 763,-816.53 763,-752.57 763,-752.57 763,-746.57 769,-740.57 775,-740.57" class="f-ana s-ana"/>
-<text xml:space="preserve" text-anchor="middle" x="823.88" y="-815.51" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ana"> &#160;PURE TRANSFORMS &#160;</text>
+<path stroke-width="1.5" d="M775,-923.27C775,-923.27 987,-923.27 987,-923.27 993,-923.27 999,-929.27 999,-935.27 999,-935.27 999,-999.23 999,-999.23 999,-1005.23 993,-1011.23 987,-1011.23 987,-1011.23 775,-1011.23 775,-1011.23 769,-1011.23 763,-1005.23 763,-999.23 763,-999.23 763,-935.27 763,-935.27 763,-929.27 769,-923.27 775,-923.27" class="f-ana s-ana"/>
+<text xml:space="preserve" text-anchor="middle" x="823.88" y="-998.21" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ana"> &#160;PURE TRANSFORMS &#160;</text>
 </g>
 <g id="clust4" class="cluster">
 
-<path stroke-width="1.5" d="M819,-293.71C819,-293.71 1119,-293.71 1119,-293.71 1125,-293.71 1131,-299.71 1131,-305.71 1131,-305.71 1131,-685.32 1131,-685.32 1131,-691.32 1125,-697.32 1119,-697.32 1119,-697.32 819,-697.32 819,-697.32 813,-697.32 807,-691.32 807,-685.32 807,-685.32 807,-305.71 807,-305.71 807,-299.71 813,-293.71 819,-293.71" class="f-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="882.88" y="-684.3" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-fmt"> &#160;CORE — the format contract &#160;</text>
+<path stroke-width="1.5" d="M1028,-293.71C1028,-293.71 1411,-293.71 1411,-293.71 1417,-293.71 1423,-299.71 1423,-305.71 1423,-305.71 1423,-998.11 1423,-998.11 1423,-1004.11 1417,-1010.11 1411,-1010.11 1411,-1010.11 1028,-1010.11 1028,-1010.11 1022,-1010.11 1016,-1004.11 1016,-998.11 1016,-998.11 1016,-305.71 1016,-305.71 1016,-299.71 1022,-293.71 1028,-293.71" class="f-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1091.88" y="-997.08" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-fmt"> &#160;CORE — the format contract &#160;</text>
 </g>
 <g id="clust5" class="cluster">
 
-<path stroke-width="1.5" d="M830,-8C830,-8 1191,-8 1191,-8 1197,-8 1203,-14 1203,-20 1203,-20 1203,-221.46 1203,-221.46 1203,-227.46 1197,-233.46 1191,-233.46 1191,-233.46 830,-233.46 830,-233.46 824,-233.46 818,-227.46 818,-221.46 818,-221.46 818,-20 818,-20 818,-14 824,-8 830,-8" class="f-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="859.38" y="-220.44" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-srv"> &#160;DURABILITY &#160;</text>
+<path stroke-width="1.5" d="M1058,-8C1058,-8 1419,-8 1419,-8 1425,-8 1431,-14 1431,-20 1431,-20 1431,-221.46 1431,-221.46 1431,-227.46 1425,-233.46 1419,-233.46 1419,-233.46 1058,-233.46 1058,-233.46 1052,-233.46 1046,-227.46 1046,-221.46 1046,-221.46 1046,-20 1046,-20 1046,-14 1052,-8 1058,-8" class="f-srv s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="1087.38" y="-220.44" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-srv"> &#160;DURABILITY &#160;</text>
 </g>
 
 <g id="node1" class="node">
 <title>h_doc</title>
-<path stroke-width="1.3" d="M801.64,-1394.75C801.64,-1394.75 548.36,-1394.75 548.36,-1394.75 542.95,-1394.75 537.54,-1389.34 537.54,-1383.93 537.54,-1383.93 537.54,-1373.11 537.54,-1373.11 537.54,-1367.7 542.95,-1362.29 548.36,-1362.29 548.36,-1362.29 801.64,-1362.29 801.64,-1362.29 807.05,-1362.29 812.46,-1367.7 812.46,-1373.11 812.46,-1373.11 812.46,-1383.93 812.46,-1383.93 812.46,-1389.34 807.05,-1394.75 801.64,-1394.75" class="f-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="675" y="-1379.25" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">document change</text>
-<text xml:space="preserve" text-anchor="middle" x="675" y="-1369.5" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">onDidChangeTextDocument · DocumentListener · on_lines</text>
+<path stroke-width="1.3" d="M801.64,-1577.45C801.64,-1577.45 548.36,-1577.45 548.36,-1577.45 542.95,-1577.45 537.54,-1572.04 537.54,-1566.63 537.54,-1566.63 537.54,-1555.81 537.54,-1555.81 537.54,-1550.4 542.95,-1544.99 548.36,-1544.99 548.36,-1544.99 801.64,-1544.99 801.64,-1544.99 807.05,-1544.99 812.46,-1550.4 812.46,-1555.81 812.46,-1555.81 812.46,-1566.63 812.46,-1566.63 812.46,-1572.04 807.05,-1577.45 801.64,-1577.45" class="f-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="675" y="-1561.94" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">document change</text>
+<text xml:space="preserve" text-anchor="middle" x="675" y="-1552.19" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">onDidChangeTextDocument · DocumentListener · on_lines</text>
 </g>
 
 <g id="node8" class="node">
 <title>reconcile</title>
-<path stroke-width="1.3" d="M784.34,-1258.54C784.34,-1258.54 565.66,-1258.54 565.66,-1258.54 559.66,-1258.54 553.66,-1252.54 553.66,-1246.54 553.66,-1246.54 553.66,-1226.08 553.66,-1226.08 553.66,-1220.08 559.66,-1214.08 565.66,-1214.08 565.66,-1214.08 784.34,-1214.08 784.34,-1214.08 790.34,-1214.08 796.34,-1220.08 796.34,-1226.08 796.34,-1226.08 796.34,-1246.54 796.34,-1246.54 796.34,-1252.54 790.34,-1258.54 784.34,-1258.54" class="f-uix s-uix"/>
-<text xml:space="preserve" text-anchor="middle" x="675" y="-1243.04" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">per&#45;event join (doc&#45;wiring)</text>
-<text xml:space="preserve" text-anchor="middle" x="675" y="-1233.29" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">signal 1 insert shape + signal 2 command intercept</text>
-<text xml:space="preserve" text-anchor="middle" x="675" y="-1223.54" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">→ exactly one paste per change</text>
+<path stroke-width="1.3" d="M784.34,-1441.24C784.34,-1441.24 565.66,-1441.24 565.66,-1441.24 559.66,-1441.24 553.66,-1435.24 553.66,-1429.24 553.66,-1429.24 553.66,-1408.78 553.66,-1408.78 553.66,-1402.78 559.66,-1396.78 565.66,-1396.78 565.66,-1396.78 784.34,-1396.78 784.34,-1396.78 790.34,-1396.78 796.34,-1402.78 796.34,-1408.78 796.34,-1408.78 796.34,-1429.24 796.34,-1429.24 796.34,-1435.24 790.34,-1441.24 784.34,-1441.24" class="f-uix s-uix"/>
+<text xml:space="preserve" text-anchor="middle" x="675" y="-1425.73" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">per&#45;event join (doc&#45;wiring)</text>
+<text xml:space="preserve" text-anchor="middle" x="675" y="-1415.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">signal 1 insert shape + signal 2 command intercept</text>
+<text xml:space="preserve" text-anchor="middle" x="675" y="-1406.23" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">→ exactly one paste per change</text>
 </g>
 
 <g id="edge1" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M675,-1361.71C675,-1338.57 675,-1295.09 675,-1266.16" class="s-edge"/>
-<polygon stroke-width="1.1" points="677.1,-1266.44 675,-1260.44 672.9,-1266.44 677.1,-1266.44" class="a-edge s-edge"/>
-<text xml:space="preserve" text-anchor="middle" x="700.88" y="-1306.75" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">insertion</text>
-<text xml:space="preserve" text-anchor="middle" x="700.88" y="-1297.75" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">shape + timing</text>
+<path fill="none" stroke-width="1.1" d="M675,-1544.41C675,-1521.27 675,-1477.79 675,-1448.86" class="s-edge"/>
+<polygon stroke-width="1.1" points="677.1,-1449.14 675,-1443.14 672.9,-1449.14 677.1,-1449.14" class="a-edge s-edge"/>
+<text xml:space="preserve" text-anchor="middle" x="700.88" y="-1489.45" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">insertion</text>
+<text xml:space="preserve" text-anchor="middle" x="700.88" y="-1480.45" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">shape + timing</text>
 </g>
 
 <g id="node10" class="node">
 <title>expected</title>
-<path stroke-width="1.3" d="M964.84,-1257.42C964.84,-1257.42 851.16,-1257.42 851.16,-1257.42 845.16,-1257.42 839.16,-1251.42 839.16,-1245.42 839.16,-1245.42 839.16,-1227.21 839.16,-1227.21 839.16,-1221.21 845.16,-1215.21 851.16,-1215.21 851.16,-1215.21 964.84,-1215.21 964.84,-1215.21 970.84,-1215.21 976.84,-1221.21 976.84,-1227.21 976.84,-1227.21 976.84,-1245.42 976.84,-1245.42 976.84,-1251.42 970.84,-1257.42 964.84,-1257.42" class="f-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="908" y="-1241.91" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">expected&#45;content registry</text>
-<text xml:space="preserve" text-anchor="middle" x="908" y="-1232.16" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">what the recorder believes</text>
-<text xml:space="preserve" text-anchor="middle" x="908" y="-1222.41" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">each file contains</text>
+<path stroke-width="1.3" d="M964.84,-1440.12C964.84,-1440.12 851.16,-1440.12 851.16,-1440.12 845.16,-1440.12 839.16,-1434.12 839.16,-1428.12 839.16,-1428.12 839.16,-1409.9 839.16,-1409.9 839.16,-1403.9 845.16,-1397.9 851.16,-1397.9 851.16,-1397.9 964.84,-1397.9 964.84,-1397.9 970.84,-1397.9 976.84,-1403.9 976.84,-1409.9 976.84,-1409.9 976.84,-1428.12 976.84,-1428.12 976.84,-1434.12 970.84,-1440.12 964.84,-1440.12" class="f-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="908" y="-1424.61" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">expected&#45;content registry</text>
+<text xml:space="preserve" text-anchor="middle" x="908" y="-1414.86" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">what the recorder believes</text>
+<text xml:space="preserve" text-anchor="middle" x="908" y="-1405.11" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">each file contains</text>
 </g>
 
 <g id="edge13" class="edge">
 
-<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M593.84,-1361.7C526.81,-1347.82 441.04,-1327.82 430.75,-1314.54 425.85,-1308.22 425.18,-1302.29 430.75,-1296.54 445.73,-1281.08 797.18,-1289.75 818,-1284.29 836.2,-1279.52 854.87,-1270.56 870.46,-1261.73" class="s-rec"/>
-<polygon stroke-width="1.1" points="871.36,-1263.63 875.5,-1258.8 869.25,-1260 871.36,-1263.63" class="a-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="457.38" y="-1306.75" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">update model</text>
-<text xml:space="preserve" text-anchor="middle" x="457.38" y="-1297.75" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">after every edit</text>
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M593.84,-1544.4C526.81,-1530.52 441.04,-1510.52 430.75,-1497.24 425.85,-1490.92 425.18,-1484.99 430.75,-1479.24 445.73,-1463.78 797.18,-1472.45 818,-1466.99 836.2,-1462.22 854.87,-1453.26 870.46,-1444.43" class="s-rec"/>
+<polygon stroke-width="1.1" points="871.36,-1446.33 875.5,-1441.5 869.25,-1442.7 871.36,-1446.33" class="a-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="457.38" y="-1489.45" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">update model</text>
+<text xml:space="preserve" text-anchor="middle" x="457.38" y="-1480.45" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">after every edit</text>
 </g>
 
 <g id="node2" class="node">
 <title>h_cmd</title>
-<path stroke-width="1.3" d="M235.51,-1394.75C235.51,-1394.75 26.49,-1394.75 26.49,-1394.75 21.08,-1394.75 15.67,-1389.34 15.67,-1383.93 15.67,-1383.93 15.67,-1373.11 15.67,-1373.11 15.67,-1367.7 21.08,-1362.29 26.49,-1362.29 26.49,-1362.29 235.51,-1362.29 235.51,-1362.29 240.92,-1362.29 246.33,-1367.7 246.33,-1373.11 246.33,-1373.11 246.33,-1383.93 246.33,-1383.93 246.33,-1389.34 240.92,-1394.75 235.51,-1394.75" class="f-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="131" y="-1379.25" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">paste command</text>
-<text xml:space="preserve" text-anchor="middle" x="131" y="-1369.5" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">command intercept · $Paste action · vim.paste()</text>
+<path stroke-width="1.3" d="M235.51,-1577.45C235.51,-1577.45 26.49,-1577.45 26.49,-1577.45 21.08,-1577.45 15.67,-1572.04 15.67,-1566.63 15.67,-1566.63 15.67,-1555.81 15.67,-1555.81 15.67,-1550.4 21.08,-1544.99 26.49,-1544.99 26.49,-1544.99 235.51,-1544.99 235.51,-1544.99 240.92,-1544.99 246.33,-1550.4 246.33,-1555.81 246.33,-1555.81 246.33,-1566.63 246.33,-1566.63 246.33,-1572.04 240.92,-1577.45 235.51,-1577.45" class="f-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="131" y="-1561.94" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">paste command</text>
+<text xml:space="preserve" text-anchor="middle" x="131" y="-1552.19" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">command intercept · $Paste action · vim.paste()</text>
 </g>
 
 <g id="edge2" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M174.81,-1361.64C224.37,-1344.07 307.73,-1315.72 381,-1296.54 434.52,-1282.53 494.26,-1269.95 545.83,-1260.02" class="s-edge"/>
-<polygon stroke-width="1.1" points="545.92,-1262.14 551.42,-1258.95 545.13,-1258.01 545.92,-1262.14" class="a-edge s-edge"/>
-<text xml:space="preserve" text-anchor="middle" x="399" y="-1306.75" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">a paste</text>
-<text xml:space="preserve" text-anchor="middle" x="399" y="-1297.75" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">happened</text>
+<path fill="none" stroke-width="1.1" d="M174.81,-1544.34C224.37,-1526.77 307.73,-1498.42 381,-1479.24 434.52,-1465.23 494.26,-1452.65 545.83,-1442.72" class="s-edge"/>
+<polygon stroke-width="1.1" points="545.92,-1444.84 551.42,-1441.65 545.13,-1440.71 545.92,-1444.84" class="a-edge s-edge"/>
+<text xml:space="preserve" text-anchor="middle" x="399" y="-1489.45" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">a paste</text>
+<text xml:space="preserve" text-anchor="middle" x="399" y="-1480.45" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">happened</text>
 </g>
 
 <g id="node3" class="node">
 <title>h_clip</title>
-<path stroke-width="1.3" d="M482.58,-1404.5C482.58,-1404.5 301.42,-1404.5 301.42,-1404.5 295.42,-1404.5 289.42,-1398.5 289.42,-1392.5 289.42,-1392.5 289.42,-1364.54 289.42,-1364.54 289.42,-1358.54 295.42,-1352.54 301.42,-1352.54 301.42,-1352.54 482.58,-1352.54 482.58,-1352.54 488.58,-1352.54 494.58,-1358.54 494.58,-1364.54 494.58,-1364.54 494.58,-1392.5 494.58,-1392.5 494.58,-1398.5 488.58,-1404.5 482.58,-1404.5" class="f-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="392" y="-1389" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">clipboard read — JetBrains &amp; Neovim only</text>
-<text xml:space="preserve" text-anchor="middle" x="392" y="-1379.25" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">CopyPasteManager · + / * registers</text>
-<text xml:space="preserve" text-anchor="middle" x="392" y="-1369.5" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">VS Code never reads the clipboard;</text>
-<text xml:space="preserve" text-anchor="middle" x="392" y="-1359.75" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">its signal 3 is the count reconciler</text>
+<path stroke-width="1.3" d="M482.58,-1587.2C482.58,-1587.2 301.42,-1587.2 301.42,-1587.2 295.42,-1587.2 289.42,-1581.2 289.42,-1575.2 289.42,-1575.2 289.42,-1547.24 289.42,-1547.24 289.42,-1541.24 295.42,-1535.24 301.42,-1535.24 301.42,-1535.24 482.58,-1535.24 482.58,-1535.24 488.58,-1535.24 494.58,-1541.24 494.58,-1547.24 494.58,-1547.24 494.58,-1575.2 494.58,-1575.2 494.58,-1581.2 488.58,-1587.2 482.58,-1587.2" class="f-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="392" y="-1571.69" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">clipboard read — JetBrains &amp; Neovim only</text>
+<text xml:space="preserve" text-anchor="middle" x="392" y="-1561.94" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">CopyPasteManager · + / * registers</text>
+<text xml:space="preserve" text-anchor="middle" x="392" y="-1552.19" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">VS Code never reads the clipboard;</text>
+<text xml:space="preserve" text-anchor="middle" x="392" y="-1542.44" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">its signal 3 is the count reconciler</text>
 </g>
 
 <g id="edge3" class="edge">
 
-<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M443.58,-1351.97C495,-1326.49 573.46,-1287.62 624.5,-1262.33" class="s-edge"/>
-<polygon stroke-width="1.1" points="625.27,-1264.29 629.71,-1259.75 623.4,-1260.53 625.27,-1264.29" class="a-edge s-edge"/>
-<text xml:space="preserve" text-anchor="middle" x="579.32" y="-1306.75" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">clipboard text —</text>
-<text xml:space="preserve" text-anchor="middle" x="579.32" y="-1297.75" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">other hosts only</text>
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M443.58,-1534.67C495,-1509.19 573.46,-1470.32 624.5,-1445.03" class="s-edge"/>
+<polygon stroke-width="1.1" points="625.27,-1446.99 629.71,-1442.45 623.4,-1443.23 625.27,-1446.99" class="a-edge s-edge"/>
+<text xml:space="preserve" text-anchor="middle" x="579.32" y="-1489.45" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">clipboard text —</text>
+<text xml:space="preserve" text-anchor="middle" x="579.32" y="-1480.45" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">other hosts only</text>
 </g>
 
 <g id="node4" class="node">
 <title>h_fs</title>
-<path stroke-width="1.3" d="M1113.64,-1394.75C1113.64,-1394.75 866.36,-1394.75 866.36,-1394.75 860.95,-1394.75 855.54,-1389.34 855.54,-1383.93 855.54,-1383.93 855.54,-1373.11 855.54,-1373.11 855.54,-1367.7 860.95,-1362.29 866.36,-1362.29 866.36,-1362.29 1113.64,-1362.29 1113.64,-1362.29 1119.05,-1362.29 1124.46,-1367.7 1124.46,-1373.11 1124.46,-1373.11 1124.46,-1383.93 1124.46,-1383.93 1124.46,-1389.34 1119.05,-1394.75 1113.64,-1394.75" class="f-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="990" y="-1379.25" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">filesystem watcher</text>
-<text xml:space="preserve" text-anchor="middle" x="990" y="-1369.5" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">FileSystemWatcher · BulkFileListener · FileChangedShell</text>
+<path stroke-width="1.3" d="M1113.64,-1577.45C1113.64,-1577.45 866.36,-1577.45 866.36,-1577.45 860.95,-1577.45 855.54,-1572.04 855.54,-1566.63 855.54,-1566.63 855.54,-1555.81 855.54,-1555.81 855.54,-1550.4 860.95,-1544.99 866.36,-1544.99 866.36,-1544.99 1113.64,-1544.99 1113.64,-1544.99 1119.05,-1544.99 1124.46,-1550.4 1124.46,-1555.81 1124.46,-1555.81 1124.46,-1566.63 1124.46,-1566.63 1124.46,-1572.04 1119.05,-1577.45 1113.64,-1577.45" class="f-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="990" y="-1561.94" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">filesystem watcher</text>
+<text xml:space="preserve" text-anchor="middle" x="990" y="-1552.19" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">FileSystemWatcher · BulkFileListener · FileChangedShell</text>
 </g>
 
 <g id="node11" class="node">
 <title>cmp</title>
-<path stroke-width="1.3" d="M887.87,-1108.4C887.87,-1108.4 834.09,-1086.76 834.09,-1086.76 828.52,-1084.52 828.52,-1080.04 834.09,-1077.8 834.09,-1077.8 887.87,-1056.16 887.87,-1056.16 893.43,-1053.92 904.57,-1053.92 910.13,-1056.16 910.13,-1056.16 963.91,-1077.8 963.91,-1077.8 969.48,-1080.04 969.48,-1084.52 963.91,-1086.76 963.91,-1086.76 910.13,-1108.4 910.13,-1108.4 904.57,-1110.64 893.43,-1110.64 887.87,-1108.4" class="f-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="899" y="-1083.48" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">on&#45;disk hash ==</text>
-<text xml:space="preserve" text-anchor="middle" x="899" y="-1073.73" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">expected hash?</text>
+<path stroke-width="1.3" d="M887.87,-1291.1C887.87,-1291.1 834.09,-1269.46 834.09,-1269.46 828.52,-1267.22 828.52,-1262.74 834.09,-1260.5 834.09,-1260.5 887.87,-1238.86 887.87,-1238.86 893.43,-1236.62 904.57,-1236.62 910.13,-1238.86 910.13,-1238.86 963.91,-1260.5 963.91,-1260.5 969.48,-1262.74 969.48,-1267.22 963.91,-1269.46 963.91,-1269.46 910.13,-1291.1 910.13,-1291.1 904.57,-1293.34 893.43,-1293.34 887.87,-1291.1" class="f-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="899" y="-1266.18" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">on&#45;disk hash ==</text>
+<text xml:space="preserve" text-anchor="middle" x="899" y="-1256.43" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">expected hash?</text>
 </g>
 
 <g id="edge7" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M993.88,-1361.87C1000.5,-1332.37 1012,-1266.8 998,-1214.08 986.79,-1171.86 953.47,-1133.27 928.56,-1109.12" class="s-edge"/>
-<polygon stroke-width="1.1" points="930.06,-1107.66 924.27,-1105.04 927.17,-1110.7 930.06,-1107.66" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M993.88,-1544.57C1000.5,-1515.07 1012,-1449.5 998,-1396.78 986.79,-1354.56 953.47,-1315.97 928.56,-1291.82" class="s-edge"/>
+<polygon stroke-width="1.1" points="930.06,-1290.36 924.27,-1287.74 927.17,-1293.4 930.06,-1290.36" class="a-edge s-edge"/>
 </g>
 
 <g id="node5" class="node">
 <title>h_term</title>
-<path stroke-width="1.3" d="M1319.39,-1394.75C1319.39,-1394.75 1178.61,-1394.75 1178.61,-1394.75 1173.2,-1394.75 1167.79,-1389.34 1167.79,-1383.93 1167.79,-1383.93 1167.79,-1373.11 1167.79,-1373.11 1167.79,-1367.7 1173.2,-1362.29 1178.61,-1362.29 1178.61,-1362.29 1319.39,-1362.29 1319.39,-1362.29 1324.8,-1362.29 1330.21,-1367.7 1330.21,-1373.11 1330.21,-1373.11 1330.21,-1383.93 1330.21,-1383.93 1330.21,-1389.34 1324.8,-1394.75 1319.39,-1394.75" class="f-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="1249" y="-1379.25" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">terminal</text>
-<text xml:space="preserve" text-anchor="middle" x="1249" y="-1369.5" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">shell integration, when available</text>
+<path stroke-width="1.3" d="M1319.39,-1577.45C1319.39,-1577.45 1178.61,-1577.45 1178.61,-1577.45 1173.2,-1577.45 1167.79,-1572.04 1167.79,-1566.63 1167.79,-1566.63 1167.79,-1555.81 1167.79,-1555.81 1167.79,-1550.4 1173.2,-1544.99 1178.61,-1544.99 1178.61,-1544.99 1319.39,-1544.99 1319.39,-1544.99 1324.8,-1544.99 1330.21,-1550.4 1330.21,-1555.81 1330.21,-1555.81 1330.21,-1566.63 1330.21,-1566.63 1330.21,-1572.04 1324.8,-1577.45 1319.39,-1577.45" class="f-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="1249" y="-1561.94" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">terminal</text>
+<text xml:space="preserve" text-anchor="middle" x="1249" y="-1552.19" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">shell integration, when available</text>
 </g>
 
 <g id="node13" class="node">
 <title>tx</title>
-<path stroke-width="1.3" d="M979.09,-802.78C979.09,-802.78 782.91,-802.78 782.91,-802.78 776.91,-802.78 770.91,-796.78 770.91,-790.78 770.91,-790.78 770.91,-760.57 770.91,-760.57 770.91,-754.57 776.91,-748.57 782.91,-748.57 782.91,-748.57 979.09,-748.57 979.09,-748.57 985.09,-748.57 991.09,-754.57 991.09,-760.57 991.09,-760.57 991.09,-790.78 991.09,-790.78 991.09,-796.78 985.09,-802.78 979.09,-802.78" class="f-ana s-ana"/>
-<text xml:space="preserve" text-anchor="middle" x="881" y="-787.28" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">event → log entry</text>
-<text xml:space="preserve" text-anchor="middle" x="881" y="-775.28" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">unit&#45;tested with no editor present</text>
-<text xml:space="preserve" text-anchor="middle" x="881" y="-765.53" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">relative paths · one inline content cap (64 KB)</text>
-<text xml:space="preserve" text-anchor="middle" x="881" y="-755.78" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">monotonic t · fixed&#45;width wall clock</text>
+<path stroke-width="1.3" d="M979.09,-985.48C979.09,-985.48 782.91,-985.48 782.91,-985.48 776.91,-985.48 770.91,-979.48 770.91,-973.48 770.91,-973.48 770.91,-943.27 770.91,-943.27 770.91,-937.27 776.91,-931.27 782.91,-931.27 782.91,-931.27 979.09,-931.27 979.09,-931.27 985.09,-931.27 991.09,-937.27 991.09,-943.27 991.09,-943.27 991.09,-973.48 991.09,-973.48 991.09,-979.48 985.09,-985.48 979.09,-985.48" class="f-ana s-ana"/>
+<text xml:space="preserve" text-anchor="middle" x="881" y="-969.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">event → log entry</text>
+<text xml:space="preserve" text-anchor="middle" x="881" y="-957.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">unit&#45;tested with no editor present</text>
+<text xml:space="preserve" text-anchor="middle" x="881" y="-948.23" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">relative paths · one inline content cap (64 KB)</text>
+<text xml:space="preserve" text-anchor="middle" x="881" y="-938.48" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">monotonic t · fixed&#45;width wall clock</text>
 </g>
 
 <g id="edge14" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M1237.43,-1362.05C1220,-1337.15 1189,-1286.03 1189,-1237.31 1189,-1237.31 1189,-1237.31 1189,-918.88 1189,-831.61 1085.81,-797.72 998.88,-784.66" class="s-edge"/>
-<polygon stroke-width="1.1" points="999.21,-782.59 992.97,-783.81 998.61,-786.74 999.21,-782.59" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M1237.43,-1544.75C1220,-1519.85 1189,-1468.73 1189,-1420.01 1189,-1420.01 1189,-1420.01 1189,-1101.58 1189,-1095.02 1039.91,-1028.76 949.19,-989.04" class="s-edge"/>
+<polygon stroke-width="1.1" points="950.08,-987.14 943.74,-986.66 948.4,-990.98 950.08,-987.14" class="a-edge s-edge"/>
 </g>
 
 <g id="node6" class="node">
 <title>h_git</title>
-<path stroke-width="1.3" d="M1601.64,-1394.75C1601.64,-1394.75 1384.36,-1394.75 1384.36,-1394.75 1378.95,-1394.75 1373.54,-1389.34 1373.54,-1383.93 1373.54,-1383.93 1373.54,-1373.11 1373.54,-1373.11 1373.54,-1367.7 1378.95,-1362.29 1384.36,-1362.29 1384.36,-1362.29 1601.64,-1362.29 1601.64,-1362.29 1607.05,-1362.29 1612.46,-1367.7 1612.46,-1373.11 1612.46,-1373.11 1612.46,-1383.93 1612.46,-1383.93 1612.46,-1389.34 1607.05,-1394.75 1601.64,-1394.75" class="f-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="1493" y="-1379.25" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">git</text>
-<text xml:space="preserve" text-anchor="middle" x="1493" y="-1369.5" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">built&#45;in API · Git4Idea · external — may be absent</text>
+<path stroke-width="1.3" d="M1601.64,-1577.45C1601.64,-1577.45 1384.36,-1577.45 1384.36,-1577.45 1378.95,-1577.45 1373.54,-1572.04 1373.54,-1566.63 1373.54,-1566.63 1373.54,-1555.81 1373.54,-1555.81 1373.54,-1550.4 1378.95,-1544.99 1384.36,-1544.99 1384.36,-1544.99 1601.64,-1544.99 1601.64,-1544.99 1607.05,-1544.99 1612.46,-1550.4 1612.46,-1555.81 1612.46,-1555.81 1612.46,-1566.63 1612.46,-1566.63 1612.46,-1572.04 1607.05,-1577.45 1601.64,-1577.45" class="f-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="1493" y="-1561.94" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">git</text>
+<text xml:space="preserve" text-anchor="middle" x="1493" y="-1552.19" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">built&#45;in API · Git4Idea · external — may be absent</text>
 </g>
 
 <g id="edge15" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M1465.24,-1361.77C1429.52,-1339.21 1372,-1294.06 1372,-1237.31 1372,-1237.31 1372,-1237.31 1372,-918.88 1372,-841.48 1144.05,-803.54 998.78,-787.21" class="s-edge"/>
-<polygon stroke-width="1.1" points="999.35,-785.16 993.15,-786.59 998.88,-789.34 999.35,-785.16" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M1468.81,-1544.39C1436.7,-1521.24 1384,-1474.89 1384,-1420.01 1384,-1420.01 1384,-1420.01 1384,-1101.58 1384,-1015.21 1088.8,-1035.79 1006,-1011.23 985.84,-1005.25 964.49,-997.11 945.26,-989.06" class="s-edge"/>
+<polygon stroke-width="1.1" points="946.15,-987.15 939.81,-986.75 944.51,-991.02 946.15,-987.15" class="a-edge s-edge"/>
 </g>
 
 <g id="node7" class="node">
 <title>h_win</title>
-<path stroke-width="1.3" d="M1832.14,-1394.75C1832.14,-1394.75 1665.86,-1394.75 1665.86,-1394.75 1660.45,-1394.75 1655.04,-1389.34 1655.04,-1383.93 1655.04,-1383.93 1655.04,-1373.11 1655.04,-1373.11 1655.04,-1367.7 1660.45,-1362.29 1665.86,-1362.29 1665.86,-1362.29 1832.14,-1362.29 1832.14,-1362.29 1837.55,-1362.29 1842.96,-1367.7 1842.96,-1373.11 1842.96,-1373.11 1842.96,-1383.93 1842.96,-1383.93 1842.96,-1389.34 1837.55,-1394.75 1832.14,-1394.75" class="f-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="1749" y="-1379.25" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">window</text>
-<text xml:space="preserve" text-anchor="middle" x="1749" y="-1369.5" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">focus · selection · extension activation</text>
+<path stroke-width="1.3" d="M1832.14,-1577.45C1832.14,-1577.45 1665.86,-1577.45 1665.86,-1577.45 1660.45,-1577.45 1655.04,-1572.04 1655.04,-1566.63 1655.04,-1566.63 1655.04,-1555.81 1655.04,-1555.81 1655.04,-1550.4 1660.45,-1544.99 1665.86,-1544.99 1665.86,-1544.99 1832.14,-1544.99 1832.14,-1544.99 1837.55,-1544.99 1842.96,-1550.4 1842.96,-1555.81 1842.96,-1555.81 1842.96,-1566.63 1842.96,-1566.63 1842.96,-1572.04 1837.55,-1577.45 1832.14,-1577.45" class="f-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="1749" y="-1561.94" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">window</text>
+<text xml:space="preserve" text-anchor="middle" x="1749" y="-1552.19" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">focus · selection · extension activation</text>
 </g>
 
 <g id="edge16" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M1728.43,-1361.87C1699.96,-1338.26 1652,-1290.59 1652,-1237.31 1652,-1237.31 1652,-1237.31 1652,-918.88 1652,-853.3 1215.08,-805.87 999.06,-786.43" class="s-edge"/>
-<polygon stroke-width="1.1" points="999.29,-784.34 993.12,-785.9 998.91,-788.52 999.29,-784.34" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M1715,-1544.45C1673.85,-1522.74 1610,-1479.48 1610,-1420.01 1610,-1420.01 1610,-1420.01 1610,-1101.58 1610,-965.86 1138.18,-1041.99 1006,-1011.23 984.3,-1006.18 961.53,-997.76 941.45,-989.15" class="s-edge"/>
+<polygon stroke-width="1.1" points="942.34,-987.25 936,-986.77 940.66,-991.1 942.34,-987.25" class="a-edge s-edge"/>
 </g>
 
 <g id="node9" class="node">
 <title>anomaly</title>
-<path stroke-width="1.3" d="M654.64,-1116.21C654.64,-1116.21 566.43,-1086.15 566.43,-1086.15 560.75,-1084.22 560.75,-1080.34 566.43,-1078.41 566.43,-1078.41 654.64,-1048.35 654.64,-1048.35 660.32,-1046.42 671.68,-1046.42 677.36,-1048.35 677.36,-1048.35 765.57,-1078.41 765.57,-1078.41 771.25,-1080.34 771.25,-1084.22 765.57,-1086.15 765.57,-1086.15 677.36,-1116.21 677.36,-1116.21 671.68,-1118.14 660.32,-1118.14 654.64,-1116.21" class="f-uix s-uix"/>
-<text xml:space="preserve" text-anchor="middle" x="666" y="-1087.71" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-ink">paste reconciler — every 5 s</text>
-<text xml:space="preserve" text-anchor="middle" x="666" y="-1078.71" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-ink">intercepted vs large&#45;insert</text>
-<text xml:space="preserve" text-anchor="middle" x="666" y="-1069.71" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-ink">counts differ by &gt; 1?</text>
+<path stroke-width="1.3" d="M654.64,-1298.91C654.64,-1298.91 566.43,-1268.85 566.43,-1268.85 560.75,-1266.92 560.75,-1263.04 566.43,-1261.11 566.43,-1261.11 654.64,-1231.05 654.64,-1231.05 660.32,-1229.12 671.68,-1229.12 677.36,-1231.05 677.36,-1231.05 765.57,-1261.11 765.57,-1261.11 771.25,-1263.04 771.25,-1266.92 765.57,-1268.85 765.57,-1268.85 677.36,-1298.91 677.36,-1298.91 671.68,-1300.84 660.32,-1300.84 654.64,-1298.91" class="f-uix s-uix"/>
+<text xml:space="preserve" text-anchor="middle" x="666" y="-1270.4" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-ink">paste reconciler — every 5 s</text>
+<text xml:space="preserve" text-anchor="middle" x="666" y="-1261.4" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-ink">intercepted vs large&#45;insert</text>
+<text xml:space="preserve" text-anchor="middle" x="666" y="-1252.4" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-ink">counts differ by &gt; 1?</text>
 </g>
 
 <g id="edge5" class="edge">
 
-<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M673.71,-1213.53C672.39,-1191.14 670.29,-1155.67 668.61,-1127.39" class="s-hum"/>
-<polygon stroke-width="1.1" points="670.72,-1127.52 668.27,-1121.65 666.53,-1127.77 670.72,-1127.52" class="a-hum s-hum"/>
-<text xml:space="preserve" text-anchor="middle" x="689.68" y="-1168.29" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">counters,</text>
-<text xml:space="preserve" text-anchor="middle" x="689.68" y="-1159.29" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">not events</text>
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M673.71,-1396.23C672.39,-1373.84 670.29,-1338.37 668.61,-1310.09" class="s-hum"/>
+<polygon stroke-width="1.1" points="670.72,-1310.22 668.27,-1304.35 666.53,-1310.47 670.72,-1310.22" class="a-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="689.68" y="-1350.99" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">counters,</text>
+<text xml:space="preserve" text-anchor="middle" x="689.68" y="-1341.99" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">not events</text>
 </g>
 
 <g id="edge4" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M627,-1213.55C549.24,-1174.89 408.5,-1088.79 450.75,-988.48 487.22,-901.89 519.53,-885.8 602,-840.78 651.27,-813.89 711.36,-798.24 763.15,-789.16" class="s-ana"/>
-<polygon stroke-width="1.1" points="763.2,-791.28 768.76,-788.2 762.49,-787.14 763.2,-791.28" class="a-ana s-ana"/>
-<text xml:space="preserve" text-anchor="middle" x="516.38" y="-998.69" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">one paste event — or doc.change</text>
-<text xml:space="preserve" text-anchor="middle" x="516.38" y="-989.69" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">source=paste_likely if it cannot replay</text>
+<path fill="none" stroke-width="1.1" d="M627,-1396.25C549.24,-1357.59 408.5,-1271.49 450.75,-1171.18 487.22,-1084.59 519.53,-1068.5 602,-1023.48 651.27,-996.59 711.36,-980.94 763.15,-971.86" class="s-ana"/>
+<polygon stroke-width="1.1" points="763.2,-973.98 768.76,-970.9 762.49,-969.84 763.2,-973.98" class="a-ana s-ana"/>
+<text xml:space="preserve" text-anchor="middle" x="516.38" y="-1181.39" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">one paste event — or doc.change</text>
+<text xml:space="preserve" text-anchor="middle" x="516.38" y="-1172.39" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">source=paste_likely if it cannot replay</text>
 </g>
 
 <g id="edge6" class="edge">
 
-<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M638.43,-1053.45C601.7,-1012.91 545.61,-936.44 584.5,-881.28 624.78,-824.14 698.96,-798 763.04,-786.13" class="s-bad"/>
-<polygon stroke-width="1.1" points="763.22,-788.23 768.76,-785.11 762.49,-784.1 763.22,-788.23" class="a-bad s-bad"/>
-<text xml:space="preserve" text-anchor="middle" x="622.75" y="-917.34" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">yes → paste.anomaly</text>
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M638.43,-1236.15C601.7,-1195.61 545.61,-1119.14 584.5,-1063.98 624.78,-1006.84 698.96,-980.7 763.04,-968.83" class="s-bad"/>
+<polygon stroke-width="1.1" points="763.22,-970.93 768.76,-967.81 762.49,-966.8 763.22,-970.93" class="a-bad s-bad"/>
+<text xml:space="preserve" text-anchor="middle" x="622.75" y="-1100.04" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">yes → paste.anomaly</text>
 </g>
 
 <g id="edge8" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M906.79,-1214.81C905.35,-1190.6 902.94,-1149.87 901.18,-1120.14" class="s-rec"/>
-<polygon stroke-width="1.1" points="903.3,-1120.36 900.85,-1114.5 899.11,-1120.61 903.3,-1120.36" class="a-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="930.18" y="-1163.79" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">source of truth</text>
+<path fill="none" stroke-width="1.1" d="M906.79,-1397.51C905.35,-1373.3 902.94,-1332.57 901.18,-1302.84" class="s-rec"/>
+<polygon stroke-width="1.1" points="903.3,-1303.06 900.85,-1297.2 899.11,-1303.31 903.3,-1303.06" class="a-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="930.18" y="-1346.49" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">source of truth</text>
 </g>
 
 <g id="node12" class="node">
 <title>explain</title>
-<path stroke-width="1.3" d="M870.57,-946.82C870.57,-946.82 797.99,-923.54 797.99,-923.54 792.28,-921.71 792.28,-918.05 797.99,-916.22 797.99,-916.22 870.57,-892.94 870.57,-892.94 876.29,-891.11 887.71,-891.11 893.43,-892.94 893.43,-892.94 966.01,-916.22 966.01,-916.22 971.72,-918.05 971.72,-921.71 966.01,-923.54 966.01,-923.54 893.43,-946.82 893.43,-946.82 887.71,-948.65 876.29,-948.65 870.57,-946.82" class="f-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="882" y="-921.08" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">explained by a</text>
-<text xml:space="preserve" text-anchor="middle" x="882" y="-911.33" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">formatter or git event?</text>
+<path stroke-width="1.3" d="M870.57,-1129.52C870.57,-1129.52 797.99,-1106.24 797.99,-1106.24 792.28,-1104.41 792.28,-1100.75 797.99,-1098.92 797.99,-1098.92 870.57,-1075.64 870.57,-1075.64 876.29,-1073.81 887.71,-1073.81 893.43,-1075.64 893.43,-1075.64 966.01,-1098.92 966.01,-1098.92 971.72,-1100.75 971.72,-1104.41 966.01,-1106.24 966.01,-1106.24 893.43,-1129.52 893.43,-1129.52 887.71,-1131.35 876.29,-1131.35 870.57,-1129.52" class="f-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="882" y="-1103.78" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">explained by a</text>
+<text xml:space="preserve" text-anchor="middle" x="882" y="-1094.03" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">formatter or git event?</text>
 </g>
 
 <g id="edge10" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M895.92,-1052.23C893.1,-1025.63 888.92,-986.14 885.87,-957.41" class="s-rec"/>
-<polygon stroke-width="1.1" points="887.98,-957.38 885.26,-951.64 883.8,-957.83 887.98,-957.38" class="a-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="900.01" y="-994.19" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">differ</text>
+<path fill="none" stroke-width="1.1" d="M895.92,-1234.93C893.1,-1208.33 888.92,-1168.84 885.87,-1140.11" class="s-rec"/>
+<polygon stroke-width="1.1" points="887.98,-1140.08 885.26,-1134.34 883.8,-1140.53 887.98,-1140.08" class="a-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="900.01" y="-1176.89" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">differ</text>
 </g>
 
 <g id="edge9" class="edge">
 
-<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M863.79,-1065.27C807.76,-1038.98 702.57,-986.05 682.5,-950.48 667.39,-923.69 666.61,-907.61 682.5,-881.28 703.67,-846.19 740.96,-822.28 777.55,-806.28" class="s-hum"/>
-<polygon stroke-width="1.1" points="778.14,-808.31 782.84,-804.03 776.5,-804.44 778.14,-808.31" class="a-hum s-hum"/>
-<text xml:space="preserve" text-anchor="middle" x="723.75" y="-917.34" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">match → ordinary save</text>
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M863.79,-1247.97C807.76,-1221.68 702.57,-1168.75 682.5,-1133.18 667.39,-1106.39 666.61,-1090.31 682.5,-1063.98 703.67,-1028.89 740.96,-1004.98 777.55,-988.98" class="s-hum"/>
+<polygon stroke-width="1.1" points="778.14,-991.01 782.84,-986.73 776.5,-987.14 778.14,-991.01" class="a-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="723.75" y="-1100.04" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">match → ordinary save</text>
 </g>
 
 <g id="edge11" class="edge">
 
-<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M855.82,-896.99C843.48,-884.94 830.06,-868.88 823.5,-851.28 817.7,-835.73 825.54,-820.78 837.12,-808.4" class="s-hum"/>
-<polygon stroke-width="1.1" points="838.33,-810.16 841.1,-804.43 835.36,-807.18 838.33,-810.16" class="a-hum s-hum"/>
-<text xml:space="preserve" text-anchor="middle" x="852.75" y="-843.49" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">yes → attributed</text>
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M855.82,-1079.69C843.48,-1067.64 830.06,-1051.58 823.5,-1033.98 817.7,-1018.43 825.54,-1003.48 837.12,-991.1" class="s-hum"/>
+<polygon stroke-width="1.1" points="838.33,-992.86 841.1,-987.13 835.36,-989.88 838.33,-992.86" class="a-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="852.75" y="-1026.19" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">yes → attributed</text>
 </g>
 
 <g id="edge12" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M886.03,-889.97C887.62,-875.25 888.89,-857.07 888,-840.78 887.47,-830.99 886.48,-820.39 885.41,-810.69" class="s-bad"/>
-<polygon stroke-width="1.1" points="887.5,-810.51 884.73,-804.79 883.33,-810.99 887.5,-810.51" class="a-bad s-bad"/>
-<text xml:space="preserve" text-anchor="middle" x="932.9" y="-843.49" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">no → fs.external_change</text>
+<path fill="none" stroke-width="1.1" d="M886.03,-1072.67C887.62,-1057.95 888.89,-1039.77 888,-1023.48 887.47,-1013.69 886.48,-1003.09 885.41,-993.39" class="s-bad"/>
+<polygon stroke-width="1.1" points="887.5,-993.21 884.73,-987.49 883.33,-993.69 887.5,-993.21" class="a-bad s-bad"/>
+<text xml:space="preserve" text-anchor="middle" x="932.9" y="-1026.19" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">no → fs.external_change</text>
 </g>
 
-<g id="node14" class="node">
-<title>env</title>
-<path stroke-width="1.3" d="M936.39,-671.57C936.39,-671.57 825.61,-671.57 825.61,-671.57 820.2,-671.57 814.79,-666.16 814.79,-660.75 814.79,-660.75 814.79,-649.93 814.79,-649.93 814.79,-644.52 820.2,-639.11 825.61,-639.11 825.61,-639.11 936.39,-639.11 936.39,-639.11 941.8,-639.11 947.21,-644.52 947.21,-649.93 947.21,-649.93 947.21,-660.75 947.21,-660.75 947.21,-666.16 941.8,-671.57 936.39,-671.57" class="f-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="881" y="-656.07" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">envelope</text>
-<text xml:space="preserve" text-anchor="middle" x="881" y="-646.32" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">seq · t · wall · kind · data</text>
+<g id="node15" class="node">
+<title>gate</title>
+<path stroke-width="1.3" d="M1135.92,-832.66C1135.92,-832.66 1084.54,-811.28 1084.54,-811.28 1079,-808.97 1079,-804.37 1084.54,-802.06 1084.54,-802.06 1135.92,-780.68 1135.92,-780.68 1141.46,-778.37 1152.54,-778.37 1158.08,-780.68 1158.08,-780.68 1209.46,-802.06 1209.46,-802.06 1215,-804.37 1215,-808.97 1209.46,-811.28 1209.46,-811.28 1158.08,-832.66 1158.08,-832.66 1152.54,-834.97 1141.46,-834.97 1135.92,-832.66" class="f-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1147" y="-807.87" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">captured under</text>
+<text xml:space="preserve" text-anchor="middle" x="1147" y="-798.12" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">this policy?</text>
 </g>
 
 <g id="edge17" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M881,-748.12C881,-727.52 881,-699.24 881,-679.54" class="s-edge"/>
-<polygon stroke-width="1.1" points="883.1,-679.59 881,-673.59 878.9,-679.59 883.1,-679.59" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M928.25,-930.78C980.15,-901.57 1062.42,-855.27 1109.89,-828.55" class="s-edge"/>
+<polygon stroke-width="1.1" points="1110.7,-830.51 1114.9,-825.73 1108.64,-826.85 1110.7,-830.51" class="a-edge s-edge"/>
 </g>
 
-<g id="node15" class="node">
-<title>jcs</title>
-<path stroke-width="1.3" d="M902.14,-562.11C902.14,-562.11 825.86,-562.11 825.86,-562.11 820.45,-562.11 815.04,-556.7 815.04,-551.29 815.04,-551.29 815.04,-540.47 815.04,-540.47 815.04,-535.06 820.45,-529.65 825.86,-529.65 825.86,-529.65 902.14,-529.65 902.14,-529.65 907.55,-529.65 912.96,-535.06 912.96,-540.47 912.96,-540.47 912.96,-551.29 912.96,-551.29 912.96,-556.7 907.55,-562.11 902.14,-562.11" class="f-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="864" y="-546.61" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">JCS canonicalize</text>
-<text xml:space="preserve" text-anchor="middle" x="864" y="-536.86" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">RFC 8785</text>
+<g id="node14" class="node">
+<title>polic</title>
+<path stroke-width="1.3" d="M1257.59,-984.36C1257.59,-984.36 1046.41,-984.36 1046.41,-984.36 1040.41,-984.36 1034.41,-978.36 1034.41,-972.36 1034.41,-972.36 1034.41,-944.4 1034.41,-944.4 1034.41,-938.4 1040.41,-932.4 1046.41,-932.4 1046.41,-932.4 1257.59,-932.4 1257.59,-932.4 1263.59,-932.4 1269.59,-938.4 1269.59,-944.4 1269.59,-944.4 1269.59,-972.36 1269.59,-972.36 1269.59,-978.36 1263.59,-984.36 1257.59,-984.36" class="f-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1152" y="-969.33" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">capture policy</text>
+<text xml:space="preserve" text-anchor="middle" x="1152" y="-959.58" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">resolved once from the course&#45;signed manifest</text>
+<text xml:space="preserve" text-anchor="middle" x="1152" y="-949.83" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">selection_change · focus_change · terminal ·</text>
+<text xml:space="preserve" text-anchor="middle" x="1152" y="-940.08" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">heartbeat_interval_ms — everything else is FLOOR</text>
 </g>
 
 <g id="edge18" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M877.79,-638.54C875.7,-627.97 873,-613.74 871,-601.11 869.38,-590.9 867.88,-579.56 866.68,-569.91" class="s-edge"/>
-<polygon stroke-width="1.1" points="868.79,-569.93 865.99,-564.23 864.63,-570.44 868.79,-569.93" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M1151.15,-931.98C1150.35,-908.04 1149.14,-871.87 1148.24,-844.71" class="s-fmt"/>
+<polygon stroke-width="1.1" points="1150.34,-844.9 1148.05,-838.98 1146.15,-845.04 1150.34,-844.9" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1203.42" y="-885.48" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">one lookup in a frozen map —</text>
+<text xml:space="preserve" text-anchor="middle" x="1203.42" y="-876.48" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">cheap enough for the firehose</text>
 </g>
 
 <g id="node16" class="node">
-<title>hash</title>
-<path stroke-width="1.3" d="M994.43,-452.65C994.43,-452.65 823.57,-452.65 823.57,-452.65 819.5,-452.65 815.41,-448.57 815.41,-444.49 815.41,-444.49 815.41,-436.33 815.41,-436.33 815.41,-432.25 819.5,-428.17 823.57,-428.17 823.57,-428.17 994.43,-428.17 994.43,-428.17 998.5,-428.17 1002.59,-432.25 1002.59,-436.33 1002.59,-436.33 1002.59,-444.49 1002.59,-444.49 1002.59,-448.57 998.5,-452.65 994.43,-452.65" class="f-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="909" y="-436.26" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">hash = sha256(prev_hash ‖ canonical)</text>
+<title>drop</title>
+<path stroke-width="1.3" d="M1227.84,-691.07C1227.84,-691.07 1036.16,-691.07 1036.16,-691.07 1030.16,-691.07 1024.16,-685.07 1024.16,-679.07 1024.16,-679.07 1024.16,-651.11 1024.16,-651.11 1024.16,-645.11 1030.16,-639.11 1036.16,-639.11 1036.16,-639.11 1227.84,-639.11 1227.84,-639.11 1233.84,-639.11 1239.84,-645.11 1239.84,-651.11 1239.84,-651.11 1239.84,-679.07 1239.84,-679.07 1239.84,-685.07 1233.84,-691.07 1227.84,-691.07" class="f-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="1132" y="-676.04" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink2">dropped at the ONE choke point —</text>
+<text xml:space="preserve" text-anchor="middle" x="1132" y="-666.29" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink2">and BEFORE chaining, so it consumes no seq.</text>
+<text xml:space="preserve" text-anchor="middle" x="1132" y="-656.54" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink2">Dropping after would leave a gap that</text>
+<text xml:space="preserve" text-anchor="middle" x="1132" y="-646.79" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink2">validation check 4 reads as a deletion.</text>
 </g>
 
 <g id="edge19" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M870.83,-529.17C878.9,-510.62 892.3,-479.81 900.89,-460.06" class="s-edge"/>
-<polygon stroke-width="1.1" points="902.79,-460.96 903.26,-454.62 898.94,-459.28 902.79,-460.96" class="a-edge s-edge"/>
-</g>
-
-<g id="edge21" class="edge">
-
-<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M915.05,-453.16C925.44,-474.87 944.54,-522.62 934,-562.11 927.04,-588.17 910.77,-614.52 898.08,-632.34" class="s-fmt"/>
-<polygon stroke-width="1.1" points="896.41,-631.07 894.57,-637.16 899.8,-633.55 896.41,-631.07" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="998.95" y="-551.59" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">prev_hash advances in memory —</text>
-<text xml:space="preserve" text-anchor="middle" x="998.95" y="-542.59" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the .slog is never re&#45;read to</text>
-<text xml:space="preserve" text-anchor="middle" x="998.95" y="-533.59" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">continue a chain</text>
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M1143.89,-776.75C1141.46,-754.12 1138.08,-722.65 1135.54,-699.05" class="s-hum"/>
+<polygon stroke-width="1.1" points="1137.66,-699.09 1134.93,-693.34 1133.48,-699.53 1137.66,-699.09" class="a-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="1144" y="-730.28" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">no</text>
 </g>
 
 <g id="node17" class="node">
-<title>buf</title>
-<path stroke-width="1.3" d="M989.26,-334.17C989.26,-334.17 826.74,-334.17 826.74,-334.17 821.32,-334.17 815.91,-328.76 815.91,-323.35 815.91,-323.35 815.91,-312.53 815.91,-312.53 815.91,-307.12 821.32,-301.71 826.74,-301.71 826.74,-301.71 989.26,-301.71 989.26,-301.71 994.68,-301.71 1000.09,-307.12 1000.09,-312.53 1000.09,-312.53 1000.09,-323.35 1000.09,-323.35 1000.09,-328.76 994.68,-334.17 989.26,-334.17" class="f-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="908" y="-318.67" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">buffer policy</text>
-<text xml:space="preserve" text-anchor="middle" x="908" y="-308.92" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">the firehose must not block the editor</text>
+<title>env</title>
+<path stroke-width="1.3" d="M1404.39,-681.32C1404.39,-681.32 1293.61,-681.32 1293.61,-681.32 1288.2,-681.32 1282.79,-675.91 1282.79,-670.5 1282.79,-670.5 1282.79,-659.68 1282.79,-659.68 1282.79,-654.27 1288.2,-648.86 1293.61,-648.86 1293.61,-648.86 1404.39,-648.86 1404.39,-648.86 1409.8,-648.86 1415.21,-654.27 1415.21,-659.68 1415.21,-659.68 1415.21,-670.5 1415.21,-670.5 1415.21,-675.91 1409.8,-681.32 1404.39,-681.32" class="f-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1349" y="-665.82" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">envelope</text>
+<text xml:space="preserve" text-anchor="middle" x="1349" y="-656.07" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">seq · t · wall · kind · data</text>
 </g>
 
 <g id="edge20" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M908.9,-427.86C908.74,-408.22 908.41,-367.95 908.19,-342.26" class="s-fmt"/>
-<polygon stroke-width="1.1" points="910.3,-342.44 908.15,-336.46 906.1,-342.48 910.3,-342.44" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="936.34" y="-382.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">hash only —</text>
-<text xml:space="preserve" text-anchor="middle" x="936.34" y="-373.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">never sign here</text>
+<path fill="none" stroke-width="1.1" d="M1174.24,-786.85C1212.37,-760.5 1281.34,-712.85 1320.26,-685.95" class="s-fmt"/>
+<polygon stroke-width="1.1" points="1321.12,-687.91 1324.86,-682.77 1318.73,-684.45 1321.12,-687.91" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1260.06" y="-730.28" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">yes</text>
 </g>
 
 <g id="node18" class="node">
-<title>atomic</title>
-<path stroke-width="1.3" d="M1182.71,-202.94C1182.71,-202.94 1005.29,-202.94 1005.29,-202.94 999.29,-202.94 993.29,-196.94 993.29,-190.94 993.29,-190.94 993.29,-170.48 993.29,-170.48 993.29,-164.48 999.29,-158.48 1005.29,-158.48 1005.29,-158.48 1182.71,-158.48 1182.71,-158.48 1188.71,-158.48 1194.71,-164.48 1194.71,-170.48 1194.71,-170.48 1194.71,-190.94 1194.71,-190.94 1194.71,-196.94 1188.71,-202.94 1182.71,-202.94" class="f-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="1094" y="-187.44" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">atomic replace — WHOLE files only</text>
-<text xml:space="preserve" text-anchor="middle" x="1094" y="-177.69" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">*.slog.meta · manifest.json · manifest.sig</text>
-<text xml:space="preserve" text-anchor="middle" x="1094" y="-167.94" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">temp → fsync → rename</text>
+<title>jcs</title>
+<path stroke-width="1.3" d="M1194.14,-562.11C1194.14,-562.11 1117.86,-562.11 1117.86,-562.11 1112.45,-562.11 1107.04,-556.7 1107.04,-551.29 1107.04,-551.29 1107.04,-540.47 1107.04,-540.47 1107.04,-535.06 1112.45,-529.65 1117.86,-529.65 1117.86,-529.65 1194.14,-529.65 1194.14,-529.65 1199.55,-529.65 1204.96,-535.06 1204.96,-540.47 1204.96,-540.47 1204.96,-551.29 1204.96,-551.29 1204.96,-556.7 1199.55,-562.11 1194.14,-562.11" class="f-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1156" y="-546.61" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">JCS canonicalize</text>
+<text xml:space="preserve" text-anchor="middle" x="1156" y="-536.86" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">RFC 8785</text>
 </g>
 
-<g id="edge25" class="edge">
+<g id="edge21" class="edge">
 
-<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M926.63,-427.6C940.19,-418.17 959.05,-404.24 974,-390.17 997.87,-367.7 1004.18,-361.68 1022,-334.17 1048.34,-293.52 1070.71,-241.71 1083.24,-210.16" class="s-fmt"/>
-<polygon stroke-width="1.1" points="1085.06,-211.27 1085.3,-204.92 1081.15,-209.73 1085.06,-211.27" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1076.64" y="-319.15" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">every 100:</text>
-<text xml:space="preserve" text-anchor="middle" x="1076.64" y="-310.15" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">signed checkpoint</text>
+<path fill="none" stroke-width="1.1" d="M1322.97,-648.28C1288.05,-627.08 1226.07,-589.43 1188.24,-566.46" class="s-edge"/>
+<polygon stroke-width="1.1" points="1189.57,-564.81 1183.35,-563.49 1187.39,-568.4 1189.57,-564.81" class="a-edge s-edge"/>
 </g>
 
-<g id="node20" class="node">
-<title>full</title>
-<path stroke-width="1.3" d="M892.57,-201.78C892.57,-201.78 865.94,-186.64 865.94,-186.64 860.73,-183.68 860.73,-177.74 865.94,-174.78 865.94,-174.78 892.57,-159.64 892.57,-159.64 897.78,-156.68 908.22,-156.68 913.43,-159.64 913.43,-159.64 940.06,-174.78 940.06,-174.78 945.27,-177.74 945.27,-183.68 940.06,-186.64 940.06,-186.64 913.43,-201.78 913.43,-201.78 908.22,-204.74 897.78,-204.74 892.57,-201.78" class="f-panel s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="903" y="-181.91" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">write</text>
-<text xml:space="preserve" text-anchor="middle" x="903" y="-172.16" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">failed?</text>
+<g id="node19" class="node">
+<title>hash</title>
+<path stroke-width="1.3" d="M1241.42,-452.65C1241.42,-452.65 1070.58,-452.65 1070.58,-452.65 1066.49,-452.65 1062.41,-448.57 1062.41,-444.49 1062.41,-444.49 1062.41,-436.33 1062.41,-436.33 1062.41,-432.25 1066.49,-428.17 1070.58,-428.17 1070.58,-428.17 1241.42,-428.17 1241.42,-428.17 1245.51,-428.17 1249.59,-432.25 1249.59,-436.33 1249.59,-436.33 1249.59,-444.49 1249.59,-444.49 1249.59,-448.57 1245.51,-452.65 1241.42,-452.65" class="f-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1156" y="-436.26" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">hash = sha256(prev_hash ‖ canonical)</text>
 </g>
 
 <g id="edge22" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M907.42,-301.16C906.64,-280.21 905.25,-242.66 904.24,-215.24" class="s-srv"/>
-<polygon stroke-width="1.1" points="906.35,-215.38 904.03,-209.46 902.15,-215.53 906.35,-215.38" class="a-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="941.2" y="-255.92" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">flush: append to the</text>
-<text xml:space="preserve" text-anchor="middle" x="941.2" y="-246.92" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">open handle</text>
-</g>
-
-<g id="node19" class="node">
-<title>disk</title>
-<polygon stroke-width="1.3" points="985.71,-58.21 826.29,-58.21 826.29,-16 991.71,-16 991.71,-52.21 985.71,-58.21" class="f-srv s-srv"/>
-<polyline fill="none" stroke-width="1.3" points="985.71,-58.21 985.71,-52.21" class="s-srv"/>
-<polyline fill="none" stroke-width="1.3" points="991.71,-52.21 985.71,-52.21" class="s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="909" y="-42.71" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">*.slog</text>
-<text xml:space="preserve" text-anchor="middle" x="909" y="-32.96" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">append&#45;only, one handle open &#39;a&#39;</text>
-<text xml:space="preserve" text-anchor="middle" x="909" y="-23.21" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">never rewritten</text>
-</g>
-
-<g id="edge23" class="edge">
-
-<path fill="none" stroke-width="1.1" d="M904.1,-153.74C905.15,-128.99 906.72,-91.83 907.8,-66.36" class="s-srv"/>
-<polygon stroke-width="1.1" points="909.89,-66.6 908.05,-60.52 905.7,-66.42 909.89,-66.6" class="a-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="911.04" y="-102.67" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">no</text>
-</g>
-
-<g id="node21" class="node">
-<title>degr</title>
-<path stroke-width="1.3" d="M1183.46,-58.21C1183.46,-58.21 1046.54,-58.21 1046.54,-58.21 1040.54,-58.21 1034.54,-52.21 1034.54,-46.21 1034.54,-46.21 1034.54,-28 1034.54,-28 1034.54,-22 1040.54,-16 1046.54,-16 1046.54,-16 1183.46,-16 1183.46,-16 1189.46,-16 1195.46,-22 1195.46,-28 1195.46,-28 1195.46,-46.21 1195.46,-46.21 1195.46,-52.21 1189.46,-58.21 1183.46,-58.21" class="f-bad s-bad"/>
-<text xml:space="preserve" text-anchor="middle" x="1115" y="-42.71" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">recorder.degraded</text>
-<text xml:space="preserve" text-anchor="middle" x="1115" y="-32.96" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">stop appending, tell the student</text>
-<text xml:space="preserve" text-anchor="middle" x="1115" y="-23.21" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">— never partial&#45;write</text>
+<path fill="none" stroke-width="1.1" d="M1156,-529.17C1156,-510.78 1156,-480.35 1156,-460.59" class="s-edge"/>
+<polygon stroke-width="1.1" points="1158.1,-460.75 1156,-454.75 1153.9,-460.75 1158.1,-460.75" class="a-edge s-edge"/>
 </g>
 
 <g id="edge24" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M924.49,-165.35C960.51,-141.29 1033.47,-92.56 1077.91,-62.88" class="s-bad"/>
-<polygon stroke-width="1.1" points="1079.05,-64.64 1082.87,-59.57 1076.72,-61.15 1079.05,-64.64" class="a-bad s-bad"/>
-<text xml:space="preserve" text-anchor="middle" x="1048.61" y="-107.92" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">yes → drop</text>
-<text xml:space="preserve" text-anchor="middle" x="1048.61" y="-97.42" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the buffer</text>
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M1166.16,-453.14C1197.14,-488.88 1290.68,-596.8 1330.61,-642.87" class="s-fmt"/>
+<polygon stroke-width="1.1" points="1328.82,-644.01 1334.34,-647.17 1332,-641.26 1328.82,-644.01" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1322.41" y="-551.59" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">prev_hash advances in memory —</text>
+<text xml:space="preserve" text-anchor="middle" x="1322.41" y="-542.59" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the .slog is never re&#45;read to</text>
+<text xml:space="preserve" text-anchor="middle" x="1322.41" y="-533.59" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">continue a chain</text>
+</g>
+
+<g id="node20" class="node">
+<title>buf</title>
+<path stroke-width="1.3" d="M1217.27,-334.17C1217.27,-334.17 1054.73,-334.17 1054.73,-334.17 1049.33,-334.17 1043.91,-328.76 1043.91,-323.35 1043.91,-323.35 1043.91,-312.53 1043.91,-312.53 1043.91,-307.12 1049.33,-301.71 1054.73,-301.71 1054.73,-301.71 1217.27,-301.71 1217.27,-301.71 1222.67,-301.71 1228.09,-307.12 1228.09,-312.53 1228.09,-312.53 1228.09,-323.35 1228.09,-323.35 1228.09,-328.76 1222.67,-334.17 1217.27,-334.17" class="f-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1136" y="-318.67" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">buffer policy</text>
+<text xml:space="preserve" text-anchor="middle" x="1136" y="-308.92" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">the firehose must not block the editor</text>
+</g>
+
+<g id="edge23" class="edge">
+
+<path fill="none" stroke-width="1.1" d="M1154.08,-427.86C1150.82,-408.22 1144.14,-367.95 1139.87,-342.26" class="s-fmt"/>
+<polygon stroke-width="1.1" points="1141.96,-342.02 1138.91,-336.44 1137.82,-342.7 1141.96,-342.02" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1175.54" y="-382.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">hash only —</text>
+<text xml:space="preserve" text-anchor="middle" x="1175.54" y="-373.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">never sign here</text>
+</g>
+
+<g id="node21" class="node">
+<title>atomic</title>
+<path stroke-width="1.3" d="M1410.71,-202.94C1410.71,-202.94 1233.29,-202.94 1233.29,-202.94 1227.29,-202.94 1221.29,-196.94 1221.29,-190.94 1221.29,-190.94 1221.29,-170.48 1221.29,-170.48 1221.29,-164.48 1227.29,-158.48 1233.29,-158.48 1233.29,-158.48 1410.71,-158.48 1410.71,-158.48 1416.71,-158.48 1422.71,-164.48 1422.71,-170.48 1422.71,-170.48 1422.71,-190.94 1422.71,-190.94 1422.71,-196.94 1416.71,-202.94 1410.71,-202.94" class="f-srv s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="1322" y="-187.44" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">atomic replace — WHOLE files only</text>
+<text xml:space="preserve" text-anchor="middle" x="1322" y="-177.69" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">*.slog.meta · manifest.json · manifest.sig</text>
+<text xml:space="preserve" text-anchor="middle" x="1322" y="-167.94" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">temp → fsync → rename</text>
+</g>
+
+<g id="edge28" class="edge">
+
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M1171.55,-427.89C1183.63,-418.51 1200.4,-404.51 1213,-390.17 1261.81,-334.64 1296.09,-253.41 1311.99,-210.59" class="s-fmt"/>
+<polygon stroke-width="1.1" points="1313.9,-211.47 1313.99,-205.12 1309.96,-210.03 1313.9,-211.47" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1306.62" y="-319.15" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">every 100:</text>
+<text xml:space="preserve" text-anchor="middle" x="1306.62" y="-310.15" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">signed checkpoint</text>
+</g>
+
+<g id="node23" class="node">
+<title>full</title>
+<path stroke-width="1.3" d="M1120.57,-201.78C1120.57,-201.78 1093.94,-186.64 1093.94,-186.64 1088.73,-183.68 1088.73,-177.74 1093.94,-174.78 1093.94,-174.78 1120.57,-159.64 1120.57,-159.64 1125.78,-156.68 1136.22,-156.68 1141.43,-159.64 1141.43,-159.64 1168.06,-174.78 1168.06,-174.78 1173.27,-177.74 1173.27,-183.68 1168.06,-186.64 1168.06,-186.64 1141.43,-201.78 1141.43,-201.78 1136.22,-204.74 1125.78,-204.74 1120.57,-201.78" class="f-panel s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="1131" y="-181.91" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">write</text>
+<text xml:space="preserve" text-anchor="middle" x="1131" y="-172.16" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">failed?</text>
+</g>
+
+<g id="edge25" class="edge">
+
+<path fill="none" stroke-width="1.1" d="M1135.42,-301.16C1134.64,-280.21 1133.25,-242.66 1132.24,-215.24" class="s-srv"/>
+<polygon stroke-width="1.1" points="1134.35,-215.38 1132.03,-209.46 1130.15,-215.53 1134.35,-215.38" class="a-srv s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="1169.2" y="-255.92" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">flush: append to the</text>
+<text xml:space="preserve" text-anchor="middle" x="1169.2" y="-246.92" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">open handle</text>
+</g>
+
+<g id="node22" class="node">
+<title>disk</title>
+<polygon stroke-width="1.3" points="1213.71,-58.21 1054.29,-58.21 1054.29,-16 1219.71,-16 1219.71,-52.21 1213.71,-58.21" class="f-srv s-srv"/>
+<polyline fill="none" stroke-width="1.3" points="1213.71,-58.21 1213.71,-52.21" class="s-srv"/>
+<polyline fill="none" stroke-width="1.3" points="1219.71,-52.21 1213.71,-52.21" class="s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="1137" y="-42.71" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">*.slog</text>
+<text xml:space="preserve" text-anchor="middle" x="1137" y="-32.96" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">append&#45;only, one handle open &#39;a&#39;</text>
+<text xml:space="preserve" text-anchor="middle" x="1137" y="-23.21" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">never rewritten</text>
+</g>
+
+<g id="edge26" class="edge">
+
+<path fill="none" stroke-width="1.1" d="M1132.1,-153.74C1133.15,-128.99 1134.72,-91.83 1135.8,-66.36" class="s-srv"/>
+<polygon stroke-width="1.1" points="1137.89,-66.6 1136.05,-60.52 1133.7,-66.42 1137.89,-66.6" class="a-srv s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="1139.04" y="-102.67" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">no</text>
+</g>
+
+<g id="node24" class="node">
+<title>degr</title>
+<path stroke-width="1.3" d="M1411.46,-58.21C1411.46,-58.21 1274.54,-58.21 1274.54,-58.21 1268.54,-58.21 1262.54,-52.21 1262.54,-46.21 1262.54,-46.21 1262.54,-28 1262.54,-28 1262.54,-22 1268.54,-16 1274.54,-16 1274.54,-16 1411.46,-16 1411.46,-16 1417.46,-16 1423.46,-22 1423.46,-28 1423.46,-28 1423.46,-46.21 1423.46,-46.21 1423.46,-52.21 1417.46,-58.21 1411.46,-58.21" class="f-bad s-bad"/>
+<text xml:space="preserve" text-anchor="middle" x="1343" y="-42.71" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">recorder.degraded</text>
+<text xml:space="preserve" text-anchor="middle" x="1343" y="-32.96" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">stop appending, tell the student</text>
+<text xml:space="preserve" text-anchor="middle" x="1343" y="-23.21" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">— never partial&#45;write</text>
+</g>
+
+<g id="edge27" class="edge">
+
+<path fill="none" stroke-width="1.1" d="M1152.49,-165.35C1188.51,-141.29 1261.47,-92.56 1305.91,-62.88" class="s-bad"/>
+<polygon stroke-width="1.1" points="1307.05,-64.64 1310.87,-59.57 1304.72,-61.15 1307.05,-64.64" class="a-bad s-bad"/>
+<text xml:space="preserve" text-anchor="middle" x="1276.61" y="-107.92" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">yes → drop</text>
+<text xml:space="preserve" text-anchor="middle" x="1276.61" y="-97.42" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the buffer</text>
 </g>
 </g>
 </svg>

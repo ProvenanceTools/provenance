@@ -135,12 +135,12 @@ export const nodes: Record<string, ArchNode> = {
   // ── The five (six) views of one submission ────────────────────────────────
   t1: {
     title: 'Overview',
-    body: 'Overview is the default tab, which is precisely why it does not load the event index. The full index is the most expensive fetch in the application, and paying for it every time someone glances at a submission would tax the ninety per cent of visits that end in "no". It is requested only once a flag drawer is actually opened.\n\nUntil it arrives, the drawer degrades rather than blocks: supporting rows show their bare global event number and their jump buttons still work, because a supporting seq is all either destination needs to resolve the event and the session along with it. The flags themselves render through the same panel and drawer the offline /local route uses, so a reviewer opens a finding and lands on its evidence instead of reading a list of heuristic ids.',
+    body: 'Overview is the default tab, which is precisely why it does not load the event index. The full index is the most expensive fetch in the application, and paying for it every time someone glances at a submission would tax the ninety per cent of visits that end in "no". It is requested only once a flag drawer is actually opened.\n\nThe assignment-manifest card sits here for a reason that is about reading, not layout. It names the course, the collaboration and submission modes, the certificate’s validity, the offline trust-chain verdict — and, most importantly, the capture signals the course switched off. Without that last list a reviewer looking at a submission from a course that disabled terminal capture sees no terminal events and no terminal-related flags, and has no way to distinguish that from a student who never opened one; absent by policy and absent by omission look identical on screen unless the policy is on screen too. The card renders nothing at all for a 1.x bundle with nothing disabled, because an empty card is worse than no card, so callers mount it unconditionally. The same component serves the offline /local overview.\n\nUntil the index arrives, the drawer degrades rather than blocks: supporting rows show their bare global event number and their jump buttons still work, because a supporting seq is all either destination needs to resolve the event and the session along with it. The flags themselves render through the same panel and drawer the offline /local route uses, so a reviewer opens a finding and lands on its evidence instead of reading a list of heuristic ids.',
     links: [
       { label: 'Overview.tsx', href: `${GH}/packages/analyzer/src/views/submission/Overview.tsx` },
       {
-        label: 'FlagDashboardPanel.tsx',
-        href: `${GH}/packages/analyzer/src/views/overview/FlagDashboardPanel.tsx`,
+        label: 'AssignmentManifestCard.tsx',
+        href: `${GH}/packages/analyzer/src/components/AssignmentManifestCard.tsx`,
       },
     ],
   },

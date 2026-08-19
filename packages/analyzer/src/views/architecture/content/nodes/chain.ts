@@ -4,9 +4,32 @@ import { GH } from './links.js';
 /** Nodes in the `chain` diagram. Keys are bare dot node names. */
 export const nodes: Record<string, ArchNode> = {
   // ── Key material ──────────────────────────────────────────────────────────
+  rkpriv: {
+    title: 'The root private key',
+    body: 'It signs certificates and nothing else. It never touches a manifest, never reaches a server, and never appears in a build; the only artefact it produces is a course_cert vouching for one course’s public key over one validity window. That is the entire reason the layer exists. Before it, the recorder embedded a single course’s public key, so a second course meant a second VSIX, a second Marketplace listing, and a second release to keep in step with the first.\n\nConcentrating that much authority in one offline key is a deliberate trade. Holding it lets you certify any key for any course id, which is strictly more power than any single course key ever had. What buys it back is that it is used a handful of times a year, on a secured machine, and never by the people who run assignments — the minting tool refuses to hand out a certificate that does not verify against its own root public key before printing it, and the same tool exists precisely so course staff never need this file.',
+    invariant:
+      'The root key signs certificates only. A manifest signed directly by the root key is not a thing the format can express.',
+    links: [
+      { label: 'mint-course-cert.ts', href: `${GH}/tools/mint-course-cert.ts` },
+      { label: 'course-cert.ts', href: `${GH}/packages/log-core/src/course-cert.ts` },
+    ],
+  },
+  rkpub: {
+    title: 'The root public key',
+    body: 'One value, in three places, none of which is a secret. The recorder compiles it in as a single-line 64-hex constant whose shape is a contract: the production build locates it with a regex, rewrites it, packages the VSIX, then restores the file so local work continues on the dev key, and it refuses outright if the supplied value is missing, is not 64 lowercase hex, or equals the dev key committed to the repo. The server reads it from PROVENANCE_ROOT_PUBLIC_KEY_HEX and the browser bundle bakes in VITE_ROOT_PUBLIC_KEY_HEX, because analysis-core is isomorphic and is not allowed to hardcode a key of its own.\n\nUnset is a legitimate state on the analysis side and is handled as one. With no root key configured, validation check 2 reports skipped for a 2.0 bundle rather than guessing in either direction, and the roll-up turns a skipped check into a warn rather than a pass. Absence of the means to verify is reported as absence, never rounded up to clean.',
+    invariant:
+      'A production recorder build refuses to embed the dev root key. An unconfigured server or browser reports check 2 as skipped, never as a pass.',
+    links: [
+      {
+        label: 'root-public-key.ts',
+        href: `${GH}/packages/recorder/src/activation/root-public-key.ts`,
+      },
+      { label: 'embed-root-key.ts', href: `${GH}/tools/embed-root-key.ts` },
+    ],
+  },
   ckpriv: {
     title: 'The course private key',
-    body: 'It signs one thing: the assignment manifest. Nothing in the running system ever verifies with it (the recorder carries only the public half, and no server holds either), so there is no deployment that needs it and no service whose compromise could leak it. The generator refuses to overwrite an existing file, refuses to write anywhere inside the repository, and sets mode 0600; even the hash-allowlist tooling that takes a keypair file reads only public_key_hex out of it.\n\nThat asymmetry is why the design puts an offline key at the root instead of an online signing service. Holding this key lets you mint a manifest for any folder, and a manifest is both the permission to record and the input to the derivation that wraps every session key, so anyone with it can produce logs the analyzer will accept. Rotating per semester is what bounds that exposure, and rotation is a real operation: a new keypair means a new recorder build, because the public half is compiled in.',
+    body: 'It signs one thing: the assignment manifest payload. Nothing in the running system ever verifies with it and no server holds it, so there is no deployment that needs it and no service whose compromise could leak it. The generator refuses to overwrite an existing file, refuses to write anywhere inside the repository, and sets mode 0600; even the hash-allowlist tooling that takes a keypair file reads only public_key_hex out of it.\n\nWhat changed under the trust chain is the blast radius of a rotation, not the handling. Holding this key still lets you mint a manifest for any folder, and a manifest is still both the permission to record and the input to the derivation that wraps every session key. But the public half is no longer compiled into anything, so rotating it is now a re-mint of one certificate rather than a new recorder build for every student — which is what makes a one-semester validity window a realistic policy instead of an aspiration.',
     invariant:
       'Never in the repo, in CI, or on a server. The only machine that needs it is a staff machine signing an assignment manifest.',
     links: [
@@ -19,15 +42,26 @@ export const nodes: Record<string, ArchNode> = {
   },
   ckpub: {
     title: 'The course public key',
-    body: 'One 64-hex constant in a file whose shape is a contract. The production build locates it with a regex that assumes a single-line definition, rewrites it, builds and packages the VSIX, then restores the file so local work continues on the dev key. It refuses to run if the supplied key is missing, is not 64 lowercase hex, or equals the dev key committed to the repo: a misconfigured release cannot silently ship a recorder that trusts the development keypair.\n\nCompiled in rather than fetched, because the recorder makes no network calls at all. The cost is that there is no revocation channel and no way to push a replacement: rotating the course keypair means publishing a new VSIX and re-signing every manifest, and until a student installs it their recorder will not activate. That is the accepted price of a tool that must work offline and must not phone anywhere.',
+    body: 'This is the value the certificate exists to carry. It is not embedded anywhere any more: the recorder learns it at activation time, out of the course_cert sitting in the manifest it just opened, and trusts it only for as long as the root signature over that certificate holds. One recorder build therefore serves every course, and onboarding a course is minting a certificate rather than shipping software.\n\nIt is also the right identifier to revoke, and the spec is explicit about why. The certificate sits outside the course-signed payload, so the copy that travels with a student’s work is whichever one they were given; revoking a certificate is meaningless when the holder chooses which certificate ships. Revoking the public key it vouches for is not. That check is server-side only — an offline recorder cannot learn about revocation without breaking the no-network rule — and short validity windows are the accepted, stated mitigation for the gap.',
+    links: [
+      { label: 'course-cert.ts', href: `${GH}/packages/log-core/src/course-cert.ts` },
+      {
+        label: 'manifest-loader.ts',
+        href: `${GH}/packages/recorder/src/activation/manifest-loader.ts`,
+      },
+    ],
+  },
+  lkpub: {
+    title: 'The grandfathered legacy course key',
+    body: 'A second, temporary trust anchor that exists only to keep already-issued work verifiable. Every Manifest 1.x file in the field was signed directly by a course key, carries no certificate, and will never be reissued; verifying one against the root key fails closed, which for a recorder means silent non-activation. So manifest-loader.ts routes on format_version — 2.0 walks the chain to the root key, 1.x is checked against this constant instead.\n\nThe part that is easy to get wrong is that the three recorders do not share this value. Each grandfathers its own prior embedded constant, because the point is to keep accepting the manifests that recorder already accepted, and the key that signed those is whatever it was verifying against. For the VS Code and JetBrains recorders that is a dev placeholder with the real key injected at build time; for the Neovim recorder there is no build step at all, so its constant shipped in every tagged release and signed every real 1.x manifest its users hold. Cross-wiring another recorder’s key there would silently end recording for all of them. The root key, by contrast, genuinely is one shared value.',
     invariant:
-      'A production build refuses to embed the dev key, so a release can never ship trusting the development keypair.',
+      'Scheduled for deletion. Once no 1.x manifest still needs verifying, this file, its course-keys.ts re-export, the 1.x branch in manifest-loader.ts, and its embedding step all go in one PR.',
     links: [
       {
-        label: 'course-public-key.ts',
-        href: `${GH}/packages/recorder/src/activation/course-public-key.ts`,
+        label: 'legacy-course-public-key.ts',
+        href: `${GH}/packages/recorder/src/activation/legacy-course-public-key.ts`,
       },
-      { label: 'embed-course-key.ts', href: `${GH}/tools/embed-course-key.ts` },
+      { label: 'course-keys.ts', href: `${GH}/packages/recorder/src/activation/course-keys.ts` },
     ],
   },
   skey: {
@@ -43,22 +77,47 @@ export const nodes: Record<string, ArchNode> = {
   },
 
   // ── Activation ────────────────────────────────────────────────────────────
+  cert: {
+    title: 'The course certificate',
+    body: 'Four fields and a root signature, and it travels inline in the .provenance-manifest rather than as a file of its own. One file to discover and one to distribute means the certificate and the manifest cannot be separated by a copy, a move, or a .gitignore. It sits outside the course-signed payload, because a course does not sign its own authorization; buildSignedPayload excludes both sig and course_cert by construction.\n\nThe validity window is evaluated against the manifest’s issued_at, never against the wall clock. "Was this certificate valid when this manifest was issued" still has a stable answer during an adjudication in 2028; "is it valid today" does not. The bounds accept a date or a full timestamp, and a date-only bound resolves asymmetrically on purpose: valid_from opens at that day’s first instant, valid_until runs through the end of the day it names rather than expiring at its start, which is the reading a human takes from "valid until January 15".',
+    invariant:
+      'The window is checked against manifest.issued_at, never against now. An archived bundle must verify identically years later.',
+    links: [
+      { label: 'course-cert.ts', href: `${GH}/packages/log-core/src/course-cert.ts` },
+      { label: 'mint-course-cert.ts', href: `${GH}/tools/mint-course-cert.ts` },
+    ],
+  },
   amf: {
     title: 'The assignment manifest',
-    body: 'The signature covers exactly four fields (assignment_id, semester, issued_at, files_under_review) canonicalized as a fresh object with sig excluded. The parser ignores every other key in the file, which also means every other key sits outside the signature; nothing reads them, and nothing that matters should ever be added there. files_under_review is not decoration either: it is the list that gets the in-memory expected-content model behind external-change detection, and the list whose final on-disk hashes the seal records.\n\nThe field carrying the security property is assignment_id, because it is what makes each assignment’s signature different from the last. That signature is copied into every session’s entry 0 and is the input the session private key is wrapped under, so one file is simultaneously the authorization to record and the secret that unwraps this assignment’s keys. Rotating the id per assignment is what stops a session recorded for last week’s homework being re-presented for this one.',
+    body: 'At 2.0 the signature covers nine fields — course_id, assignment_id, semester, issued_at, files_under_review, collaboration, submission, scope and the capture policy — canonicalized as a fresh object with sig and course_cert excluded. All of them are required rather than optional, which is not fussiness: a fixed key set means the Kotlin and Lua ports canonicalize without needing a rule for "which optionals were present", and that rule would be a divergence risk across three hand-written implementations. Unknown top-level keys are ignored for forward compatibility, and because canonicalization names its fields explicitly, an unknown key cannot quietly change the signed bytes.\n\nWhat moved into the signature is the interesting part. course_id is now inside it and must equal the certificate’s, or one course’s key could sign a manifest claiming to be another and both signatures would still verify — that equality is a mandatory conformance vector. policy is inside it because that is the only place it can be: a professor may turn capture down, and a student may not turn it off. Manifest has no format_version field at 1.x, so a missing one is defaulted to "1.0" and the file is accepted, never rejected.',
     links: [
       { label: 'manifest.ts', href: `${GH}/packages/log-core/src/manifest.ts` },
       { label: 'Recorder PRD §4.1', href: `${GH}/docs/prd.md` },
     ],
   },
   averify: {
-    title: 'Verify the manifest signature',
-    body: 'The payload is rebuilt rather than read. Verification canonicalizes a fresh object of the four signed fields and checks the signature over those bytes, so nothing about the file itself (key order, indentation, a trailing newline) can affect the outcome. A student may reformat their manifest and the recorder still activates; a student who changes one character of files_under_review breaks it.\n\nOne implementation choice here is deliberate rather than incidental: @noble/ed25519 v3 verifies with ZIP215 semantics, which are more permissive than RFC 8032 about non-canonical point encodings. That is acceptable only because the public key is a hardcoded constant rather than something a caller supplies, and the verifier says so in a comment. If the key ever becomes user-supplied, this is the decision that has to be revisited first.',
+    title: 'Walk the trust chain',
+    body: 'Five steps in a fixed order, identical in all three recorders. Assert format_version is 2.0; validate the 2.0 shape; verify course_cert minus its root_sig against the embedded root key; verify the payload against the public key that certificate vouches for; assert the manifest’s course_id equals the certificate’s. Then check issued_at against the window, which is reported rather than enforced — see the policy node for why a lapsed certificate must not stop a class recording.\n\nThe first two steps are security controls and not formalities, which is why they run before any signature work. At 1.x, course_id, collaboration, submission, scope and policy are all outside the signed payload, so without the version gate a student could take a legitimately issued 1.x manifest from their own course, staple on that course’s certificate (public, root-signed, copyable from any 2.0 manifest), add a matching course_id, and staple on an invented policy disabling capture — and every signature would verify. And because canonicalize omits undefined-valued keys, a 2.0 manifest with no policy at all would sign and chain perfectly cleanly, so the shape check is what makes "the chain verified" imply "the course signed a policy".',
+    invariant:
+      'Chain-verify 2.0 only. A 1.x manifest takes the legacy path and has no policy — that gate is what denies students the capture off switch.',
     links: [
       { label: 'manifest.ts', href: `${GH}/packages/log-core/src/manifest.ts` },
       {
         label: 'manifest-loader.ts',
         href: `${GH}/packages/recorder/src/activation/manifest-loader.ts`,
+      },
+    ],
+  },
+  pol: {
+    title: 'The capture policy',
+    body: 'Four knobs, and the shape of the block is itself the enforcement mechanism. selection_change, focus_change and terminal are booleans; heartbeat_interval_ms is clamped to five seconds through two minutes. Every other event kind is on the hard floor, and the floor is enforced by there simply being no key that could express "off" for it. A manifest that carries a retired key, or an invented one, resolves it as an unknown key: ignored, never a gate. A missing block resolves to everything on at a thirty-second cadence, which is exactly v1.x behaviour, so a 1.x manifest changes nothing.\n\nWhere the floor is drawn follows one rule: a signal whose absence degrades correctness rather than merely detail must not be a knob. Sensitivity argues for a knob; being load-bearing vetoes one. Two candidates failed that test and were removed rather than shipped. doc_open_close, because doc.open’s content is the seed reconstruction starts from, so a course could switch off replay and the Source tab for its whole cohort with nothing warning it. And inline_content, which is the sharper case: every other knob makes the system see less evidence against a student, while that one made it see less evidence for one, because internal_move needs the paste content to downgrade a large_paste. A course being able to make the system more likely to falsely accuse its own students is not a legitimate configuration.\n\nA lapsed certificate does not stop recording. Refusing to activate would silently end recording for an entire class, which for an integrity tool is a worse failure than recording under a stale key, so the recorder records, stamps the expiry, and leaves the judgement to the analyzer.',
+    invariant:
+      'A floor event kind has no key in policy.capture. The schema is the enforcement; the exported list is only the assertable statement of it.',
+    links: [
+      { label: 'policy.ts', href: `${GH}/packages/log-core/src/policy.ts` },
+      {
+        label: 'policy-gating.test.ts',
+        href: `${GH}/packages/analysis-core/src/heuristics/policy-gating.test.ts`,
       },
     ],
   },
@@ -87,7 +146,7 @@ export const nodes: Record<string, ArchNode> = {
   },
   e0: {
     title: 'Entry 0 · session.start',
-    body: 'Position zero is structural, not conventional. The loader rejects a .slog whose first entry is anything other than session.start, and sealing records session_id: null for a log where it cannot find one rather than guessing. The session id, the assignment, the format version, the session public key and the manifest signature all live in that single payload, so a log with no readable entry 0 is a log with no identity.\n\nConcentrating all of it there is the point: everything verification needs later about what a session was sits at the head of the chain, where altering any of it invalidates every hash that follows. The obvious alternative (a separate header file, or the sidecar that already carries the same public key) would have put the verification anchor somewhere the chain does not reach.',
+    body: 'Position zero is structural, not conventional. The loader rejects a .slog whose first entry is anything other than session.start, and sealing records session_id: null for a log where it cannot find one rather than guessing. The session id, the assignment, the format version, the session public key and the manifest signature all live in that single payload, so a log with no readable entry 0 is a log with no identity.\n\nAt 2.0 the payload also carries the whole manifest — the course-signed fields, its sig, and the root-signed course_cert — rather than only the signature over it. That is what turns check 2 from a consistency test into a verification, and it is also how the effective capture policy reaches the analyzer, which is the only way to tell "not recorded by policy" from "did not happen". The VS Code-shaped vscode block gives way to a host block naming the editor, its version, its build and the platform, so the JetBrains and Neovim recorders stop having to pretend into a field named after a different editor; vscode is retained as a deprecated alias on read for 1.x bundles.\n\nConcentrating all of it there is the point: everything verification needs later about what a session was sits at the head of the chain, where altering any of it invalidates every hash that follows. The obvious alternative (a separate header file, or the sidecar that already carries the same public key) would have put the verification anchor somewhere the chain does not reach.',
     links: [
       {
         label: 'parse-session.ts',
@@ -195,13 +254,18 @@ export const nodes: Record<string, ArchNode> = {
   },
   vbind: {
     title: 'Verify the session binding',
-    body: 'This check does less than its label promises, and the difference is worth stating. It compares the manifest signature recorded in each session’s entry 0 across the sessions in one bundle and fails when they differ, which catches a bundle assembled from sessions recorded against different assignments. A single-session bundle passes it trivially. It cannot check that signature against the course public key, because the bundle manifest carries no copy of it and the analyzer holds no assignment manifest to compare against.\n\nThe anti-replay property really lives elsewhere: in the per-assignment rotation that makes each manifest signature unique, and in the key wrapping that makes an old session key unrecoverable without the old manifest. This check is the cheap consistency test sitting on top of those. Closing the gap would mean giving the analyzer the signed manifests for a semester, a product decision, not an oversight in this function.',
+    body: 'For a 2.0 bundle this is now a real cryptographic check, walked entirely offline and trusting nothing from the server. The full manifest rides inside every session.start, so the analyzer re-walks the same five steps the recorder walked at activation — certificate against the configured root key, payload against the key that certificate vouches for, course_id equality — and then requires every session’s recorded manifest_sig to equal the embedded sig. That last equality is what ties the verified manifest to the keys: manifest_sig is the HKDF input the session keypair was wrapped under, so it binds the document the analyzer just verified to the key that signed this session’s checkpoints and the bundle seal.\n\nEarlier bundles keep the older, weaker guarantee, permanently. A 1.x bundle carries only the signature, never the payload, so the check remains what it always was: all sessions must share one manifest_sig, which catches a bundle assembled from sessions recorded against different assignments and passes trivially on a single session. Archived submissions must keep validating years later, so that path is not going away.\n\nTwo outcomes are deliberately not failures. With no root key configured the check reports skipped rather than guessing, and skipped rolls the bundle up to warn rather than pass. And a certificate that had lapsed by the time the manifest was issued is reported in the detail text while the check still passes: every signature verifies, so the bundle is not tampered with — the course is late on its paperwork, and that is a different finding.',
+    invariant:
+      'An unconfigured root key reports skipped, never pass. An expired certificate is reported, never failed — the signatures still verify.',
     links: [
       {
         label: 'verify-session-binding.ts',
         href: `${GH}/packages/analysis-core/src/validation/verify-session-binding.ts`,
       },
-      { label: 'Recorder PRD §5.4', href: `${GH}/docs/prd.md` },
+      {
+        label: 'bundle-manifest.ts',
+        href: `${GH}/packages/analysis-core/src/manifest/bundle-manifest.ts`,
+      },
     ],
   },
   verdict: {

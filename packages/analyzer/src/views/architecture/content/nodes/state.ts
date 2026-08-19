@@ -13,7 +13,7 @@ export const nodes: Record<string, ArchNode> = {
   },
   verify: {
     title: 'Manifest verification',
-    body: 'The recorder carries the course’s ed25519 public key compiled into its own source, and a folder becomes an assignment only if the manifest it contains carries a signature that verifies against that key. Anyone can drop a file named .provenance-manifest into a directory; only course staff can make one the recorder will act on.\n\nThe failure branch is silent on purpose. A manifest that is missing, malformed, or badly signed produces one console line and nothing else: no dialog, no status bar, no log file, no .provenance/ directory. An error dialog would be a probe: it would tell whoever was editing the manifest exactly when they had the format right and only the signature wrong, and it would fire on every unrelated folder that happened to contain a file with that name. Silence gives the same protection and leaks nothing.',
+    body: 'The recorder carries one ed25519 public key compiled into its own source — the root key — and a folder becomes an assignment only if its manifest chains back to it. Verification routes on format_version: a 2.0 manifest is walked root key → course_cert → course-signed payload, with the manifest’s course_id required to match the certificate’s; a 1.x manifest predates the chain entirely and is checked against a grandfathered legacy course key instead. Anyone can drop a file named .provenance-manifest into a directory; only course staff can make one the recorder will act on.\n\nOne key for every course is the change worth noticing. The course’s own public key now travels inside the certificate rather than being compiled in, so onboarding a course is minting a certificate rather than shipping a new build, and rotating a course key no longer requires every student to reinstall.\n\nThe failure branch is silent on purpose. A manifest that is missing, malformed, or badly signed produces one console line and nothing else: no dialog, no status bar, no log file, no .provenance/ directory. An error dialog would be a probe: it would tell whoever was editing the manifest exactly when they had the format right and only the signature wrong, and it would fire on every unrelated folder that happened to contain a file with that name. Silence gives the same protection and leaks nothing.',
     invariant:
       'If the signature does not verify, the extension does nothing: no session, no files, no UI.',
     links: [
@@ -22,8 +22,8 @@ export const nodes: Record<string, ArchNode> = {
         href: `${GH}/packages/recorder/src/activation/manifest-loader.ts`,
       },
       {
-        label: 'course-public-key.ts',
-        href: `${GH}/packages/recorder/src/activation/course-public-key.ts`,
+        label: 'root-public-key.ts',
+        href: `${GH}/packages/recorder/src/activation/root-public-key.ts`,
       },
       { label: 'Recorder PRD §4.1', href: `${GH}/docs/prd.md` },
     ],
