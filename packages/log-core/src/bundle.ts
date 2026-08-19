@@ -33,11 +33,22 @@ export type SubmissionFileEntry = {
 
 export type BundleManifest = {
   /**
-   * '1.0' = legacy bundles (no submission_files). '1.1' = carries the final
-   * on-disk state of every files_under_review entry. The validator accepts both;
-   * `submission_files` is therefore optional at the type level (absent on 1.0).
+   * - '1.0' — legacy bundles (no submission_files).
+   * - '1.1' — carries the final on-disk state of every files_under_review entry.
+   *   This is what the `seal` command writes to `manifest.json`, unchanged.
+   * - '1.2' — a ROLLING seal (see `rolling-manifest.ts`): the same field set,
+   *   maintained continuously by the recorder into
+   *   `.provenance/manifest-<session_id>.json` so a git-submitted repo is always
+   *   sealed. On disk a 1.2 manifest covers exactly one session and is signed by
+   *   that session's own key; the analyzer's loader also synthesizes a 1.2
+   *   manifest spanning every rolling manifest it found, which is why the shape
+   *   validator here accepts one-or-more sessions and the exactly-one rule lives
+   *   in `validateRollingSessionManifest`.
+   *
+   * The validator accepts all three; `submission_files` is therefore optional at
+   * the type level (absent on 1.0, required on 1.1 and 1.2).
    */
-  format_version: '1.0' | '1.1';
+  format_version: '1.0' | '1.1' | '1.2';
   assignment_id: string;
   semester: string;
   /** Hex sha256 of the recorder extension. */
@@ -105,9 +116,10 @@ export function validateBundleManifestShape(
 
   const obj = value as Record<string, unknown>;
 
-  // format_version: accept 1.0 (legacy, no submission_files) and 1.1.
+  // format_version: 1.0 (legacy, no submission_files), 1.1 (classic seal), or
+  // 1.2 (rolling seal — see rolling-manifest.ts).
   const version = obj['format_version'];
-  if (version !== '1.0' && version !== '1.1') {
+  if (version !== '1.0' && version !== '1.1' && version !== '1.2') {
     return err({ kind: 'wrong_version', actual: version });
   }
 
@@ -151,6 +163,19 @@ export function validateBundleManifestShape(
     return err({ kind: 'invalid_field', field: 'sessions', reason: 'must be an array' });
   }
 
+  // A rolling seal is written by a LIVE recorder that knows its own session id,
+  // so `session_id: null` (the "unparseable .slog at seal time" escape hatch the
+  // classic seal needs) cannot legitimately occur — and an empty `sessions` array
+  // would be a seal of nothing. Both are shape errors at 1.2 only; 1.0/1.1 keep
+  // their existing latitude exactly.
+  if (version === '1.2' && obj['sessions'].length === 0) {
+    return err({
+      kind: 'invalid_field',
+      field: 'sessions',
+      reason: 'a rolling (1.2) manifest must cover at least one session',
+    });
+  }
+
   for (let i = 0; i < obj['sessions'].length; i++) {
     const s = (obj['sessions'] as unknown[])[i];
     if (typeof s !== 'object' || s === null) {
@@ -169,6 +194,14 @@ export function validateBundleManifestShape(
         kind: 'invalid_field',
         field: `sessions[${i}].session_id`,
         reason: 'must be a non-empty string or null',
+      });
+    }
+
+    if (version === '1.2' && sObj['session_id'] === null) {
+      return err({
+        kind: 'invalid_field',
+        field: `sessions[${i}].session_id`,
+        reason: 'a rolling (1.2) manifest must name the session it seals',
       });
     }
 
@@ -207,8 +240,8 @@ export function validateBundleManifestShape(
     }
   }
 
-  // submission_files: required iff format_version === '1.1'. Absent on legacy 1.0.
-  if (version === '1.1') {
+  // submission_files: required on 1.1 and 1.2. Absent on legacy 1.0.
+  if (version === '1.1' || version === '1.2') {
     if (!Array.isArray(obj['submission_files'])) {
       if (obj['submission_files'] === undefined) {
         return err({ kind: 'missing_field', field: 'submission_files' });

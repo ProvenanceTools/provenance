@@ -19,6 +19,16 @@ export type {
   ValidationReport,
 } from './bundle.js';
 
+// Rolling seal — per-session manifest-<session_id>.json (git-native submission)
+export {
+  ROLLING_MANIFEST_FORMAT_VERSION,
+  rollingManifestFilenames,
+  parseRollingManifestFilename,
+  validateRollingSessionManifest,
+  describeRollingManifestError,
+} from './rolling-manifest.js';
+export type { RollingSessionManifest, RollingManifestError } from './rolling-manifest.js';
+
 // Bundle manifest signing (shared by recorder seal + seed tooling)
 export { signBundleManifest } from './bundle-sign.js';
 export type { SignedBundleManifest } from './bundle-sign.js';

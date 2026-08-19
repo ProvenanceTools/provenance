@@ -19,8 +19,9 @@
  *
  *   --out           log-core FORMAT vectors: hash chain, ed25519, session key, manifests,
  *                   checkpoint, golden bundle, the Manifest 2.0 family (course cert,
- *                   manifest-v2, capture policy), and the S2 identity family (enrollment,
- *                   student-keys). Consumed by JetBrains `core/` and by the Neovim
+ *                   manifest-v2, capture policy), the S2 identity family (enrollment,
+ *                   student-keys), and the S3 rolling seal (rolling-manifest).
+ *                   Consumed by JetBrains `core/` and by the Neovim
  *                   `tests/conformance/fixtures/`.
  *   --recorder-out  recorder PAYLOAD-BUILDER vectors: the paste and fs.external_change
  *                   inline-content builders. These pin the inline/truncate cap (64 KB of
@@ -1328,6 +1329,119 @@ async function buildStudentKeyVectors(): Promise<unknown> {
   };
 }
 
+/**
+ * S3 rolling seal — `.provenance/manifest-<session_id>.json` at format_version 1.2.
+ *
+ * A git-submitted repo has no packaging step to hook, so the recorder maintains
+ * the seal continuously: one manifest per session, named after that session,
+ * signed by that session's own ephemeral key, rewritten on every checkpoint.
+ * Per-session filenames are what make a shared 61B repo's `.provenance/`
+ * add-only and therefore conflict-free on merge.
+ *
+ * A port must reproduce three things exactly:
+ *  1. The FILENAMES. `manifest-<session_id>.json` / `.sig`. Not `manifest.json` —
+ *     that name belongs to the classic seal and must never be written by the
+ *     rolling path.
+ *  2. The CANONICAL BYTES. Identical JCS canonicalization and identical field set
+ *     to a 1.1 manifest; only `format_version` and the one-session rule differ. A
+ *     port that reorders keys or emits a different number representation produces
+ *     a manifest whose signature the analyzer will reject.
+ *  3. The ONE-SESSION RULE. A rolling manifest FILE covers exactly one session,
+ *     whose `session_id` is non-null and equals the id in the filename. The
+ *     `rejects` array below is the negative suite: each entry MUST be refused.
+ *     (The analyzer's own loader synthesizes a multi-session 1.2 manifest in
+ *     memory, which is why the plain shape validator accepts N sessions and this
+ *     stricter rule is a separate function.)
+ */
+async function buildRollingManifestVectors(): Promise<unknown> {
+  const sessionPriv = seed(6);
+  const sessionId = '33333333-3333-4333-8333-333333333333';
+  const otherSessionId = '44444444-4444-4444-8444-444444444444';
+
+  const manifest = {
+    format_version: '1.2' as const,
+    assignment_id: 'proj2',
+    semester: 'fa26',
+    extension_hash: '1'.repeat(64),
+    sessions: [
+      {
+        session_id: sessionId,
+        prev_session_id: null,
+        slog_sha256: '2'.repeat(64),
+        meta_sha256: '3'.repeat(64),
+      },
+    ],
+    submission_files: [
+      { path: 'gitlet/Repository.java', status: 'present' as const, sha256: '4'.repeat(64) },
+      { path: 'gitlet/Missing.java', status: 'missing' as const, sha256: null },
+    ],
+  };
+
+  const signed = await signBundleManifest(manifest, sessionPriv);
+
+  return {
+    note:
+      'Rolling seal (S3). One manifest per session, signed by that session key, ' +
+      'rewritten on every checkpoint so a git-committed .provenance/ is always sealed.',
+    format_version: '1.2',
+    session_id: sessionId,
+    filenames: {
+      json: `manifest-${sessionId}.json`,
+      sig: `manifest-${sessionId}.sig`,
+    },
+    /** Names that MUST NOT be read as a rolling manifest. */
+    not_rolling_filenames: [
+      'manifest.json',
+      'manifest.sig',
+      'manifest-.json',
+      `manifest-${sessionId}.json.tmp`,
+      `session-${sessionId}.slog`,
+    ],
+    session_pubkey_hex: await pub(sessionPriv),
+    manifest,
+    canonical_json: signed.canonicalJson,
+    signature_hex: signed.signatureHex,
+    /** Each of these must be REFUSED as a rolling manifest file for `session_id`. */
+    rejects: [
+      {
+        note: 'a classic 1.1 manifest is not a rolling seal',
+        error_kind: 'not_rolling',
+        manifest: { ...manifest, format_version: '1.1' },
+      },
+      {
+        note: 'a rolling manifest FILE covers exactly one session',
+        error_kind: 'wrong_session_count',
+        manifest: {
+          ...manifest,
+          sessions: [
+            manifest.sessions[0],
+            {
+              session_id: otherSessionId,
+              prev_session_id: sessionId,
+              slog_sha256: '5'.repeat(64),
+              meta_sha256: '6'.repeat(64),
+            },
+          ],
+        },
+      },
+      {
+        note: 'a live recorder always knows its own session id',
+        error_kind: 'null_session_id',
+        manifest: {
+          ...manifest,
+          sessions: [{ ...manifest.sessions[0], session_id: null }],
+        },
+      },
+      {
+        note: 'copied sideways: the manifest names a session its filename does not',
+        error_kind: 'session_id_mismatch',
+        expected_session_id: otherSessionId,
+        manifest,
+      },
+    ],
+  };
+}
+
 async function main(): Promise<void> {
   const { out, recorderOut } = parseArgs(process.argv.slice(2));
 
@@ -1495,6 +1609,9 @@ async function main(): Promise<void> {
 
   // --- 13. S5 git.event commit graph: sha / parents / branch ---
   writeJson(outDir, 'git-event.json', buildGitEventVectors());
+
+  // --- 14. S3 rolling seal: manifest-<session_id>.json at format_version 1.2 ---
+  writeJson(outDir, 'rolling-manifest.json', await buildRollingManifestVectors());
 
   console.log(`Wrote conformance vectors to ${outDir}`);
 }
