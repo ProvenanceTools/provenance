@@ -569,7 +569,9 @@ describe('verifyIdentityChain (2.1 institution)', () => {
   });
 
   it('reports a missing institution_cert anchor rather than silently passing', async () => {
-    const { institution_cert: _omitted, ...withoutAnchor } = await chainInput();
+    const withAnchor = await chainInput();
+    const withoutAnchor = { ...withAnchor };
+    delete withoutAnchor.institution_cert;
     const r = await verifyIdentityChain(withoutAnchor);
     expect(r.ok).toBe(false);
     if (!r.ok) {

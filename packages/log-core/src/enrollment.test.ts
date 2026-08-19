@@ -575,7 +575,9 @@ describe('verifyIdentityChain', () => {
   it('reports a missing course_cert anchor rather than silently passing', async () => {
     // Omit the key entirely — `exactOptionalPropertyTypes` makes an explicit
     // `undefined` a type error, which is the stronger contract.
-    const { course_cert: _omitted, ...withoutAnchor } = await chainInput();
+    const withAnchor = await chainInput();
+    const withoutAnchor = { ...withAnchor };
+    delete withoutAnchor.course_cert;
     const r = await verifyIdentityChain(withoutAnchor);
     expect(r.ok).toBe(false);
     if (!r.ok) {

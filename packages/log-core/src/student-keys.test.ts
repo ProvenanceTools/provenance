@@ -147,8 +147,7 @@ describe('deriveStudentKeySeed', () => {
     // — it bit provjet once. Nothing is concatenated onto v2, and the constant is
     // pure ASCII, so there is nothing left to get wrong.
     expect(STUDENT_KEY_HKDF_INFO.endsWith(':')).toBe(false);
-    // eslint-disable-next-line no-control-regex
-    expect(/^[\x00-\x7f]*$/.test(STUDENT_KEY_HKDF_INFO)).toBe(true);
+    expect([...STUDENT_KEY_HKDF_INFO].every((ch) => ch.charCodeAt(0) < 0x80)).toBe(true);
   });
 
   it('equals HKDF-SHA256(ikm=master, salt=SALT, info=INFO, L=32) computed independently', () => {

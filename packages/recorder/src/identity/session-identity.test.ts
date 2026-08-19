@@ -189,6 +189,11 @@ describe('buildSessionIdentity — enrolled', () => {
     });
     expect(rewalked.ok).toBe(true);
     if (!rewalked.ok) return;
+    // `IdentityChainOk` is now a union over the identity version; this recorder
+    // still emits the 2.0 course-scoped block, so narrow to that branch. The
+    // assertions themselves are unchanged.
+    expect(rewalked.value.identity_version).toBe('2.0');
+    if (rewalked.value.identity_version !== '2.0') return;
     expect(rewalked.value.course_id).toBe(COURSE_ID);
     expect(rewalked.value.student_ref).toBe(STUDENT_REF);
   });
