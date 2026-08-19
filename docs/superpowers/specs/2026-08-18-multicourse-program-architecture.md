@@ -126,6 +126,18 @@ Fixed decisions:
 - **Validity is evaluated against `manifest.issued_at`, not wall-clock now.** A
   Fall 2026 bundle must still verify in 2028 for an adjudication case. "Was the
   cert valid when the manifest was issued", never "is it valid today".
+- **`valid_from` and `valid_until` accept an ISO 8601 date (`YYYY-MM-DD`) or full
+  timestamp, and a date-only bound resolves asymmetrically at each end:**
+  `valid_from` is inclusive from that day's FIRST instant (UTC midnight), so
+  `valid_from: "2026-08-20"` means valid starting at the beginning of Aug 20.
+  `valid_until` is inclusive THROUGH THE END of that day, so
+  `valid_until: "2027-01-15"` covers all of Jan 15 and expires at the first
+  instant of Jan 16 — the reading a human gets from "valid until Jan 15", not
+  a cert that is already expired on the day it names. A full timestamp at
+  either end (`"2027-01-15T12:00:00Z"`) means exactly that instant, unchanged
+  by the date-only extension. Implemented in `packages/log-core/src/course-cert.ts`
+  (`parseIsoInstantMs`, `resolveValidUntilExclusiveMs`, `checkCertWindow`) and
+  pinned by the `course-cert.json` conformance vectors' `window_cases`.
 - **The session-key KDF is unchanged.** `session-keys.ts` still uses the manifest
   signature as HKDF IKM; that signature is now produced by a course key instead of
   the single embedded key.

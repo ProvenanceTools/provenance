@@ -386,13 +386,36 @@ async function buildCourseCertVectors(): Promise<unknown> {
     window_note:
       'The window is evaluated against manifest.issued_at, NEVER against wall-clock now: a Fall ' +
       '2026 bundle must still verify in 2028 for an adjudication case. Both bounds are ' +
-      'INCLUSIVE, and a date-only bound is the instant of UTC midnight that day (so ' +
-      'valid_until "2027-01-15" expires at 2027-01-15T00:00:00Z). An out-of-window result is ' +
-      'NOT fatal — it never invalidates a signature; the caller decides.',
+      'INCLUSIVE, but a date-only bound resolves asymmetrically: valid_from is the FIRST ' +
+      'instant of that day (UTC midnight), while valid_until is inclusive THROUGH THE END of ' +
+      'that day — "valid until 2027-01-15" covers all of the 15th and expires at the first ' +
+      'instant of the 16th. A full-timestamp bound at either end means exactly that instant, ' +
+      'unaffected by the date-only extension. An out-of-window result is NOT fatal — it never ' +
+      'invalidates a signature; the caller decides.',
     window_cases: [
       windowCase('inside', 'Ordinary mid-semester manifest.', validCert, '2026-09-08T00:00:00Z'),
       windowCase('at_valid_from', 'Lower bound is inclusive.', validCert, '2026-08-20T00:00:00Z'),
-      windowCase('at_valid_until', 'Upper bound is inclusive.', validCert, '2027-01-15T00:00:00Z'),
+      windowCase(
+        'at_valid_until',
+        'The first instant of the final day is inside the window.',
+        validCert,
+        '2027-01-15T00:00:00Z',
+      ),
+      windowCase(
+        'late_on_valid_until_day',
+        'MANDATORY. The last millisecond of the final day is still inside the window: a ' +
+          'date-only valid_until is inclusive through end-of-day, not just its first instant. ' +
+          'This is the boundary the inclusive-end-of-day rule exists to move.',
+        validCert,
+        '2027-01-15T23:59:59.999Z',
+      ),
+      windowCase(
+        'day_after_valid_until',
+        'MANDATORY. The first instant of the day AFTER a date-only valid_until is out of ' +
+          'window — the exact millisecond the inclusive-end-of-day rule draws the line at.',
+        validCert,
+        '2027-01-16T00:00:00Z',
+      ),
       windowCase(
         'before_valid_from',
         'One second before the window opens.',
@@ -401,9 +424,10 @@ async function buildCourseCertVectors(): Promise<unknown> {
       ),
       windowCase(
         'after_valid_until',
-        'One millisecond past the window. Non-fatal: the recorder still records and stamps the expiry.',
+        'Comfortably past the window, weeks after the last covered day. Non-fatal: the ' +
+          'recorder still records and stamps the expiry.',
         validCert,
-        '2027-01-15T00:00:00.001Z',
+        '2027-02-01T00:00:00Z',
       ),
       windowCase(
         'expired_long_ago_but_contemporaneous',

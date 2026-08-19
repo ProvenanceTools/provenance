@@ -8,6 +8,7 @@ import {
   checkCertWindow,
   buildCourseCertSignedPayload,
   parseIsoInstantMs,
+  resolveValidUntilExclusiveMs,
 } from './course-cert.js';
 import type { CourseCert } from './course-cert.js';
 import { canonicalize } from './canonical.js';
@@ -389,9 +390,38 @@ describe('checkCertWindow', () => {
     expect(checkCertWindow(cert(), '2026-09-08T00:00:00Z')).toEqual({ in_window: true });
   });
 
-  it('treats both bounds as inclusive', () => {
+  it("treats valid_from as inclusive from that day's FIRST instant (unchanged behaviour)", () => {
     expect(checkCertWindow(cert(), '2026-08-20T00:00:00Z')).toEqual({ in_window: true });
+  });
+
+  it('treats a date-only valid_until as inclusive through the END of that day', () => {
+    // The last day ("2027-01-15") is covered start to finish, not just its
+    // first instant — this is the behaviour change this suite pins.
     expect(checkCertWindow(cert(), '2027-01-15T00:00:00Z')).toEqual({ in_window: true });
+    expect(checkCertWindow(cert(), '2027-01-15T12:00:00Z')).toEqual({ in_window: true });
+    expect(checkCertWindow(cert(), '2027-01-15T23:59:59.999Z')).toEqual({ in_window: true });
+  });
+
+  it('is out of window at the first instant of the day AFTER a date-only valid_until', () => {
+    expect(checkCertWindow(cert(), '2027-01-16T00:00:00Z')).toEqual({
+      in_window: false,
+      reason: 'after_valid_until',
+    });
+  });
+
+  it('treats a full-timestamp valid_until as an exact inclusive instant, unaffected by the date-only extension', () => {
+    const withTimestamp: CourseCert = { ...cert(), valid_until: '2027-01-15T12:00:00Z' };
+    expect(checkCertWindow(withTimestamp, '2027-01-15T12:00:00Z')).toEqual({ in_window: true });
+    expect(checkCertWindow(withTimestamp, '2027-01-15T12:00:00.001Z')).toEqual({
+      in_window: false,
+      reason: 'after_valid_until',
+    });
+    // Unlike the date-only case, the rest of that same calendar day is NOT
+    // covered — a full timestamp means exactly that instant, not "that day".
+    expect(checkCertWindow(withTimestamp, '2027-01-15T23:00:00Z')).toEqual({
+      in_window: false,
+      reason: 'after_valid_until',
+    });
   });
 
   it('reports before_valid_from', () => {
@@ -401,8 +431,8 @@ describe('checkCertWindow', () => {
     });
   });
 
-  it('reports after_valid_until', () => {
-    expect(checkCertWindow(cert(), '2027-01-15T00:00:00.001Z')).toEqual({
+  it('reports after_valid_until, well past the extended window', () => {
+    expect(checkCertWindow(cert(), '2027-02-01T00:00:00Z')).toEqual({
       in_window: false,
       reason: 'after_valid_until',
     });
@@ -428,4 +458,35 @@ describe('checkCertWindow', () => {
     // Wall clock is decades past valid_until, yet the answer is about issued_at.
     expect(checkCertWindow(ancient, '1999-06-15T00:00:00Z')).toEqual({ in_window: true });
   });
+});
+
+// ---------------------------------------------------------------------------
+// resolveValidUntilExclusiveMs
+// ---------------------------------------------------------------------------
+
+describe('resolveValidUntilExclusiveMs', () => {
+  it('extends a date-only value to the start of the NEXT day', () => {
+    expect(resolveValidUntilExclusiveMs('2027-01-15')).toBe(Date.UTC(2027, 0, 16, 0, 0, 0, 0));
+  });
+
+  it('advances a full timestamp by exactly one millisecond', () => {
+    expect(resolveValidUntilExclusiveMs('2027-01-15T12:00:00Z')).toBe(
+      Date.UTC(2027, 0, 15, 12, 0, 0, 1),
+    );
+  });
+
+  it('rolls a date-only value at a year boundary into the next year', () => {
+    expect(resolveValidUntilExclusiveMs('2026-12-31')).toBe(Date.UTC(2027, 0, 1, 0, 0, 0, 0));
+  });
+
+  it('returns null for an unparseable value', () => {
+    expect(resolveValidUntilExclusiveMs('not a date')).toBeNull();
+  });
+
+  it.each(['2026-12-31T23:59:60Z', '2026-09-08T24:00:00Z', '2026-02-31', '2026-02-30'])(
+    'rejects %j the same as parseIsoInstantMs (leap second / 24:00:00 / non-existent date)',
+    (value) => {
+      expect(resolveValidUntilExclusiveMs(value)).toBeNull();
+    },
+  );
 });

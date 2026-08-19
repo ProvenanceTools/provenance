@@ -68,9 +68,18 @@ export type CourseCert = {
   course_id: string;
   /** Hex ed25519 public key of the course signing key, 64 chars (32 bytes). */
   course_pubkey: string;
-  /** Inclusive lower bound of the validity window. ISO 8601 date or timestamp. */
+  /**
+   * Inclusive lower bound of the validity window. ISO 8601 date or timestamp.
+   * A date-only value (`YYYY-MM-DD`) means the first instant of that day
+   * (UTC midnight); a full timestamp means exactly that instant.
+   */
   valid_from: string;
-  /** Inclusive upper bound of the validity window. ISO 8601 date or timestamp. */
+  /**
+   * Inclusive upper bound of the validity window. ISO 8601 date or timestamp.
+   * A date-only value (`YYYY-MM-DD`) means THROUGH THE END of that day, not
+   * merely its first instant — see {@link resolveValidUntilExclusiveMs}. A
+   * full timestamp means exactly that instant, unchanged.
+   */
   valid_until: string;
   /** Hex ed25519 signature by the ROOT key, 128 chars (64 bytes). */
   root_sig: string;
@@ -123,10 +132,18 @@ const ISO_INSTANT_RE =
  * Two deliberate rules, both pinned by conformance vectors:
  *
  *  - A **date-only** string (`YYYY-MM-DD`) is the instant of UTC midnight that
- *    day. So `valid_until: "2027-01-15"` expires at `2027-01-15T00:00:00Z`, not
- *    at the end of that day. This is the least-surprising reading of a date as
- *    an instant, and the edge case is harmless because being out of window is
- *    non-fatal.
+ *    day (its *start*). This is the general-purpose reading used everywhere a
+ *    bare date is parsed to an instant — including `valid_from`, where "valid
+ *    from Aug 20" meaning "from the beginning of Aug 20" is exactly what
+ *    people expect.
+ *
+ *    `valid_until` is a documented exception: a human reads "valid until
+ *    Jan 15" as covering Jan 15 itself, so {@link checkCertWindow} does not
+ *    use this function's raw return value for that field directly — it goes
+ *    through {@link resolveValidUntilExclusiveMs}, which extends a date-only
+ *    `valid_until` to the end of that day. This function's own day-start
+ *    reading is unchanged; only the caller-side interpretation for that one
+ *    field moves.
  *  - A timestamp with **no offset suffix** is treated as UTC.
  */
 export function parseIsoInstantMs(value: string): number | null {
@@ -183,6 +200,41 @@ export function parseIsoInstantMs(value: string): number | null {
   }
 
   return ms;
+}
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Matches ONLY a bare `YYYY-MM-DD` — no time component at all. */
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Resolve a `valid_until` value to an EXCLUSIVE upper-bound instant, in epoch
+ * milliseconds: the certificate is out of window once `issued >= result`.
+ *
+ * `valid_until` is documented as an inclusive upper bound, but a date-only
+ * value (`YYYY-MM-DD`) means inclusive **through the end of that day**, not
+ * merely its first instant — "valid until Jan 15" should cover Jan 15. This
+ * is expressed as an exclusive bound at the START OF THE NEXT DAY, rather
+ * than as an inclusive `<day-start> + 23:59:59.999`, on purpose: an exclusive
+ * "next midnight" bound cannot be undercut by a precision trap (a stray
+ * leap-second adjustment, a sub-millisecond source, an off-by-one in a port's
+ * "last millisecond of the day" arithmetic) the way a literal 23:59:59.999
+ * constant could be. Since every instant this is ever compared against
+ * (`manifest.issued_at`) is itself parsed to millisecond resolution, the two
+ * framings denote the identical set of in-window instants here — "exclusive
+ * next midnight" is chosen for robustness, not because it changes behavior.
+ *
+ * A full timestamp `valid_until` keeps its historical, exact-instant meaning
+ * unchanged: valid AT that instant, expired the millisecond after — so the
+ * exclusive bound is simply `<parsed ms> + 1`.
+ *
+ * Returns `null` if `value` does not match {@link ISO_INSTANT_RE} (delegates
+ * to {@link parseIsoInstantMs} for the grammar check).
+ */
+export function resolveValidUntilExclusiveMs(value: string): number | null {
+  const ms = parseIsoInstantMs(value);
+  if (ms === null) return null;
+  return DATE_ONLY_RE.test(value) ? ms + ONE_DAY_MS : ms + 1;
 }
 
 /**
@@ -331,17 +383,24 @@ export async function verifyCourseCert(
  * Step 4 of the Manifest 2.0 verification order: is `issuedAt` inside
  * `[valid_from, valid_until]` (both bounds inclusive)?
  *
+ * "Inclusive" means different arithmetic at each end for a date-only bound:
+ * `valid_from` is inclusive from that day's FIRST instant (UTC midnight,
+ * {@link parseIsoInstantMs}'s ordinary reading); `valid_until` is inclusive
+ * through that day's LAST instant, via {@link resolveValidUntilExclusiveMs}.
+ * A full-timestamp bound at either end means exactly that instant, at
+ * millisecond resolution, on both sides.
+ *
  * `issuedAt` is the manifest's `issued_at`. Wall-clock now is never consulted.
  */
 export function checkCertWindow(cert: CourseCert, issuedAt: string): CertWindowStatus {
   const from = parseIsoInstantMs(cert.valid_from);
-  const until = parseIsoInstantMs(cert.valid_until);
+  const untilExclusive = resolveValidUntilExclusiveMs(cert.valid_until);
   const issued = parseIsoInstantMs(issuedAt);
 
-  if (from === null || until === null || issued === null) {
+  if (from === null || untilExclusive === null || issued === null) {
     return { in_window: false, reason: 'unparseable_timestamp' };
   }
   if (issued < from) return { in_window: false, reason: 'before_valid_from' };
-  if (issued > until) return { in_window: false, reason: 'after_valid_until' };
+  if (issued >= untilExclusive) return { in_window: false, reason: 'after_valid_until' };
   return { in_window: true };
 }
