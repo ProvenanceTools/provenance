@@ -577,6 +577,110 @@ describe('startSession — rolling seal', () => {
     await session.dispose();
   });
 
+  // -------------------------------------------------------------------------
+  // The `final` marker, bound to the ONE moment it is true.
+  //
+  // A final seal promotes the reader to whole-file semantics, so an append past
+  // it fails. That is only honest at dispose(), after session.end is emitted,
+  // the writer flushed and the checkpoint drained. Claiming it any earlier
+  // would make the student's next keystroke a finding.
+  // -------------------------------------------------------------------------
+
+  /** Read the rolling manifest this session has on disk right now. */
+  async function readSeal(sessionId: string): Promise<Record<string, unknown>> {
+    const json = await fs.readFile(path.join(provenanceDir, `manifest-${sessionId}.json`), 'utf8');
+    return JSON.parse(json) as Record<string, unknown>;
+  }
+
+  it('does NOT mark the session-start seal final', async () => {
+    const session = await start();
+    const sessionId = await sessionIdOf(session);
+
+    // The log is one entry old and about to grow for the rest of the session.
+    expect(await readSeal(sessionId)).not.toHaveProperty('final');
+
+    await session.dispose();
+  });
+
+  it('does NOT mark a checkpoint seal final', async () => {
+    const session = await start();
+    const sessionId = await sessionIdOf(session);
+
+    emitPastCheckpoint(session);
+    await session.writer.flush();
+    await session.getPendingCheckpoint();
+
+    // A checkpoint says "here is where I am", not "I am finished". The student
+    // is still typing.
+    expect(await readSeal(sessionId)).not.toHaveProperty('final');
+
+    await session.dispose();
+  });
+
+  it('marks the dispose() seal final, so an append after the session fails', async () => {
+    const session = await start();
+    const sessionId = await sessionIdOf(session);
+    emitPastCheckpoint(session);
+    await session.dispose();
+
+    const seal = await readSeal(sessionId);
+    expect(seal['final']).toBe(true);
+
+    // Still a well-formed rolling seal bound to its filename, and the claim is
+    // signed by this session's own key — a student cannot strip it.
+    const shape = validateBundleManifestShape(seal);
+    expect(shape.ok).toBe(true);
+    if (!shape.ok) return;
+    expect(validateRollingSessionManifest(shape.value, sessionId).ok).toBe(true);
+
+    const json = await fs.readFile(path.join(provenanceDir, `manifest-${sessionId}.json`), 'utf8');
+    const sigHex = await fs.readFile(path.join(provenanceDir, `manifest-${sessionId}.sig`), 'utf8');
+    expect(
+      await ed.verifyAsync(
+        hexToBytes(sigHex),
+        new TextEncoder().encode(json),
+        hexToBytes(session.sessionKeypair.publicKeyHex),
+      ),
+    ).toBe(true);
+  });
+
+  it('the final seal commits to the WHOLE log, session.end included', async () => {
+    // The claim and the digest have to agree. If dispose() sealed before the
+    // final flush, `final: true` would assert whole-file coverage of bytes the
+    // digest does not cover — and the reader would then fail an honest bundle.
+    const session = await start();
+    const sessionId = await sessionIdOf(session);
+    await session.dispose();
+
+    const seal = await readSeal(sessionId);
+    const sessions = seal['sessions'] as Array<{ slog_sha256: string; meta_sha256: string }>;
+    const slogBytes = await fs.readFile(session.slogPath);
+    const metaBytes = await fs.readFile(`${session.slogPath}.meta`);
+
+    expect(sessions[0]!.slog_sha256).toBe(createHash('sha256').update(slogBytes).digest('hex'));
+    expect(sessions[0]!.meta_sha256).toBe(createHash('sha256').update(metaBytes).digest('hex'));
+  });
+
+  it('leaves NO final seal when the session dies without dispose()', async () => {
+    // A crash, a power cut, a full disk, a `git checkout` that removed
+    // `.provenance/`. The last non-final seal simply stands, and the reader
+    // keeps prefix semantics with the unattested tail reported. This is a
+    // coverage gap, never a tamper finding — which is exactly why finality is a
+    // claim the writer makes rather than something the reader infers from a
+    // trailing session.end entry.
+    const session = await start();
+    const sessionId = await sessionIdOf(session);
+    emitPastCheckpoint(session);
+    await session.writer.flush();
+    await session.getPendingCheckpoint();
+
+    // Deliberately no dispose() — the process "died" here.
+    const seal = await readSeal(sessionId);
+    expect(seal).not.toHaveProperty('final');
+
+    await session.dispose();
+  });
+
   it('the final seal after dispose() covers the fully flushed .slog', async () => {
     const session = await start();
     const sessionId = await sessionIdOf(session);

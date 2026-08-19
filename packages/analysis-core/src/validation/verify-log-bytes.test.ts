@@ -308,6 +308,126 @@ describe('verifyLogBytes — rolling-sealed bundles', () => {
     expect(check.status).toBe('fail');
     expect(check.detail).toContain(sid);
   });
+
+  // -------------------------------------------------------------------------
+  // FINAL vs NON-FINAL — the reason the append above is catchable at all.
+  //
+  // A rolling seal is signed BEFORE the log's trailing bytes exist, so it can
+  // only commit to a prefix — which is what stops an honest mid-session archive
+  // being read as tampering, and is also what made an append invisible. The
+  // recorder's dispose()-time roll marks itself `final` inside the SIGNED
+  // payload, and that seal (and only that seal) is read whole-file.
+  // -------------------------------------------------------------------------
+
+  it('reads the append as a WHOLE-FILE contradiction, not a broken prefix', async () => {
+    // Proves the previous test fails for the right reason. A prefix search
+    // would still find the sealed prefix intact and report growth; the final
+    // marker is what makes this a mismatch at all.
+    const { zipBuffer, sessionIds } = await buildTestBundle({
+      sessions: [{ eventCount: 4 }],
+      rollingSeal: { final: true },
+    });
+    const sid = sessionIds[0]!;
+
+    const tampered = await rewriteZip(zipBuffer, async (zip) => {
+      const text = await zip.file(slogName(sid))!.async('string');
+      const lines = text.trim().split('\n');
+      zip.file(slogName(sid), `${text}${lines[lines.length - 1]!}\n`);
+    });
+
+    const bundle = await load(tampered);
+    expect(bundle.rollingSeal?.coverage?.[0]?.final).toBe(true);
+    // Whole-file semantics: no prefix was found, so no prefix was contradicted.
+    expect(bundle.rollingSeal?.coverage?.[0]?.slog).toEqual({ kind: 'no_match' });
+
+    const check = verifyLogBytes(bundle);
+    expect(check.status).toBe('fail');
+    expect(check.detail).toContain('FINAL');
+    expect(check.detail).toContain('after the session ended');
+  });
+
+  it('does NOT accuse the same append when the seal is not final', async () => {
+    // The honest mid-session archive: identical bytes, identical append, but
+    // the seal never claimed the log was finished. Accusing here is the exact
+    // false-positive this whole design exists to avoid.
+    const { zipBuffer, sessionIds } = await buildTestBundle({
+      sessions: [{ eventCount: 4 }],
+      rollingSeal: { final: false },
+    });
+    const sid = sessionIds[0]!;
+
+    const grown = await rewriteZip(zipBuffer, async (zip) => {
+      const text = await zip.file(slogName(sid))!.async('string');
+      const lines = text.trim().split('\n');
+      zip.file(slogName(sid), `${text}${lines[lines.length - 1]!}\n`);
+    });
+
+    const bundle = await load(grown);
+    expect(bundle.rollingSeal?.coverage?.[0]?.final).toBe(false);
+
+    const check = verifyLogBytes(bundle);
+    expect(check.status).toBe('pass');
+    expect(check.status).not.toBe('fail');
+  });
+
+  it('reports the unattested tail, and says outright that no final seal is present', async () => {
+    // THE DOWNGRADE, as staff see it. A student who deletes their final seal
+    // and restores an earlier non-final one they also legitimately signed
+    // re-opens the prefix gap. It cannot be refuted — both seals are real
+    // statements by the same key, and the shape is byte-for-byte identical to
+    // an honest mid-session archive — so it stays a PASS. What it must not do
+    // is read as "sealed in full", and this is the sentence that stops it.
+    const { zipBuffer, sessionIds } = await buildTestBundle({
+      sessions: [{ eventCount: 4 }],
+      rollingSeal: { final: false },
+    });
+    const sid = sessionIds[0]!;
+
+    const grown = await rewriteZip(zipBuffer, async (zip) => {
+      const text = await zip.file(slogName(sid))!.async('string');
+      const lines = text.trim().split('\n');
+      zip.file(slogName(sid), `${text}${lines[lines.length - 1]!}\n`);
+    });
+
+    const check = verifyLogBytes(await load(grown));
+    expect(check.status).toBe('pass');
+    expect(check.detail).toContain(sid);
+    expect(check.detail).toContain('written after the last seal');
+    expect(check.detail).toContain('NOT marked');
+    expect(check.detail).toContain('could not be detected');
+  });
+
+  it('says a clean final-sealed bundle is covered in full', async () => {
+    const { blob } = await buildTestBundle({
+      sessions: [{ eventCount: 4 }],
+      rollingSeal: { final: true },
+    });
+
+    const check = verifyLogBytes(await load(blob));
+    expect(check.status).toBe('pass');
+    expect(check.detail).toContain('FINAL');
+    expect(check.detail).toContain('covered in full');
+  });
+
+  it('still catches a flipped byte inside a NON-final seal’s prefix', async () => {
+    // Making finality the trigger for strictness must not cost the prefix
+    // enforcement that already existed. Editing the sealed region reproduces no
+    // state the file ever passed through, final or not.
+    const { zipBuffer, sessionIds } = await buildTestBundle({
+      sessions: [{ eventCount: 5 }],
+      rollingSeal: { final: false },
+    });
+    const sid = sessionIds[0]!;
+
+    const tampered = await rewriteZip(zipBuffer, async (zip) => {
+      const bytes = await zip.file(slogName(sid))!.async('uint8array');
+      const i = Math.floor(bytes.length / 2);
+      bytes[i] = bytes[i]! ^ 0x01;
+      zip.file(slogName(sid), bytes);
+    });
+
+    expect(verifyLogBytes(await load(tampered)).status).toBe('fail');
+  });
 });
 
 // ---------------------------------------------------------------------------

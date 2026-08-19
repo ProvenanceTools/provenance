@@ -49,6 +49,51 @@
  * read as A's seal. `validateRollingSessionManifest` is the one place that rule
  * is enforced, so no reader can forget it.
  *
+ * ## The `final` marker — closing the append hole
+ *
+ * A rolling seal is signed BEFORE the log's trailing bytes exist. It is
+ * rewritten at session start, at every checkpoint, and at `dispose()`, hashing
+ * the `.slog` as it stands at that moment, so its `slog_sha256` legitimately
+ * commits only to a PREFIX (see `prefix-digest.ts`). That is not a defect — it
+ * is what stops an honest mid-session archive being read as tampering — but it
+ * costs something real: an entry appended past the final checkpoint is
+ * indistinguishable from honest mid-session growth.
+ *
+ * `final: true` is what recovers that. The recorder writes it on exactly one
+ * roll: the `dispose()`-time one, taken after `session.end` has been emitted
+ * and the writer flushed, when the log provably will not grow again. A reader
+ * that sees it is entitled to whole-file semantics, and an append then fails.
+ *
+ *   final seal      => WHOLE-FILE. Any append, truncation or edit fails.
+ *   non-final seal  => PREFIX, exactly as before. Honest growth is never a finding.
+ *
+ * Three properties make this safe rather than a new way to accuse people:
+ *
+ *  1. **It is inside the signed payload.** `signBundleManifest` canonicalizes
+ *     the whole manifest, so a student cannot add `final`, flip it, or strip it
+ *     from a seal without the session's private key. Doing so breaks check 1.
+ *  2. **Absence is never a finding.** A session that dies without a clean
+ *     dispose — a crash, a power cut, a full disk, a read-only `.provenance/`,
+ *     the directory removed by a `git checkout` — simply has no final seal, and
+ *     falls back to prefix semantics with the unattested tail REPORTED. Those
+ *     are documented, expected failure paths; every one of them belongs to a
+ *     student who did nothing wrong. This is exactly why finality is an
+ *     explicit, signed claim by the writer rather than something a reader
+ *     infers from the presence of a `session.end` entry: `session.end` is in the
+ *     log, and the log is the thing whose completeness is in question.
+ *  3. **It is a one-way ratchet.** `final` only ever tightens what the reader
+ *     will accept. There is no shape of this field that makes a bundle easier
+ *     to forge.
+ *
+ * The residual is the DOWNGRADE: a student restores an earlier, non-final seal
+ * of their own (an older git commit has one) in place of the final one, and
+ * their tail becomes unattested again. Nothing crypto can prevent that — both
+ * seals are genuinely signed by the same session key, and the earlier one is a
+ * true statement about an earlier moment. It is not silent, though: the tail is
+ * measured and reported as unattested by `verify-log-bytes.ts`, and it is
+ * deliberately NOT a finding, because an honest mid-session archive produces a
+ * byte-for-byte identical shape.
+ *
  * `1.2` also appears as the `format_version` of the manifest the analyzer's
  * loader SYNTHESIZES for a rolling-sealed bundle (the union over every
  * per-session manifest present). That object legitimately covers N sessions, so
@@ -162,6 +207,25 @@ export function validateRollingSessionManifest(
     });
   }
   return ok(manifest as RollingSessionManifest);
+}
+
+/**
+ * Does this seal claim to be the LAST one its session will get?
+ *
+ * The single definition of finality, for the same reason
+ * `parseRollingManifestFilename` is the single definition of the filename rule:
+ * every reader that chooses whole-file over prefix semantics must choose it the
+ * same way. Strictly `=== true`, so a manifest carrying anything else — a
+ * truthy string, a 1, `undefined` — falls back to the SAFER prefix reading and
+ * cannot be tricked into strictness.
+ *
+ * Only meaningful for a 1.2 rolling seal. A classic 1.0 / 1.1 manifest is
+ * sealed once over a finished log and never goes through this: see
+ * `analysis-core/loader/parse-bundle.ts`, which computes coverage only when the
+ * rolling union IS the bundle's manifest.
+ */
+export function isFinalRollingSeal(manifest: Pick<BundleManifest, 'final'>): boolean {
+  return manifest.final === true;
 }
 
 /** Human-readable form of a {@link RollingManifestError}, for check details. */

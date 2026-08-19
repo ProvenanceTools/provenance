@@ -55,6 +55,22 @@
  * `verify-log-bytes.ts` states the size of the unattested tail on the passing
  * verdict, so "sealed" is never confused with "sealed in full".
  *
+ * ## Except when the writer said it was finished
+ *
+ * The residual above is only forced while the log can still grow. `dispose()`
+ * takes one last roll after `session.end` is emitted and both files are flushed
+ * and closed, and marks it `final: true` inside the signed payload. For that
+ * seal there is no future to be incapable of attesting to, so the prefix search
+ * is not merely unnecessary — running it would be wrong, because it would keep
+ * excusing a tail the writer has stated cannot exist. A final seal therefore
+ * goes through `wholeFileCoverage` and an append fails at full strength.
+ *
+ * The marker is signed, so it cannot be added, flipped or stripped without the
+ * session key. Its ABSENCE is never a finding: a crash, a power cut, a full
+ * disk or a `git checkout` that removed `.provenance/` all leave a last
+ * non-final seal, and those sessions keep prefix semantics with the unattested
+ * tail reported. See `log-core/rolling-manifest.ts`.
+ *
  * ## Scope: rolling seals only
  *
  * `parse-bundle.ts` computes this ONLY when the synthesized union manifest is
@@ -90,9 +106,39 @@ export type SealCoverage =
 /** One session's rolling-seal coverage over both of its log files. */
 export type RollingSealCoverage = {
   sessionId: string;
+  /**
+   * The seal declared itself FINAL (`log-core`'s `isFinalRollingSeal`), so its
+   * digests were read as WHOLE-FILE commitments and no prefix search was done.
+   *
+   * Carried through to `verify-log-bytes.ts` so a mismatch can be described
+   * accurately — "the finished log was modified" reads very differently from
+   * "the sealed prefix was contradicted" — and so a passing verdict can say
+   * whether the log is sealed, or sealed in full.
+   */
+  final: boolean;
   slog: SealCoverage;
   meta: SealCoverage;
 };
+
+/**
+ * Coverage of a FINAL seal: plain whole-file equality, no prefix search.
+ *
+ * A final seal is written by `dispose()` after `session.end` is emitted and both
+ * files are flushed and closed, so it commits to every byte. Searching for a
+ * prefix here would be actively wrong: it would find the honest reading of a
+ * seal that no longer needs one, and hand an append the benefit of a doubt the
+ * writer explicitly gave up. This is the whole point of the marker.
+ *
+ * Shares `SealCoverage` with the prefix path so callers keep one shape:
+ * `exact` when the bytes agree, `no_match` when they do not, `unavailable` when
+ * there was no usable commitment (never a finding).
+ */
+export function wholeFileCoverage(actual: string, committed: unknown): SealCoverage {
+  if (typeof committed !== 'string' || !SHA256_RE.test(committed)) {
+    return { kind: 'unavailable', reason: 'the manifest carries no usable digest' };
+  }
+  return committed === actual ? { kind: 'exact' } : { kind: 'no_match' };
+}
 
 /**
  * Coverage of a rolling seal's `slog_sha256` over the archived `.slog`.
