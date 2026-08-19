@@ -26,6 +26,7 @@ export {
   parseRollingManifestFilename,
   validateRollingSessionManifest,
   describeRollingManifestError,
+  isFinalRollingSeal,
 } from './rolling-manifest.js';
 export type { RollingSessionManifest, RollingManifestError } from './rolling-manifest.js';
 
