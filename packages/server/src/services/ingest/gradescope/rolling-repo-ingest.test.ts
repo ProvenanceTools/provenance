@@ -134,13 +134,16 @@ async function statsFingerprint(db: DrizzleDb, submissionId: string) {
     submission: sub[0]!,
     perFile: perFile
       .map((r) => ({
-        path: r.path,
+        file_path: r.file_path,
+        chars_typed: r.chars_typed,
+        chars_pasted: r.chars_pasted,
+        chars_external_change_delta: r.chars_external_change_delta,
+        saves: r.saves,
         final_length: r.final_length,
         start_length: r.start_length,
-        active_ms: r.active_ms,
-        idle_ms: r.idle_ms,
+        reconstruction_tainted: r.reconstruction_tainted,
       }))
-      .sort((a, b) => a.path.localeCompare(b.path)),
+      .sort((a, b) => a.file_path.localeCompare(b.file_path)),
   };
 }
 
@@ -165,6 +168,8 @@ describe('git-native ingest of a rolling-sealed repo', () => {
 
       const statsFirst = await statsFingerprint(db, first);
       const statsSecond = await statsFingerprint(db, second);
+      // Guard against a vacuous pass: per-file stats must actually be written.
+      expect(statsFirst.perFile.length).toBeGreaterThan(0);
       expect(statsSecond).toEqual(statsFirst);
     });
   });
