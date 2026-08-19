@@ -234,11 +234,27 @@ export function reconcileRollingSealsWithSessions(
  * it is why `validateBundleManifestShape` accepts N sessions at 1.2 while
  * `validateRollingSessionManifest` enforces exactly-one on each on-disk FILE.
  *
- * `assignment_id` / `semester` / `extension_hash` are scalars the union can only
- * have one of. They are taken from the first seal in `sessionOrder`; any seal
- * that disagrees becomes a `divergent_scope` defect rather than being silently
- * dropped, because two seals claiming different assignments inside one
- * `.provenance/` is precisely what an integrity tool exists to notice.
+ * `assignment_id` / `semester` are scalars the union can only have one of. They
+ * are taken from the first seal in `sessionOrder`; any seal that disagrees
+ * becomes a `divergent_scope` defect rather than being silently dropped, because
+ * two seals claiming different assignments inside one `.provenance/` is
+ * precisely what an integrity tool exists to notice.
+ *
+ * `extension_hash` is NOT one of those. It records which recorder BUILD produced
+ * a session, and a student who updates their recorder part-way through an
+ * assignment produces sessions with different build hashes for entirely honest
+ * reasons — a single `manifest.json` simply carries whichever build was current
+ * at seal time and passes. So variance is normal and must not be a defect.
+ *
+ * The union still has to carry one, and it carries the NEWEST session's: it is
+ * the build behind the final state of the work, and it matches the
+ * last-writer-wins rule already used for `submission_files`. Picking a single
+ * scalar would, on its own, hide a build — a student could record one session
+ * under an official recorder and the rest under a modified one, and only the
+ * session that happened to sort first would ever be checked against the
+ * allowlist. So the loader also keeps EVERY observed hash on
+ * `bundle.rollingSeal.observedExtensionHashes`, and
+ * `heuristics/extension-hash-mismatch.ts` checks all of them.
  *
  * `submission_files` is a last-writer-wins merge in `sessionOrder`. That matches
  * check 8's model: each rolling manifest records the on-disk state as of ITS
@@ -285,11 +301,14 @@ export function synthesizeRollingUnionManifest(
     if (seal.manifest.semester !== first.manifest.semester) {
       disagreements.push(`semester ${seal.manifest.semester} != ${first.manifest.semester}`);
     }
-    if (seal.manifest.extension_hash !== first.manifest.extension_hash) {
-      disagreements.push(
-        `extension_hash ${seal.manifest.extension_hash} != ${first.manifest.extension_hash}`,
-      );
-    }
+    // `extension_hash` is deliberately NOT a scope disagreement. A student who
+    // updates their recorder mid-assignment legitimately records sessions under
+    // different build hashes, and today's single `manifest.json` carries only
+    // the hash current at seal time and passes. Treating variance as a defect
+    // failed check 1 for updating the extension — an accusation against an
+    // honest student. The hashes are not discarded: every one is preserved on
+    // `bundle.rollingSeal.observedExtensionHashes` and checked against the
+    // known-good allowlist by `heuristics/extension-hash-mismatch.ts`.
     if (disagreements.length > 0) {
       defects.push({
         sessionId: seal.sessionId,
@@ -313,7 +332,9 @@ export function synthesizeRollingUnionManifest(
     format_version: ROLLING_MANIFEST_FORMAT_VERSION,
     assignment_id: first.manifest.assignment_id,
     semester: first.manifest.semester,
-    extension_hash: first.manifest.extension_hash,
+    // Newest session's build, not the first — see the docstring. Every observed
+    // hash is preserved separately so none is hidden by this choice.
+    extension_hash: ordered[ordered.length - 1]!.manifest.extension_hash,
     sessions: ordered.map((seal) => seal.manifest.sessions[0]),
     submission_files: [...submissionFiles.values()],
   };

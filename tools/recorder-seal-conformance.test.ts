@@ -1352,3 +1352,612 @@ describe('rolling seal → analysis-core load + validate (git-submitted shape)',
     });
   });
 });
+
+// ===========================================================================
+// THE COMPOSITION GAP: a rolling seal whose subject is still growing.
+//
+// `buildRollingSealedBundle` above rolls each seal AFTER its session has
+// emitted session.end and disposed its writer. That is the one ordering in
+// which a whole-file digest can possibly be exact, and it is NOT the ordering a
+// git-submitted assignment produces. There is no seal step: the student pushes
+// whenever, the grader clones whenever, and `dispose()` may never run at all.
+//
+// The rolling seal is rewritten at session start, at each checkpoint, and at
+// dispose(). Between those writes its `slog_sha256` / `meta_sha256` describe a
+// PREFIX of a file that has since grown. Every scenario below is an honest
+// student, and every one of them archives a `.slog` that is longer than the
+// digest its own signed manifest names.
+//
+// These assert on `bundleDetections`, NOT on the eight. `log_bytes_match` is a
+// bundleDetection, so `expectAllChecksPass` — which the existing both-shapes
+// test relies on — structurally cannot see it.
+// ===========================================================================
+
+type LiveSession = {
+  sessionId: string;
+  keypair: SessionKeypair;
+  slogPath: string;
+  /** Final content per workspace-relative path, as the recording has left it. */
+  finalContent: Map<string, string>;
+  /** doc.open + doc.change + doc.save for one file, with a signed checkpoint. */
+  work(file: { path: string; initial: string; append: string }): Promise<void>;
+  /** N session.heartbeat entries: they grow the `.slog` and touch no file. */
+  idle(n: number): void;
+  /** Push the SessionWriter's buffer to disk. */
+  flush(): Promise<void>;
+  /** The REAL rolling-seal writer, signing with this session's own key. */
+  roll(): Promise<void>;
+  /** Graceful shutdown: session.end, flush, close. Deliberately no final roll. */
+  close(opts?: { emitSessionEnd?: boolean }): Promise<void>;
+};
+
+/**
+ * Open a real recorder session and hand back the controls, so a test can
+ * interleave recording and sealing the way the live recorder does.
+ *
+ * Same production parts as `recordSession` — SessionHost, SessionWriter,
+ * MetaWriter, the real per-session keypair, log-core's real signCheckpoint —
+ * just not driven to completion up front.
+ */
+async function openLiveSession(opts: {
+  provenanceDir: string;
+  sessionId: string;
+  prevSessionId: string | null;
+}): Promise<LiveSession> {
+  const { provenanceDir, sessionId, prevSessionId } = opts;
+
+  const keypair = await generateSessionKeypair();
+  const encryptedPrivkey = await encryptSessionPrivkey(keypair.privateKey, MANIFEST_SIG, sessionId);
+  const slogPath = path.join(provenanceDir, `session-${sessionId}.slog`);
+
+  const clock = new FixedClock(0, new Date('2026-05-19T14:00:00.000Z'));
+  const writer = await SessionWriter.open({ slogPath, clock });
+  const meta = await MetaWriter.create({
+    metaPath: `${slogPath}.meta`,
+    sessionId,
+    sessionPubkeyHex: keypair.publicKeyHex,
+    encryptedPrivkey,
+  });
+
+  const host = createSessionHost({
+    sessionId,
+    clock,
+    onEntry: (entry) => writer.append(entry),
+  });
+
+  host.emit('session.start', {
+    format_version: '1.0',
+    session_id: sessionId,
+    prev_session_id: prevSessionId,
+    assignment: { id: ASSIGNMENT_ID, semester: SEMESTER },
+    manifest_sig: MANIFEST_SIG,
+    machine_id: 'b'.repeat(64),
+    vscode: { version: '1.100.0', commit: '', platform: 'darwin-arm64' },
+    recorder: { version: '1.2.0', extension_id: 'itsgeagle.provenance-recorder' },
+    session_pubkey: keypair.publicKeyHex,
+  });
+
+  const finalContent = new Map<string, string>();
+
+  return {
+    sessionId,
+    keypair,
+    slogPath,
+    finalContent,
+
+    async work(f) {
+      clock.advance(1000);
+      host.emit('doc.open', {
+        path: f.path,
+        sha256: sha256OfString(f.initial),
+        line_count: f.initial.split('\n').length,
+        content: f.initial,
+      });
+
+      const lines = f.initial.split('\n');
+      const endLine = lines.length - 1;
+      const endChar = lines[endLine]!.length;
+
+      clock.advance(1000);
+      host.emit('doc.change', {
+        path: f.path,
+        deltas: [
+          {
+            range: {
+              start: { line: endLine, character: endChar },
+              end: { line: endLine, character: endChar },
+            },
+            text: f.append,
+          },
+        ],
+        source: 'typed',
+      });
+
+      const final = f.initial + f.append;
+      finalContent.set(f.path, final);
+
+      clock.advance(1000);
+      const saved = host.emit('doc.save', { path: f.path, sha256: sha256OfString(final) });
+      if (saved !== null) {
+        await meta.appendCheckpoint(
+          await signCheckpoint(saved.seq, saved.hash, keypair.privateKey),
+        );
+      }
+    },
+
+    idle(n) {
+      for (let i = 0; i < n; i++) {
+        clock.advance(30_000);
+        host.emit('session.heartbeat', { focused: true, active_file: null, idle_since_ms: 0 });
+      }
+    },
+
+    async flush() {
+      await writer.flush();
+    },
+
+    async roll() {
+      const result = await writeRollingSeal({
+        provenanceDir,
+        sessionId,
+        prevSessionId,
+        slogPath,
+        assignmentRoot: path.dirname(provenanceDir),
+        assignmentId: ASSIGNMENT_ID,
+        semester: SEMESTER,
+        filesUnderReview: [...finalContent.keys()],
+        sessionPrivkey: keypair.privateKey,
+        extensionHash: EXTENSION_HASH,
+      });
+      if (result.kind !== 'written') {
+        throw new Error(`writeRollingSeal did not succeed: ${JSON.stringify(result)}`);
+      }
+    },
+
+    async close(closeOpts) {
+      if (closeOpts?.emitSessionEnd !== false) {
+        clock.advance(1000);
+        host.emit('session.end', { reason: 'deactivate' });
+      }
+      await writer.flush();
+      await writer.dispose();
+      await meta.dispose();
+    },
+  };
+}
+
+/**
+ * Assert no bundle-level detection is reporting a finding.
+ *
+ * This is the assertion the existing rolling tests never made.
+ * `expectAllChecksPass` only looks at `report.checks`, and `log_bytes_match`
+ * is not one of the eight — so a bundle can pass all eight while shouting
+ * "tampered" at high severity, confidence 1.0.
+ */
+function expectNoBundleDetections(report: Verified['report']): void {
+  const firing = (report.bundleDetections ?? [])
+    .filter((d) => d.status !== 'pass' && d.status !== 'skipped')
+    .map((d) => `${d.id}=${d.status} (${d.detail ?? ''})`);
+  expect(firing).toEqual([]);
+}
+
+describe('HONEST STUDENT: a rolling seal whose .slog kept growing after it', () => {
+  /**
+   * Record a session, roll its seal, then keep recording — and archive the repo
+   * without any further seal. This is a `git add . && git commit && git push`
+   * from an editor that is still open.
+   */
+  async function midFlightRepo(opts: {
+    label: string;
+    /** Emit session.end + close cleanly, or simulate a power loss. */
+    graceful: boolean;
+    /** Do post-roll work that also rewrites a submission file. */
+    touchFilesAfterRoll: boolean;
+  }): Promise<{ bundlePath: string; sessionId: string }> {
+    const root = await makeRoot(opts.label);
+    const provenanceDir = path.join(root, '.provenance');
+    await fsPromises.mkdir(provenanceDir, { recursive: true });
+
+    const live = await openLiveSession({
+      provenanceDir,
+      sessionId: uuid(1),
+      prevSessionId: null,
+    });
+
+    await live.work({ path: 'main.py', initial: 'def solve():\n    pass\n', append: 'solve()\n' });
+    await live.flush();
+
+    // The seal the recorder rolls at this checkpoint.
+    await live.roll();
+
+    // …and then the student keeps working. Nothing rolls another seal until the
+    // next checkpoint, 100 entries away.
+    if (opts.touchFilesAfterRoll) {
+      await live.work({
+        path: 'main.py',
+        initial: 'def solve():\n    pass\nsolve()\n',
+        append: '# more work\n',
+      });
+    } else {
+      live.idle(5);
+    }
+
+    await live.close({ emitSessionEnd: opts.graceful });
+    await writeWorkspaceFiles(root, live.finalContent);
+
+    const bundlePath = await zipRepo({
+      root,
+      provenanceDir,
+      submissionFiles: live.finalContent,
+      outputPath: path.join(root, 'git-clone.zip'),
+    });
+
+    return { bundlePath, sessionId: live.sessionId };
+  }
+
+  it('does not accuse a student whose session was still open at archive time', async () => {
+    const { bundlePath } = await midFlightRepo({
+      label: 'mid-flight-open',
+      graceful: true,
+      touchFilesAfterRoll: false,
+    });
+    const verified = await loadAndValidate(bundlePath);
+    expectNoBundleDetections(verified.report);
+  });
+
+  it('does not accuse a student whose machine died between checkpoint and dispose', async () => {
+    // No session.end, no dispose()-time roll — a force-quit or a power cut.
+    // The seal left behind is whatever the last checkpoint wrote.
+    const { bundlePath } = await midFlightRepo({
+      label: 'mid-flight-crash',
+      graceful: false,
+      touchFilesAfterRoll: false,
+    });
+    const verified = await loadAndValidate(bundlePath);
+    expectNoBundleDetections(verified.report);
+  });
+
+  it('does not accuse a student who edited a reviewed file after the last roll', async () => {
+    const { bundlePath } = await midFlightRepo({
+      label: 'mid-flight-edits',
+      graceful: true,
+      touchFilesAfterRoll: true,
+    });
+    const verified = await loadAndValidate(bundlePath);
+    expectNoBundleDetections(verified.report);
+  });
+
+  it('does not accuse a partner whose repo was cloned mid-session', async () => {
+    // Two contributors, one shared `.provenance/`. A finished her session and
+    // its dispose-time seal covers her whole log. B is still typing.
+    const root = await makeRoot('partner-mid-flight');
+    const provenanceDir = path.join(root, '.provenance');
+    await fsPromises.mkdir(provenanceDir, { recursive: true });
+
+    const a = await openLiveSession({ provenanceDir, sessionId: uuid(1), prevSessionId: null });
+    await a.work({ path: 'main.py', initial: 'a = 1\n', append: 'b = 2\n' });
+    await a.close();
+    await a.roll(); // the dispose()-time roll: exact, covers everything
+
+    const b = await openLiveSession({ provenanceDir, sessionId: uuid(2), prevSessionId: uuid(1) });
+    await b.work({ path: 'main.py', initial: 'a = 1\nb = 2\n', append: 'c = 3\n' });
+    await b.flush();
+    await b.roll(); // B's checkpoint roll…
+    b.idle(4); // …and B keeps working
+    await b.close();
+
+    await writeWorkspaceFiles(root, b.finalContent);
+
+    const bundlePath = await zipRepo({
+      root,
+      provenanceDir,
+      submissionFiles: b.finalContent,
+      outputPath: path.join(root, 'git-clone.zip'),
+    });
+
+    const verified = await loadAndValidate(bundlePath);
+    expectNoBundleDetections(verified.report);
+  });
+
+  it('does not accuse a session whose .slog.meta gained a checkpoint after its roll', async () => {
+    // The `.slog.meta` is written by a different writer on a different cadence
+    // from the seal. A checkpoint that lands after the roll moves
+    // `meta_sha256` exactly the way a trailing entry moves `slog_sha256`.
+    const root = await makeRoot('meta-after-roll');
+    const provenanceDir = path.join(root, '.provenance');
+    await fsPromises.mkdir(provenanceDir, { recursive: true });
+
+    const live = await openLiveSession({
+      provenanceDir,
+      sessionId: uuid(1),
+      prevSessionId: null,
+    });
+    await live.work({ path: 'main.py', initial: 'a = 1\n', append: 'b = 2\n' });
+    await live.flush();
+    await live.roll();
+
+    // A save-triggered checkpoint, appended to the .meta after the roll.
+    await live.work({ path: 'main.py', initial: 'a = 1\nb = 2\n', append: 'c = 3\n' });
+    await live.close();
+    await writeWorkspaceFiles(root, live.finalContent);
+
+    const bundlePath = await zipRepo({
+      root,
+      provenanceDir,
+      submissionFiles: live.finalContent,
+      outputPath: path.join(root, 'git-clone.zip'),
+    });
+
+    const verified = await loadAndValidate(bundlePath);
+    expectNoBundleDetections(verified.report);
+  });
+
+  it('reports how much of the log the rolling seal actually covers', () => {
+    // Passing is not the same as fully sealed, and the verdict has to say which
+    // one it is. The tail past the last roll is covered by the chain and the
+    // checkpoints but by no bundle-level signature, and staff are entitled to
+    // know that rather than read "pass" as "signed end to end".
+    return midFlightRepo({
+      label: 'mid-flight-detail',
+      graceful: true,
+      touchFilesAfterRoll: false,
+    }).then(async ({ bundlePath }) => {
+      const verified = await loadAndValidate(bundlePath);
+      const detection = verified.report.bundleDetections!.find((d) => d.id === 'log_bytes_match')!;
+      expect(detection.status).toBe('pass');
+      expect(detection.detail).toContain('written after the last seal');
+      expect(detection.detail).toMatch(/\d+ of \d+ bytes sealed/);
+    });
+  });
+});
+
+// ===========================================================================
+// …and the same mid-flight bundle must still catch real tampering.
+//
+// Reading a rolling digest as a PREFIX commitment is only defensible if the
+// sealed region is still enforced at full strength. Each mutation below breaks
+// the sealed prefix in a different way and must go red.
+//
+// The one thing it CANNOT catch is stated as a characterization test rather
+// than hidden: a rolling seal is signed before the trailing bytes exist, so it
+// can never attest to them. That residual belongs to the rolling design, not to
+// this reading of it — and the classic seal, which is terminal, still catches
+// exactly that append (see the both-shapes test at the end).
+// ===========================================================================
+
+describe('mutations: the sealed PREFIX of a mid-flight rolling bundle is still enforced', () => {
+  let bundlePath: string;
+  let slogName: string;
+
+  beforeAll(async () => {
+    const root = await makeRoot('rolling-prefix-mutate');
+    const provenanceDir = path.join(root, '.provenance');
+    await fsPromises.mkdir(provenanceDir, { recursive: true });
+
+    const live = await openLiveSession({
+      provenanceDir,
+      sessionId: uuid(1),
+      prevSessionId: null,
+    });
+    await live.work({ path: 'main.py', initial: 'a = 1\n', append: 'b = 2\n' });
+    await live.flush();
+    await live.roll(); // seals the prefix that exists right now
+    // …and then keeps going, so the archived log runs past its own seal and
+    // there is both a sealed region and an unsealed tail to aim mutations at.
+    await live.work({ path: 'main.py', initial: 'a = 1\nb = 2\n', append: 'c = 3\n' });
+    await live.close();
+    await writeWorkspaceFiles(root, live.finalContent);
+
+    slogName = `session-${live.sessionId}.slog`;
+    bundlePath = await zipRepo({
+      root,
+      provenanceDir,
+      submissionFiles: live.finalContent,
+      outputPath: path.join(root, 'git-clone.zip'),
+    });
+
+    // Green before every mutation, and genuinely partial rather than exact —
+    // otherwise these mutations would be testing the classic path by accident.
+    const verified = await loadAndValidate(bundlePath);
+    expectNoBundleDetections(verified.report);
+    const coverage = verified.bundle.rollingSeal!.coverage!;
+    expect(coverage).toHaveLength(1);
+    expect(coverage[0]!.slog.kind).toBe('partial');
+    expect(coverage[0]!.meta.kind).toBe('partial');
+  });
+
+  it('flipping a byte INSIDE the sealed prefix fails log_bytes_match', async () => {
+    const buf = await mutateZip(bundlePath, async (zip) => {
+      // session.start's machine_id is 64 hex chars and sits in the first entry,
+      // which is comfortably inside the sealed prefix. Flipping a nibble inside
+      // a quoted hex value keeps the file valid NDJSON, so the loader still
+      // parses it and this detection — not the parser — is what catches it.
+      const text = await zip.file(slogName)!.async('string');
+      const flipped = text.replace(
+        /"([0-9a-f]{64})"/,
+        (_m, hex: string) => `"${hex[0] === '0' ? '1' : '0'}${hex.slice(1)}"`,
+      );
+      expect(flipped).not.toBe(text);
+      zip.file(slogName, flipped);
+    });
+    const report = await validateMutated(buf);
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('fail');
+    const detection = report.bundleDetections!.find((c) => c.id === 'log_bytes_match')!;
+    expect(detection.detail).toContain('no state this file could have passed through');
+  });
+
+  it('truncating BELOW the sealed prefix fails log_bytes_match', async () => {
+    const buf = await mutateZip(bundlePath, async (zip) => {
+      const lines = (await zip.file(slogName)!.async('string')).trim().split('\n');
+      // Keep session.start so the bundle still loads; drop the rest, which
+      // takes the file below the point the seal committed to.
+      zip.file(slogName, `${lines[0]!}\n`);
+    });
+    const report = await validateMutated(buf);
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('fail');
+  });
+
+  it('rewriting an entry inside the sealed prefix fails log_bytes_match', async () => {
+    // Not a byte flip but a re-chained rewrite: the attacker replaces an entry
+    // and re-chains everything after it, which defeats check 3. Only a
+    // commitment to the sealed bytes can catch this.
+    const buf = await mutateZip(bundlePath, async (zip) => {
+      const lines = (await zip.file(slogName)!.async('string')).trim().split('\n');
+      const entries = lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+      // Rewrite the doc.change payload (entry 2), then re-chain the tail.
+      let prev = entries[0]!['hash'] as string;
+      const rebuilt = [lines[0]!];
+      for (const e of entries.slice(1)) {
+        const { hash: _h, prev_hash: _p, ...rest } = e;
+        if (rest['kind'] === 'doc.change') {
+          const data = rest['data'] as { deltas: Array<{ text: string }> };
+          data.deltas[0]!.text = '# rewritten\n';
+        }
+        const rechained = chainEntry(prev, rest as Parameters<typeof chainEntry>[1]);
+        prev = rechained.hash;
+        rebuilt.push(serializeEntry(rechained).trimEnd());
+      }
+      zip.file(slogName, `${rebuilt.join('\n')}\n`);
+    });
+    const report = await validateMutated(buf);
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('fail');
+  });
+
+  it('deleting a checkpoint from the sealed part of .slog.meta fails log_bytes_match', async () => {
+    // The meta is re-serialized whole on every checkpoint, so its coverage is
+    // read as "the first k checkpoints", not as a byte prefix. Removing a
+    // checkpoint the seal already committed to reproduces no truncation of the
+    // archived list, so it must not slip through as honest growth.
+    const buf = await mutateZip(bundlePath, async (zip) => {
+      const name = `${slogName}.meta`;
+      const meta = JSON.parse(await zip.file(name)!.async('string')) as {
+        checkpoints: unknown[];
+      };
+      expect(meta.checkpoints.length).toBeGreaterThan(1);
+      meta.checkpoints = meta.checkpoints.slice(1); // drop the SEALED one
+      zip.file(name, JSON.stringify(meta));
+    });
+    const report = await validateMutated(buf);
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('fail');
+    const detection = report.bundleDetections!.find((c) => c.id === 'log_bytes_match')!;
+    expect(detection.detail).toContain('.slog.meta');
+  });
+
+  it('editing a non-checkpoint field of .slog.meta fails log_bytes_match', async () => {
+    // Only `checkpoints` changes over a session's life. Anything else moving
+    // means the file is not a later state of what was sealed.
+    const buf = await mutateZip(bundlePath, async (zip) => {
+      const name = `${slogName}.meta`;
+      const meta = JSON.parse(await zip.file(name)!.async('string')) as Record<string, unknown>;
+      meta['info'] = 'tampered';
+      zip.file(name, JSON.stringify(meta));
+    });
+    const report = await validateMutated(buf);
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('fail');
+  });
+
+  it('CHARACTERIZATION: an append PAST the sealed prefix is not caught, and cannot be', async () => {
+    // The residual, recorded rather than papered over. The seal was signed
+    // before these bytes existed, so no reading of it can attest to them —
+    // this is a property of rolling seals, not of how they are verified.
+    //
+    // It is also exactly what an honest mid-session archive looks like, which
+    // is why it must not be a high/1.0 finding. What DOES still cover this
+    // region: the hash chain (check 3), seq/t/wall monotonicity (checks 4–6),
+    // doc_save_hashes (check 7), submitted_code_match (check 8), and every
+    // event-stream heuristic. And the verdict states the unattested size.
+    const buf = await mutateZip(bundlePath, async (zip) => {
+      const lines = (await zip.file(slogName)!.async('string')).trim().split('\n');
+      const last = JSON.parse(lines[lines.length - 1]!) as {
+        seq: number;
+        t: number;
+        wall: string;
+        hash: string;
+      };
+      const appended = chainEntry(last.hash, {
+        seq: last.seq + 1,
+        t: last.t + 1000,
+        wall: new Date(new Date(last.wall).getTime() + 1000).toISOString(),
+        kind: 'session.heartbeat',
+        data: { focused: true, active_file: null, idle_since_ms: 0 },
+      });
+      zip.file(slogName, `${lines.join('\n')}\n${serializeEntry(appended)}`);
+    });
+    const report = await validateMutated(buf);
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('pass');
+    const detection = report.bundleDetections!.find((c) => c.id === 'log_bytes_match')!;
+    expect(detection.detail).toContain('written after the last seal');
+  });
+
+  it('the mid-flight bundle is still clean after all mutations', async () => {
+    expectNoBundleDetections((await loadAndValidate(bundlePath)).report);
+  });
+});
+
+// ===========================================================================
+// The gate: prefix semantics belong to a PURELY rolling bundle.
+//
+// A classic seal is terminal — taken once, by an explicit command, over a
+// finished log — so it commits to the whole file and a post-seal append must
+// still fail. `parse-bundle.ts` computes coverage only when there is no
+// `manifest.json`, and a both-shapes bundle uses the classic manifest. This is
+// the test that stops bug 3's "seal everything" behaviour from quietly
+// downgrading every classic course's append detection.
+// ===========================================================================
+
+describe('a both-shapes bundle keeps WHOLE-FILE semantics', () => {
+  it('carries no rolling coverage, and an append past the classic seal still fails', async () => {
+    const root = await makeRoot('both-shapes-append');
+    const scenario = await buildRollingSealedBundle({
+      root,
+      sessionCount: 1,
+      files: [{ path: 'main.py', initial: 'a = 1\n', append: 'b = 2\n' }],
+    });
+
+    const sealed = await sealBundle({
+      assignmentRoot: root,
+      provenanceDir: scenario.provenanceDir,
+      assignmentId: ASSIGNMENT_ID,
+      semester: SEMESTER,
+      filesUnderReview: [...scenario.finalContent.keys()],
+      sessionPrivkey: scenario.sessions[0]!.keypair.privateKey,
+      sessionPubkeyHex: scenario.sessions[0]!.keypair.publicKeyHex,
+      computeExtensionHash: async () => EXTENSION_HASH,
+      outputDir: root,
+      now: () => new Date('2026-05-19T14:30:00.000Z'),
+    });
+    if (sealed.kind !== 'ok') throw new Error('sealBundle failed');
+
+    const verified = await loadAndValidate(sealed.bundlePath);
+    expect(verified.bundle.manifest.format_version).toBe('1.1');
+    // Rolling seals are present and verified, but they do NOT get to relax the
+    // classic manifest's whole-file commitment.
+    expect(verified.bundle.rollingSeal!.seals).toHaveLength(1);
+    expect(verified.bundle.rollingSeal!.coverage).toBeUndefined();
+    expectNoBundleDetections(verified.report);
+
+    const slogName = `session-${scenario.sessions[0]!.sessionId}.slog`;
+    const buf = await mutateZip(sealed.bundlePath, async (zip) => {
+      const lines = (await zip.file(slogName)!.async('string')).trim().split('\n');
+      const last = JSON.parse(lines[lines.length - 1]!) as {
+        seq: number;
+        t: number;
+        wall: string;
+        hash: string;
+      };
+      const appended = chainEntry(last.hash, {
+        seq: last.seq + 1,
+        t: last.t + 1000,
+        wall: new Date(new Date(last.wall).getTime() + 1000).toISOString(),
+        kind: 'session.heartbeat',
+        data: { focused: true, active_file: null, idle_since_ms: 0 },
+      });
+      zip.file(slogName, `${lines.join('\n')}\n${serializeEntry(appended)}`);
+    });
+    const report = await validateMutated(buf);
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('fail');
+    expect(report.bundleDetections!.find((c) => c.id === 'log_bytes_match')!.detail).toContain(
+      'modified after sealing',
+    );
+  });
+});

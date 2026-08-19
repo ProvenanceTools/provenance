@@ -413,13 +413,21 @@ describe('startSession — rolling seal', () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function start(root: string = assignmentRoot): Promise<ActiveSession> {
-    const manifest = await signedManifest({
+  async function start(
+    root: string = assignmentRoot,
+    submission?: 'bundle' | 'git',
+  ): Promise<ActiveSession> {
+    const base = await signedManifest({
       assignment_id: 'hw03',
       semester: 'fa26',
       issued_at: '2026-09-15T00:00:00Z',
       files_under_review: ['hw.py'],
     });
+    // `submission` reaches startSession only from an already-verified 2.0
+    // manifest: parseManifestValue returns early for 1.x and the object it
+    // hands back has no `submission` at all, so this field can never carry an
+    // unsigned value in production.
+    const manifest = submission === undefined ? base : { ...base, submission };
     return startSession({
       assignmentRoot: root,
       manifest,
@@ -450,6 +458,49 @@ describe('startSession — rolling seal', () => {
       });
     }
   }
+
+  // -------------------------------------------------------------------------
+  // The submission-mode gate. `submission` is in the 2.0 SIGNED payload, so it
+  // is the one trustworthy way to know whether this course submits by git.
+  // -------------------------------------------------------------------------
+
+  it('writes NO rolling seal when the course signed submission: bundle', async () => {
+    const session = await start(assignmentRoot, 'bundle');
+    const sessionId = await sessionIdOf(session);
+    emitPastCheckpoint(session);
+    await session.dispose();
+
+    // Not at session start, not at a checkpoint, not at dispose.
+    const names = rollingManifestFilenames(sessionId);
+    const entries = await fs.readdir(provenanceDir);
+    expect(entries).not.toContain(names.json);
+    expect(entries).not.toContain(names.sig);
+    // The recording itself is untouched.
+    expect(entries.some((e) => e.endsWith('.slog'))).toBe(true);
+  });
+
+  it('writes a rolling seal when the course signed submission: git', async () => {
+    const session = await start(assignmentRoot, 'git');
+    const sessionId = await sessionIdOf(session);
+    const names = rollingManifestFilenames(sessionId);
+    const entries = await fs.readdir(provenanceDir);
+    expect(entries).toContain(names.json);
+    expect(entries).toContain(names.sig);
+    await session.dispose();
+  });
+
+  it('FAILS OPEN: a 1.x manifest, which cannot sign a submission mode, still seals', async () => {
+    // A course that has not migrated to a 2.0 manifest has no signed statement
+    // either way. Suppressing the seal there would leave every session
+    // `unsealed_session` — check 1 failing on a student who did nothing wrong —
+    // whereas rolling unnecessarily costs two files the classic manifest
+    // overrides anyway.
+    const session = await start(assignmentRoot);
+    const sessionId = await sessionIdOf(session);
+    const entries = await fs.readdir(provenanceDir);
+    expect(entries).toContain(rollingManifestFilenames(sessionId).json);
+    await session.dispose();
+  });
 
   it('seals a session that never reaches a checkpoint (zero events past session.start)', async () => {
     const session = await start();

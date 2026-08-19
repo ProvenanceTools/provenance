@@ -16,6 +16,9 @@ import type {
   RollingSessionManifest,
   SessionStartPayload,
 } from '@provenance/log-core';
+import type { RollingSealCoverage } from './rolling-coverage.js';
+
+export type { RollingSealCoverage, SealCoverage } from './rolling-coverage.js';
 
 // ---------------------------------------------------------------------------
 // Loader errors (unzip / structural)
@@ -155,7 +158,12 @@ export type RollingSealDefect = {
     | 'no_session_log'
     /** A session's `.slog` is covered by no seal at all. */
     | 'unsealed_session'
-    /** Two seals disagree on assignment_id / semester / extension_hash. */
+    /**
+     * Two seals disagree on assignment_id / semester.
+     *
+     * NOT extension_hash: updating the recorder mid-assignment legitimately
+     * varies it. See `synthesizeRollingUnionManifest`.
+     */
     | 'divergent_scope';
   detail: string;
 };
@@ -166,6 +174,31 @@ export type BundleRollingSeal = {
   seals: RollingSeal[];
   /** Everything wrong with the seals. Check 1 reports all of these. */
   defects: RollingSealDefect[];
+  /**
+   * Every distinct `extension_hash` any seal reported, sorted and de-duplicated.
+   *
+   * A student who updates their recorder mid-assignment legitimately produces
+   * sessions with different build hashes, so the union manifest's single
+   * `extension_hash` scalar cannot represent them all. Keeping the full set here
+   * is what lets `heuristics/extension-hash-mismatch.ts` check EVERY build that
+   * touched the work against the known-good allowlist — otherwise a student
+   * could run one official session and do the rest under a modified recorder,
+   * and only the session that happened to sort first would ever be checked.
+   */
+  observedExtensionHashes: readonly string[];
+  /**
+   * How much of each session's logs its rolling seal actually covers.
+   *
+   * Present ONLY when the synthesized union manifest is this bundle's manifest —
+   * i.e. when there is no classic `manifest.json`. A rolling seal is rewritten
+   * as the session grows, so its digests commit to a PREFIX; a classic seal is
+   * taken once over a finished log and commits to the whole file. Leaving this
+   * absent for a classic or both-shapes bundle is what keeps whole-file equality
+   * (and therefore post-seal append detection) at full strength there.
+   *
+   * See `loader/rolling-coverage.ts` and `validation/verify-log-bytes.ts`.
+   */
+  coverage?: readonly RollingSealCoverage[];
 };
 
 // ---------------------------------------------------------------------------

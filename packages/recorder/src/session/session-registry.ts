@@ -334,6 +334,24 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   // whatever gets committed is then always a valid seal of that moment. See
   // io/rolling-seal-writer.ts.
   //
+  // GATED on the course's signed submission mode, and gated to FAIL OPEN.
+  //
+  // `submission` is part of the 2.0 signed payload, so it is trustworthy: at
+  // 1.x, `parseManifestValue` returns early and the object it hands back has no
+  // `submission` at all, which means `'bundle'` can only ever come from a
+  // manifest the course actually signed. Nothing unsigned can turn the seal off.
+  //
+  // The asymmetry is deliberate. Rolling where it is not needed costs two extra
+  // files in `.provenance/`, and the classic manifest still wins as
+  // `bundle.manifest` so nothing about a bundle-submitted course's analysis
+  // changes. NOT rolling where it IS needed costs an `unsealed_session` defect
+  // on every session, which fails check 1 — a false accusation against a student
+  // whose course simply has not migrated to a 2.0 manifest yet. Between "a
+  // couple of redundant files" and "an integrity finding against innocent work",
+  // only one of those is acceptable, so the seal is suppressed only when the
+  // course has signed a statement that it submits bundles.
+  const rollingSealEnabled = manifest.submission !== 'bundle';
+  //
   // `extension_hash` is resolved lazily and exactly once. computeExtensionHash
   // walks the whole dist/ tree, so doing it per checkpoint would be pathological;
   // doing it eagerly here would add directory-walk latency to activation, which
@@ -365,6 +383,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
    * recording. Recording is more important than sealing.
    */
   function rewriteRollingSeal(): Promise<void> {
+    if (!rollingSealEnabled) return Promise.resolve();
     rollingSealChain = rollingSealChain.then(() => rollingSealOnce());
     return rollingSealChain;
   }
