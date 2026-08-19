@@ -4,7 +4,9 @@ import { buildTestBundle } from '../test-support/build-test-bundle.js';
 import {
   buildTrustChainKeys,
   buildManifest2,
+  buildManifest1x,
   sessionStart2,
+  sessionStart1x,
 } from '../test-support/build-manifest-2.js';
 import { loadBundle } from '../loader/parse-bundle.js';
 import type { Bundle } from '../loader/types.js';
@@ -16,6 +18,7 @@ import {
   verifyBundleTrustChain,
   establishBundleTrust,
   summarizeBundleManifest,
+  isManifest2Binding,
 } from './bundle-manifest.js';
 
 async function load(built: { zipBuffer: ArrayBuffer }): Promise<Bundle> {
@@ -59,7 +62,67 @@ describe('readSessionManifests', () => {
   });
 });
 
+describe('isManifest2Binding', () => {
+  it('is false for an embedded 1.x manifest — presence is not version', async () => {
+    const keys = await buildTrustChainKeys();
+    const manifest = await buildManifest1x({ keys });
+    const bundle = await load(
+      await buildTestBundle({ sessions: [{ sessionStart: sessionStart1x(manifest) }] }),
+    );
+    const [binding] = readSessionManifests(bundle);
+
+    // The manifest IS there and parsed fine…
+    expect(binding!.manifest).not.toBeNull();
+    expect(binding!.manifestError).toBeNull();
+    expect(binding!.manifestSig).toBe(manifest.sig);
+    // …and it is still not a 2.0 claim.
+    expect(isManifest2Binding(binding!)).toBe(false);
+
+    // parseManifestValue strips every 2.0-only field below 2.0, which is what
+    // makes reading the version off an unverified manifest safe.
+    expect(binding!.manifest?.course_id).toBeUndefined();
+    expect(binding!.manifest?.course_cert).toBeUndefined();
+    expect(binding!.manifest?.policy).toBeUndefined();
+  });
+
+  it('is true only for an embedded 2.0 manifest, and false when none is embedded', async () => {
+    const keys = await buildTrustChainKeys();
+    const manifest = await buildManifest2({ keys });
+    const bundle = await load(
+      await buildTestBundle({ sessions: [{ sessionStart: sessionStart2(manifest) }, {}] }),
+    );
+    const [v2, none] = readSessionManifests(bundle);
+    expect(isManifest2Binding(v2!)).toBe(true);
+    expect(isManifest2Binding(none!)).toBe(false);
+  });
+});
+
 describe('resolveBundleCapturePolicy', () => {
+  it('resolves a 1.x bundle WITH embedded manifests to the default policy', async () => {
+    // The regression case: a current recorder against a 1.x manifest. A 1.x
+    // manifest signs no policy, so `source` must stay `'default'` — reporting
+    // `'unverified_manifest'` would invent a refused suppression.
+    const keys = await buildTrustChainKeys();
+    const manifest = await buildManifest1x({ keys });
+    const bundle = await load(
+      await buildTestBundle({
+        sessions: [
+          { sessionStart: sessionStart1x(manifest) },
+          { sessionStart: sessionStart1x(manifest) },
+        ],
+      }),
+    );
+
+    const resolved = resolveBundleCapturePolicy(bundle);
+    expect(resolved.source).toBe('default');
+    expect(resolved.effective).toEqual(DEFAULT_CAPTURE_POLICY);
+    expect(resolved.disabledSignals).toEqual([]);
+    expect(resolved.claimedDisabledSignals).toEqual([]);
+    for (const policy of resolved.bySession.values()) {
+      expect(policy).toEqual(DEFAULT_CAPTURE_POLICY);
+    }
+  });
+
   it('resolves a 1.x bundle to the default (everything on) policy', async () => {
     const bundle = await load(await buildTestBundle({ sessions: [{}] }));
     const resolved = resolveBundleCapturePolicy(bundle);
@@ -165,6 +228,22 @@ describe('verifyBundleTrustChain', () => {
     const bundle = await load(await buildTestBundle({ sessions: [{}] }));
     const result = await verifyBundleTrustChain(bundle, keys.rootPubkeyHex);
     expect(result.kind).toBe('legacy');
+  });
+
+  it('reports "legacy" for a 1.x bundle whose sessions DO embed the manifest', async () => {
+    const keys = await buildTrustChainKeys();
+    const manifest = await buildManifest1x({ keys });
+    const bundle = await load(
+      await buildTestBundle({ sessions: [{ sessionStart: sessionStart1x(manifest) }] }),
+    );
+
+    const chain = await verifyBundleTrustChain(bundle, keys.rootPubkeyHex);
+    expect(chain.kind).toBe('legacy');
+
+    // …and the verdict stamped is `unverified`: a 1.x chain cannot be verified,
+    // so it must never license honouring a policy.
+    await establishBundleTrust(bundle, keys.rootPubkeyHex);
+    expect(bundle.capturePolicyTrust).toBe('unverified');
   });
 
   it('verifies root → course → manifest → session for a well-formed 2.0 bundle', async () => {

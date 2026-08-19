@@ -19,12 +19,25 @@
  *
  * ## 1.x is supported permanently
  *
- * Every function here degrades to exactly the pre-2.0 answer for a bundle with
- * no embedded manifest: `resolveBundleCapturePolicy` returns
- * `DEFAULT_CAPTURE_POLICY` (everything on, 30s heartbeat — i.e. what a 1.x
- * recorder actually did), and `verifyBundleTrustChain` returns `legacy` rather
- * than an error. Archived submissions must still validate years later; that
- * adjudication case is what justifies the whole program (spec §9).
+ * Every function here degrades to exactly the pre-2.0 answer for a 1.x bundle:
+ * `resolveBundleCapturePolicy` returns `DEFAULT_CAPTURE_POLICY` (everything on,
+ * 30s heartbeat — i.e. what a 1.x recorder actually did), and
+ * `verifyBundleTrustChain` returns `legacy` rather than an error. Archived
+ * submissions must still validate years later; that adjudication case is what
+ * justifies the whole program (spec §9).
+ *
+ * **"1.x bundle" means the embedded manifest's `format_version` is below 2.0 —
+ * not that no manifest is embedded.** All three recorders write
+ * `session.start.data.manifest` unconditionally, 1.x manifests included
+ * (`packages/recorder/src/session/recorder-context.ts` states the intent: the
+ * field is additive, and a 1.x manifest's parsed form carries no 2.0-only
+ * fields, so nothing unsigned rides along). Emitting it unconditionally is also
+ * what makes the absence-vs-disabled rule work, so the reader is the side that
+ * must distinguish version from presence. Reading presence as a 2.0 claim sends
+ * a grandfathered 1.x bundle into `verifyManifestChain`, which refuses at step 0
+ * with `not_manifest_2_0` — every submission in a course that has not yet
+ * migrated its manifests reports `overall: fail`. See
+ * {@link isManifest2Binding}, the one predicate that decision goes through.
  *
  * ## The absence-vs-disabled rule (spec §4)
  *
@@ -110,7 +123,15 @@ export type SessionManifestBinding = {
   sessionId: string;
   /** `session.start.data.manifest_sig` — present in every format version. */
   manifestSig: string;
-  /** The full manifest carried by `session.start` 2.0; `null` for 1.x. */
+  /**
+   * The full manifest carried by `session.start.data.manifest`, whatever its
+   * format version; `null` only when the session carried none.
+   *
+   * NOT a 2.0 marker. Every current recorder embeds the manifest it activated
+   * against even when that manifest is 1.x, so read
+   * {@link isManifest2Binding} — never `manifest !== null` — to ask "is this a
+   * 2.0 bundle?".
+   */
   manifest: Manifest | null;
   /**
    * Set when `data.manifest` was present but failed shape validation. A
@@ -165,6 +186,34 @@ export function readSessionManifests(bundle: Bundle): SessionManifestBinding[] {
   });
 }
 
+/**
+ * Does this session carry a **2.0** manifest?
+ *
+ * The single predicate every "is this a 2.0 bundle?" decision in this module
+ * goes through. Presence is not version: a 1.x manifest travels in
+ * `session.start.data.manifest` too, and treating its presence as a 2.0 claim
+ * routes it into `verifyManifestChain`, which correctly refuses at step 0 with
+ * `not_manifest_2_0` — turning every submission from a course still issuing 1.x
+ * manifests into a check-2 failure.
+ *
+ * Nothing is lost by reading the version off an unverified manifest, because
+ * `parseManifestValue` has already dropped every 2.0-only field (`course_id`,
+ * `course_cert`, `policy`) from a non-2.0 one. A student who downgrades
+ * `format_version` to dodge the chain walk therefore also discards the policy
+ * they wanted honoured and the certificate they wanted believed: they land on
+ * the legacy path with `DEFAULT_CAPTURE_POLICY`, every signal treated as
+ * captured, every heuristic running. That is the inner defence step 0's own
+ * docstring defers to.
+ */
+export function isManifest2Binding(
+  binding: SessionManifestBinding,
+): binding is SessionManifestBinding & { manifest: Manifest } {
+  return (
+    binding.manifest !== null &&
+    manifestFormatVersion(binding.manifest) === MANIFEST_FORMAT_VERSION_2
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Capture policy
 // ---------------------------------------------------------------------------
@@ -186,7 +235,9 @@ export type BundleCapturePolicy = {
    * - `'unverified_manifest'` — a 2.0 manifest is present but unverified (chain
    *   invalid, or no root key configured). `effective` is the DEFAULT policy;
    *   what the manifest asked for is in `claimedDisabledSignals`.
-   * - `'default'` — no embedded manifest at all, i.e. every 1.x bundle.
+   * - `'default'` — no 2.0 manifest, i.e. every 1.x bundle, whether or not its
+   *   sessions embed the 1.x manifest. A 1.x manifest signs no policy, so there
+   *   is nothing to refuse and nothing to honour.
    */
   source: 'manifest_2_0' | 'unverified_manifest' | 'default';
   /** The policy heuristics must gate on. See the module docstring for the merge. */
@@ -231,9 +282,13 @@ export function resolveBundleCapturePolicy(bundle: Bundle): BundleCapturePolicy 
   let intervalSeen = false;
 
   for (const binding of readSessionManifests(bundle)) {
-    if (binding.manifest === null) {
-      // 1.x session, or a session whose embedded manifest did not validate.
-      // Either way we know nothing was disabled, so the default applies.
+    if (!isManifest2Binding(binding)) {
+      // No manifest, a manifest that did not validate, or a 1.x manifest — and
+      // a 1.x manifest signs no `policy` at all (`parseManifestValue` strips
+      // the field below 2.0). None of the three can disable anything, so the
+      // default applies and `source` stays `'default'`: reporting
+      // `'unverified_manifest'` for a bundle whose manifest never asked for a
+      // suppression would invent a refusal that never happened.
       bySession.set(binding.sessionId, { ...DEFAULT_CAPTURE_POLICY });
       continue;
     }
@@ -321,7 +376,11 @@ export type BundleTrustChainError =
   | EmbeddedManifestInvalid;
 
 export type BundleTrustChain =
-  /** No session carried an embedded manifest — a 1.0/1.1 bundle. Not an error. */
+  /**
+   * No session carried a **2.0** manifest — a 1.0/1.1 bundle. Not an error, and
+   * not the same as "no session carried a manifest": a current recorder embeds
+   * a 1.x manifest too, and that bundle is `legacy`.
+   */
   | { kind: 'legacy' }
   /** A 2.0 bundle, but no root public key was supplied, so step 1 cannot run. */
   | { kind: 'unconfigured'; manifest: Manifest }
@@ -347,25 +406,9 @@ export async function verifyBundleTrustChain(
 ): Promise<BundleTrustChain> {
   const bindings = readSessionManifests(bundle);
 
-  const withManifest = bindings.filter((b) => b.manifest !== null);
-  if (withManifest.length === 0) {
-    const broken = bindings.find((b) => b.manifestError !== null);
-    if (broken !== undefined) {
-      return {
-        kind: 'invalid',
-        manifest: null,
-        error: {
-          kind: 'embedded_manifest_invalid',
-          sessionId: broken.sessionId,
-          detail: broken.manifestError ?? 'invalid',
-        },
-      };
-    }
-    return { kind: 'legacy' };
-  }
-
-  // A session that carries a manifest but fails to validate it is a hard error
-  // even if other sessions are fine — the bundle claims 2.0 and does not honour it.
+  // A session that carries a `data.manifest` which does not parse is a hard
+  // error at every format version, and regardless of what the other sessions
+  // carry: the object is there and it is malformed, which no version explains.
   const broken = bindings.find((b) => b.manifestError !== null);
   if (broken !== undefined) {
     return {
@@ -379,7 +422,28 @@ export async function verifyBundleTrustChain(
     };
   }
 
-  const manifest = withManifest[0]!.manifest as Manifest;
+  // The legacy-vs-2.0 decision is made on the embedded manifest's
+  // `format_version`, NEVER on its presence — see {@link isManifest2Binding}.
+  // No session claiming 2.0 means there is no chain in this bundle to walk, so
+  // check 2 falls back to sig-equality. That covers three real shapes at once:
+  // a pre-2.0 recorder (no `data.manifest` anywhere), a current recorder on a
+  // 1.x manifest (every session embeds one), and a student who upgraded
+  // mid-assignment (some sessions embed, some do not).
+  const withV2 = bindings.filter(isManifest2Binding);
+  if (withV2.length === 0) {
+    return { kind: 'legacy' };
+  }
+
+  // At least one session claims 2.0, so the bundle is held to the 2.0 contract.
+  // Take the FIRST 2.0 manifest rather than the first embedded one: in a bundle
+  // that mixes versions the 1.x sessions must not decide which manifest gets
+  // walked, or a single stale session would drag a genuine 2.0 bundle back onto
+  // a path that refuses it. The sig-binding loop below then holds every session
+  // — 1.x, 2.0, or manifest-less alike — to this manifest's `sig`, so a bundle
+  // whose sessions disagree on version fails as `manifest_sig_mismatch`, naming
+  // the offending session. That is the honest cause: those sessions were keyed
+  // by a different manifest, which is exactly what the binding exists to catch.
+  const manifest = withV2[0]!.manifest;
 
   // Bundle binding: every session's manifest_sig must be the embedded sig.
   // Checked BEFORE the signature work so a mixed bundle reports the useful
