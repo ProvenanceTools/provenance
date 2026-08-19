@@ -16,14 +16,28 @@
  * is fine here: reconstruction, heuristics, and the event stream derive entirely
  * from the `.slog` logs — they never read submitted source bytes.
  *
- * Every bundle handed out from here has had its Manifest 2.0 trust chain walked
- * and the verdict stamped on it (`establishBundleTrust`). That is what lets the
- * course-signed capture policy gate heuristics: an unverified policy is not
- * honoured, so a student cannot edit their own manifest to switch signals — and
- * with them the cross-submission comparisons — off. Validation check 2 stamps
- * the same verdict on the ingest path; this covers the read paths that never
- * re-run validation, above all the cross-flag job (`run-cross.ts`). Doing it
- * here rather than at each call site means a new read path cannot forget.
+ * Every bundle handed out from here carries TWO stamps, established once per
+ * parse and cached with the parse:
+ *
+ *  - **Trust** (`establishBundleTrust`) — the Manifest 2.0 chain verdict. That
+ *    is what lets the course-signed capture policy gate heuristics: an
+ *    unverified policy is not honoured, so a student cannot edit their own
+ *    manifest to switch signals — and with them the cross-submission
+ *    comparisons — off. Validation check 2 stamps the same verdict on the
+ *    ingest path; this covers the read paths that never re-run validation,
+ *    above all the cross-flag job (`run-cross.ts`).
+ *
+ *  - **Contributors** (`establishBundleContributors`) — which contributor
+ *    produced each session, resolved from `session.start.identity` alone. Every
+ *    downstream consumer then reads the one verdict through the synchronous
+ *    `contributorOf(bundle, sessionId)` rather than re-deriving identity.
+ *
+ * Doing both here rather than at each call site means a new read path cannot
+ * forget. An unstamped bundle reads as fully `unattributed`, which is the
+ * blameless, ordinary state — a student who never enrolled — and also the state
+ * under which the contributor-gated heuristics keep firing. Forgetting the
+ * stamp therefore fails toward MORE findings, never toward a false accusation;
+ * it is still a bug, and `load-index.contributors.test.ts` catches it.
  */
 
 import { eq } from 'drizzle-orm';
@@ -32,6 +46,7 @@ import type { Bundle } from '@provenance/analysis-core/loader/types.js';
 import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
 import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
 import { establishBundleTrust } from '@provenance/analysis-core/manifest/bundle-manifest.js';
+import { establishBundleContributors } from '@provenance/analysis-core/identity/resolve-contributors.js';
 import { rootPublicKeyHexIfConfigured } from '../../config/root-key.js';
 import { getBlob } from '../storage/blobs.js';
 import type { StorageClient } from '../storage/client.js';
@@ -152,6 +167,18 @@ export async function loadSubmissionIndex(
   // Before anything reads the capture policy off this bundle. Cached with it,
   // so the verdict is computed once per parse, not once per read path.
   await establishBundleTrust(bundle, rootPublicKeyHexIfConfigured());
+  // And before anything asks "who produced this session?". Same reasoning, and
+  // the same single choke point: every server read path comes through here, so
+  // stamping here means a NEW read path cannot forget and silently serve an
+  // `unattributed` bundle. Runs after the trust stamp because an archived 2.0
+  // identity anchors to the Manifest 2.0 `course_cert`.
+  //
+  // The key is a PARAMETER, as it must be — `analysis-core` is isomorphic and
+  // never hardcodes one. `undefined` is a supported deployment state, not an
+  // error: every identified session then reads `unverifiable / no_root_key`,
+  // which `isIdentityCheckFailure()` reports as FALSE — "we could not check",
+  // never "we checked and it failed". Bundles still load and still analyse.
+  await establishBundleContributors(bundle, rootPublicKeyHexIfConfigured());
   const index = buildIndex(bundle);
   const result: SubmissionIndex = { bundle, index };
   cache.set(cacheKey, result);
