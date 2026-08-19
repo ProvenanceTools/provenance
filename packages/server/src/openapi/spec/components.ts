@@ -990,6 +990,89 @@ export const components = {
         },
       },
     },
+
+    // -----------------------------------------------------------------------
+    // Identity 2.1 — institution-scoped student credentials
+    // -----------------------------------------------------------------------
+
+    InstitutionCert: {
+      type: 'object',
+      description:
+        'ROOT-signed authorization for the server-held institution key. Travels beside the ' +
+        'credential, not inside it, because an issuer does not sign its own authorization. ' +
+        'A verifier MUST check that this cert, the credential, and its own root-verified ' +
+        'anchor all name the same institution_id — otherwise a genuinely root-certified key ' +
+        'for one institution could mint credentials naming another.',
+      required: [
+        'format_version',
+        'institution_id',
+        'institution_pubkey',
+        'valid_from',
+        'valid_until',
+        'root_sig',
+      ],
+      properties: {
+        format_version: { type: 'string', example: '2.1' },
+        institution_id: { type: 'string', example: 'berkeley' },
+        institution_pubkey: { type: 'string', pattern: '^[0-9a-f]{64}$' },
+        valid_from: { type: 'string', example: '2026-08-20' },
+        valid_until: { type: 'string', example: '2027-01-15' },
+        root_sig: { type: 'string', pattern: '^[0-9a-f]{128}$' },
+      },
+    },
+    StudentCredential: {
+      type: 'object',
+      description:
+        'Institution-signed statement binding a student public key to a global opaque ' +
+        'reference. Names no course, semester, or assignment — deliberately. Course ' +
+        'membership is a roster question answered later by the server against data it owns; ' +
+        'making it a precondition of having an identity is what deadlocked the 2.0 design.',
+      required: [
+        'format_version',
+        'institution_id',
+        'student_ref',
+        'student_pubkey',
+        'issued_at',
+        'expires_at',
+        'institution_sig',
+      ],
+      properties: {
+        format_version: { type: 'string', example: '2.1' },
+        institution_id: { type: 'string', example: 'berkeley' },
+        student_ref: {
+          type: 'string',
+          format: 'uuid',
+          description:
+            'Opaque GLOBAL reference — one per student, forever, across every course. Never ' +
+            'an SID, name, or email: it travels in the log where a project partner can read it.',
+        },
+        student_pubkey: { type: 'string', pattern: '^[0-9a-f]{64}$' },
+        issued_at: {
+          type: 'string',
+          description:
+            "Also the instant the institution cert's validity window is judged against.",
+        },
+        expires_at: { type: 'string' },
+        institution_sig: { type: 'string', pattern: '^[0-9a-f]{128}$' },
+      },
+    },
+    StudentCredentialResponse: {
+      type: 'object',
+      required: ['credential', 'institution_cert', 'institution_id', 'student_ref', 'reissued'],
+      properties: {
+        credential: { $ref: '#/components/schemas/StudentCredential' },
+        institution_cert: { $ref: '#/components/schemas/InstitutionCert' },
+        institution_id: { type: 'string' },
+        student_ref: { type: 'string', format: 'uuid' },
+        reissued: {
+          type: 'boolean',
+          description:
+            'True when this account had already been issued a credential and the server ' +
+            're-issued for it. The previously issued credential is NOT invalidated — it stays ' +
+            'valid until its own signed expires_at, so archived bundles keep verifying.',
+        },
+      },
+    },
   },
 
   securitySchemes: {

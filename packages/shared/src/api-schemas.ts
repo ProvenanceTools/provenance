@@ -1213,3 +1213,75 @@ export const EnrollmentResponseSchema = z.object({
   reissued: z.boolean(),
 });
 export type EnrollmentResponse = z.infer<typeof EnrollmentResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Student credentials (identity format_version 2.1 — institution-scoped)
+// ---------------------------------------------------------------------------
+
+/**
+ * A ROOT-signed authorization for the server's institution key. Mirrors
+ * `InstitutionCert` in `@provenance/log-core`; redeclared here because the HTTP
+ * contract is validated with Zod at the boundary and must not depend on
+ * log-core's structural types.
+ */
+export const InstitutionCertSchema = z.object({
+  format_version: z.string(),
+  institution_id: z.string(),
+  institution_pubkey: z.string().regex(/^[0-9a-f]{64}$/),
+  valid_from: z.string(),
+  valid_until: z.string(),
+  root_sig: z.string().regex(/^[0-9a-f]{128}$/),
+});
+export type InstitutionCertPayload = z.infer<typeof InstitutionCertSchema>;
+
+/**
+ * An institution-signed statement binding a student public key to a global
+ * opaque `student_ref`.
+ *
+ * Names no course, no semester, and no assignment — deliberately. Course
+ * membership is a roster question the server answers later against data it
+ * owns; making it a precondition of having an identity is what deadlocked the
+ * 2.0 design.
+ */
+export const StudentCredentialSchema = z.object({
+  format_version: z.string(),
+  institution_id: z.string(),
+  /** Opaque GLOBAL reference. Never an SID, name, or email. One per student. */
+  student_ref: z.string(),
+  student_pubkey: z.string().regex(/^[0-9a-f]{64}$/),
+  issued_at: z.string(),
+  expires_at: z.string(),
+  institution_sig: z.string().regex(/^[0-9a-f]{128}$/),
+});
+export type StudentCredentialPayload = z.infer<typeof StudentCredentialSchema>;
+
+/**
+ * What the student pastes back into the recorder, at identity 2.1.
+ *
+ * `credential` and `institution_cert` together are two of the three fields of
+ * `session.start.identity`; the recorder supplies the third
+ * (`session_pubkey_sig`) itself at session start. The certificate travels
+ * BESIDE the credential rather than inside it for the same reason `course_cert`
+ * travels inside a manifest: an issuer does not sign its own authorization.
+ */
+export const StudentCredentialResponseSchema = z.object({
+  credential: StudentCredentialSchema,
+  institution_cert: InstitutionCertSchema,
+  /** Echoed for display; always equal to `credential.institution_id`. */
+  institution_id: z.string(),
+  /** Echoed for display; always equal to `credential.student_ref`. */
+  student_ref: z.string(),
+  /**
+   * True when this account had already been issued a credential and the server
+   * re-issued for it. The previously issued credential is NOT invalidated — it
+   * stays valid until its own signed `expires_at`.
+   */
+  reissued: z.boolean(),
+});
+export type StudentCredentialResponse = z.infer<typeof StudentCredentialResponseSchema>;
+
+/** The request body: the student's single long-lived ed25519 PUBLIC key. */
+export const StudentCredentialRequestSchema = z.object({
+  student_pubkey: StudentPubkeySchema,
+});
+export type StudentCredentialRequest = z.infer<typeof StudentCredentialRequestSchema>;

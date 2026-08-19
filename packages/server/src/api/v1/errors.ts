@@ -67,6 +67,11 @@ export type ApiErrorCode =
   | 'ENROLLMENT_NOT_ON_ROSTER'
   | 'ENROLLMENT_ROSTER_AMBIGUOUS'
   | 'ENROLLMENT_UNAVAILABLE'
+  // Student credentials (identity 2.1 — institution-scoped). There is no
+  // CREDENTIAL_NOT_ON_ROSTER sibling, deliberately: a roster precondition is
+  // the deadlock 2.1 removes.
+  | 'CREDENTIAL_SESSION_REQUIRED'
+  | 'CREDENTIAL_UNAVAILABLE'
   // Semantic validation (422)
   | 'ROSTER_REQUIRED'
   | 'HEURISTIC_CONFIG_INVALID'
@@ -320,6 +325,38 @@ export const Errors = {
    */
   enrollmentUnavailable(reason: string): ApiError {
     return new ApiError('ENROLLMENT_UNAVAILABLE', 503, 'Enrollment is not available', { reason });
+  },
+
+  // -------------------------------------------------------------------------
+  // Student credentials (identity 2.1 — institution-scoped)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Issuing a student credential requires an interactive Google session, not an
+   * API token. A credential IS the attribution claim, so a stolen long-lived
+   * bearer secret must not be able to produce one; the Google login stays in
+   * the loop.
+   */
+  credentialSessionRequired(): ApiError {
+    return new ApiError(
+      'CREDENTIAL_SESSION_REQUIRED',
+      403,
+      'Issuing a student credential requires an interactive login; API tokens cannot issue credentials',
+    );
+  },
+
+  /**
+   * No institution key is configured, or its certificate is outside its
+   * validity window. Deliberately does not distinguish those to the caller
+   * beyond `reason`.
+   *
+   * Note there is no `not_on_roster` sibling here, and there must not be: a
+   * roster precondition is exactly the deadlock identity 2.1 removes.
+   */
+  credentialUnavailable(reason: string): ApiError {
+    return new ApiError('CREDENTIAL_UNAVAILABLE', 503, 'Credential issuance is not available', {
+      reason,
+    });
   },
 
   fileNotFound(fileId?: string): ApiError {
