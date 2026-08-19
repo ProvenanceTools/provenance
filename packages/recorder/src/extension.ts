@@ -29,6 +29,13 @@ import { createRecordingStatusBar } from './activation/status-bar.js';
 import { sealBundle } from './commands/seal.js';
 import { chooseSessionForSeal } from './commands/seal-selector.js';
 import { computeExtensionHash } from './commands/extension-hash.js';
+import {
+  showEnrollmentKey,
+  importEnrollmentToken,
+  exportIdentitySecret,
+  importIdentitySecret,
+} from './commands/enrollment.js';
+import type { EnrollmentCommandDeps } from './commands/enrollment.js';
 import { startSession, SessionRegistry } from './session/session-registry.js';
 import type { ActiveSession, HeartbeatVscodeDeps } from './session/session-registry.js';
 import { resolveOwnerRoot } from './session/session-router.js';
@@ -262,6 +269,12 @@ export async function activateImpl(deps: ActivateDeps): Promise<ActiveSession | 
 const registry = new SessionRegistry();
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  // Registered FIRST, before the workspace guard and before any manifest is
+  // discovered: a student must be able to import their identity secret on a new
+  // machine, or paste an enrollment token, without a recording session already
+  // running. Nothing here starts a session or touches the log.
+  registerEnrollmentCommands(context);
+
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {
     return;
@@ -321,6 +334,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         platform: `${process.platform}-${process.arch}`,
         clock: new SystemClock(),
         extensionDistPath,
+        secrets: context.secrets,
         isOwnedByThisRoot: (fsPath: string) =>
           resolveOwnerRoot(
             fsPath,
@@ -374,6 +388,7 @@ async function rescan(
         platform: `${process.platform}-${process.arch}`,
         clock: new SystemClock(),
         extensionDistPath,
+        secrets: context.secrets,
         isOwnedByThisRoot: (fsPath: string) => resolveOwnerRoot(fsPath, allRoots) === root,
       });
       context.subscriptions.push(...session.ownDisposables);
@@ -445,6 +460,57 @@ function registerSealCommand(context: vscode.ExtensionContext, extensionDistPath
     },
   );
   context.subscriptions.push(sealCmd);
+}
+
+/**
+ * Wire the four S2 enrollment commands to the real VS Code UI.
+ *
+ * The command bodies live in `commands/enrollment.ts` and take every seam as a
+ * dependency, so this function is the only place they meet `vscode`. None of
+ * them makes a network call — enrollment is a paste (recorder PRD NG2).
+ */
+function registerEnrollmentCommands(context: vscode.ExtensionContext): void {
+  const deps: EnrollmentCommandDeps = {
+    secrets: context.secrets,
+    // Read live from the registry: sessions come and go with workspace folders.
+    activeCourseIds: () =>
+      registry
+        .all()
+        .map((s) => s.manifest.course_id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    pickCourse: (items) =>
+      Promise.resolve(
+        vscode.window.showQuickPick(items, { placeHolder: 'Which course?' }),
+      ) as Promise<string | undefined>,
+    promptInput: (opts) =>
+      Promise.resolve(
+        vscode.window.showInputBox({
+          prompt: opts.prompt,
+          placeHolder: opts.placeHolder,
+          ignoreFocusOut: true,
+        }),
+      ) as Promise<string | undefined>,
+    showInfo: (message) => void vscode.window.showInformationMessage(message),
+    showError: (message) => void vscode.window.showWarningMessage(message),
+    copyToClipboard: (text) => Promise.resolve(vscode.env.clipboard.writeText(text)),
+    showDocument: async (text) => {
+      const doc = await vscode.workspace.openTextDocument({ content: text, language: 'plaintext' });
+      await vscode.window.showTextDocument(doc, { preview: true });
+    },
+  };
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('provenance.showEnrollmentKey', () => showEnrollmentKey(deps)),
+    vscode.commands.registerCommand('provenance.importEnrollmentToken', () =>
+      importEnrollmentToken(deps),
+    ),
+    vscode.commands.registerCommand('provenance.exportIdentitySecret', () =>
+      exportIdentitySecret(deps),
+    ),
+    vscode.commands.registerCommand('provenance.importIdentitySecret', () =>
+      importIdentitySecret(deps),
+    ),
+  );
 }
 
 export async function deactivate(): Promise<void> {

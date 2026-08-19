@@ -9,7 +9,7 @@
 import * as os from 'node:os';
 import * as crypto from 'node:crypto';
 import * as vscode from 'vscode';
-import type { Manifest, SessionStartPayload } from '@provenance/log-core';
+import type { Manifest, SessionIdentity, SessionStartPayload } from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -62,6 +62,11 @@ function computeMachineId(sessionId: string): string {
  *                          `process.platform + '-' + process.arch`.
  * @param sessionPubkeyHex  Hex-encoded ed25519 public key for this session (Phase 9+).
  *                          Pass '' for pre-Phase-9 sessions or tests that don't need a real key.
+ * @param identity          The S2 identity block, when the student holds a verifying
+ *                          enrollment for this manifest's course. MUST come from
+ *                          `identity/session-identity.ts`, which has already walked it
+ *                          against the manifest's root-verified `course_cert`. Omitted
+ *                          entirely when absent — see the note at the emission site.
  */
 export function buildRecorderContext(args: {
   manifest: Manifest;
@@ -70,8 +75,17 @@ export function buildRecorderContext(args: {
   vscodeVersion: string;
   platform: string;
   sessionPubkeyHex?: string;
+  identity?: SessionIdentity;
 }): RecorderContext {
-  const { manifest, prevSessionId, extension, vscodeVersion, platform, sessionPubkeyHex } = args;
+  const {
+    manifest,
+    prevSessionId,
+    extension,
+    vscodeVersion,
+    platform,
+    sessionPubkeyHex,
+    identity,
+  } = args;
 
   const sessionId = crypto.randomUUID();
   const machineId = computeMachineId(sessionId);
@@ -121,11 +135,23 @@ export function buildRecorderContext(args: {
       editor_build: '',
       platform,
     },
-    // NOTE: `identity` is deliberately NOT emitted. Enrollment tokens and the
-    // student per-course key are sub-project S2 and do not exist yet; the field is
-    // optional at the type level precisely so this step could land first. Emitting
-    // a placeholder would put an unsigned, unverifiable identity claim into a
-    // signed chain, which is worse than emitting nothing.
+    // `identity` (program spec §5, §5a) — the enrollment token, its course-signed
+    // `enrollment_cert`, and the student per-course key's signature over
+    // `session_pubkey`.
+    //
+    // The key is spread rather than assigned: when the student is not enrolled the
+    // field must be ABSENT, not `undefined`. `session.start` is hash-chained through
+    // JCS, which omits undefined-valued keys — so the two forms would in fact hash
+    // identically today, but relying on that would make the payload's shape depend
+    // on a canonicalizer detail. The three ports each have to reproduce this
+    // exactly, so the payload says what it means.
+    //
+    // Absence is the ordinary, expected state and never blocks recording: a student
+    // who has not enrolled yet, whose keyring is unavailable, or whose course let a
+    // cert lapse still produces a fully chain-verifiable bundle. Anything that
+    // fails to verify is dropped upstream in `identity/session-identity.ts` rather
+    // than written, because a broken claim inside a signed chain is permanent.
+    ...(identity !== undefined ? { identity } : {}),
     vscode: {
       version: vscodeVersion,
       // vscode.version is the only publicly available version string in the extension API.

@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { buildRecorderContext } from './recorder-context.js';
-import type { Manifest } from '@provenance/log-core';
+import type { Manifest, SessionIdentity } from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -331,10 +331,64 @@ describe('buildRecorderContext — session.start 2.0', () => {
     expect(ctx.vscode).toEqual({ version: '1.97.0', commit: '', platform: 'darwin-arm64' });
   });
 
-  it('does NOT emit identity — enrollment keys are S2 and do not exist yet', () => {
+  // NOTE — this assertion CHANGED MEANING in S2. It used to read "identity is
+  // never emitted, because enrollment does not exist yet". Now identity exists,
+  // and the rule it encodes is the real one: omitted when the student is not
+  // enrolled, present when they are. The omission half is still asserted, because
+  // it is the behaviour that keeps an unenrolled student recording.
+  it('omits identity entirely when the student is not enrolled', () => {
     const ctx = build(TEST_MANIFEST_V2);
     expect(ctx.identity).toBeUndefined();
+    // Absent, not present-and-undefined — see the emission-site comment.
     expect(Object.hasOwn(ctx, 'identity')).toBe(false);
+  });
+
+  it('emits identity verbatim when the student IS enrolled', () => {
+    const identity: SessionIdentity = {
+      enrollment: {
+        format_version: '2.0',
+        student_ref: '11111111-2222-3333-4444-555555555555',
+        course_id: 'berkeley-cs61b',
+        student_pubkey: '1'.repeat(64),
+        issued_at: '2026-08-25T00:00:00Z',
+        expires_at: '2027-01-15',
+        enrollment_sig: '2'.repeat(128),
+      },
+      enrollment_cert: {
+        format_version: '2.0',
+        course_id: 'berkeley-cs61b',
+        enrollment_pubkey: '3'.repeat(64),
+        valid_from: '2026-08-20',
+        valid_until: '2027-01-15',
+        course_sig: '4'.repeat(128),
+      },
+      session_pubkey_sig: '5'.repeat(128),
+    };
+
+    const ctx = buildRecorderContext({
+      manifest: TEST_MANIFEST_V2,
+      prevSessionId: null,
+      extension: makeExtension({ version: '1.2.0', publisher: 'itsgeagle', name: 'recorder' }),
+      vscodeVersion: '1.97.0',
+      platform: 'darwin-arm64',
+      identity,
+    });
+
+    // Byte-exact passthrough: the analyzer re-walks the chain from these bytes,
+    // so nothing may be re-shaped, re-ordered into new keys, or dropped.
+    expect(ctx.identity).toEqual(identity);
+    expect(Object.keys(ctx.identity ?? {}).sort()).toEqual([
+      'enrollment',
+      'enrollment_cert',
+      'session_pubkey_sig',
+    ]);
+  });
+
+  it('still omits identity for a 1.x manifest even if one is supplied', () => {
+    // Belt and braces: session-identity.ts refuses to produce one without a
+    // course_cert, so this asserts the caller contract rather than a filter here.
+    const ctx = build(TEST_MANIFEST);
+    expect(ctx.identity).toBeUndefined();
   });
 
   it('keeps format_version at "1.0" — the 2.0 additions are purely additive', () => {

@@ -13,20 +13,61 @@
  *
  * Key types we rely on (reproduced minimally to avoid importing the git type defs):
  *   Repository.state: RepositoryState
- *   RepositoryState.HEAD: { commit?: string; ... }
+ *   RepositoryState.HEAD: { commit?: string; name?: string; ... }
  *   RepositoryState.onDidChange: Event<void>
+ *   Repository.getCommit(ref): Thenable<Commit>
  *
  * Design notes:
  * - We ask for API version 1 (stable). If unavailable we return a no-op Disposable.
- * - On each repository state change we emit git.event with:
+ * - On each repository state change we emit git.event with the commit graph:
  *     operation: 'state_change'
- *     commit_sha: the current HEAD commit sha (if available and it changed)
+ *     commit_sha: the current HEAD commit sha (retained for 1.x readers)
+ *     sha / parents / branch: program spec S5, see below
  * - We call explanationTagger?.markGit() on each emit to suppress fs.external_change
  *   false positives (PRD §4.5 / explanation-tags.ts).
  * - All field accesses are defensive — any failure logs a warning and continues.
+ *
+ * ## The commit graph (program spec S5)
+ *
+ * Gradescope delivers no `.git`, and a `.git` that did travel would prove less
+ * than it looks like it does: `commit --amend`, `rebase`, and `filter-branch`
+ * rewrite history after the fact. The recorder sits on the LIVE repository while
+ * the work happens, so recording `sha`, `parents`, and `branch` here puts the
+ * graph inside the signed hash chain at the instant it existed, where it can no
+ * longer be rewritten. That is strictly better evidence than a shipped `.git`.
+ *
+ * ## NO AUTHOR IDENTITY — this is a protocol constraint, not a preference
+ *
+ * The git `Commit` object that {@link GitRepository.getCommit} resolves to also
+ * carries `authorName`, `authorEmail`, `authorDate`, and `message`. **None of
+ * them is read, here or anywhere else in the recorder.** The approved CPHS
+ * protocol treats a new category of identifier as requiring a filed modification
+ * BEFORE implementation, and a real name plus a real email address on every
+ * commit is exactly that. `sha`, `parents`, and `branch` are structural — they
+ * describe the shape of the history, not who produced it — and attribution
+ * already has a designed, opaque home in `session.start.identity.student_ref`.
+ *
+ * The local {@link GitCommit} type below therefore declares only `hash` and
+ * `parents`, so the other fields are not merely unused but unreachable. Widening
+ * it is out of protocol.
+ *
+ * ## Why emission became asynchronous
+ *
+ * `sha` and `branch` are readable synchronously off `state.HEAD`, but `parents`
+ * needs `getCommit(ref)`, which is async. Two consequences are handled here:
+ *
+ *  - **Ordering.** Log entries are ordered, and an unserialized async read would
+ *    let a fast `getCommit` overtake a slow one, writing the graph out of order.
+ *    Handlers are therefore chained through a single promise per wiring.
+ *  - **`markGit()` stays synchronous.** The tagger suppresses `fs.external_change`
+ *    false positives from the file writes a checkout performs, and those writes
+ *    land immediately. Deferring the mark behind an `await` would reintroduce
+ *    exactly the false positives it exists to prevent, so it is called in the
+ *    synchronous part of the handler, before anything is awaited.
  */
 
 import type * as vscode from 'vscode';
+import type { GitEventPayload } from '@provenance/log-core';
 import type { ExplanationTagger } from '../events/explanation-tags.js';
 
 // ---------------------------------------------------------------------------
@@ -40,20 +81,45 @@ type GitAPI = {
   onDidCloseRepository: (handler: (repo: GitRepository) => void) => vscode.Disposable;
 };
 
+/**
+ * The ONLY two fields of the git API's `Commit` this recorder may read.
+ *
+ * The real object also carries `authorName`, `authorEmail`, `authorDate`, and
+ * `message`. They are deliberately absent from this type so they are unreachable
+ * rather than merely unused — see the module docstring. Adding one requires a
+ * filed CPHS protocol modification first.
+ */
+type GitCommit = {
+  hash?: string;
+  parents?: string[];
+};
+
 type GitRepository = {
   rootUri: { fsPath: string };
   state: {
-    HEAD?: { commit?: string };
+    /** `name` is the current branch; absent when HEAD is detached. */
+    HEAD?: { commit?: string; name?: string };
     onDidChange: (handler: () => void) => vscode.Disposable;
   };
+  /** Absent on git API builds that predate it — treated as "parents unknown". */
+  getCommit?: (ref: string) => Thenable<GitCommit>;
 };
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * The wiring handle. A `vscode.Disposable`, plus {@link GitWiring.settled} for
+ * tests and shutdown to await the in-flight commit-graph reads.
+ */
+export type GitWiring = vscode.Disposable & {
+  /** Resolves once every queued state-change handler has finished. */
+  settled: () => Promise<void>;
+};
+
 export type GitWiringDeps = {
-  emit: (data: { operation: string; commit_sha?: string }) => void;
+  emit: (data: GitEventPayload) => void;
   getGitExtension: () => vscode.Extension<unknown> | undefined;
   /** If present, markGit() is called after each emitted git.event. */
   explanationTagger?: ExplanationTagger;
@@ -69,14 +135,19 @@ export type GitWiringDeps = {
 // startGitWiring
 // ---------------------------------------------------------------------------
 
-export function startGitWiring(deps: GitWiringDeps): vscode.Disposable {
+/** A wiring handle that does nothing, for every "no git here" exit below. */
+function inertWiring(): GitWiring {
+  return { dispose() {}, settled: () => Promise.resolve() };
+}
+
+export function startGitWiring(deps: GitWiringDeps): GitWiring {
   const { emit, getGitExtension, explanationTagger } = deps;
   const isOwnedByThisRoot = deps.isOwnedByThisRoot ?? (() => true);
 
   const gitExtension = getGitExtension();
   if (gitExtension === undefined) {
     console.warn('[provenance] vscode.git extension not found; git.event wiring skipped.');
-    return { dispose() {} };
+    return inertWiring();
   }
 
   let api: GitAPI | undefined;
@@ -85,15 +156,25 @@ export function startGitWiring(deps: GitWiringDeps): vscode.Disposable {
     api = exports?.getAPI?.(1);
   } catch (e) {
     console.warn('[provenance] failed to get vscode.git API v1:', e);
-    return { dispose() {} };
+    return inertWiring();
   }
 
   if (api === undefined) {
     console.warn('[provenance] vscode.git getAPI(1) returned undefined; git.event wiring skipped.');
-    return { dispose() {} };
+    return inertWiring();
   }
 
   const disposables: vscode.Disposable[] = [];
+
+  /**
+   * Serializes the async commit-graph reads. Log entries are ordered, so every
+   * state-change handler is appended to this one chain rather than racing: a
+   * fast `getCommit` must not overtake a slow one and emit out of order.
+   */
+  let queue: Promise<void> = Promise.resolve();
+
+  /** Set by dispose(). An in-flight read must not write into a closed session. */
+  let disposed = false;
 
   // Track the last-seen HEAD commit per repository to emit only on actual changes.
   const lastCommit = new Map<GitRepository, string | undefined>();
@@ -111,9 +192,14 @@ export function startGitWiring(deps: GitWiringDeps): vscode.Disposable {
     let sub: vscode.Disposable;
     try {
       sub = repo.state.onDidChange(() => {
+        // --- Synchronous part. Everything here must happen before any await.
         let commit_sha: string | undefined;
+        let branch: string | undefined;
         try {
           commit_sha = repo.state.HEAD?.commit;
+          // `name` is absent when HEAD is detached. Never invented — an omitted
+          // branch and a branch called "HEAD" are different claims.
+          branch = repo.state.HEAD?.name;
         } catch (e) {
           console.warn('[provenance] git wiring: failed to read HEAD on state change:', e);
         }
@@ -121,22 +207,55 @@ export function startGitWiring(deps: GitWiringDeps): vscode.Disposable {
         const prev = lastCommit.get(repo);
         lastCommit.set(repo, commit_sha);
 
+        // Ownership is a routing decision, so it is made BEFORE the graph read:
+        // fetching the commit graph of a repo this session does not own is work
+        // it should never do.
         if (!isOwnedByThisRoot(repo.rootUri.fsPath)) {
           return;
         }
 
-        // Only emit if we actually have a commit sha (or if it changed from something).
-        // Even for non-commit operations (branch switch, index change) we emit with the
-        // current sha so the analyzer sees the activity.
-        emit({
-          operation: 'state_change',
-          ...(commit_sha !== undefined ? { commit_sha } : {}),
-        });
-
-        // Suppress fs.external_change false positives (git checkout rewrites files).
+        // Suppress fs.external_change false positives (git checkout rewrites
+        // files). Called SYNCHRONOUSLY and before the emit: those writes land
+        // immediately, so deferring the mark behind the await below would
+        // reintroduce exactly the false positives the tagger exists to prevent.
         explanationTagger?.markGit();
 
-        void prev; // suppress unused-variable warning; we keep it for future use
+        void prev; // kept for future use; the sha itself is emitted below
+
+        // --- Async part, appended to the shared queue so emission stays ordered.
+        queue = queue.then(async () => {
+          if (disposed) return;
+
+          // `parents` needs an async read, and is OMITTED when it cannot be
+          // obtained. An empty array would be a positive claim of "root commit",
+          // which a read failure is not entitled to make.
+          let parents: string[] | undefined;
+          if (commit_sha !== undefined && typeof repo.getCommit === 'function') {
+            try {
+              const commit = await repo.getCommit(commit_sha);
+              // ONLY `parents` is read off the commit. The object also carries
+              // authorName / authorEmail / authorDate / message; reading any of
+              // them is out of protocol — see the module docstring.
+              if (Array.isArray(commit?.parents)) {
+                parents = commit.parents.filter((p): p is string => typeof p === 'string');
+              }
+            } catch (e) {
+              console.warn('[provenance] git wiring: failed to read commit parents:', e);
+            }
+          }
+
+          if (disposed) return;
+
+          // Emitted even for non-commit operations (branch switch, index change)
+          // so the analyzer sees the activity. `commit_sha` duplicates `sha` on
+          // purpose: 1.x readers only know the former.
+          emit({
+            operation: 'state_change',
+            ...(commit_sha !== undefined ? { commit_sha, sha: commit_sha } : {}),
+            ...(parents !== undefined ? { parents } : {}),
+            ...(branch !== undefined ? { branch } : {}),
+          });
+        });
       });
     } catch (e) {
       console.warn('[provenance] git wiring: failed to subscribe to repo state:', e);
@@ -166,6 +285,9 @@ export function startGitWiring(deps: GitWiringDeps): vscode.Disposable {
 
   return {
     dispose() {
+      // Set first: an in-flight commit-graph read must not emit into a session
+      // whose writer is being closed.
+      disposed = true;
       for (const d of disposables) {
         try {
           d.dispose();
@@ -176,5 +298,6 @@ export function startGitWiring(deps: GitWiringDeps): vscode.Disposable {
       disposables.length = 0;
       lastCommit.clear();
     },
+    settled: () => queue,
   };
 }

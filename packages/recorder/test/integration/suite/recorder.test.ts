@@ -34,6 +34,7 @@
 import * as assert from 'node:assert/strict';
 import * as path from 'node:path';
 import { statSync } from 'node:fs';
+import * as vscode from 'vscode';
 import {
   MANIFEST_FORMAT_VERSION_2,
   verifyManifestChain,
@@ -180,6 +181,43 @@ suite('Provenance Recorder integration — permissive fixture', () => {
     assert.equal(typeof host.editor_build, 'string');
     assert.equal(typeof host.platform, 'string');
     assert.ok(host.platform.length > 0, 'host.platform is empty');
+  });
+
+  test('an UNENROLLED student records normally, with `identity` omitted', () => {
+    // The safety property of S2, and the only half of it a real host can show:
+    // this fixture's VS Code profile holds no master secret and no enrollment
+    // token, so `buildSessionIdentity` skips with `not_enrolled` and the session
+    // must record exactly as it always has.
+    //
+    // The enrolled half is unit-tested instead (src/identity/session-identity.test.ts):
+    // seeding it here would mean pre-populating the Extension Host's SecretStorage,
+    // which is an OS credential vault with no test-time write path — and adding an
+    // exported hook to reach it would put a "write the student's identity" API into
+    // the shipped extension purely for a test.
+    const payload = sessionStartPayload(entries);
+    assert.equal(
+      payload.identity,
+      undefined,
+      'session.start carries an `identity` block, but this fixture has no enrollment token — ' +
+        'an identity was emitted that cannot have been verified.',
+    );
+    // Never blocks: the session is still a real, complete 2.0 recording.
+    assert.ok(payload.manifest !== undefined, 'unenrolled session lost its manifest block');
+    assert.ok(entries.length > 0, 'unenrolled session recorded nothing at all');
+  });
+
+  test('the enrollment commands are registered in the real host', async () => {
+    // They are registered before the workspace guard, so a student can import
+    // their identity secret on a new machine without a session running.
+    const commands = await vscode.commands.getCommands(true);
+    for (const id of [
+      'provenance.showEnrollmentKey',
+      'provenance.importEnrollmentToken',
+      'provenance.exportIdentitySecret',
+      'provenance.importIdentitySecret',
+    ]) {
+      assert.ok(commands.includes(id), `command ${id} is not registered`);
+    }
   });
 
   test('the produced .slog passes validateChain', () => {

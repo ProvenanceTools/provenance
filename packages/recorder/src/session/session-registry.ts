@@ -24,8 +24,10 @@ import {
   encryptSessionPrivkey,
   signCheckpoint,
 } from '@provenance/log-core';
-import type { HashedEnvelope, Clock, Manifest } from '@provenance/log-core';
+import type { HashedEnvelope, Clock, Manifest, SessionIdentity } from '@provenance/log-core';
 import { buildRecorderContext } from './recorder-context.js';
+import { buildSessionIdentity } from '../identity/session-identity.js';
+import type { SecretStore } from '../identity/secret-store.js';
 import { createSessionHost } from './session-host.js';
 import { SessionWriter } from '../io/session-writer.js';
 import { MetaWriter } from '../io/meta-writer.js';
@@ -103,6 +105,13 @@ export type StartSessionDeps = {
    * mounts one global status bar, not one per session (plan decision 5).
    */
   createStatusBar?: (disposables: vscode.Disposable[]) => vscode.StatusBarItem;
+  /**
+   * `ExtensionContext.secrets`, holding the student master secret and their
+   * per-course enrollment tokens (program spec §5a). Omitted means no `identity`
+   * is emitted and the session records exactly as it does today — which is also
+   * what every pre-S2 test caller gets.
+   */
+  secrets?: SecretStore;
 };
 
 // ---------------------------------------------------------------------------
@@ -192,6 +201,42 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   // Step 3c: Generate the session keypair.
   const keypair = await generateSessionKeypair();
 
+  // Step 3c-bis: Build the S2 identity block (program spec §5a step 5).
+  //
+  // Runs AFTER the session keypair exists, because the student's per-course key
+  // countersigns exactly that public key. Never blocks: `buildSessionIdentity`
+  // returns `skipped` for every failure — not enrolled, no keyring, a lapsed
+  // cert, a token from another machine — and the session records without an
+  // `identity`. It also refuses to hand back a block that does not verify against
+  // this manifest's root-verified `course_cert`, so nothing unverifiable can enter
+  // the hash chain.
+  //
+  // `secrets` is optional so the many existing test callers (and any caller
+  // without an ExtensionContext) keep working; absent means "never enrolled".
+  let identity: SessionIdentity | undefined;
+  if (deps.secrets !== undefined) {
+    const outcome = await buildSessionIdentity({
+      manifest,
+      sessionPubkeyHex: keypair.publicKeyHex,
+      // The window checks are judged against the session's own start instant, never
+      // wall-clock now, so an archived bundle still reads correctly years later.
+      sessionStartedAt: clock.wall(),
+      secrets: deps.secrets,
+    });
+    if (outcome.kind === 'emitted') {
+      identity = outcome.identity;
+      // Out-of-window is reported, never enforced (program spec §4) — surface it
+      // so the student can renew, but record either way.
+      if (!outcome.verified.token_window.in_window) {
+        console.warn(
+          `[provenance] enrollment token out of window (${outcome.verified.token_window.reason}); recording anyway.`,
+        );
+      }
+    } else {
+      console.warn(`[provenance] no session identity emitted: ${outcome.reason.kind}`);
+    }
+  }
+
   // Step 3d: Build recorder context (generates sessionId, machineId, etc.).
   const recorderContext = buildRecorderContext({
     manifest,
@@ -200,6 +245,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     vscodeVersion,
     platform,
     sessionPubkeyHex: keypair.publicKeyHex,
+    ...(identity !== undefined ? { identity } : {}),
   });
 
   // Step 4: Open a SessionWriter (.provenance/ dir already created in Step 3a).

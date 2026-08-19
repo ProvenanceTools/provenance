@@ -712,6 +712,145 @@ async function buildManifestV2Vectors(): Promise<unknown> {
 }
 
 /**
+ * Vectors for the `git.event` commit graph (program spec S5).
+ *
+ * Each case pins the JCS canonical bytes AND the resulting chain hash for a
+ * `git.event` envelope, so a port that orders keys differently, sorts `parents`,
+ * or collapses `[]` into "absent" fails here rather than producing a log whose
+ * hashes silently disagree with every other recorder's.
+ *
+ * Three things ports get wrong, in the order they are likely to:
+ *
+ *  - **`parents` order is meaningful.** The first parent is the branch that was
+ *    merged into. JCS sorts object KEYS but leaves array ELEMENTS alone, so a
+ *    port that helpfully sorts the shas produces different bytes and a different
+ *    hash. A case below pins the flipped order to a different hash to prove it.
+ *  - **`[]` and absent differ.** An empty array is "this commit genuinely has no
+ *    parents" (a root commit); an absent field is "the recorder could not read
+ *    them". Collapsing them lets a read failure and a root commit look alike.
+ *  - **`commit_sha` is still emitted.** It duplicates `sha` on purpose, for 1.x
+ *    readers, through the reader-before-writer migration.
+ *
+ * There is deliberately no author name and no author email in any case here, and
+ * a port MUST NOT add one: the approved CPHS protocol treats a new category of
+ * identifier as requiring a filed modification before implementation. `sha`,
+ * `parents`, and `branch` are structural. Attribution lives in the opaque
+ * `student_ref` inside `session.start.identity`, and nowhere else.
+ */
+function buildGitEventVectors(): unknown {
+  const gitCase = (name: string, note: string, data: Record<string, unknown>): unknown => {
+    const envelope = {
+      seq: 0,
+      t: 0,
+      wall: '2026-01-01T00:00:00.000Z',
+      kind: 'git.event',
+      data,
+    };
+    return {
+      name,
+      note,
+      data,
+      canonical_json: canonicalize(data),
+      envelope,
+      prev_hash: GENESIS_PREV_HASH,
+      hash: chainEntry(GENESIS_PREV_HASH, envelope).hash,
+    };
+  };
+
+  const A = 'a'.repeat(40);
+  const B = 'b'.repeat(40);
+  const C = 'c'.repeat(40);
+
+  return {
+    note:
+      'git.event commit-graph fields (program spec S5). Gradescope delivers no .git, and a ' +
+      '.git that did travel would be rewritable after the fact (amend, rebase, filter-branch), ' +
+      'so the graph is captured at RECORD time, inside the signed hash chain, where it can no ' +
+      'longer be rewritten. Every field except `operation` is optional and stays optional: 1.x ' +
+      'and pre-S5 2.0 bundles carry only { operation, commit_sha } and must keep parsing ' +
+      'forever (program spec §9).',
+    floor_note:
+      'git.event is a FLOOR event kind and adding fields to its payload does not change that. ' +
+      'It has no key in policy.capture, so "off" is not expressible — which is deliberate: the ' +
+      'commit graph is the exculpatory evidence that a large insert was a merge or a checkout ' +
+      'rather than a paste, and a course must not be able to switch that off.',
+    no_author_identity_note:
+      'NO git author name and NO author email, here or anywhere else in the log. This is a ' +
+      'protocol constraint, not a style preference: the approved CPHS protocol treats a new ' +
+      'category of identifier as requiring a filed modification BEFORE implementation. sha, ' +
+      'parents and branch describe the SHAPE of the history, not who made it. Attribution has ' +
+      'a designed, opaque home already — student_ref inside session.start.identity. A port ' +
+      'that adds an author field is out of protocol.',
+    parents_order_note:
+      'JCS sorts object keys but NOT array elements. parents[0] is the branch merged INTO, so ' +
+      'the order carries meaning and must never be sorted or normalized.',
+    cases: [
+      gitCase(
+        'legacy_1x',
+        'The pre-S5 shape. Must canonicalize and chain exactly as it always has — this is the ' +
+          'permanent 1.x compatibility anchor.',
+        { operation: 'state_change', commit_sha: A },
+      ),
+      gitCase('operation_only', 'Minimal payload: every other field is optional.', {
+        operation: 'state_change',
+      }),
+      gitCase(
+        'root_commit',
+        'parents is an EMPTY ARRAY — the commit genuinely has no parents. Distinct from the ' +
+          'unknown_parents case below.',
+        { operation: 'commit', commit_sha: A, sha: A, parents: [], branch: 'main' },
+      ),
+      gitCase(
+        'unknown_parents',
+        'parents is ABSENT — the recorder could not read them. MUST NOT canonicalize the same ' +
+          'as root_commit.',
+        { operation: 'commit', commit_sha: A, sha: A, branch: 'main' },
+      ),
+      gitCase('ordinary_commit', 'Exactly one parent.', {
+        operation: 'commit',
+        commit_sha: B,
+        sha: B,
+        parents: [A],
+        branch: 'main',
+      }),
+      gitCase(
+        'merge_commit',
+        'Two parents. parents[0] is the branch merged INTO; see merge_commit_parents_flipped.',
+        { operation: 'commit', commit_sha: C, sha: C, parents: [A, B], branch: 'main' },
+      ),
+      gitCase(
+        'merge_commit_parents_flipped',
+        'The same merge with parents reversed. It means something different, so it MUST hash ' +
+          'differently from merge_commit. A port that sorts parents fails here.',
+        { operation: 'commit', commit_sha: C, sha: C, parents: [B, A], branch: 'main' },
+      ),
+      gitCase(
+        'detached_head',
+        'branch is ABSENT when HEAD is detached. A port must omit it, never invent "HEAD" or "".',
+        { operation: 'checkout', commit_sha: A, sha: A, parents: [] },
+      ),
+      gitCase(
+        'branch_with_slash',
+        'Branch names routinely contain "/" and "-". Nothing escapes them; they are ordinary ' +
+          'JSON string values.',
+        { operation: 'checkout', commit_sha: B, sha: B, parents: [A], branch: 'feat/proj2-part1' },
+      ),
+      gitCase(
+        'branch_non_ascii',
+        'A non-ASCII branch name. JCS escapes nothing extra here; the value is UTF-8 and the ' +
+          'three ports must agree on its bytes.',
+        { operation: 'checkout', commit_sha: B, sha: B, parents: [A], branch: 'feature/über' },
+      ),
+      gitCase(
+        'octopus_merge',
+        'Three parents. Length is the structure: 0 = root, 1 = ordinary, 2+ = merge.',
+        { operation: 'commit', commit_sha: C, sha: C, parents: [A, B, C], branch: 'main' },
+      ),
+    ],
+  };
+}
+
+/**
  * Vectors for `resolveCapturePolicy` (program spec §4).
  *
  * Also exports the hard floor, which is the part a port is most likely to get
@@ -1353,6 +1492,9 @@ async function main(): Promise<void> {
 
   // --- 12. S2 student master secret -> per-course key derivation ---
   writeJson(outDir, 'student-keys.json', await buildStudentKeyVectors());
+
+  // --- 13. S5 git.event commit graph: sha / parents / branch ---
+  writeJson(outDir, 'git-event.json', buildGitEventVectors());
 
   console.log(`Wrote conformance vectors to ${outDir}`);
 }

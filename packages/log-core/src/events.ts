@@ -258,9 +258,65 @@ export type FsExternalChangePayload = {
   new_content_tail?: string;
 };
 
+/**
+ * A git operation observed through the editor's git integration (PRD §4.2),
+ * carrying enough of the commit graph for replay to show branch and merge
+ * structure (program spec S5).
+ *
+ * ## Why the graph is recorded rather than shipped
+ *
+ * Gradescope delivers no `.git`, and a `.git` that did travel would prove less
+ * than it appears to: `commit --amend`, `rebase`, and `filter-branch` rewrite
+ * history after the fact, so a repository handed in at submission time is
+ * evidence of what a student ended up with, not of what happened. The recorder
+ * sits on the live repository while the work is being done, so capturing the
+ * graph here puts it inside the signed hash chain at the instant it existed,
+ * where it can no longer be rewritten.
+ *
+ * ## No author identity. Ever.
+ *
+ * There is deliberately no `author_name` and no `author_email` here, and none
+ * anywhere else in the log. The approved CPHS protocol treats a new category of
+ * identifier as requiring a filed modification BEFORE implementation, and git
+ * author identity is exactly that — a real name and a real email address, in
+ * clear, attached to every commit. `sha`, `parents`, and `branch` are
+ * structural: they describe the shape of the history, not who produced it.
+ *
+ * Attribution already has a designed home, and it is opaque on purpose: the
+ * `student_ref` UUID inside `session.start.identity`. Adding an author field
+ * here would reintroduce, unsigned and unreviewed, precisely the identifier that
+ * design went to some trouble to avoid.
+ *
+ * ## Every new field is optional, permanently
+ *
+ * 1.x bundles, and the 2.0 bundles recorded before this landed, carry only
+ * `operation` and `commit_sha`. 1.x support is permanent (program spec §9), so
+ * these stay optional at the type level rather than becoming required at some
+ * future version.
+ */
 export type GitEventPayload = {
   operation: string;
+  /**
+   * @deprecated Superseded by {@link GitEventPayload.sha}, which means the same
+   * thing. Retained — and still emitted by 2.0 writers — so 1.x readers keep
+   * working through the reader-before-writer migration (program spec §9).
+   */
   commit_sha?: string;
+  /** Full 40-char hex sha of the commit HEAD points at. Absent if unreadable. */
+  sha?: string;
+  /**
+   * Parent shas of {@link GitEventPayload.sha}, in git's own order — the FIRST
+   * parent is the branch that was merged into. Order is therefore meaningful and
+   * must never be sorted: reversing it inverts the meaning of a merge.
+   *
+   * Length is the structure: `0` is a root commit, `1` an ordinary commit, `2`
+   * or more a merge. An EMPTY ARRAY and an ABSENT FIELD mean different things —
+   * `[]` is "this commit genuinely has no parents", absent is "the recorder
+   * could not read them" — so a reader must not collapse the two.
+   */
+  parents?: string[];
+  /** Current branch name. Absent when HEAD is detached; never invented. */
+  branch?: string;
 };
 
 export type ClockSkewPayload = {
