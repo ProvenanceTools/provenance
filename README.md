@@ -333,26 +333,40 @@ VSIX never needs to know about ahead of time. The script refuses to run if the e
 is missing, malformed, or matches the dev root key, so a misconfigured release can
 never silently ship a dev VSIX.
 
+Optionally also set `PROVENANCE_LEGACY_COURSE_PUBLIC_KEY_HEX` (the grandfathered
+single course key from before the root-key hierarchy) if this build still needs to
+activate against Manifest 1.x files in the field:
+
+```sh
+PROVENANCE_ROOT_PUBLIC_KEY_HEX=<the maintainer's root public key> \
+PROVENANCE_LEGACY_COURSE_PUBLIC_KEY_HEX=<the old course public key> \
+  npm run build:prod --workspace packages/recorder
+```
+
+It's optional and only needed while 1.x manifests are still in the field; omitting it
+produces a VSIX that will not activate on 1.x manifests (2.0 only). See
+`legacy-course-public-key.ts` for the removal condition once every course has
+re-issued as 2.0.
+
 **Refresh the analyzer's known-good extension-hash list** so a new VSIX won't trip
 `extension_hash_mismatch`:
 
 ```sh
-npm run update-hashes -- --keypair /Volumes/SECURE/cs61a-fa26.json
+npm run update-hashes -- --root-keypair /Volumes/SECURE/root-keypair.json
 ```
 
-> **Note:** `scripts/update-extension-hash-allowlist.mjs` was written for the old
-> per-course-key model — it still sets `PROVENANCE_COURSE_PUBLIC_KEY_HEX` (reading
-> `public_key_hex` from a _course_ keypair file) when it drives `build:prod`, which
-> now expects `PROVENANCE_ROOT_PUBLIC_KEY_HEX` instead. Since one VSIX build now
-> serves every course, this script's whole per-course-keypair invocation model is
-> stale under the root-key hierarchy; it needs updating (env var, and probably
-> dropping the per-course framing entirely, since there is now only one production
-> hash to track per root-key rotation) before `--keypair` / the env-var path will
-> work again. Filed as follow-up; out of scope for the change that introduced this
-> note (`tools/` and `packages/recorder/package.json` only — see `CLAUDE.md`).
-> `--no-build`, `--hash`, `--remove`, `--clear`, and `--show` are unaffected.
+This reads `public_key_hex` from the root keypair JSON, runs the same `build:prod`
+pipeline as above, and adds the resulting VSIX's `extension_hash` to the allowlist.
+If `PROVENANCE_LEGACY_COURSE_PUBLIC_KEY_HEX` is set in the environment, it's passed
+through to the build the same way — but note that embedding the legacy key changes
+the built `dist/` and therefore the hash, so a build with it set produces a different
+hash than one without. The script always hashes whatever `dist/` the build it just
+ran actually produced, so the recorded hash is correct for that variant; to allowlist
+both a 1.x-compatible and a 2.0-only VSIX, run the script twice, once with the var
+set and once without.
 
-Other modes: `--show` (print current list), `--no-build` (hash an already-bundled `dist/`), `--hash <hex>` / `--remove <hex>` (manual entries), `--clear`.
+Other modes: `--show` (print current list), `--no-build` (hash an already-bundled
+`dist/`), `--hash <hex>` / `--remove <hex>` (manual entries), `--clear`, `--help`.
 
 See [`docs/recorder.md`](docs/recorder.md) for the full security model and what the recorder defends against.
 
