@@ -111,6 +111,74 @@ export async function buildManifest2(opts: BuildManifest2Opts): Promise<Manifest
   return { ...unsigned, sig: await signManifest(unsigned, keys.coursePrivkey) };
 }
 
+export type BuildManifest1xOpts = {
+  keys: TrustChainKeys;
+  /** `'1.0'` or `'1.1'`. Anything else is not a 1.x manifest. */
+  formatVersion?: string;
+  assignmentId?: string;
+  semester?: string;
+  issuedAt?: string;
+  filesUnderReview?: string[];
+};
+
+/**
+ * Mint a signed **Manifest 1.x** — the shape a course that has not migrated to
+ * 2.0 still issues.
+ *
+ * A 1.x manifest has no `course_id`, no `course_cert`, and no capture `policy`:
+ * those fields arrived with 2.0, and `parseManifestValue` strips them from any
+ * non-2.0 manifest, so there is nothing here for a chain walk to consume. The
+ * `sig` is nonetheless a REAL course signature over the real payload, because a
+ * fixture whose signature is a hex placeholder cannot tell "we ignored the
+ * signature because the format has no chain" apart from "we ignored it because
+ * it was junk".
+ */
+export async function buildManifest1x(opts: BuildManifest1xOpts): Promise<Manifest> {
+  const {
+    keys,
+    formatVersion = '1.0',
+    assignmentId = 'hw1',
+    semester = 'fa26',
+    issuedAt = '2026-09-08T00:00:00Z',
+    filesUnderReview = ['hw1.py'],
+  } = opts;
+
+  const unsigned: Omit<Manifest, 'sig'> = {
+    format_version: formatVersion,
+    assignment_id: assignmentId,
+    semester,
+    issued_at: issuedAt,
+    files_under_review: filesUnderReview,
+  };
+
+  return { ...unsigned, sig: await signManifest(unsigned, keys.coursePrivkey) };
+}
+
+/**
+ * The `session.start.data` fields a **current** recorder writes when the
+ * assignment manifest it activated against is 1.x.
+ *
+ * This is the case the analyzer regressed on. All three recorders emit
+ * `data.manifest` unconditionally — see
+ * `packages/recorder/src/session/recorder-context.ts`, which spells out why:
+ * the field is additive, and a 1.x manifest's parsed form carries no 2.0-only
+ * fields, so nothing unsigned rides along. `data.format_version` stays `'1.0'`,
+ * exactly as the recorder writes it; the presence of `manifest` is NOT a 2.0
+ * claim.
+ */
+export function sessionStart1x(manifest: Manifest): Record<string, unknown> {
+  return {
+    manifest_sig: manifest.sig,
+    manifest,
+    host: {
+      editor: 'vscode',
+      editor_version: '1.100.0',
+      editor_build: '',
+      platform: 'darwin',
+    },
+  };
+}
+
 /**
  * The `session.start.data` fields a 2.0 recorder writes, ready to be handed to
  * `buildTestBundle`'s per-session `sessionStart` override.

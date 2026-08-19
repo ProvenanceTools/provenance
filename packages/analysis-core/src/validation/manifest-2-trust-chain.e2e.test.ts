@@ -37,6 +37,7 @@ import {
   verifyCourseCert,
   resolveCapturePolicy,
   isEventKindCaptured,
+  DEFAULT_CAPTURE_POLICY,
 } from '@provenance/log-core';
 import type { CapturePolicy, CourseCert, EventKind, Manifest } from '@provenance/log-core';
 import { loadBundle } from '../loader/parse-bundle.js';
@@ -46,13 +47,16 @@ import { buildTestBundle } from '../test-support/build-test-bundle.js';
 import {
   buildTrustChainKeys,
   buildManifest2,
+  buildManifest1x,
   sessionStart2,
+  sessionStart1x,
 } from '../test-support/build-manifest-2.js';
 import type { TrustChainKeys } from '../test-support/build-manifest-2.js';
 import {
   resolveBundleCapturePolicy,
   summarizeBundleManifest,
   isSignalCaptured,
+  CAPTURE_SIGNALS,
 } from '../manifest/bundle-manifest.js';
 import { runValidation } from './run-validation.js';
 import type { ValidationCheck, ValidationReport } from './check-types.js';
@@ -337,7 +341,10 @@ describe('a 1.x bundle', () => {
       submissionFiles: [{ path: FILE, status: 'present', content: CODE_APPENDED }],
     });
 
-    // Nothing about a 1.x bundle embeds a manifest.
+    // This fixture is a PRE-2.0 recorder: it wrote no `data.manifest` at all.
+    // That is a property of this fixture, not of 1.x bundles in general — a
+    // current recorder embeds the manifest whatever its version, which is the
+    // case the sibling test below covers.
     expect(bundle.sessions.every((s) => s.firstEvent.data.manifest === undefined)).toBe(true);
 
     const report = await runValidation(bundle, { rootPubkeyHex: keys.rootPubkeyHex });
@@ -354,6 +361,105 @@ describe('a 1.x bundle', () => {
     expect(summary.trust_chain).toBe('legacy');
     expect(summary.disabled_signals).toEqual([]);
     expect(summary.heartbeat_interval_ms).toBe(30_000);
+  });
+
+  it('passes all eight checks when a CURRENT recorder embeds the 1.x manifest', async () => {
+    // The grandfathering case, and the regression this suite previously missed:
+    // a course still issuing 1.x manifests whose students have updated to a
+    // recorder that emits `session.start.data.manifest` unconditionally.
+    //
+    // The reader must decide legacy-vs-2.0 by the embedded manifest's
+    // `format_version`, never by its presence. Reading presence as a 2.0 claim
+    // sends this bundle into the chain walk, which refuses at step 0 with
+    // `not_manifest_2_0` — failing check 2 for every submission in the course.
+    const manifest1x = await buildManifest1x({
+      keys,
+      assignmentId: ASSIGNMENT_ID,
+      semester: SEMESTER,
+      issuedAt: ISSUED_AT,
+      filesUnderReview: [FILE],
+    });
+    const start = sessionStart1x(manifest1x);
+    const bundle = await buildBundle({
+      sessions: [
+        { events: studentSession(), sessionStart: start },
+        { events: continuationSession(), sessionStart: start },
+      ],
+      submissionFiles: [{ path: FILE, status: 'present', content: CODE_APPENDED }],
+    });
+
+    // The fixture really is what a current recorder writes: manifest embedded,
+    // 1.x, and bound by manifest_sig.
+    expect(bundle.sessions.every((s) => s.firstEvent.data.manifest !== undefined)).toBe(true);
+    expect(bundle.sessions[0]!.firstEvent.data.manifest_sig).toBe(manifest1x.sig);
+
+    const report = await runValidation(bundle, { rootPubkeyHex: keys.rootPubkeyHex });
+
+    expect(statuses(report)).toEqual(ALL_PASS);
+    expect(report.overall).toBe('pass');
+
+    // Legacy path, not the chain path — and emphatically not `not_manifest_2_0`.
+    const binding = check(report, 'session_binding');
+    expect(binding.detail).toBe('All 2 sessions share the same manifest_sig.');
+    expect(binding.detail).not.toContain('Trust chain');
+
+    const summary = await summarizeBundleManifest(bundle, keys.rootPubkeyHex);
+    expect(summary.format_version).toBe('1.x');
+    expect(summary.trust_chain).toBe('legacy');
+    expect(summary.trust_chain_detail).toBeNull();
+    expect(summary.course_id).toBeNull();
+    expect(summary.disabled_signals).toEqual([]);
+    expect(summary.heartbeat_interval_ms).toBe(30_000);
+
+    // A 1.x manifest signs no policy, so the resolved policy is the DEFAULT one
+    // and its source is `default` — not `unverified_manifest`, which would be
+    // the same presence-vs-version confusion one layer down.
+    const policy = resolveBundleCapturePolicy(bundle);
+    expect(policy.source).toBe('default');
+    expect(policy.effective).toEqual(DEFAULT_CAPTURE_POLICY);
+    expect(policy.claimedDisabledSignals).toEqual([]);
+    for (const signal of CAPTURE_SIGNALS) {
+      expect(isSignalCaptured(bundle, signal)).toBe(true);
+    }
+
+    // An unverifiable 1.x chain must never be stamped `verified`: the trust
+    // stamp gates whether a signed policy is honoured, and there is no verified
+    // signature here to honour one from.
+    expect(bundle.capturePolicyTrust).toBe('unverified');
+  });
+
+  it('takes the legacy path when only SOME sessions embed the 1.x manifest', async () => {
+    // A student who updated their recorder mid-assignment: the earlier session
+    // predates the embedding, the later one carries the manifest. No session
+    // claims 2.0, so there is no chain to walk and sig-equality is the whole
+    // statement available — the same answer both sessions would have got alone.
+    const manifest1x = await buildManifest1x({
+      keys,
+      assignmentId: ASSIGNMENT_ID,
+      semester: SEMESTER,
+      issuedAt: ISSUED_AT,
+      filesUnderReview: [FILE],
+    });
+    const bundle = await buildBundle({
+      sessions: [
+        // Pre-update: manifest_sig only, no embedded manifest.
+        { events: studentSession(), sessionStart: { manifest_sig: manifest1x.sig } },
+        // Post-update: the same manifest, now embedded.
+        { events: continuationSession(), sessionStart: sessionStart1x(manifest1x) },
+      ],
+      submissionFiles: [{ path: FILE, status: 'present', content: CODE_APPENDED }],
+    });
+
+    expect(bundle.sessions[0]!.firstEvent.data.manifest).toBeUndefined();
+    expect(bundle.sessions[1]!.firstEvent.data.manifest).toBeDefined();
+
+    const report = await runValidation(bundle, { rootPubkeyHex: keys.rootPubkeyHex });
+
+    expect(statuses(report)).toEqual(ALL_PASS);
+    expect(check(report, 'session_binding').detail).toBe(
+      'All 2 sessions share the same manifest_sig.',
+    );
+    expect(resolveBundleCapturePolicy(bundle).source).toBe('default');
   });
 
   it('still fails check 2 when two sessions bind to different assignment manifests', async () => {
@@ -444,6 +550,49 @@ describe('trust-chain tampering', () => {
     );
   });
 
+  it('rejects a bundle whose sessions disagree on manifest version', async () => {
+    // One session carries a genuine 2.0 manifest, another a genuine 1.x one.
+    // Some session claims 2.0, so the bundle is held to the 2.0 contract and
+    // the chain is walked against the 2.0 manifest — the 1.x session must not
+    // get to drag the walk onto a manifest that has no chain. The 1.x session
+    // then fails the sig binding, which is the honest cause: it was keyed by a
+    // different manifest entirely.
+    const manifest2 = await buildManifest2({
+      keys,
+      courseId: COURSE_ID,
+      assignmentId: ASSIGNMENT_ID,
+      semester: SEMESTER,
+      issuedAt: ISSUED_AT,
+      filesUnderReview: [FILE],
+    });
+    const manifest1x = await buildManifest1x({
+      keys,
+      assignmentId: ASSIGNMENT_ID,
+      semester: SEMESTER,
+      issuedAt: ISSUED_AT,
+      filesUnderReview: [FILE],
+    });
+
+    // 1.x session FIRST, so a reader that simply took the first embedded
+    // manifest would walk the 1.x one and report `not_manifest_2_0`.
+    const bundle = await buildBundle({
+      sessions: [
+        { events: studentSession(), sessionStart: sessionStart1x(manifest1x) },
+        { events: continuationSession(), sessionStart: sessionStart2(manifest2) },
+      ],
+      submissionFiles: [{ path: FILE, status: 'present', content: CODE_APPENDED }],
+    });
+
+    const report = await runValidation(bundle, { rootPubkeyHex: keys.rootPubkeyHex });
+
+    expectOnlySessionBindingFailed(report);
+    const binding = check(report, 'session_binding');
+    expect(binding.detail).toContain(`recorded manifest_sig ${manifest1x.sig.slice(0, 16)}…`);
+    expect(binding.detail).toContain('but carries a manifest signed');
+    expect(binding.detail).not.toContain('not 2.0');
+    expect(binding.supportingSeqs).toEqual([{ sessionId: bundle.sessions[0]!.sessionId, seq: 0 }]);
+  });
+
   it('rejects a policy block edited after signing — the student off-switch attempt', async () => {
     const genuine = await buildManifest2({
       keys,
@@ -507,8 +656,11 @@ describe('trust-chain tampering', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. The 1.x downgrade attack is refused.
-//    Every signature verifies individually; the chain must still reject it.
+// 4. The 1.x downgrade attack is neutralised.
+//    Every signature verifies individually, so the defence cannot be a
+//    signature check. It is the parse: 2.0-only fields do not survive being
+//    read off a manifest that declares itself 1.x, so the downgrade buys the
+//    student a plain 1.x bundle and nothing else.
 // ---------------------------------------------------------------------------
 
 describe('the 1.x downgrade attack', () => {
@@ -563,17 +715,42 @@ describe('the 1.x downgrade attack', () => {
     });
   });
 
-  it('fails check 2 on format_version, not on any signature', async () => {
+  it('is treated as the 1.x bundle it declares itself to be, gaining nothing', async () => {
+    // This assertion was previously `session_binding: 'fail'`, on the grounds
+    // that step 0 of the chain walk refuses `not_manifest_2_0`. That verdict was
+    // unreachable without also failing every HONEST 1.x bundle a current
+    // recorder writes, because reaching step 0 at all required treating the mere
+    // PRESENCE of `data.manifest` as a 2.0 claim — and a current recorder embeds
+    // 1.x manifests too. A refusal that fires on 100% of a grandfathered
+    // course's submissions is not a detection, so the check is now made on
+    // `format_version` and this bundle takes the legacy path.
+    //
+    // Nothing is conceded by that. The attack is defeated one layer down, where
+    // it always was: `parseManifestValue` drops `course_id`, `policy`, and
+    // `course_cert` from any manifest below 2.0, so the stapled-on fields never
+    // reach a reader. The manifest is treated as exactly what it declares —
+    // a 1.x manifest — and a 1.x manifest confers nothing.
     const { manifest } = await buildDowngradeManifest();
     const bundle = await build20Bundle(manifest);
 
     const report = await runValidation(bundle, { rootPubkeyHex: keys.rootPubkeyHex });
+    expect(statuses(report)).toEqual(ALL_PASS);
 
-    expectOnlySessionBindingFailed(report);
-    expect(check(report, 'session_binding').detail).toContain(
-      'manifest is format_version 1.0, not 2.0',
-    );
-    expect(check(report, 'session_binding').detail).not.toContain('signature');
+    const binding = check(report, 'session_binding');
+    expect(binding.detail).toBe('Single session; binding trivially consistent.');
+    // Emphatically NOT the old step-0 refusal, which cost more than it caught.
+    expect(binding.detail).not.toContain('not 2.0');
+    expect(binding.detail).not.toContain('signature');
+
+    // What the attacker actually wanted, and did not get: none of the unsigned
+    // 2.0 fields survive, and the chain is never reported as verified.
+    const summary = await summarizeBundleManifest(bundle, keys.rootPubkeyHex);
+    expect(summary.format_version).toBe('1.x');
+    expect(summary.trust_chain).toBe('legacy');
+    expect(summary.course_id).toBeNull();
+    expect(summary.cert).toBeNull();
+    expect(summary.disabled_signals).toEqual([]);
+    expect(bundle.capturePolicyTrust).toBe('unverified');
   });
 
   it('does not hand the student the capture off-switch it was reaching for', async () => {
