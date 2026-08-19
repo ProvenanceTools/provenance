@@ -67,6 +67,7 @@ import {
   verifyCourseCert,
   checkCertWindow,
   buildCourseCertSignedPayload,
+  parseIsoInstantMs,
   resolveCapturePolicy,
   DEFAULT_CAPTURE_POLICY,
   FLOOR_EVENT_KINDS,
@@ -348,6 +349,36 @@ async function buildCourseCertVectors(): Promise<unknown> {
         rootPubkeyHex,
       ),
     ],
+    timestamp_note:
+      'The exact accepting set of the timestamp parser, spelled out because the three ' +
+      'implementations have wildly different date libraries and must agree. Grammar: ' +
+      'YYYY-MM-DD optionally followed by THH:MM:SS, optional .fraction (padded/truncated to ' +
+      'milliseconds), optional Z or +/-HH:MM. Date-only means UTC midnight; a missing offset ' +
+      'means UTC. Non-existent calendar dates are REJECTED, not rolled forward — JS Date ' +
+      'would turn 2026-02-31 into 2026-03-03, and java.time would throw, so the parser ' +
+      'normalises that difference away by rejecting. expected_ms is null for a rejection.',
+    timestamp_parse_cases: [
+      '2026-08-20',
+      '2026-09-08T12:34:56Z',
+      '2026-09-08T00:00:00',
+      '2026-09-08T00:00:00.5Z',
+      '2026-09-08T00:00:00.123456Z',
+      '2026-09-08T02:00:00+02:00',
+      '2026-09-07T21:00:00-03:00',
+      '2028-02-29',
+      '0026-09-08',
+      '2026-02-31',
+      '2027-02-29',
+      '2026-13-01',
+      '2026-09-32',
+      '2026-09-08T25:00:00Z',
+      '2026-09-08 00:00:00Z',
+      '2026/09/08',
+      '20260908',
+      'not a date',
+      '',
+    ].map((input) => ({ input, expected_ms: parseIsoInstantMs(input) })),
+
     window_note:
       'The window is evaluated against manifest.issued_at, NEVER against wall-clock now: a Fall ' +
       '2026 bundle must still verify in 2028 for an adjudication case. Both bounds are ' +

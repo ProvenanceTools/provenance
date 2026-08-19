@@ -138,8 +138,26 @@ export function parseIsoInstantMs(value: string): number | null {
   if (day < 1 || day > 31) return null;
   if (hour > 23 || minute > 59 || second > 60) return null;
 
-  let ms = Date.UTC(year, month - 1, day, hour, minute, second, millis);
+  // `Date.UTC` maps years 0-99 onto 1900-1999, so a four-digit year like '0026'
+  // would silently become 1926. Build the date and set the full year explicitly.
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, second, millis);
+  let ms = date.getTime();
   if (Number.isNaN(ms)) return null;
+
+  // `Date` silently rolls invalid calendar dates forward (2026-02-31 becomes
+  // 2026-03-03). Accepting that would put this parser's accepting set at the
+  // mercy of JS date arithmetic, which the Kotlin (`java.time`, strict) and Lua
+  // (hand-rolled) ports would not reproduce. Reject anything that did not
+  // round-trip.
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
 
   const offset = m[8];
   if (offset !== undefined && offset !== 'Z') {

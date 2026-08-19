@@ -267,6 +267,26 @@ describe('parseIsoInstantMs', () => {
   ])('rejects %j', (value) => {
     expect(parseIsoInstantMs(value)).toBeNull();
   });
+
+  it.each(['2026-02-31', '2026-02-30', '2027-02-29', '2026-04-31', '2026-06-31'])(
+    'rejects the non-existent calendar date %j instead of rolling it forward',
+    (value) => {
+      // JS Date silently rolls 2026-02-31 to 2026-03-03. Kotlin's java.time and a
+      // hand-rolled Lua parser would not, so accepting it would put the three
+      // implementations' accepting sets out of sync.
+      expect(parseIsoInstantMs(value)).toBeNull();
+    },
+  );
+
+  it('accepts a real leap day', () => {
+    expect(parseIsoInstantMs('2028-02-29')).toBe(Date.UTC(2028, 1, 29));
+  });
+
+  it('does not map a four-digit year below 100 onto the 1900s', () => {
+    const ms = parseIsoInstantMs('0026-09-08');
+    expect(ms).not.toBeNull();
+    expect(new Date(ms as number).getUTCFullYear()).toBe(26);
+  });
 });
 
 // ---------------------------------------------------------------------------
