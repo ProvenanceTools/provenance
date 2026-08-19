@@ -369,16 +369,42 @@ export const RosterUpsertSummarySchema = z.object({
 export type RosterUpsertSummary = z.infer<typeof RosterUpsertSummarySchema>;
 
 /**
- * A submission folder that could not be processed as a bundle.
+ * A submission folder — or one assignment scope within it — that could not be
+ * processed as a bundle.
  *
  * `bundle_too_large` arises only on the streaming upload / local-path ingest,
  * where bundle sizes are discovered one at a time (the job is already running),
  * so an oversize bundle is skipped-and-reported rather than failing the whole
  * upload up front.
+ *
+ * The scope reasons come from git-repo submissions, where one cloned repository
+ * can hold several `.provenance/` directories (program architecture §6):
+ *   - `no_seal` — a `.provenance/` with no `manifest.json`. Nothing runs the
+ *     seal command on a git push, so this is the normal state of a git scope
+ *     until the recorder's rolling seal ships. Reported per scope so a repo
+ *     never disappears from ingest without a record.
+ *   - `scope_excluded` — the assignment's `ingest_scope.path_glob` did not
+ *     match this scope's directory.
+ *   - `ambiguous_scope` — `ingest_scope.on_multiple = 'error'` and more than
+ *     one scope declared this assignment id.
+ *
+ * `scope_path` is `''` for the folder root (always so on the flat Gradescope
+ * path) and a directory prefix such as `proj2/` for a fanned-out scope. Optional
+ * rather than defaulted: apiFetch infers its result type from the schema, and a
+ * zod default makes input and output diverge — optional keeps a response from a
+ * server predating scope fan-out parseable without that split.
  */
 export const GradescopeSkippedEntrySchema = z.object({
   folder_key: z.string(),
-  reason: z.enum(['no_manifest', 'no_submitters', 'bundle_too_large']),
+  scope_path: z.string().optional(),
+  reason: z.enum([
+    'no_manifest',
+    'no_submitters',
+    'bundle_too_large',
+    'no_seal',
+    'scope_excluded',
+    'ambiguous_scope',
+  ]),
 });
 export type GradescopeSkippedEntry = z.infer<typeof GradescopeSkippedEntrySchema>;
 

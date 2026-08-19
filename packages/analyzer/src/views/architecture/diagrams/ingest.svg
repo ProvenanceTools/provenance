@@ -102,7 +102,7 @@
 <g id="node6" class="node">
 <title>fanout</title>
 <polygon stroke-width="1.3" points="480.17,-1898.35 272.53,-1898.35 272.53,-1875.75 480.17,-1875.75 491.47,-1887.05 480.17,-1898.35" class="f-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="382" y="-1887.78" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">fan out — one job per submission</text>
+<text xml:space="preserve" text-anchor="middle" x="382" y="-1887.78" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">fan out — one job per scope × submitter</text>
 <text xml:space="preserve" text-anchor="middle" x="382" y="-1878.03" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">pg&#45;boss, bounded concurrency, cancellable</text>
 </g>
 

@@ -23,7 +23,7 @@ digraph ingest {
     meta   [label="read submission_metadata.yml"]
     hasmeta[label="is this actually a\nGradescope export?" shape=diamond fillcolor="#12161f"
             fontsize=9 height=0.85 width=1.8]
-    fanout [label="fan out — one job per submission\npg-boss, bounded concurrency, cancellable"
+    fanout [label="fan out — one job per scope × submitter\npg-boss, bounded concurrency, cancellable"
             shape=cds margin="0.26,0.10"]
     pbun   [label="parse bundle\nmanifest + every .slog"]
     pfail  [label="invalid_manifest / unparseable\nrecorded on the job, not fatal\nto the rest of the export"

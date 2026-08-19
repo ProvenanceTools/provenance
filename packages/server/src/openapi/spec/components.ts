@@ -270,9 +270,17 @@ export const components = {
             type: 'object',
             properties: {
               folder_key: { type: 'string' },
+              scope_path: { type: 'string' },
               reason: {
                 type: 'string',
-                enum: ['no_manifest', 'no_submitters', 'bundle_too_large'],
+                enum: [
+                  'no_manifest',
+                  'no_submitters',
+                  'bundle_too_large',
+                  'no_seal',
+                  'scope_excluded',
+                  'ambiguous_scope',
+                ],
               },
             },
           },

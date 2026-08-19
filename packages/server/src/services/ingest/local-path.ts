@@ -7,8 +7,15 @@
  * buffers the whole upload in memory (and trips a ~2 GiB FormData ceiling);
  * this path never holds more than one rebuilt bundle at a time. It otherwise
  * reuses the exact same downstream pipeline — roster upsert → stage blob →
- * `ingest_files` row → enqueue one `ingest_file` job per submitter — so the
- * worker processes locally-ingested submissions identically to uploaded ones.
+ * `ingest_files` row → enqueue one `ingest_file` job per (assignment scope ×
+ * submitter) — so the worker processes locally-ingested submissions identically
+ * to uploaded ones.
+ *
+ * A submission folder can hold more than one assignment scope: CS 61B/61C
+ * students push a git repo and Gradescope clones the WHOLE repository, so one
+ * folder can carry `proj2/.provenance/` and `lab5/.provenance/` side by side.
+ * `repo-scopes.ts` fans that out into one flat bundle per scope before staging;
+ * a classic flat folder has exactly one scope and is unaffected.
  *
  * Deliberately does NOT enforce INGEST_MAX_BATCH_BYTES (the total-size cap that
  * exists to bound the in-memory HTTP path); processing arbitrarily large local
@@ -29,7 +36,8 @@ import { stageBlob } from './stage-blob.js';
 import { createBoundedRunner } from './bounded-runner.js';
 import { recordPhase } from '../../jobs/ingest-profile.js';
 import { upsertRosterFromSubmitters } from './gradescope/upsert-roster.js';
-import { openLocalExport } from './gradescope/stream-export.js';
+import { openLocalExport, type StreamedSkipReason } from './gradescope/stream-export.js';
+import { loadIngestScopeConfigs, scopeConfigResolver } from './gradescope/scope-config.js';
 import { zipBundleEntries, type BundleEntry } from './gradescope/build-bundle-zip.js';
 import { createRebuildPool, type RebuildPool } from './gradescope/rebuild-pool.js';
 import { getBoss, JOB_KINDS } from '../../jobs/pg-boss.js';
@@ -86,7 +94,13 @@ export interface IngestLocalPathArgs {
 
 export interface IngestLocalPathSkipped {
   folderKey: string;
-  reason: 'no_manifest' | 'no_submitters' | 'bundle_too_large';
+  /**
+   * The assignment scope within the folder that was skipped: `''` for the
+   * folder root, else a directory prefix such as `proj2/`. Non-empty only for
+   * git-repo submissions carrying several scopes.
+   */
+  scopePath: string;
+  reason: StreamedSkipReason | 'bundle_too_large';
 }
 
 export type IngestLocalPathResult =
@@ -95,7 +109,9 @@ export type IngestLocalPathResult =
       /** Null when the export had no stageable submissions (roster-only). */
       jobId: string | null;
       roster: { added: number; updated: number };
+      /** Bundles staged — one per ACCEPTED SCOPE, not per submission folder. */
       bundlesProcessed: number;
+      /** `ingest_files` rows staged — one per (accepted scope × submitter). */
       submissionsQueued: number;
       skipped: IngestLocalPathSkipped[];
     }
@@ -121,7 +137,14 @@ export async function ingestLocalPath(
   const { semesterId, userId, archivePath, maxBundleBytes, maxBatchFiles } = args;
   const existingJobId = args.jobId ?? null;
 
-  const opened = await openLocalExport(archivePath);
+  // Scope-resolution config is per assignment and keyed by the id each scope
+  // declares, so the whole semester's map is read once up front (a handful of
+  // rows) rather than per discovered scope.
+  const scopeConfigs = await loadIngestScopeConfigs(db, semesterId);
+
+  const opened = await openLocalExport(archivePath, {
+    scopeConfigFor: scopeConfigResolver(scopeConfigs),
+  });
   if (!opened.ok) {
     return { ok: false, error: opened.error, detail: opened.detail };
   }
@@ -184,7 +207,11 @@ export async function ingestLocalPath(
         const sub = next.value;
 
         if (sub.kind === 'skipped') {
-          skipped.push({ folderKey: sub.folderKey, reason: sub.reason });
+          skipped.push({
+            folderKey: sub.folderKey,
+            scopePath: sub.scopePath,
+            reason: sub.reason,
+          });
           continue;
         }
 
@@ -192,7 +219,11 @@ export async function ingestLocalPath(
         // headers; estimate it here (cheap) to preserve the pre-count size cap
         // without doing the actual (now-offloaded) serialization first.
         if (estimateStoreZipSize(sub.entries) > maxBundleBytes) {
-          skipped.push({ folderKey: sub.folderKey, reason: 'bundle_too_large' });
+          skipped.push({
+            folderKey: sub.folderKey,
+            scopePath: sub.scopePath,
+            reason: 'bundle_too_large',
+          });
           continue;
         }
 
@@ -222,6 +253,14 @@ export async function ingestLocalPath(
 
         bundlesProcessed++;
         const { entries, folderKey } = sub;
+        // One ingest_files row per (scope x submitter). The root scope keeps the
+        // historical `<folder>.zip` name so the flat Gradescope path is
+        // byte-for-byte unchanged; a fanned-out scope names its directory so the
+        // unmatched tray shows which part of the repo it came from.
+        const sourceName =
+          sub.scopePath === ''
+            ? `${folderKey}.zip`
+            : `${folderKey}/${sub.scopePath.slice(0, -1)}.zip`;
         // Rebuild the bundle ZIP once per bundle (offloaded to the pool), shared
         // across its co-submitters. Kicked off here so it proceeds while we
         // stream the next folders; the runner's backpressure bounds how far the
@@ -249,7 +288,7 @@ export async function ingestLocalPath(
             await db.insert(ingest_files).values({
               id: fileId,
               ingest_job_id: activeJobId,
-              original_filename: `${folderKey}.zip`,
+              original_filename: sourceName,
               size_bytes: sizeBytes,
               blob_sha256: blobSha256,
               status: 'pending',

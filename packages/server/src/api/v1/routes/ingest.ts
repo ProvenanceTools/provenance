@@ -631,6 +631,7 @@ export function createIngestRouter(): Hono {
 
         const skippedSummary = result.skipped.map((s) => ({
           folder_key: s.folderKey,
+          scope_path: s.scopePath,
           reason: s.reason,
         }));
 

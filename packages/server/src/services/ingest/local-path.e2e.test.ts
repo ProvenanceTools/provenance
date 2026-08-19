@@ -36,6 +36,7 @@ import {
   semesters,
   memberships,
   roster_entries,
+  assignments,
   ingest_jobs,
   ingest_files,
   submissions,
@@ -92,6 +93,38 @@ submission_nobundle:
   - :name: No Recorder
     :sid: '444'
 `;
+
+/**
+ * A git-native export: ONE submitter, ONE repo folder, holding two sealed
+ * assignment scopes plus an unsealed one and repo noise. This is the CS 61B/61C
+ * shape — Gradescope clones the whole repository, not a sealed bundle.
+ */
+const REPO_METADATA = `submission_repo:
+  :submitters:
+  - :name: Repo Student
+    :sid: '555'
+    :email: repo@berkeley.edu
+`;
+
+async function writeRepoExportZip(dir: string): Promise<string> {
+  const root = 'assignment_9100_export/';
+  const folder = `${root}submission_repo/`;
+  const outer = new JSZip();
+  outer.file(`${root}submission_metadata.yml`, REPO_METADATA);
+  await layBundleIntoFolder(outer, `${folder}proj2/`, 'proj2');
+  await layBundleIntoFolder(outer, `${folder}lab5/`, 'lab5');
+  // A scope the student worked in but never sealed — no manifest.json, because
+  // nothing runs the seal command on a git push.
+  outer.file(
+    `${folder}lab6/.provenance/session-11111111-1111-4111-8111-111111111111.slog`,
+    new TextEncoder().encode('{}\n'),
+  );
+  outer.file(`${folder}README.md`, new TextEncoder().encode('# repo\n'));
+  const buf = await outer.generateAsync({ type: 'nodebuffer' });
+  const zipPath = path.join(dir, 'repo-export.zip');
+  await writeFile(zipPath, buf);
+  return zipPath;
+}
 
 async function writeExportZip(dir: string): Promise<string> {
   const root = 'assignment_8046601_export/';
@@ -223,7 +256,13 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
       expect(result.roster).toEqual({ added: 4, updated: 0 });
       expect(result.bundlesProcessed).toBe(2);
       expect(result.submissionsQueued).toBe(3);
-      expect(result.skipped).toEqual([{ folderKey: 'submission_nobundle', reason: 'no_manifest' }]);
+      // REGRESSION GUARD (flat Gradescope path): one `.provenance/` per folder
+      // still means ONE bundle per folder, at the root scope, and a folder that
+      // is not a bundle at all is still reported as no_manifest — the fan-out
+      // adapter must not change any of this.
+      expect(result.skipped).toEqual([
+        { folderKey: 'submission_nobundle', scopePath: '', reason: 'no_manifest' },
+      ]);
       expect(result.jobId).not.toBeNull();
       const jobId = result.jobId!;
 
@@ -374,6 +413,140 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
       expect(result.jobId).toBe(jobId);
       const jobRows = await db.select({ id: ingest_jobs.id }).from(ingest_jobs);
       expect(jobRows).toHaveLength(1);
+    });
+  });
+
+  it('fans one git repo out to one submission per assignment scope', async () => {
+    await withTestMinio(async ({ client, bucketName }) => {
+      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+      _setConfigForTest(
+        parseEnv({
+          NODE_ENV: 'test',
+          PUBLIC_BASE_URL: 'http://localhost:3000',
+          DATABASE_URL: pgContainer.getConnectionUri(),
+          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_BUCKET: bucketName,
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+          OBJECT_STORAGE_REGION: 'us-east-1',
+          GOOGLE_OAUTH_CLIENT_ID: 'client-id',
+          GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
+          AUTH_ALLOWED_HOSTED_DOMAINS: '["berkeley.edu"]',
+          AUTH_SUPERADMIN_EMAILS: '["admin@berkeley.edu"]',
+          AUTH_COOKIE_SIGNING_SECRET: 'test-signing-secret-for-e2e-tests-123456789',
+          SESSION_TTL_DAYS: '14',
+          INGEST_MAX_BUNDLE_BYTES: '52428800',
+          INGEST_MAX_BATCH_BYTES: '5368709120',
+          INGEST_MAX_BATCH_FILES: '10000',
+        }),
+      );
+
+      const userId = crypto.randomUUID();
+      await db.insert(users).values({
+        id: userId,
+        google_subject: `sub-${userId}`,
+        email: `admin-${userId}@berkeley.edu`,
+        display_name: 'Admin',
+      });
+      const [course] = await db
+        .insert(courses)
+        .values({ name: 'CS 61B', slug: `cs61b-${crypto.randomUUID().slice(0, 8)}` })
+        .returning();
+      const [semester] = await db
+        .insert(semesters)
+        .values({
+          course_id: course!.id,
+          term: 'fa',
+          year: 2026,
+          slug: `fa2026-${crypto.randomUUID().slice(0, 8)}`,
+          display_name: 'Fall 2026',
+          filename_convention: '^(?<assignment_id>[a-z0-9_-]+)[-_](?<sid>\\d{6,12})\\.zip$',
+        })
+        .returning();
+      await db.insert(memberships).values({
+        user_id: userId,
+        semester_id: semester!.id,
+        role: 'admin',
+        granted_by: userId,
+      });
+
+      workerStop = await startWorker();
+
+      const cfg = getConfig();
+      const storageClient = createStorageClient(storageConfigFromEnv(cfg));
+      const archivePath = await writeRepoExportZip(tmpDir);
+
+      const result = await ingestLocalPath(
+        { db, storageClient },
+        {
+          semesterId: semester!.id,
+          userId,
+          archivePath,
+          maxBundleBytes: cfg.INGEST_MAX_BUNDLE_BYTES,
+          maxBatchFiles: cfg.INGEST_MAX_BATCH_FILES,
+        },
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      // One uploaded repo, one submitter — but TWO sealed scopes, so two bundles
+      // and two staged files.
+      expect(result.bundlesProcessed).toBe(2);
+      expect(result.submissionsQueued).toBe(2);
+      // The unsealed scope is reported per-scope, not silently dropped.
+      expect(result.skipped).toEqual([
+        { folderKey: 'submission_repo', scopePath: 'lab6/', reason: 'no_seal' },
+      ]);
+      expect(result.jobId).not.toBeNull();
+      const jobId = result.jobId!;
+
+      const start = Date.now();
+      let finalStatus: string | null = null;
+      while (Date.now() - start < 120_000) {
+        const [jobRow] = await db
+          .select({ status: ingest_jobs.status })
+          .from(ingest_jobs)
+          .where(eq(ingest_jobs.id, jobId));
+        if (jobRow && jobRow.status !== 'queued' && jobRow.status !== 'running') {
+          finalStatus = jobRow.status;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      expect(finalStatus).toBe('succeeded');
+
+      const fileRows = await db
+        .select({ status: ingest_files.status, original_filename: ingest_files.original_filename })
+        .from(ingest_files)
+        .where(eq(ingest_files.ingest_job_id, jobId));
+      expect(fileRows).toHaveLength(2);
+      expect(fileRows.every((f) => f.status === 'matched')).toBe(true);
+      expect(fileRows.map((f) => f.original_filename).sort()).toEqual([
+        'submission_repo/lab5.zip',
+        'submission_repo/proj2.zip',
+      ]);
+
+      // Two submissions for ONE student, one per scope, each under the
+      // assignment its own manifest declared — and each with its own blob.
+      const subs = await db
+        .select({
+          student_id: submissions.student_id,
+          blob_sha256: submissions.blob_sha256,
+          assignment_id_str: assignments.assignment_id_str,
+          version_index: submissions.version_index,
+        })
+        .from(submissions)
+        .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
+        .where(eq(submissions.semester_id, semester!.id));
+
+      expect(subs).toHaveLength(2);
+      expect(new Set(subs.map((s) => s.student_id)).size).toBe(1);
+      expect(subs.map((s) => s.assignment_id_str).sort()).toEqual(['lab5', 'proj2']);
+      expect(new Set(subs.map((s) => s.blob_sha256)).size).toBe(2);
+      // Independent version streams: each scope is version 1 of its own
+      // assignment, not v1 and v2 of a shared one.
+      expect(subs.map((s) => s.version_index)).toEqual([1, 1]);
     });
   });
 });

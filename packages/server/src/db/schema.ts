@@ -359,6 +359,18 @@ export const assignments = pgTable(
     assignment_id_str: text('assignment_id_str').notNull(),
     label: text('label').notNull().default(''),
     sort_order: integer('sort_order').notNull().default(0),
+    // Scope resolution for git-repo submissions (program architecture §6 /
+    // migration 0023). A cloned repo can contain several `.provenance/`
+    // directories; each one is self-identifying, so the default accepts every
+    // sealed scope wherever it sits. This overrides that for what
+    // self-identification cannot settle — two directories declaring the same
+    // assignment id, or a stale vendored copy.
+    //   { mode: 'self_identifying' | 'path', path_glob?: string,
+    //     on_multiple: 'error' | 'ingest_all' }
+    // Narrowed by parseIngestScopeConfig (services/ingest/gradescope/repo-scopes.ts).
+    ingest_scope: jsonb('ingest_scope')
+      .notNull()
+      .default(sql`'{"mode":"self_identifying","on_multiple":"ingest_all"}'::jsonb`),
     created_at: timestamp('created_at', { withTimezone: true })
       .notNull()
       .default(sql`now()`),

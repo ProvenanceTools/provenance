@@ -15,6 +15,7 @@ import JSZip from 'jszip';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { openLocalExport, type StreamedSubmission } from './stream-export.js';
 import { zipBundleEntries } from './build-bundle-zip.js';
+import { DEFAULT_INGEST_SCOPE, type IngestScopeConfig } from './repo-scopes.js';
 
 const PROVENANCE_FILE = /^(manifest\.json|manifest\.sig|session-.*\.slog(\.meta)?)$/;
 
@@ -39,6 +40,17 @@ async function layBundleIntoFolder(
     outer.file(dest, bytes);
   }
 }
+
+/**
+ * Metadata for the git-repo export: one submitter, one repo folder holding two
+ * sealed assignment scopes, one unsealed scope, and repo noise.
+ */
+const REPO_METADATA = `submission_repo:
+  :submitters:
+  - :name: Repo Student
+    :sid: '555'
+    :email: repo@berkeley.edu
+`;
 
 const METADATA = `submission_solo:
   :submitters:
@@ -135,5 +147,94 @@ describe('openLocalExport (streaming local-path reader)', () => {
     );
     expect(skipReasons['submission_nobundle']).toBe('no_manifest');
     expect(skipReasons['submission_empty']).toBe('no_submitters');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Git-native ingest: one repository, several assignment scopes
+// ---------------------------------------------------------------------------
+
+describe('openLocalExport — git repo with several .provenance/ scopes', () => {
+  let tmpDir: string;
+  let zipPath: string;
+  const root = 'assignment_9000_export/';
+  const folder = `${root}submission_repo/`;
+
+  beforeAll(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'prov-stream-repo-'));
+    zipPath = path.join(tmpDir, 'repo-export.zip');
+
+    const outer = new JSZip();
+    outer.file(`${root}submission_metadata.yml`, REPO_METADATA);
+    await layBundleIntoFolder(outer, `${folder}proj2/`, 'proj2');
+    await layBundleIntoFolder(outer, `${folder}lab5/`, 'lab5');
+    // A scope the student worked in but never sealed: session logs, no manifest.
+    outer.file(
+      `${folder}lab6/.provenance/session-11111111-1111-4111-8111-111111111111.slog`,
+      new TextEncoder().encode('{}\n'),
+    );
+    outer.file(`${folder}README.md`, new TextEncoder().encode('# repo\n'));
+
+    await writeFile(zipPath, await outer.generateAsync({ type: 'nodebuffer' }));
+  });
+
+  afterAll(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function drain(scopeConfig?: IngestScopeConfig): Promise<StreamedSubmission[]> {
+    const opened = await openLocalExport(
+      zipPath,
+      scopeConfig === undefined ? {} : { scopeConfigFor: () => scopeConfig },
+    );
+    if (!opened.ok) throw new Error(`openLocalExport failed: ${opened.error}`);
+    const seen: StreamedSubmission[] = [];
+    for await (const sub of opened.submissions()) seen.push(sub);
+    await opened.close();
+    return seen;
+  }
+
+  it('yields one bundle per sealed scope, each with its own declared assignment', async () => {
+    const seen = await drain();
+    const bundles = seen.filter((s) => s.kind === 'bundle');
+
+    expect(bundles.map((b) => b.scopePath).sort()).toEqual(['lab5/', 'proj2/']);
+    // All from ONE uploaded folder and ONE submitter — the fan-out is per scope.
+    expect(new Set(bundles.map((b) => b.folderKey))).toEqual(new Set(['submission_repo']));
+    for (const b of bundles) {
+      if (b.kind !== 'bundle') continue;
+      expect(b.submitters.map((s) => s.sid)).toEqual(['555']);
+      const inner = await JSZip.loadAsync(await zipBundleEntries(b.entries));
+      const manifestFile = inner.file('manifest.json');
+      expect(manifestFile).not.toBeNull();
+      const manifest = JSON.parse(await manifestFile!.async('string')) as {
+        assignment_id: string;
+      };
+      expect(manifest.assignment_id).toBe(b.scopePath.slice(0, -1));
+    }
+  });
+
+  it('reports the unsealed scope as no_seal rather than dropping the repo', async () => {
+    const seen = await drain();
+    const skipped = seen.filter((s) => s.kind === 'skipped');
+    expect(skipped.map((s) => (s.kind === 'skipped' ? [s.scopePath, s.reason] : []))).toEqual([
+      ['lab6/', 'no_seal'],
+    ]);
+  });
+
+  it('honours ingest_scope mode=path, excluding the non-matching scopes', async () => {
+    const seen = await drain({ mode: 'path', path_glob: 'proj2/**', on_multiple: 'ingest_all' });
+    const bundles = seen.filter((s) => s.kind === 'bundle');
+    expect(bundles.map((b) => b.scopePath)).toEqual(['proj2/']);
+    const excluded = seen.filter((s) => s.kind === 'skipped' && s.reason === 'scope_excluded');
+    expect(excluded.map((s) => (s.kind === 'skipped' ? s.scopePath : ''))).toEqual(['lab5/']);
+  });
+
+  it('defaults to accepting every sealed scope when no config is supplied', async () => {
+    const withDefault = await drain(DEFAULT_INGEST_SCOPE);
+    const implicit = await drain();
+    expect(withDefault.filter((s) => s.kind === 'bundle').map((b) => b.scopePath)).toEqual(
+      implicit.filter((s) => s.kind === 'bundle').map((b) => b.scopePath),
+    );
   });
 });

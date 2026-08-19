@@ -373,7 +373,12 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
       expect(body.roster).toEqual({ added: 4, updated: 0 });
       expect(body.bundles_processed).toBe(2);
       expect(body.submissions_queued).toBe(3);
-      expect(body.skipped).toEqual([{ folder_key: 'submission_nobundle', reason: 'no_manifest' }]);
+      // REGRESSION GUARD: the flat Gradescope folder path is unchanged by the
+      // git-repo scope fan-out — one `.provenance/` per folder still yields one
+      // bundle at the root scope, and a non-bundle folder is still no_manifest.
+      expect(body.skipped).toEqual([
+        { folder_key: 'submission_nobundle', scope_path: '', reason: 'no_manifest' },
+      ]);
 
       // Roster was populated from the metadata (all four submitters).
       const roster = await db

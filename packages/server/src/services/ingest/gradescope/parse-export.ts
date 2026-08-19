@@ -14,18 +14,27 @@
  * (build-bundle-zip.ts), and returns:
  *   - `rosterSubmitters`: every submitter across the whole export, deduped by
  *     sid (the roster upsert source — analyzer PRD §8.4 / §9.2),
- *   - `bundles`: one entry per submission folder that is a real bundle, carrying
- *     its rebuilt ZIP and submitters (the caller stages one ingest_files row per
- *     submitter, so group co-submitters each get their own submission),
- *   - `skipped`: submission folders that are not bundles (no manifest) — still
- *     rostered, but no bundle to process.
+ *   - `bundles`: one entry per ASSIGNMENT SCOPE of each submission folder,
+ *     carrying its rebuilt ZIP and submitters (the caller stages one
+ *     ingest_files row per submitter, so group co-submitters each get their own
+ *     submission). A flat Gradescope folder has exactly one scope; a cloned git
+ *     repo can have several (see repo-scopes.ts),
+ *   - `skipped`: folders that are not bundles at all, plus scopes that exist but
+ *     produce no submission (e.g. an unsealed `.provenance/`) — still rostered,
+ *     but no bundle to process.
  *
  * Pure with respect to business logic; the only effect is JSZip in/out.
  */
 
 import JSZip from 'jszip';
 import { parseSubmissionMetadata, type GradescopeSubmitter } from './parse-metadata.js';
-import { buildBundleZipForFolder } from './build-bundle-zip.js';
+import { zipBundleEntries } from './build-bundle-zip.js';
+import {
+  discoverRepoScopes,
+  resolveRepoScopes,
+  DEFAULT_INGEST_SCOPE,
+  type IngestScopeConfigResolver,
+} from './repo-scopes.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -36,6 +45,12 @@ const METADATA_FILENAME = 'submission_metadata.yml';
 export interface GradescopeBundleEntry {
   /** Submission folder name, e.g. "submission_409194023". */
   folderKey: string;
+  /**
+   * The assignment scope this bundle came from within the folder: `''` for the
+   * folder root (the classic flat Gradescope shape), else a directory prefix
+   * such as `proj2/` (a git repo carrying several assignment scopes).
+   */
+  scopePath: string;
   /** Submitters of this submission (the caller stages one row per submitter). */
   submitters: GradescopeSubmitter[];
   /** Rebuilt flat bundle ZIP bytes (ready for the existing parse pipeline). */
@@ -44,8 +59,9 @@ export interface GradescopeBundleEntry {
 
 export interface GradescopeSkippedEntry {
   folderKey: string;
+  scopePath: string;
   submitters: GradescopeSubmitter[];
-  reason: 'no_manifest' | 'no_submitters';
+  reason: 'no_manifest' | 'no_submitters' | 'no_seal' | 'scope_excluded' | 'ambiguous_scope';
 }
 
 export interface ParsedGradescopeExport {
@@ -88,6 +104,19 @@ function locateMetadata(outer: JSZip): { obj: JSZip.JSZipObject; exportPrefix: s
   return best;
 }
 
+/** Materialize one submission folder's files, keyed by folder-relative path. */
+async function folderFiles(outer: JSZip, folderPrefix: string): Promise<Map<string, Uint8Array>> {
+  const files = new Map<string, Uint8Array>();
+  for (const [name, obj] of Object.entries(outer.files)) {
+    if (obj.dir) continue;
+    if (!name.startsWith(folderPrefix)) continue;
+    const rel = name.slice(folderPrefix.length);
+    if (rel.length === 0) continue;
+    files.set(rel, await obj.async('uint8array'));
+  }
+  return files;
+}
+
 /** Dedupe submitters by sid, merging in the first non-empty name/email seen. */
 function dedupeSubmitters(all: GradescopeSubmitter[]): GradescopeSubmitter[] {
   const bySid = new Map<string, GradescopeSubmitter>();
@@ -107,9 +136,19 @@ function dedupeSubmitters(all: GradescopeSubmitter[]): GradescopeSubmitter[] {
 // parseGradescopeExport
 // ---------------------------------------------------------------------------
 
+export interface ParseGradescopeExportOptions {
+  /**
+   * Per-assignment scope-resolution config (§6), keyed by the scope's DECLARED
+   * `assignment_id`. Defaults to accepting every sealed scope.
+   */
+  scopeConfigFor?: IngestScopeConfigResolver;
+}
+
 export async function parseGradescopeExport(
   zipBytes: ArrayBuffer | Uint8Array,
+  options: ParseGradescopeExportOptions = {},
 ): Promise<ParseExportResult> {
+  const scopeConfigFor = options.scopeConfigFor ?? (() => DEFAULT_INGEST_SCOPE);
   let outer: JSZip;
   try {
     outer = await JSZip.loadAsync(zipBytes);
@@ -136,26 +175,46 @@ export async function parseGradescopeExport(
     allSubmitters.push(...sub.submitters);
 
     if (sub.submitters.length === 0) {
-      skipped.push({ folderKey: sub.folderKey, submitters: [], reason: 'no_submitters' });
-      continue;
-    }
-
-    const folderPrefix = `${located.exportPrefix}${sub.folderKey}/`;
-    const built = await buildBundleZipForFolder(outer, folderPrefix);
-    if (!built.ok) {
       skipped.push({
         folderKey: sub.folderKey,
-        submitters: sub.submitters,
-        reason: built.reason,
+        scopePath: '',
+        submitters: [],
+        reason: 'no_submitters',
       });
       continue;
     }
 
-    bundles.push({
-      folderKey: sub.folderKey,
-      submitters: sub.submitters,
-      bundleZip: built.data,
-    });
+    const folderPrefix = `${located.exportPrefix}${sub.folderKey}/`;
+    const files = await folderFiles(outer, folderPrefix);
+
+    const discovered = discoverRepoScopes(files);
+    if (!discovered.ok) {
+      skipped.push({
+        folderKey: sub.folderKey,
+        scopePath: '',
+        submitters: sub.submitters,
+        reason: discovered.reason,
+      });
+      continue;
+    }
+
+    const resolved = resolveRepoScopes(discovered.scopes, scopeConfigFor);
+    for (const scope of resolved.accepted) {
+      bundles.push({
+        folderKey: sub.folderKey,
+        scopePath: scope.scopePath,
+        submitters: sub.submitters,
+        bundleZip: await zipBundleEntries(scope.entries),
+      });
+    }
+    for (const unusable of [...discovered.unusable, ...resolved.rejected]) {
+      skipped.push({
+        folderKey: sub.folderKey,
+        scopePath: unusable.scopePath,
+        submitters: sub.submitters,
+        reason: unusable.reason,
+      });
+    }
   }
 
   return {

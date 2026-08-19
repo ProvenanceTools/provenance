@@ -148,6 +148,13 @@
       "when": 1787097600000,
       "tag": "0022_heuristic_config_backfill_missing_flags",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1787788800000,
+      "tag": "0023_assignments_ingest_scope",
+      "breakpoints": true
     }
   ]
 }
