@@ -671,7 +671,7 @@ describe('startDocWiring', () => {
   // reconstructed at 1/266 save checkpoints, killed outright by a single large paste.
   // -------------------------------------------------------------------------
 
-  function startPasteRoutingHarness() {
+  function startPasteRoutingHarness(overrides: { inlineContent?: boolean } = {}) {
     setMockWindowState({ focused: true });
     const registry = new ExpectedContentRegistry(['src/foo.py']);
     const emitters = makeEmitters();
@@ -681,9 +681,28 @@ describe('startDocWiring', () => {
       filesUnderReview: ['src/foo.py'],
       expectedContent: registry,
       ...makeDefaultPasteDeps(),
+      ...overrides,
     });
     return emitters;
   }
+
+  it('policy.capture.inline_content=false: paste still fires, without the snippet', () => {
+    // The `paste` event is on the hard floor, so it must be emitted either way —
+    // only the student's bytes are withheld. Program spec §4.
+    const emitters = startPasteRoutingHarness({ inlineContent: false });
+    const text = 'a'.repeat(1000);
+
+    fireSingleRangePaste(text);
+
+    expect(emitters.emitPaste).toHaveBeenCalledOnce();
+    const payload = emitters.emitPaste.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.content).toBeUndefined();
+    expect(payload.content_head).toBeUndefined();
+    expect(payload.content_tail).toBeUndefined();
+    // Size and identity survive, so the paste heuristics keep working.
+    expect(payload.length).toBe(text.length);
+    expect(typeof payload.sha256).toBe('string');
+  });
 
   /** Fire one single-range insert of `text` at an empty range. */
   function fireSingleRangePaste(text: string) {

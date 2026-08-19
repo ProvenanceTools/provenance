@@ -33,9 +33,22 @@ export type ExternalChangeContentFields = {
  * not string.length — multi-byte codepoints count as more than one byte).
  * Either `new_content` is set (small file) or `new_content_head` +
  * `new_content_tail` are set (large file), never both.
+ *
+ * @param inlineContent  `policy.capture.inline_content` (program spec §4). When
+ *   false, no snippet is emitted at any size, while `new_content_size` is still
+ *   recorded. The `fs.external_change` EVENT is on the hard floor and is never
+ *   suppressed; this knob only controls whether the file's bytes land in the log.
+ *   Defaults to true, which is 1.x behaviour.
  */
-export function buildExternalChangeContent(text: string): ExternalChangeContentFields {
+export function buildExternalChangeContent(
+  text: string,
+  inlineContent = true,
+): ExternalChangeContentFields {
   const byteLength = Buffer.byteLength(text, 'utf8');
+
+  if (!inlineContent) {
+    return { new_content_size: byteLength };
+  }
 
   if (byteLength <= MAX_INLINE_BYTES) {
     return {
