@@ -112,4 +112,63 @@ describe('extension_hash_mismatch — positive', () => {
     const flags = extensionHashMismatchHeuristic.run(index, patchedBundle, config);
     expect(flags).toHaveLength(1);
   });
+
+  // -------------------------------------------------------------------------
+  // Rolling seals: one signed manifest per session, so a bundle can span
+  // several recorder builds. Checking only the union manifest's single scalar
+  // would leave the others unexamined.
+  // -------------------------------------------------------------------------
+
+  it('checks EVERY build a rolling-sealed bundle observed, not just the union scalar', async () => {
+    const { index, bundle } = await buildAndIndex({ sessions: [{ eventCount: 2 }] });
+    const other = 'c'.repeat(64);
+    const patchedBundle = {
+      ...bundle,
+      // The scalar is a known-good build…
+      manifest: { ...bundle.manifest, extension_hash: KNOWN_HASH },
+      // …but an earlier session ran under something the course does not know.
+      rollingSeal: {
+        seals: [],
+        defects: [],
+        observedExtensionHashes: [KNOWN_HASH, other],
+      },
+    };
+    const config = mergeConfig({ extensionHashMismatch: { knownGoodHashes: [KNOWN_HASH] } });
+    const flags = extensionHashMismatchHeuristic.run(index, patchedBundle, config);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.detail!['extensionHash']).toBe(other);
+  });
+
+  it('stays silent when every observed build is known-good', async () => {
+    const { index, bundle } = await buildAndIndex({ sessions: [{ eventCount: 2 }] });
+    const second = 'c'.repeat(64);
+    const patchedBundle = {
+      ...bundle,
+      manifest: { ...bundle.manifest, extension_hash: second },
+      rollingSeal: {
+        seals: [],
+        defects: [],
+        observedExtensionHashes: [KNOWN_HASH, second],
+      },
+    };
+    const config = mergeConfig({
+      extensionHashMismatch: { knownGoodHashes: [KNOWN_HASH, second] },
+    });
+    expect(extensionHashMismatchHeuristic.run(index, patchedBundle, config)).toEqual([]);
+  });
+
+  it('reports one flag per distinct unrecognised build', async () => {
+    const { index, bundle } = await buildAndIndex({ sessions: [{ eventCount: 2 }] });
+    const a = 'c'.repeat(64);
+    const b = 'd'.repeat(64);
+    const patchedBundle = {
+      ...bundle,
+      manifest: { ...bundle.manifest, extension_hash: a },
+      // The duplicate must not produce a duplicate flag.
+      rollingSeal: { seals: [], defects: [], observedExtensionHashes: [a, a, b] },
+    };
+    const config = mergeConfig({ extensionHashMismatch: { knownGoodHashes: [KNOWN_HASH] } });
+    const flags = extensionHashMismatchHeuristic.run(index, patchedBundle, config);
+    expect(flags.map((f) => f.detail!['extensionHash'])).toEqual([a, b]);
+  });
 });

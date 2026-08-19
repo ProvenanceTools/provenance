@@ -110,6 +110,14 @@ export type RollingSealSpec = {
     replaceJsonFor?: { sessionIndex: number; text: string };
     /** Override `assignment_id` in one session's rolling manifest. */
     assignmentIdFor?: { sessionIndex: number; assignmentId: string };
+    /**
+     * Override `extension_hash` in one session's rolling manifest.
+     *
+     * Not tampering: a student who updates their recorder mid-assignment
+     * produces exactly this. Named alongside the tamper options because it
+     * shares their "patch one session's manifest" plumbing.
+     */
+    extensionHashFor?: { sessionIndex: number; extensionHash: string };
   };
 };
 
@@ -729,7 +737,10 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
             ? rTamper.assignmentIdFor.assignmentId
             : assignmentId,
         semester,
-        extension_hash: 'a'.repeat(64),
+        extension_hash:
+          rTamper.extensionHashFor?.sessionIndex === i
+            ? rTamper.extensionHashFor.extensionHash
+            : 'a'.repeat(64),
         sessions: [
           {
             session_id: s.sessionId,

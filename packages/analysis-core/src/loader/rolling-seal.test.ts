@@ -636,6 +636,47 @@ describe('edge case: rolling seals that disagree with each other', () => {
     const check = await verifyManifestSig(result.value);
     expect(check.status).toBe('fail');
   });
+
+  it('does NOT report divergent_scope when two seals name different recorder builds', async () => {
+    // Updating the recorder mid-assignment is normal: today's single
+    // `manifest.json` carries whichever build was current at seal time and
+    // passes. Treating the variance as a scope defect failed check 1 for an
+    // honest student who took an update.
+    const newBuild = 'f'.repeat(64);
+    const built = await buildTestBundle({
+      rollingSeal: { tamper: { extensionHashFor: { sessionIndex: 1, extensionHash: newBuild } } },
+      submissionFiles: [{ path: '/test/file.py', status: 'present', content: 'x3x2x1' }],
+      sessions: [{ eventCount: 3 }, { eventCount: 3 }],
+    });
+
+    const result = await loadBundle(built.blob, 'repo.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.rollingSeal!.defects).toEqual([]);
+    expect((await verifyManifestSig(result.value)).status).toBe('pass');
+  });
+
+  it('carries the NEWEST build as the union scalar, and keeps every build observed', async () => {
+    const newBuild = 'f'.repeat(64);
+    const built = await buildTestBundle({
+      rollingSeal: { tamper: { extensionHashFor: { sessionIndex: 1, extensionHash: newBuild } } },
+      submissionFiles: [{ path: '/test/file.py', status: 'present', content: 'x3x2x1' }],
+      sessions: [{ eventCount: 3 }, { eventCount: 3 }],
+    });
+
+    const result = await loadBundle(built.blob, 'repo.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // The scalar is the build behind the final state of the work…
+    expect(result.value.manifest.extension_hash).toBe(newBuild);
+    // …and nothing is hidden by that choice: both builds stay available so the
+    // allowlist can check the one the scalar dropped.
+    expect(result.value.rollingSeal!.observedExtensionHashes).toEqual(
+      ['a'.repeat(64), newBuild].sort(),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

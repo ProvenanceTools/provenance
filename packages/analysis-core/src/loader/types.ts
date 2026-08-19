@@ -158,7 +158,12 @@ export type RollingSealDefect = {
     | 'no_session_log'
     /** A session's `.slog` is covered by no seal at all. */
     | 'unsealed_session'
-    /** Two seals disagree on assignment_id / semester / extension_hash. */
+    /**
+     * Two seals disagree on assignment_id / semester.
+     *
+     * NOT extension_hash: updating the recorder mid-assignment legitimately
+     * varies it. See `synthesizeRollingUnionManifest`.
+     */
     | 'divergent_scope';
   detail: string;
 };
