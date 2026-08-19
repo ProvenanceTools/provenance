@@ -48,7 +48,12 @@ export type ActivateDeps = {
   vscodeVersion: string;
   /** Platform string (process.platform + '-' + process.arch in production). */
   platform: string;
-  /** Override for manifest verification pubkey (tests inject a test keypair's pubkey). */
+  /**
+   * Override for the embedded manifest-verification key (tests inject a test
+   * keypair's pubkey). At Manifest 2.0 this is the ROOT key the inline
+   * `course_cert` must chain to; at 1.x it is the key the payload signature is
+   * checked against directly. Defaults to ROOT_PUBLIC_KEY_HEX.
+   */
   pubkeyHex?: string;
   /** Override for the .provenance/ directory path (tests inject a tmp dir). */
   provenanceDirOverride?: string;
