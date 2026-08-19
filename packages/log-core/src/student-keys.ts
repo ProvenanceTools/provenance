@@ -80,6 +80,28 @@ export const STUDENT_MASTER_SECRET_BYTES = 32;
 export const STUDENT_KEY_HKDF_INFO_PREFIX = 'provenance-student-key-v1:';
 
 /**
+ * HKDF `info` for the CURRENT global student key. FIXED — no `course_id`, no
+ * `institution_id`, no user-derived component of any kind.
+ *
+ * A student has ONE key, forever, across every course. Identity stopped being
+ * course-scoped because a per-course key requires a per-course credential,
+ * which requires a roster match, which only exists after the student's first
+ * submission — while their very first session needs an identity before they do
+ * any work at all. See `institution.ts` for the full account.
+ *
+ * A pleasant side effect: with nothing user-derived in `info`, the encoding
+ * hazard that the v1 prefix has to live with is simply gone here. Under v1 a
+ * non-ASCII `course_id` encoded as `US_ASCII` rather than UTF-8 silently
+ * produced a DIFFERENT key with no error — it bit provjet once, and the v1
+ * conformance vectors keep a `berkeley-café` case precisely to catch a
+ * recurrence. This constant is pure ASCII and constant, so there is nothing left
+ * to get wrong.
+ *
+ * There is no trailing colon: nothing is concatenated onto it.
+ */
+export const STUDENT_KEY_HKDF_INFO = 'provenance-student-key-v2';
+
+/**
  * HKDF salt: the UTF-8 bytes of `provenance-student-key-v1` (25 bytes).
  *
  * Frozen at module load and copied on read so a caller cannot mutate the shared
@@ -169,6 +191,59 @@ export async function deriveCourseKeypair(
   courseId: string,
 ): Promise<StudentCourseKeypair> {
   const privateKey = deriveCourseKeySeed(masterSecret, courseId);
+  const publicKeyBytes = await ed.getPublicKeyAsync(privateKey);
+  return { publicKeyHex: bytesToHex(publicKeyBytes), privateKey };
+}
+
+// ---------------------------------------------------------------------------
+// The CURRENT derivation: one global student key
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive the raw 32-byte ed25519 seed for a student's single global key.
+ *
+ * Same master secret, same salt, same output length, same "the 32 bytes ARE the
+ * ed25519 seed" rule as {@link deriveCourseKeySeed}. The ONLY difference is the
+ * `info`, which is {@link STUDENT_KEY_HKDF_INFO} — fixed, ASCII, and carrying no
+ * user-derived component. A student therefore has one key across every course,
+ * bound to a global `student_ref` by a single credential obtained once.
+ *
+ * Because the two `info` strings differ, the v1 per-course keys and this key are
+ * unrelated: a student's existing course keys are unaffected, and archived
+ * bundles keep verifying against the public keys their tokens name.
+ *
+ * Pure and synchronous. Throws (rather than returning a `Result`) on a malformed
+ * input, because that is a programmer error at a call site that controls the
+ * argument — an unexpected condition, not an expected one.
+ *
+ * @param masterSecret Exactly {@link STUDENT_MASTER_SECRET_BYTES} raw bytes.
+ */
+export function deriveStudentKeySeed(masterSecret: Uint8Array): Uint8Array {
+  if (masterSecret.length !== STUDENT_MASTER_SECRET_BYTES) {
+    throw new TypeError(
+      `deriveStudentKeySeed: masterSecret must be exactly ${STUDENT_MASTER_SECRET_BYTES} bytes, got ${masterSecret.length}`,
+    );
+  }
+
+  const info = new TextEncoder().encode(STUDENT_KEY_HKDF_INFO);
+  // A fresh copy of the salt each call: `hkdf` does not mutate it, but the
+  // exported constant is shared and this removes any doubt.
+  const salt = Uint8Array.from(STUDENT_KEY_HKDF_SALT);
+  return hkdf(sha256, masterSecret, salt, info, STUDENT_KEY_SEED_BYTES);
+}
+
+/**
+ * Derive a student's single global ed25519 keypair from their master secret.
+ *
+ * The private key is the {@link deriveStudentKeySeed} output verbatim; the public
+ * key is the ordinary ed25519 public key for that seed. This is the key that
+ * countersigns `session_pubkey` (see `institution.ts`) and whose public half the
+ * institution binds to a global `student_ref` inside a student credential.
+ */
+export async function deriveStudentKeypair(
+  masterSecret: Uint8Array,
+): Promise<StudentCourseKeypair> {
+  const privateKey = deriveStudentKeySeed(masterSecret);
   const publicKeyBytes = await ed.getPublicKeyAsync(privateKey);
   return { publicKeyHex: bytesToHex(publicKeyBytes), privateKey };
 }

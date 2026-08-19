@@ -92,6 +92,20 @@ import {
   STUDENT_KEY_HKDF_SALT,
   STUDENT_KEY_SEED_BYTES,
   STUDENT_MASTER_SECRET_BYTES,
+  signInstitutionCert,
+  signStudentCredential,
+  signStudentSessionBinding,
+  verifyInstitutionCert,
+  verifyStudentCredential,
+  buildInstitutionCertSignedPayload,
+  buildStudentCredentialSignedPayload,
+  buildStudentSessionBindingPayload,
+  checkCredentialWindow,
+  INSTITUTION_IDENTITY_FORMAT_VERSION,
+  STUDENT_SESSION_BINDING_PURPOSE,
+  deriveStudentKeypair,
+  deriveStudentKeySeed,
+  STUDENT_KEY_HKDF_INFO,
 } from '@provenance/log-core';
 import type {
   CourseCert,
@@ -99,6 +113,8 @@ import type {
   EnrollmentCert,
   EnrollmentToken,
   SessionIdentity,
+  InstitutionCert,
+  StudentCredential,
 } from '@provenance/log-core';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 // The recorder's SHIPPED builders, from its build output — deriving the vectors
@@ -1442,6 +1458,541 @@ async function buildRollingManifestVectors(): Promise<unknown> {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Institution identity vectors — identity format_version 2.1
+// ---------------------------------------------------------------------------
+
+/**
+ * Fixed key seeds for the institution identity family. Chosen not to collide
+ * with any seed already in use (0x03/0x04/0x05/0x06/0x07/0x09 for 1.x,
+ * 0x0a-0x0d for Manifest 2.0, 0x0e-0x13 for the legacy 2.0 identity family),
+ * so adding these cannot perturb a byte of the existing output.
+ */
+const INSTITUTION_PRIV = seed(0x14);
+const OTHER_INSTITUTION_PRIV = seed(0x15);
+const GLOBAL_STUDENT_PRIV = seed(0x16);
+const OTHER_GLOBAL_STUDENT_PRIV = seed(0x17);
+const INSTITUTION_SESSION_PRIV = seed(0x18);
+
+const INSTITUTION_ID = 'berkeley';
+const OTHER_INSTITUTION_ID = 'stanford';
+/** Global — one per STUDENT, not one per course. Deliberately not STUDENT_REF. */
+const GLOBAL_STUDENT_REF = '9c8e1a70-2f2b-4c55-8f1e-6b4a0d9c7e21';
+const CREDENTIAL_ISSUED_AT = '2026-09-01T00:00:00Z';
+const CREDENTIAL_EXPIRES_AT = '2027-01-15';
+
+type UnsignedInstitutionCert = Omit<InstitutionCert, 'root_sig'>;
+type UnsignedStudentCredential = Omit<StudentCredential, 'institution_sig'>;
+
+async function makeInstitutionCert(
+  overrides: Partial<UnsignedInstitutionCert> = {},
+  rootPriv: Uint8Array = ROOT_PRIV,
+): Promise<InstitutionCert> {
+  const unsigned: UnsignedInstitutionCert = {
+    format_version: INSTITUTION_IDENTITY_FORMAT_VERSION,
+    institution_id: INSTITUTION_ID,
+    institution_pubkey: await pub(INSTITUTION_PRIV),
+    valid_from: CERT_VALID_FROM,
+    valid_until: CERT_VALID_UNTIL,
+    ...overrides,
+  };
+  return { ...unsigned, root_sig: await signInstitutionCert(unsigned, rootPriv) };
+}
+
+async function makeStudentCredential(
+  overrides: Partial<UnsignedStudentCredential> = {},
+  institutionPriv: Uint8Array = INSTITUTION_PRIV,
+): Promise<StudentCredential> {
+  const unsigned: UnsignedStudentCredential = {
+    format_version: INSTITUTION_IDENTITY_FORMAT_VERSION,
+    institution_id: INSTITUTION_ID,
+    student_ref: GLOBAL_STUDENT_REF,
+    student_pubkey: await pub(GLOBAL_STUDENT_PRIV),
+    issued_at: CREDENTIAL_ISSUED_AT,
+    expires_at: CREDENTIAL_EXPIRES_AT,
+    ...overrides,
+  };
+  return {
+    ...unsigned,
+    institution_sig: await signStudentCredential(unsigned, institutionPriv),
+  };
+}
+
+/**
+ * Vectors for the INSTITUTION identity chain (identity format_version 2.1):
+ * institution_cert -> student_credential -> session_pubkey_sig.
+ *
+ * Identity is no longer course-scoped. A course-scoped credential needed a
+ * roster match; rosters are populated by the Gradescope ingest path, which only
+ * runs AFTER a student submits — so a student could not hold an identity until
+ * after their first submission, while their first session needs one before any
+ * work happens. A student now gets ONE credential, once, binding ONE global
+ * key to a global `student_ref`.
+ *
+ * Three things a port must get exactly right, in descending order of how badly
+ * it hurts to get wrong:
+ *
+ *  1. **The anchor check** (`chain_cases[cross_institution_forgery]`). MANDATORY.
+ *     Root certifies many institutions, so a genuine signature by a genuinely
+ *     certified key proves who signed, never whom they were entitled to speak
+ *     for. This is the institution-scoped replacement for 2.0's
+ *     `cross_course_forgery`, and it is the one case where every signature in
+ *     the bundle verifies and the chain must still be refused.
+ *  2. **The version routing.** `legacy_2_0_cases` walk ARCHIVED course-scoped
+ *     identity blocks through the same entry point. A port that routes on which
+ *     fields are present rather than on the signed `format_version` will get
+ *     these wrong — see `discriminator` below.
+ *  3. **The canonical bytes.** The three `canonical_json` values are the most
+ *     useful thing here for a port, because a canonicalization disagreement
+ *     surfaces as a readable string diff rather than as an inscrutable
+ *     signature failure.
+ */
+async function buildInstitutionIdentityVectors(): Promise<unknown> {
+  const rootPubkeyHex = await pub(ROOT_PRIV);
+  const sessionPubkey = await pub(INSTITUTION_SESSION_PRIV);
+
+  const validCert = await makeInstitutionCert();
+  const validCredential = await makeStudentCredential();
+
+  const binding = {
+    institution_id: INSTITUTION_ID,
+    student_ref: GLOBAL_STUDENT_REF,
+    session_pubkey: sessionPubkey,
+  };
+  const validBindingSig = await signStudentSessionBinding(binding, GLOBAL_STUDENT_PRIV);
+
+  const identity = (overrides: Partial<SessionIdentity> = {}): SessionIdentity => ({
+    enrollment: validCredential,
+    enrollment_cert: validCert,
+    session_pubkey_sig: validBindingSig,
+    ...overrides,
+  });
+
+  const chainCase = async (
+    name: string,
+    note: string,
+    ident: SessionIdentity,
+    anchor: InstitutionCert = validCert,
+    sessionPubkeyHex: string = sessionPubkey,
+  ): Promise<unknown> => {
+    const result = await verifyIdentityChain({
+      identity: ident,
+      session_pubkey: sessionPubkeyHex,
+      institution_cert: anchor,
+      session_started_at: IDENTITY_SESSION_STARTED_AT,
+    });
+    return {
+      name,
+      note,
+      input: {
+        identity: ident,
+        session_pubkey: sessionPubkeyHex,
+        institution_cert: anchor,
+        session_started_at: IDENTITY_SESSION_STARTED_AT,
+      },
+      expected:
+        result.ok && result.value.identity_version === '2.1'
+          ? {
+              ok: true,
+              identity_version: result.value.identity_version,
+              scope: result.value.scope,
+              institution_id: result.value.institution_id,
+              student_ref: result.value.student_ref,
+              student_pubkey: result.value.student_pubkey,
+              institution_pubkey: result.value.institution_pubkey,
+              cert_window: result.value.cert_window,
+              token_window: result.value.token_window,
+            }
+          : result.ok
+            ? { ok: true, identity_version: result.value.identity_version }
+            : { ok: false, error: result.error },
+    };
+  };
+
+  // THE mandatory negative case. Stanford holds a genuinely root-certified
+  // institution key; it mints a credential naming BERKELEY and ships it with its
+  // own genuine cert. Every signature verifies. Only comparing institution_id at
+  // every link refuses it.
+  const stanfordCert = await makeInstitutionCert({
+    institution_id: OTHER_INSTITUTION_ID,
+    institution_pubkey: await pub(OTHER_INSTITUTION_PRIV),
+  });
+  const berkeleyClaimingCredential = await makeStudentCredential(
+    { institution_id: INSTITUTION_ID },
+    OTHER_INSTITUTION_PRIV,
+  );
+
+  const expiredCredential = await makeStudentCredential({
+    issued_at: '2025-09-01T00:00:00Z',
+    expires_at: '2025-12-15',
+  });
+  const expiredCert = await makeInstitutionCert({
+    valid_from: '2020-01-01',
+    valid_until: '2020-12-31',
+  });
+
+  // --- archived 2.0 material, walked through the SAME entry point -----------
+  const legacyCourseCert = await makeCert();
+  const legacyCert = await makeEnrollmentCert();
+  const legacyToken = await makeEnrollmentToken();
+  const legacySessionPubkey = await pub(IDENTITY_SESSION_PRIV);
+  const legacyIdentity: SessionIdentity = {
+    enrollment: legacyToken,
+    enrollment_cert: legacyCert,
+    session_pubkey_sig: await signSessionPubkey(
+      {
+        course_id: COURSE_ID,
+        student_ref: STUDENT_REF,
+        session_pubkey: legacySessionPubkey,
+      },
+      STUDENT_PRIV,
+    ),
+  };
+
+  const legacyCase = async (
+    name: string,
+    note: string,
+    ident: SessionIdentity,
+    courseCert: CourseCert = legacyCourseCert,
+  ): Promise<unknown> => {
+    const result = await verifyIdentityChain({
+      identity: ident,
+      session_pubkey: legacySessionPubkey,
+      course_cert: courseCert,
+      session_started_at: IDENTITY_SESSION_STARTED_AT,
+    });
+    return {
+      name,
+      note,
+      input: {
+        identity: ident,
+        session_pubkey: legacySessionPubkey,
+        course_cert: courseCert,
+        session_started_at: IDENTITY_SESSION_STARTED_AT,
+      },
+      expected:
+        result.ok && result.value.identity_version === '2.0'
+          ? {
+              ok: true,
+              identity_version: result.value.identity_version,
+              scope: result.value.scope,
+              course_id: result.value.course_id,
+              student_ref: result.value.student_ref,
+              student_pubkey: result.value.student_pubkey,
+              enrollment_pubkey: result.value.enrollment_pubkey,
+              cert_window: result.value.cert_window,
+              token_window: result.value.token_window,
+            }
+          : result.ok
+            ? { ok: true, identity_version: result.value.identity_version }
+            : { ok: false, error: result.error },
+    };
+  };
+
+  const credentialWindowCase = (
+    name: string,
+    note: string,
+    credential: StudentCredential,
+    at: string,
+  ) => ({
+    name,
+    note,
+    input: { issued_at: credential.issued_at, expires_at: credential.expires_at, at },
+    expected: checkCredentialWindow(credential, at),
+  });
+
+  const derivation = async (masterSecret: Uint8Array, note: string) => {
+    const kp = await deriveStudentKeypair(masterSecret);
+    return {
+      note,
+      input: { master_secret_hex: toHex(masterSecret) },
+      expected: {
+        info_utf8: STUDENT_KEY_HKDF_INFO,
+        seed_hex: toHex(deriveStudentKeySeed(masterSecret)),
+        pubkey_hex: kp.publicKeyHex,
+      },
+    };
+  };
+
+  return {
+    note:
+      'Institution identity conformance vectors, identity format_version 2.1. The chain is ' +
+      'root -> institution_cert -> student_credential -> session_pubkey_sig. ROOT signs the ' +
+      'institution cert (offline); the INSTITUTION key, which is the only private key that ' +
+      'lives on a server, signs one credential per student; the STUDENT key — ONE per student, ' +
+      'forever, across every course — countersigns the ephemeral session pubkey. A port walks ' +
+      'all of it with only the embedded root key. Identity names no course: course membership ' +
+      'is a roster question answered later by the server, and making it a precondition of ' +
+      'HAVING an identity is what deadlocked the 2.0 design (rosters are populated by ' +
+      'Gradescope ingest, which runs only after a student submits). Every object key in every ' +
+      'signed payload is a fixed ASCII identifier and there are no JSON arrays — student_ref is ' +
+      'always a VALUE, never a key. See course-cert.json for why.',
+
+    root_pubkey_hex: rootPubkeyHex,
+    institution_pubkey_hex: await pub(INSTITUTION_PRIV),
+    other_institution_pubkey_hex: await pub(OTHER_INSTITUTION_PRIV),
+    student_pubkey_hex: await pub(GLOBAL_STUDENT_PRIV),
+    other_student_pubkey_hex: await pub(OTHER_GLOBAL_STUDENT_PRIV),
+    session_pubkey_hex: sessionPubkey,
+
+    valid_institution_cert: validCert,
+    valid_student_credential: validCredential,
+    session_pubkey_binding: { ...binding, sig: validBindingSig },
+
+    format_version: INSTITUTION_IDENTITY_FORMAT_VERSION,
+    session_pubkey_binding_purpose: STUDENT_SESSION_BINDING_PURPOSE,
+
+    discriminator: {
+      note:
+        'THE ROUTING RULE. Two identity shapes share the same two wire slots in ' +
+        'session.start.identity: `enrollment_cert` and `enrollment`. Which walk runs is ' +
+        'decided by the SIGNED format_version inside `enrollment_cert` — 2.0 is the legacy ' +
+        'course-scoped chain (course-signed enrollment_cert + enrollment token), 2.1 is this ' +
+        'institution chain (root-signed institution_cert + student credential). NEVER route on ' +
+        'which fields are present: presence is attacker-controlled and ambiguous, and this ' +
+        'project already shipped that bug once — bundle-manifest.ts read the mere presence of ' +
+        'an embedded manifest as a 2.0 claim and made the whole legacy path unreachable. The ' +
+        "credential's own format_version must then MATCH the cert's; a mixed pair is refused " +
+        'outright, so a legacy course-signed cert can never authorize an institution credential.',
+      field: 'enrollment_cert.format_version',
+      course_scoped: ENROLLMENT_FORMAT_VERSION,
+      institution_scoped: INSTITUTION_IDENTITY_FORMAT_VERSION,
+    },
+
+    canonical_json: {
+      institution_cert: new TextDecoder().decode(buildInstitutionCertSignedPayload(validCert)),
+      student_credential: new TextDecoder().decode(
+        buildStudentCredentialSignedPayload(validCredential),
+      ),
+      session_pubkey_binding: new TextDecoder().decode(buildStudentSessionBindingPayload(binding)),
+    },
+
+    /**
+     * The institution cert is a trust anchor ONLY once its root_sig verifies
+     * against the embedded root public key. verifyIdentityChain does not do this
+     * — the caller must, exactly as for course_cert.
+     */
+    root_verification_cases: [
+      {
+        name: 'genuine_root_signature',
+        note: 'The cert the rest of these vectors anchor to.',
+        input: { cert: validCert, root_pubkey_hex: rootPubkeyHex },
+        expected: { ok: (await verifyInstitutionCert(validCert, rootPubkeyHex)).ok },
+      },
+      {
+        name: 'signed_by_a_key_that_is_not_the_root',
+        note: 'MUST be refused: an attacker supplying the cert supplies institution_pubkey too.',
+        input: {
+          cert: await makeInstitutionCert({}, WRONG_ROOT_PRIV),
+          root_pubkey_hex: rootPubkeyHex,
+        },
+        expected: {
+          ok: (
+            await verifyInstitutionCert(
+              await makeInstitutionCert({}, WRONG_ROOT_PRIV),
+              rootPubkeyHex,
+            )
+          ).ok,
+        },
+      },
+    ],
+
+    chain_cases: [
+      await chainCase('valid', 'The whole chain, every link genuine.', identity()),
+      await chainCase(
+        'cert_not_a_known_version',
+        'Version gate, step 0: a cert declaring a version that is neither 2.0 nor 2.1 is refused ' +
+          'before any signature work.',
+        identity({ enrollment_cert: await makeInstitutionCert({ format_version: '3.0' }) }),
+      ),
+      await chainCase(
+        'future_3_0_is_not_replayable_as_2_1',
+        'Version gate, step 0: BOTH artifacts genuinely signed and declaring 3.0. A reader that ' +
+          'skipped the gate would walk them under 2.1 rules; the whole point of signing the ' +
+          'version is that it cannot.',
+        identity({
+          enrollment_cert: await makeInstitutionCert({ format_version: '3.0' }),
+          enrollment: await makeStudentCredential({ format_version: '3.0' }),
+        }),
+      ),
+      await chainCase(
+        'mixed_versions_are_refused',
+        'Version gate, step 0: a 2.1 cert paired with a 2.0-versioned credential. Refused rather ' +
+          'than resolved — otherwise each artifact is read under rules the other never agreed to.',
+        identity({ enrollment: await makeStudentCredential({ format_version: '2.0' }) }),
+      ),
+      await chainCase(
+        'credential_signed_by_uncertified_key',
+        'Step 1: a credential signed by an institution key the root never certified.',
+        identity({ enrollment: await makeStudentCredential({}, OTHER_INSTITUTION_PRIV) }),
+      ),
+      await chainCase(
+        'cross_institution_forgery',
+        'Step 2, MANDATORY — the institution-scoped replacement for 2.0 cross_course_forgery. ' +
+          'Stanford holds a genuinely ROOT-certified institution key. It mints a credential ' +
+          'naming BERKELEY and ships it with its own genuine cert. The cert verifies against ' +
+          'root; the credential verifies against exactly the key that cert names; every ' +
+          'signature in the bundle is real. Only comparing institution_id across the credential, ' +
+          'the travelling cert and the root-verified anchor refuses it. One signer’s ' +
+          'credential must never be replayable under another signer’s authority.',
+        identity({
+          enrollment_cert: stanfordCert,
+          enrollment: berkeleyClaimingCredential,
+        }),
+        stanfordCert,
+      ),
+      await chainCase(
+        'travelling_cert_names_another_institution',
+        'Step 2: the cert shipped in the bundle disagrees with the root-verified anchor about ' +
+          'which institution it is.',
+        identity({
+          enrollment_cert: await makeInstitutionCert({ institution_id: OTHER_INSTITUTION_ID }),
+        }),
+      ),
+      await chainCase(
+        'travelling_cert_names_another_key',
+        'Step 2: same institution id, different certified key. A verifier that read ' +
+          'institution_pubkey from the travelling cert rather than the anchor would accept a ' +
+          'key of the attacker’s choosing.',
+        identity({
+          enrollment_cert: await makeInstitutionCert({
+            institution_pubkey: await pub(OTHER_INSTITUTION_PRIV),
+          }),
+        }),
+      ),
+      await chainCase(
+        'session_pubkey_sig_from_another_student',
+        'Step 3: the countersignature came from a different student key.',
+        identity({
+          session_pubkey_sig: await signStudentSessionBinding(binding, OTHER_GLOBAL_STUDENT_PRIV),
+        }),
+      ),
+      await chainCase(
+        'session_pubkey_not_the_countersigned_one',
+        'Step 3: a genuine countersignature lifted onto a different session key.',
+        identity(),
+        validCert,
+        await pub(seed(0x19)),
+      ),
+      await chainCase(
+        'expired_credential_is_NOT_fatal',
+        'Step 4: an expired credential still returns ok, reporting token_window. An expired ' +
+          'credential must never stop a recorder from recording (program spec §4); the ' +
+          'analyzer decides.',
+        identity({ enrollment: expiredCredential }),
+      ),
+      await chainCase(
+        'expired_institution_cert_is_NOT_fatal',
+        'Step 4, cert side. Same rule.',
+        identity({ enrollment_cert: expiredCert }),
+        expiredCert,
+      ),
+    ],
+
+    legacy_2_0_note:
+      'ARCHIVED COURSE-SCOPED IDENTITY MUST KEEP VERIFYING, PERMANENTLY. Every bundle recorded ' +
+      'before this change carries a 2.0 identity block, and adjudicating a case years after the ' +
+      'fact is the entire justification for this system (program spec §9). These cases run ' +
+      'the SAME entry point a 2.1 bundle uses and must produce exactly the results ' +
+      'enrollment.json pins — including the course_id triple comparison, which stays the ' +
+      'mandatory forgery check for 2.0 material. A port whose router looks at field presence ' +
+      'rather than the signed format_version will fail here.',
+    legacy_2_0_cases: [
+      await legacyCase(
+        'archived_course_identity_still_verifies',
+        'The unchanged 2.0 walk, reached through the version router.',
+        legacyIdentity,
+      ),
+      await legacyCase(
+        'archived_cross_course_forgery_still_refused',
+        'The 2.0 mandatory check is untouched: 61B certifies an enrollment key "for 61C" and it ' +
+          'mints a 61C token. Every signature genuine; only comparing course_id at every link ' +
+          'rejects it.',
+        {
+          ...legacyIdentity,
+          enrollment_cert: await makeEnrollmentCert({ course_id: OTHER_COURSE_ID }),
+          enrollment: await makeEnrollmentToken({ course_id: OTHER_COURSE_ID }),
+        },
+      ),
+    ],
+
+    window_note:
+      'Every window is judged against the RELEVANT ISSUE TIME, never wall-clock now, so an ' +
+      'archived bundle still verifies years later in an adjudication. The institution cert is ' +
+      "judged against the credential's issued_at; the credential is judged against the session " +
+      'start. A date-only expires_at is inclusive THROUGH THE END of that day, exactly as ' +
+      'course_cert.valid_until — same resolution rule, implemented once.',
+    credential_window_cases: [
+      credentialWindowCase('in_window', 'Mid-semester.', validCredential, '2026-10-01T00:00:00Z'),
+      credentialWindowCase(
+        'before_issued',
+        'Session predates issuance.',
+        validCredential,
+        '2026-08-25T00:00:00Z',
+      ),
+      credentialWindowCase(
+        'date_only_expiry_covers_that_whole_day',
+        'expires_at 2027-01-15 covers all of Jan 15.',
+        validCredential,
+        '2027-01-15T23:59:59Z',
+      ),
+      credentialWindowCase(
+        'date_only_expiry_ends_at_next_midnight',
+        'and expires at the first instant of Jan 16.',
+        validCredential,
+        '2027-01-16T00:00:00Z',
+      ),
+      credentialWindowCase(
+        'unparseable',
+        'A bad instant reports unparseable_timestamp rather than throwing.',
+        validCredential,
+        'whenever',
+      ),
+    ],
+
+    student_key_derivation: {
+      note:
+        'The CURRENT student key derivation: one master secret, ONE key, forever, across every ' +
+        'course. Same HKDF-SHA256, same 32-byte master secret as IKM, same non-empty salt and ' +
+        'same 32-byte output-is-the-ed25519-seed rule as the legacy per-course derivation in ' +
+        'student-keys.json — the ONLY difference is the info string, which is now FIXED. ' +
+        'Because the two info strings differ, a student’s existing per-course keys are ' +
+        'untouched and archived bundles keep verifying against the pubkeys their tokens name; ' +
+        'student-keys.json remains the contract for those and is unchanged.',
+      hkdf_params: {
+        hash: 'SHA-256',
+        ikm: 'the 32 raw bytes of the master secret',
+        salt_utf8: new TextDecoder().decode(STUDENT_KEY_HKDF_SALT),
+        salt_hex: toHex(STUDENT_KEY_HKDF_SALT),
+        info_utf8: STUDENT_KEY_HKDF_INFO,
+        info_construction: 'UTF-8 bytes of info_utf8 verbatim — nothing is concatenated',
+        output_length_bytes: STUDENT_KEY_SEED_BYTES,
+        output_is: 'the ed25519 secret key (seed)',
+      },
+      encoding_note:
+        'The v1 info concatenates a course_id, and a port encoding that as US_ASCII rather than ' +
+        'UTF-8 silently derives a DIFFERENT key with no error — it bit provjet once, which is ' +
+        'why student-keys.json keeps a berkeley-café case. Nothing is concatenated onto the ' +
+        'v2 info and the constant is pure ASCII, so the hazard is retired rather than mitigated ' +
+        'here. The v1 case stays live in student-keys.json for archived material.',
+      master_secret_bytes: STUDENT_MASTER_SECRET_BYTES,
+      derivation_cases: [
+        await derivation(MASTER_SECRET_A, 'The baseline derivation.'),
+        await derivation(MASTER_SECRET_B, 'A different student: a different key.'),
+      ],
+      differs_from_legacy_course_derivation: {
+        note:
+          'Same master secret, both derivations. These MUST NOT be equal — that is what keeps a ' +
+          "student's archived per-course keys separate from their new global one.",
+        master_secret_hex: toHex(MASTER_SECRET_A),
+        global_pubkey_hex: (await deriveStudentKeypair(MASTER_SECRET_A)).publicKeyHex,
+        legacy_course_id: COURSE_ID,
+        legacy_pubkey_hex: (await deriveCourseKeypair(MASTER_SECRET_A, COURSE_ID)).publicKeyHex,
+      },
+    },
+  };
+}
+
 async function main(): Promise<void> {
   const { out, recorderOut } = parseArgs(process.argv.slice(2));
 
@@ -1612,6 +2163,10 @@ async function main(): Promise<void> {
 
   // --- 14. S3 rolling seal: manifest-<session_id>.json at format_version 1.2 ---
   writeJson(outDir, 'rolling-manifest.json', await buildRollingManifestVectors());
+
+  // --- 15. institution identity 2.1: institution_cert -> credential -> binding,
+  //         plus the archived-2.0 cases that prove the version router works ---
+  writeJson(outDir, 'identity.json', await buildInstitutionIdentityVectors());
 
   console.log(`Wrote conformance vectors to ${outDir}`);
 }

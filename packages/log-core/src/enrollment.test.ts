@@ -97,7 +97,9 @@ async function makeIdentity(
   overrides: Partial<SessionIdentity> = {},
   studentPriv: Uint8Array = STUDENT_PRIV,
 ): Promise<SessionIdentity> {
-  const enrollment = overrides.enrollment ?? (await makeToken());
+  // `SessionIdentity.enrollment` is now a 2.0-or-2.1 union; this whole file is
+  // the 2.0 suite, so narrow once here rather than at every use.
+  const enrollment = (overrides.enrollment ?? (await makeToken())) as EnrollmentToken;
   const enrollment_cert = overrides.enrollment_cert ?? (await makeEnrollmentCert());
   const sessionPubkey = await pubHex(SESSION_PRIV);
   return {
@@ -502,39 +504,85 @@ describe('verifyIdentityChain', () => {
   it('walks course_cert -> enrollment_cert -> token -> session_pubkey_sig', async () => {
     const r = await verifyIdentityChain(await chainInput());
     expect(r.ok).toBe(true);
-    if (r.ok) {
+    if (r.ok && r.value.identity_version === '2.0') {
+      expect(r.value.scope).toBe('course');
       expect(r.value.student_ref).toBe(STUDENT_REF);
       expect(r.value.course_id).toBe(COURSE_ID);
       expect(r.value.student_pubkey).toBe(await pubHex(STUDENT_PRIV));
       expect(r.value.enrollment_pubkey).toBe(await pubHex(ENROLLMENT_PRIV));
       expect(r.value.cert_window).toEqual({ in_window: true });
       expect(r.value.token_window).toEqual({ in_window: true });
+    } else {
+      expect.unreachable('a 2.0 identity block must route to the 2.0 walk');
     }
+  });
+
+  it('routes an archived 2.0 bundle to the course walk without an institution anchor', async () => {
+    // The backwards-compatibility guarantee in one assertion: a caller that only
+    // has a course_cert — every reader written before institution identity
+    // existed — still gets a complete, successful course-scoped walk.
+    const input = await chainInput();
+    expect('institution_cert' in input).toBe(false);
+    const r = await verifyIdentityChain(input);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.identity_version).toBe('2.0');
   });
 
   // --- step 0: version gate --------------------------------------------------
 
-  it('refuses an enrollment_cert that is not 2.0, BEFORE any signature work', async () => {
+  it('refuses an enrollment_cert whose version is neither 2.0 nor 2.1, BEFORE any signature work', async () => {
     const cert = await makeEnrollmentCert({ format_version: '1.0' });
     const r = await verifyIdentityChain(
       await chainInput({ identity: await makeIdentity({ enrollment_cert: cert }) }),
     );
     expect(r.ok).toBe(false);
     if (!r.ok) {
-      expect(r.error.kind).toBe('not_enrollment_2_0');
-      expect(r.error).toMatchObject({ artifact: 'cert', format_version: '1.0' });
+      expect(r.error.kind).toBe('unsupported_identity_version');
+      expect(r.error).toMatchObject({ format_version: '1.0' });
     }
   });
 
-  it('refuses a token that is not 2.0', async () => {
+  it('refuses a FUTURE 3.0 identity outright rather than walking it as 2.0', async () => {
+    // The downgrade guard: both artifacts genuinely signed, both declaring 3.0.
+    // A reader that ignored the gate would happily walk them under 2.0 rules.
+    const r = await verifyIdentityChain(
+      await chainInput({
+        identity: await makeIdentity({
+          enrollment_cert: await makeEnrollmentCert({ format_version: '3.0' }),
+          enrollment: await makeToken({ format_version: '3.0' }),
+        }),
+      }),
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.kind).toBe('unsupported_identity_version');
+      expect(r.error).toMatchObject({ format_version: '3.0' });
+    }
+  });
+
+  it('refuses a cert and a token that declare DIFFERENT versions', async () => {
     const token = await makeToken({ format_version: '3.0' });
     const r = await verifyIdentityChain(
       await chainInput({ identity: await makeIdentity({ enrollment: token }) }),
     );
     expect(r.ok).toBe(false);
     if (!r.ok) {
-      expect(r.error.kind).toBe('not_enrollment_2_0');
-      expect(r.error).toMatchObject({ artifact: 'token' });
+      expect(r.error.kind).toBe('identity_version_mismatch');
+      expect(r.error).toMatchObject({ cert_version: '2.0', credential_version: '3.0' });
+    }
+  });
+
+  it('reports a missing course_cert anchor rather than silently passing', async () => {
+    // Omit the key entirely — `exactOptionalPropertyTypes` makes an explicit
+    // `undefined` a type error, which is the stronger contract.
+    const withAnchor = await chainInput();
+    const withoutAnchor = { ...withAnchor };
+    delete withoutAnchor.course_cert;
+    const r = await verifyIdentityChain(withoutAnchor);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.kind).toBe('missing_trust_anchor');
+      expect(r.error).toMatchObject({ required: 'course_cert' });
     }
   });
 
