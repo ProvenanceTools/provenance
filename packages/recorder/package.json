@@ -41,7 +41,7 @@
     "build:integration": "tsc -p tsconfig.integration.json",
     "test:integration": "npm run build && npm run build:integration && node ./dist-integration/test/integration/runTest.js",
     "bench": "vitest run --reporter=verbose --config vitest.bench.config.ts",
-    "build:prod": "node --experimental-strip-types ../../tools/embed-course-key.ts && npm run bundle && npm run package && git -C ../.. checkout packages/recorder/src/activation/course-public-key.ts"
+    "build:prod": "node --experimental-strip-types ../../tools/embed-root-key.ts && npm run bundle && npm run package && git -C ../.. checkout packages/recorder/src/activation/course-public-key.ts"
   },
   "dependencies": {
     "@noble/ciphers": "^2.2.0",

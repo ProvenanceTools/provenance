@@ -191,61 +191,166 @@ provenance/
 
 ## Course staff: key & manifest workflow
 
-The recorder verifies every `.provenance-manifest` manifest against an ed25519 public key embedded in the extension. The keypair is generated **offline** on a secured machine; the private key never enters the repo.
+The recorder verifies every `.provenance-manifest` manifest through a two-level trust
+chain (Manifest 2.0; full design in
+[`docs/superpowers/specs/2026-08-18-multicourse-program-architecture.md`](docs/superpowers/specs/2026-08-18-multicourse-program-architecture.md) §2–§3):
 
-**Generate the course keypair** (once, on a secured machine):
+```
+  root keypair            (maintainer; offline; once, ever; NEVER signs a manifest)
+        │ signs
+        ▼
+  course_cert             { course_id, course_pubkey, valid_from, valid_until }
+        │ authorizes
+        ▼
+  course keypair          (course staff; signs .provenance-manifest files)
+        │ signs
+        ▼
+  .provenance-manifest
+```
+
+The recorder embeds only the **root** public key — one VSIX build serves every course.
+A course's authority comes entirely from its root-signed `course_cert`, which travels
+**inline** inside every manifest that course signs, not from anything baked into the
+extension. `format_version: "1.0"` manifests (no trust chain, no `course_cert`) remain
+permanently supported for archived submissions; everything below produces 2.0 unless
+you pass `--format 1.0`.
+
+**The root private key is the highest-value secret in this system.** It transitively
+authorizes every course, past and future. Generate it once, offline, on a secured
+machine, exactly like a course keypair below — never inside this repo, never emailed,
+never logged. A dev root keypair is checked into `.notes/dev-root-keypair.json`
+(git-excluded, deliberately public/insecure) purely so local development and the test
+fixtures under `test-workspace/` have something to sign against; it must never be used
+for a real deployment.
+
+### 1. Root keypair (once, ever, offline)
+
+Generate it the same way `tools/generate-course-keypair.ts` generates a course
+keypair (it's the same ed25519 keypair shape — `{ public_key_hex, private_key_hex }`)
+on an air-gapped or otherwise hardened machine, and back up the private key to
+physical media. There is currently no dedicated root-keypair-generation tool beyond
+that — the maintainer runs the same offline procedure once.
+
+### 2. Course keypair + certificate (per course, at onboarding)
+
+**Generate the course keypair** (once per course, on a secured machine):
 
 ```sh
 node --experimental-strip-types tools/generate-course-keypair.ts /Volumes/SECURE/cs61a-fa26.json
 ```
 
-The public key is printed to stdout (paste into a clipboard or pipe into the production build). The private key is written to the chosen path with mode `0600`. Back it up to physical media.
+The public key is printed to stdout. The private key is written to the chosen path
+with mode `0600`. Back it up to physical media.
 
-**Author the unsigned `.provenance-manifest`** in the assignment starter folder. Drop this file at the workspace root the students will open:
+**Mint the course's certificate**, using the ROOT keypair (typically a separate step
+run by whoever holds the root key, not by course staff):
+
+```sh
+node --experimental-strip-types tools/mint-course-cert.ts \
+  --course-id berkeley-cs61a --course-pubkey <64-hex-from-generate-step> \
+  --valid-from 2026-08-20 --valid-until 2027-01-15 \
+  --root-keypair /Volumes/SECURE/root-keypair.json \
+  --out /Volumes/SECURE/cs61a-fa26.cert.json
+```
+
+Keep the validity window short (one semester) — an offline recorder cannot learn about
+key revocation, so a short window is the only mitigation. The certificate is
+self-verified against the root public key before being written; a tool that hands out
+a certificate that fails its own check is worse than no tool.
+
+`tools/generate-course-keypair.ts` can also do both steps in one run — pass
+`--course-id`, `--valid-from`, `--valid-until` (and optionally `--root-keypair` /
+`--cert-out`) alongside the output path — whenever the same machine holds both keys.
+
+### 3. Manifest signing (per assignment)
+
+**Author the unsigned `.provenance-manifest`** in the assignment starter folder. Drop
+this file at the workspace root the students will open:
 
 ```json
 {
   "assignment_id": "hw03",
   "semester": "fa26",
   "issued_at": "2026-09-15T00:00:00Z",
-  "files_under_review": ["hw03.py"]
+  "files_under_review": ["hw03.py"],
+  "course_id": "berkeley-cs61a",
+  "collaboration": "solo",
+  "submission": "bundle",
+  "scope": "directory",
+  "policy": {
+    "capture": {
+      "selection_change": true,
+      "focus_change": true,
+      "terminal": true,
+      "doc_open_close": true,
+      "inline_content": true,
+      "heartbeat_interval_ms": 30000
+    }
+  }
 }
 ```
 
-Field rules (enforced by `parseManifest` in `packages/log-core/src/manifest.ts`):
+Field rules (enforced by `parseManifest` / `parseManifestValue` in
+`packages/log-core/src/manifest.ts`):
 
 - `assignment_id` — non-empty string, unique per assignment. Rotating it per assignment is what prevents replay of an old session against a new assignment (PRD §6).
 - `semester` — non-empty string, e.g. `"fa26"`.
 - `issued_at` — non-empty ISO 8601 UTC timestamp.
 - `files_under_review` — array of workspace-relative paths. Only files in this list get the in-memory expected-content model used for external-change detection (PRD §4.5). Other files are still recorded for workspace context.
+- `course_id` — MUST equal the `course_id` inside the certificate you sign with, or the manifest will fail its own chain check (program spec §3 step 3).
+- `collaboration` / `submission` / `scope` — `"solo" | "group"`, `"bundle" | "git"`, `"directory" | "repo"`.
+- `policy.capture` — the professor-facing capture controls (program spec §4). A course can turn capture down; a student cannot turn it off, because this block is inside the course-signed payload. Omit keys you don't want to change from the default (everything on, 30s heartbeat).
 
-Omit the `sig` field; the signer adds it. (If you re-sign an already-signed manifest, the old `sig` is stripped first.)
+Omit `sig` and `course_cert`; the signer adds both. (If you re-sign an already-signed manifest, the old `sig`/`course_cert` are stripped first.)
 
-**Sign a per-assignment manifest** (every time a new assignment is released):
+**Sign it**:
 
 ```sh
 PROVENANCE_COURSE_KEYPAIR_PATH=/Volumes/SECURE/cs61a-fa26.json \
+PROVENANCE_COURSE_CERT_PATH=/Volumes/SECURE/cs61a-fa26.cert.json \
   node --experimental-strip-types tools/sign-manifest.ts /path/to/assignment-starter/.provenance-manifest
 ```
 
-The script strips any existing signature, canonicalizes the remaining fields (via JCS), signs with the private key, and writes the updated `.provenance-manifest` back to disk.
+The tool signs with the course private key, staples the certificate inline, then
+**self-verifies the full trust chain** (`verifyManifestChain`, root → cert → manifest)
+before writing anything to disk — it refuses to write a manifest that would not
+itself verify. Pass `--format 1.0` to emit the legacy shape instead (no `course_id` /
+`collaboration` / `submission` / `scope` / `policy` / `course_cert` — just the four
+original fields), which log-core continues to support permanently.
 
-**Produce a production VSIX** with the course public key embedded:
+### Production VSIX (root key — one build serves every course)
 
 ```sh
-PROVENANCE_COURSE_PUBLIC_KEY_HEX=<64-hex-from-generate-step> \
+PROVENANCE_ROOT_PUBLIC_KEY_HEX=<the maintainer's root public key> \
   npm run build:prod --workspace packages/recorder
 ```
 
-`build:prod` embeds the production key, builds, packages a VSIX, then restores the source file so further local work uses the dev key. The script refuses to run if the env var is missing, malformed, or matches the dev key — so a misconfigured release can never silently ship a dev VSIX.
+`build:prod` embeds the **root** public key (via `tools/embed-root-key.ts`), builds,
+packages a VSIX, then restores the source file so further local work uses the dev key.
+Unlike the old per-course-key model, this is done **once per root-key rotation, not
+once per course** — a course's authority is entirely in its `course_cert`, which the
+VSIX never needs to know about ahead of time. The script refuses to run if the env var
+is missing, malformed, or matches the dev root key, so a misconfigured release can
+never silently ship a dev VSIX.
 
-**Refresh the analyzer's known-good extension-hash list** so the new VSIX won't trip `extension_hash_mismatch` when staff load real submissions:
+**Refresh the analyzer's known-good extension-hash list** so a new VSIX won't trip
+`extension_hash_mismatch`:
 
 ```sh
 npm run update-hashes -- --keypair /Volumes/SECURE/cs61a-fa26.json
 ```
 
-This runs the same `build:prod` pipeline as above (you can re-use the same keypair JSON instead of exporting the env var by hand), then hashes the bundled `dist/` and appends the result to `packages/analysis-core/src/heuristics/config/known-good-extension-hashes.json`. The script computes the hash with the same algorithm the recorder uses at seal time, so any VSIX produced by the same run will validate cleanly. Without `--keypair` (and with no `PROVENANCE_COURSE_PUBLIC_KEY_HEX` env var) the script falls back to bundling with the dev key and prints a loud warning — that hash will never match a real release.
+> **Note:** `scripts/update-extension-hash-allowlist.mjs` was written for the old
+> per-course-key model — it still sets `PROVENANCE_COURSE_PUBLIC_KEY_HEX` (reading
+> `public_key_hex` from a _course_ keypair file) when it drives `build:prod`, which
+> now expects `PROVENANCE_ROOT_PUBLIC_KEY_HEX` instead. Since one VSIX build now
+> serves every course, this script's whole per-course-keypair invocation model is
+> stale under the root-key hierarchy; it needs updating (env var, and probably
+> dropping the per-course framing entirely, since there is now only one production
+> hash to track per root-key rotation) before `--keypair` / the env-var path will
+> work again. Filed as follow-up; out of scope for the change that introduced this
+> note (`tools/` and `packages/recorder/package.json` only — see `CLAUDE.md`).
+> `--no-build`, `--hash`, `--remove`, `--clear`, and `--show` are unaffected.
 
 Other modes: `--show` (print current list), `--no-build` (hash an already-bundled `dist/`), `--hash <hex>` / `--remove <hex>` (manual entries), `--clear`.
 
