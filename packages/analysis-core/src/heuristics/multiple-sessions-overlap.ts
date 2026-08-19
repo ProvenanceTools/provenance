@@ -1,8 +1,39 @@
 /**
  * multiple_sessions_overlap heuristic (Phase 17).
  *
- * PRD §7.4 integrity: "Two sessions have overlapping wall-time ranges —
- * impossible on a single machine without clock manipulation or log forging."
+ * PRD §7.4 integrity: two sessions have overlapping wall-time ranges.
+ *
+ * ## Keyed on CONTRIBUTOR, not on the bundle (Tier 3.2)
+ *
+ * The original wording of this flag — carried verbatim into its description —
+ * was that overlapping sessions are "impossible on a single machine without
+ * clock manipulation or log forging". In a shared repo worked by two partners,
+ * each running their own recorder, that overlap is produced every single time
+ * two people sit down together. The flag was therefore a high/0.95 forgery
+ * accusation against the assignment being done exactly as assigned. See
+ * `docs/superpowers/specs/2026-08-19-git-collaboration-semantics.md` §3 S5.
+ *
+ * So a pair is now judged by {@link compareContributors} over the two sessions'
+ * resolved contributors:
+ *
+ *  - `'same'`     — one verified person recorded both. This is the ORIGINAL
+ *                   signal and keeps its severity and confidence untouched.
+ *  - `'different'` — two verified, distinct people recorded them. Expected
+ *                   collaboration; no flag. This is the ONLY case that
+ *                   suppresses, and it requires proof on both sides.
+ *  - `'unknown'`  — at least one side is `unattributed` or `unverifiable`, so
+ *                   "these are two different people" is exactly what is NOT
+ *                   established. The flag fires, with wording that says so.
+ *                   An unenrolled cohort therefore loses no findings.
+ *
+ * Never compare `contributorKey` strings directly here. That reads "unproven"
+ * as "different people" and reintroduces the accusation through the back door,
+ * because every unattributed session carries a per-session singleton key.
+ *
+ * The verdict is read through `contributorOf`, which answers `unattributed` for
+ * a bundle no caller has stamped via `establishBundleContributors`. That is the
+ * fail-toward-more-findings direction: an unstamped bundle behaves exactly as
+ * this heuristic did before Tier 3.2.
  *
  * For each pair of sessions in the bundle, compare:
  *   - rangeA: [session.start.wall, session.end.wall]
@@ -38,15 +69,19 @@
  * never match across two sessions, so such a guard is unreachable. An earlier
  * version of this file carried one; it was dead code, and its unit tests passed
  * only because the fixtures hand-set a shared machine_id no recorder can emit.
+ * The contributor gate above is the discriminator that guard was reaching for,
+ * and it is grounded in a signed identity chain rather than in a salted hash.
  *
  * Note on bundle.sessions ordering: sessions are sorted oldest-first by
  * firstEvent.wall (done in the loader). We iterate all pairs N*(N-1)/2.
  * With typical bundle sizes (1–10 sessions) this is negligible.
  *
- * Severity: 'high'. Confidence: 0.95.
- * (Overlapping sessions are physically impossible on a single machine under
- * normal conditions. The main false positive is clock misconfiguration, but
- * that would also trigger monotonic_wall_regression.)
+ * Severity: 'high'. Confidence: 0.95 — unchanged, and deliberately so. Tier 3.2
+ * narrows WHICH pairs are judged; it does not soften the judgement on the pairs
+ * that survive the gate. The remaining innocent explanations (a misconfigured
+ * clock, or one person recording on two machines under one identity) are named
+ * in the description rather than being asserted away; clock skew would also
+ * trigger monotonic_wall_regression.
  *
  * One flag per overlapping pair. The supporting seqs are the session.start
  * events of each session.
@@ -54,6 +89,12 @@
 
 import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
+import {
+  contributorOf,
+  compareContributors,
+  describeSessionContributor,
+} from '../identity/resolve-contributors.js';
+import type { SessionContributor } from '../identity/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
 
@@ -93,11 +134,38 @@ function rangesOverlap(a: SessionRange, b: SessionRange): boolean {
   return a.startWall < b.endWall && b.startWall < a.endWall;
 }
 
+/**
+ * The clause that says what the overlap MEANS, given who recorded the two
+ * sessions. Never reached for `'different'` — that pair produces no flag.
+ */
+function contributorClause(
+  comparison: 'same' | 'unknown',
+  ca: SessionContributor,
+  cb: SessionContributor,
+): string {
+  if (comparison === 'same') {
+    const who = ca.kind === 'attributed' ? ca.studentRef : 'the same contributor';
+    return (
+      `Both sessions are attributed to the same verified contributor (${who}), so this is one ` +
+      `person's recorder covering the same wall-clock window twice. On a single machine that ` +
+      `does not happen without clock manipulation or log forging; the remaining innocent ` +
+      `explanation is that this person recorded on two machines under one identity.`
+    );
+  }
+  return (
+    `It is NOT established that two different people recorded these sessions: ` +
+    `session A is ${describeSessionContributor(ca)}; session B is ${describeSessionContributor(cb)}. ` +
+    `If one person recorded both, the overlap indicates clock manipulation or log forging. ` +
+    `If two collaborators sharing a repository recorded them, it is ordinary concurrent work — ` +
+    `the verified identity evidence that would tell those apart is absent here.`
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, _config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, _config: HeuristicConfig): Flag[] {
   // Build a session range per session using index.bySessionId.
   const ranges: SessionRange[] = [];
 
@@ -142,6 +210,16 @@ function run(index: EventIndex, _bundle: Bundle, _config: HeuristicConfig): Flag
 
       if (!rangesOverlap(a, b)) continue;
 
+      // Tier 3.2: two PROVEN-different contributors recording at once is the
+      // expected shape of pair work, not evidence of forgery. Only a proven
+      // 'different' suppresses; 'same' is the original signal and 'unknown'
+      // keeps the pre-3.2 behaviour, because "two people" is precisely what an
+      // unattributed session leaves unproven.
+      const ca = contributorOf(bundle, a.sessionId);
+      const cb = contributorOf(bundle, b.sessionId);
+      const comparison = compareContributors(ca, cb);
+      if (comparison === 'different') continue;
+
       const pairId = flagId(a.sessionId, b.sessionId);
       if (emittedPairs.has(pairId)) continue;
       emittedPairs.add(pairId);
@@ -170,8 +248,7 @@ function run(index: EventIndex, _bundle: Bundle, _config: HeuristicConfig): Flag
           `Sessions "${a.sessionId}" and "${b.sessionId}" have overlapping wall-time ranges. ` +
           `Session A: [${new Date(a.startWall).toISOString()}, ${aEndLabel}]. ` +
           `Session B: [${new Date(b.startWall).toISOString()}, ${bEndLabel}]. ` +
-          `Overlapping sessions are impossible on a single machine without clock manipulation ` +
-          `or log forging.`,
+          contributorClause(comparison, ca, cb),
         detail: {
           sessionA: a.sessionId,
           sessionB: b.sessionId,
@@ -181,6 +258,9 @@ function run(index: EventIndex, _bundle: Bundle, _config: HeuristicConfig): Flag
           sessionBEndWall: bEndLabel,
           sessionAOpenEnded: a.openEnded,
           sessionBOpenEnded: b.openEnded,
+          contributorComparison: comparison,
+          sessionAContributor: describeSessionContributor(ca),
+          sessionBContributor: describeSessionContributor(cb),
         },
       });
     }

@@ -7,6 +7,13 @@ import { multipleSessionsOverlapHeuristic } from './multiple-sessions-overlap.js
 import { buildIndex } from '../index/build-index.js';
 import { loadBundle } from '../loader/parse-bundle.js';
 import { buildTestBundle } from '../test-support/build-test-bundle.js';
+import {
+  buildIdentityKeys,
+  buildInstitutionIdentity,
+  seededKeypair,
+} from '../test-support/build-identity.js';
+import type { IdentityTestKeys } from '../test-support/build-identity.js';
+import { establishBundleContributors } from '../identity/resolve-contributors.js';
 import { mergeConfig } from './config.js';
 
 // ---------------------------------------------------------------------------
@@ -443,5 +450,215 @@ describe('multiple_sessions_overlap — recorder identity does not suppress', ()
     });
     const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
     expect(flags).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contributor keying (Tier 3.2)
+//
+// The reason this heuristic was re-keyed: two partners sharing a repo, each
+// running their own recorder, overlap in wall time every single time they work
+// together, and the flag accused them of log forgery for it. Suppression is
+// permitted ONLY where both sides resolve to verified, distinct contributors —
+// never on a bare `contributorKey` inequality, which reads "unproven" as
+// "different people".
+// ---------------------------------------------------------------------------
+
+describe('multiple_sessions_overlap — contributor keying', () => {
+  const ALICE = '9c8e1a70-2f2b-4c55-8f1e-6b4a0d9c7e21';
+  const BOB = '3a1d0e55-8c44-4b2a-a7f0-11c9d2e3f4a5';
+
+  let cachedKeys: IdentityTestKeys | null = null;
+  async function keys(): Promise<IdentityTestKeys> {
+    cachedKeys ??= await buildIdentityKeys();
+    return cachedKeys;
+  }
+
+  type Who = { studentRef: string } | 'anonymous';
+
+  /**
+   * Two sessions that overlap in wall time (0..30 and 10..30), each optionally
+   * carrying a fully-signed 2.1 identity block, with the bundle stamped so
+   * `contributorOf` can answer.
+   */
+  async function overlappingPair(whoA: Who, whoB: Who) {
+    const k = await keys();
+    const specs: Who[] = [whoA, whoB];
+    const sessions = [];
+    for (let i = 0; i < 2; i++) {
+      const sk = await seededKeypair(0x60 + i);
+      const who = specs[i]!;
+      sessions.push({
+        events: [endsAt(30)],
+        walls: [wallAt(i * 10)],
+        sessionStart: {
+          session_pubkey: sk.pubkeyHex,
+          ...(who === 'anonymous'
+            ? {}
+            : {
+                identity: await buildInstitutionIdentity({
+                  keys: k,
+                  sessionPubkeyHex: sk.pubkeyHex,
+                  studentRef: who.studentRef,
+                }),
+              }),
+        },
+      });
+    }
+
+    const { zipBuffer } = await buildTestBundle({ sessions });
+    const result = await loadBundle(new Blob([zipBuffer]), 'test.zip');
+    if (!result.ok) throw new Error(`Bundle load failed: ${JSON.stringify(result.error)}`);
+    const bundle = result.value;
+    const resolved = await establishBundleContributors(bundle, k.root.pubkeyHex);
+    return { index: buildIndex(bundle), bundle, resolved };
+  }
+
+  it('does NOT flag two attributed partners recording simultaneously', async () => {
+    const { index, bundle, resolved } = await overlappingPair(
+      { studentRef: ALICE },
+      { studentRef: BOB },
+    );
+    // Guard the premise: both sides really did verify, so the suppression below
+    // is the 'different' branch and not an accidental resolution failure.
+    expect(resolved.counts).toEqual({ attributed: 2, unverifiable: 0, unattributed: 0 });
+
+    const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
+    expect(flags).toHaveLength(0);
+  });
+
+  it('STILL flags one contributor whose own two sessions overlap', async () => {
+    const { index, bundle, resolved } = await overlappingPair(
+      { studentRef: ALICE },
+      { studentRef: ALICE },
+    );
+    expect(resolved.counts).toEqual({ attributed: 2, unverifiable: 0, unattributed: 0 });
+    expect(resolved.contributors).toHaveLength(1);
+
+    const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
+    expect(flags).toHaveLength(1);
+    const f = flags[0]!;
+    // The original signal, at its original strength.
+    expect(f.severity).toBe('high');
+    expect(f.confidence).toBeCloseTo(0.95);
+    expect(f.detail!['contributorComparison']).toBe('same');
+    expect(f.description).toContain('same verified contributor');
+    expect(f.description).toContain(ALICE);
+  });
+
+  it('STILL flags when session A is unattributed and session B is attributed', async () => {
+    const { index, bundle, resolved } = await overlappingPair('anonymous', { studentRef: BOB });
+    expect(resolved.counts).toEqual({ attributed: 1, unverifiable: 0, unattributed: 1 });
+
+    const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.detail!['contributorComparison']).toBe('unknown');
+    expect(flags[0]!.severity).toBe('high');
+  });
+
+  it('STILL flags when session B is unattributed and session A is attributed', async () => {
+    const { index, bundle, resolved } = await overlappingPair({ studentRef: ALICE }, 'anonymous');
+    expect(resolved.counts).toEqual({ attributed: 1, unverifiable: 0, unattributed: 1 });
+
+    const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.detail!['contributorComparison']).toBe('unknown');
+  });
+
+  it('STILL flags when BOTH sessions are unattributed — distinct singleton keys must not read as "different people"', async () => {
+    const { index, bundle, resolved } = await overlappingPair('anonymous', 'anonymous');
+    expect(resolved.counts).toEqual({ attributed: 0, unverifiable: 0, unattributed: 2 });
+    // Two unattributed sessions get DIFFERENT singleton contributorKeys. A
+    // direct key compare would call them "different people" and suppress —
+    // this assertion is what goes red if someone does that.
+    expect(resolved.contributors).toHaveLength(2);
+    expect(resolved.contributors[0]!.key).not.toBe(resolved.contributors[1]!.key);
+
+    const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.detail!['contributorComparison']).toBe('unknown');
+  });
+
+  it('STILL flags when the identity block is present but does not verify', async () => {
+    // A block claiming ALICE signed by a key that is not the root: `unverifiable`,
+    // never quietly merged into ALICE, and never treated as proof of a second
+    // person either.
+    const k = await keys();
+    const wrongRoot = await seededKeypair(0x77);
+    const sessions = [];
+    for (let i = 0; i < 2; i++) {
+      const sk = await seededKeypair(0x60 + i);
+      sessions.push({
+        events: [endsAt(30)],
+        walls: [wallAt(i * 10)],
+        sessionStart: {
+          session_pubkey: sk.pubkeyHex,
+          identity: await buildInstitutionIdentity({
+            keys: k,
+            sessionPubkeyHex: sk.pubkeyHex,
+            studentRef: i === 0 ? ALICE : BOB,
+            ...(i === 0 ? { certSignedBy: wrongRoot.privkey } : {}),
+          }),
+        },
+      });
+    }
+    const { zipBuffer } = await buildTestBundle({ sessions });
+    const result = await loadBundle(new Blob([zipBuffer]), 'test.zip');
+    if (!result.ok) throw new Error(`Bundle load failed: ${JSON.stringify(result.error)}`);
+    const bundle = result.value;
+    const resolved = await establishBundleContributors(bundle, k.root.pubkeyHex);
+    expect(resolved.counts).toEqual({ attributed: 1, unverifiable: 1, unattributed: 0 });
+
+    const flags = multipleSessionsOverlapHeuristic.run(buildIndex(bundle), bundle, defaultConfig);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.detail!['contributorComparison']).toBe('unknown');
+  });
+
+  it('an UNSTAMPED bundle behaves exactly as it did before Tier 3.2', async () => {
+    // No caller ran establishBundleContributors. Every session reads
+    // `unattributed`, so nothing is suppressed. An analyzer or server path that
+    // forgets to stamp must lose no findings.
+    const k = await keys();
+    const sessions = [];
+    for (let i = 0; i < 2; i++) {
+      const sk = await seededKeypair(0x60 + i);
+      sessions.push({
+        events: [endsAt(30)],
+        walls: [wallAt(i * 10)],
+        sessionStart: {
+          session_pubkey: sk.pubkeyHex,
+          identity: await buildInstitutionIdentity({
+            keys: k,
+            sessionPubkeyHex: sk.pubkeyHex,
+            studentRef: i === 0 ? ALICE : BOB,
+          }),
+        },
+      });
+    }
+    const { zipBuffer } = await buildTestBundle({ sessions });
+    const result = await loadBundle(new Blob([zipBuffer]), 'test.zip');
+    if (!result.ok) throw new Error(`Bundle load failed: ${JSON.stringify(result.error)}`);
+    const bundle = result.value;
+    expect(bundle.contributors).toBeUndefined();
+
+    const flags = multipleSessionsOverlapHeuristic.run(buildIndex(bundle), bundle, defaultConfig);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.detail!['contributorComparison']).toBe('unknown');
+  });
+
+  it('no longer claims the overlap is "impossible" on any path', async () => {
+    // The old text — carried into the grader-visible flag — asserted forgery
+    // about something that is routine and innocent in a shared repo.
+    const pairs: Array<[Who, Who]> = [
+      [{ studentRef: ALICE }, { studentRef: ALICE }],
+      ['anonymous', 'anonymous'],
+      [{ studentRef: ALICE }, 'anonymous'],
+    ];
+    for (const [a, b] of pairs) {
+      const { index, bundle } = await overlappingPair(a, b);
+      const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
+      expect(flags).toHaveLength(1);
+      expect(flags[0]!.description).not.toContain('impossible');
+    }
   });
 });
