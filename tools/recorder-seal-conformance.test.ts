@@ -98,6 +98,22 @@ const EXPECTED_CHECK_IDS: ValidationCheckId[] = [
   'submitted_code_match',
 ];
 
+/**
+ * Bundle-level tamper detections — NOT among the PRD §5.4 eight.
+ *
+ * They ride on `ValidationReport.bundleDetections` rather than in `checks`,
+ * because the eight are a frozen persisted contract (the server has eight
+ * `check_N_status` columns and asserts `checks.length === 8`). They enforce the
+ * two commitments the format always made and never checked: the signed
+ * manifest's `slog_sha256` / `meta_sha256`, and the signed `.slog.meta`
+ * checkpoints.
+ */
+const EXPECTED_DETECTION_IDS: ValidationCheckId[] = [
+  'log_bytes_match',
+  'checkpoint_chain_valid',
+  'manifest_downgrade',
+];
+
 function sha256OfString(s: string): string {
   return createHash('sha256').update(Buffer.from(s, 'utf8')).digest('hex');
 }
@@ -420,6 +436,20 @@ describe('recorder seal → analysis-core load + validate (write-direction gate)
       expectAllChecksPass(verified.report);
     });
 
+    it('satisfies the bundle-level tamper detections the manifest commits to', () => {
+      // The signed manifest's log-byte digests and the signed .slog.meta
+      // checkpoints, both produced by real recorder code, must verify against
+      // the analyzer's real readers. A recorder that wrote a digest it did not
+      // honour, or a checkpoint that did not verify, would fail here.
+      const report = verified.report;
+      expect((report.bundleDetections ?? []).map((c) => c.id)).toEqual(EXPECTED_DETECTION_IDS);
+
+      expect(detectionStatusOf(report, 'log_bytes_match')).toBe('pass');
+      expect(detectionStatusOf(report, 'checkpoint_chain_valid')).toBe('pass');
+      // No embedded assignment manifest in this fixture, so nothing to inspect.
+      expect(detectionStatusOf(report, 'manifest_downgrade')).toBe('skipped');
+    });
+
     it('binds the sealed manifest signature to the pubkey inside session.start', () => {
       // The heart of the gate. seal.test.ts verifies the signature against the
       // pubkey it passes in as a dep; the analyzer verifies against the pubkey
@@ -556,6 +586,18 @@ async function validateMutated(buf: ArrayBuffer): Promise<Verified['report']> {
 
 function statusOf(report: Verified['report'], id: ValidationCheckId): string {
   return report.checks.find((c) => c.id === id)!.status;
+}
+
+/** Status of a bundle-level detection (report.bundleDetections). */
+function detectionStatusOf(report: Verified['report'], id: ValidationCheckId): string {
+  const found = (report.bundleDetections ?? []).find((c) => c.id === id);
+  if (found === undefined) {
+    throw new Error(
+      `no bundle-level detection '${id}' in report; got ` +
+        `[${(report.bundleDetections ?? []).map((c) => c.id).join(', ')}]`,
+    );
+  }
+  return found.status;
 }
 
 describe('mutation tests: a corrupted recorder bundle must be caught', () => {
@@ -711,25 +753,9 @@ describe('mutation tests: a corrupted recorder bundle must be caught', () => {
     expect(report.overall).toBe('fail');
   });
 
-  it('CHARACTERIZATION: appending a well-formed entry is NOT caught by any of the 8 checks', async () => {
-    // This is the one mutation the gate does not catch, and it is recorded here
-    // on purpose so the limit is visible rather than folklore.
-    //
-    // The appended entry is chained with log-core's real `chainEntry`, so it
-    // self-verifies (check 3), keeps seq contiguous (check 4) and t/wall
-    // non-decreasing (checks 5–6), and touches no file (checks 7–8).
-    //
-    // What *should* catch it is the signed manifest: `sessions[].slog_sha256`
-    // commits to the exact `.slog` bytes, and those bytes just changed. But
-    // nothing in analysis-core ever reads `slog_sha256` / `meta_sha256` —
-    // verified by grep: they appear nowhere in its non-test source — so the
-    // manifest's commitment to the logs is not enforced at validation time, and
-    // the signed checkpoints in `.slog.meta` are never verified either.
-    //
-    // Reported, deliberately NOT "fixed" here: adding a check is a product
-    // decision about the 8-check contract (the server persists exactly eight
-    // check_N_status columns and asserts checks.length === 8).
-    const buf = await mutateZip(bundlePath, async (zip) => {
+  /** Append a well-formed, correctly re-chained entry to the sealed .slog. */
+  async function appendWellFormedEntry(): Promise<ArrayBuffer> {
+    return mutateZip(bundlePath, async (zip) => {
       const lines = (await zip.file(slogName)!.async('string')).trim().split('\n');
       const last = JSON.parse(lines[lines.length - 1]!) as {
         seq: number;
@@ -746,9 +772,119 @@ describe('mutation tests: a corrupted recorder bundle must be caught', () => {
       });
       zip.file(slogName, `${lines.join('\n')}\n${serializeEntry(appended)}`);
     });
-    const report = await validateMutated(buf);
+  }
+
+  it('CHARACTERIZATION: appending a well-formed entry is still not caught by any of the 8 checks', async () => {
+    // UNCHANGED, and deliberately so. The eight are a frozen persisted
+    // contract, and this records that they do not — and still do not — catch
+    // an append. The appended entry is chained with log-core's real
+    // `chainEntry`, so it self-verifies (check 3), keeps seq contiguous
+    // (check 4) and t/wall non-decreasing (checks 5–6), and touches no file
+    // (checks 7–8). Every one of the eight reads the parsed event stream; not
+    // one reads the file.
+    //
+    // The fix was NOT to add a ninth check. See the test immediately below for
+    // what now catches this.
+    const report = await validateMutated(await appendWellFormedEntry());
     expect(report.checks.filter((c) => c.status !== 'pass')).toEqual([]);
     expect(report.overall).toBe('pass');
+  });
+
+  it('THE FIX: the same append IS caught by the log_bytes_match detection', async () => {
+    // The before/after on the characterization above. The eight still pass —
+    // and `log_bytes_match` fails, because `sessions[].slog_sha256` in the
+    // SIGNED manifest commits to the exact .slog bytes and those bytes moved.
+    //
+    // Note it is this detection and not the checkpoints that catches an
+    // append: the appended entry sits PAST the last checkpoint, so every
+    // signed checkpoint still verifies. The two defences are complements.
+    const report = await validateMutated(await appendWellFormedEntry());
+
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('fail');
+    expect(detectionStatusOf(report, 'checkpoint_chain_valid')).toBe('pass');
+
+    const detection = report.bundleDetections!.find((c) => c.id === 'log_bytes_match')!;
+    expect(detection.detail).toContain('modified after sealing');
+  });
+
+  it('flipping a byte in a .slog fails log_bytes_match', async () => {
+    const buf = await mutateZip(bundlePath, async (zip) => {
+      // Flip one nibble INSIDE a quoted 64-hex value, so the file stays valid
+      // NDJSON and the loader still parses it. A flip that broke JSON would be
+      // caught by the parser rather than by this detection, proving nothing.
+      const text = await zip.file(slogName)!.async('string');
+      const flipped = text.replace(
+        /"([0-9a-f]{64})"/,
+        (_m, hex: string) => `"${hex[0] === '0' ? '1' : '0'}${hex.slice(1)}"`,
+      );
+      expect(flipped).not.toBe(text);
+      zip.file(slogName, flipped);
+    });
+    const report = await validateMutated(buf);
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('fail');
+  });
+
+  it('truncating a .slog fails log_bytes_match AND checkpoint_chain_valid', async () => {
+    // Truncation is the case the two defences overlap on: the bytes move (so
+    // the manifest digest breaks) and a signed checkpoint is left pointing
+    // past the end of the log.
+    const buf = await mutateZip(bundlePath, async (zip) => {
+      const lines = (await zip.file(slogName)!.async('string')).trim().split('\n');
+      // Keep session.start so the bundle still loads; drop everything after it.
+      zip.file(slogName, `${lines[0]!}\n`);
+    });
+    const report = await validateMutated(buf);
+
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('fail');
+    expect(detectionStatusOf(report, 'checkpoint_chain_valid')).toBe('fail');
+    const cp = report.bundleDetections!.find((c) => c.id === 'checkpoint_chain_valid')!;
+    expect(cp.detail).toContain('no entry with that seq is present');
+  });
+
+  it('tampering a .slog.meta fails log_bytes_match', async () => {
+    const buf = await mutateZip(bundlePath, async (zip) => {
+      const name = `${slogName}.meta`;
+      const meta = JSON.parse(await zip.file(name)!.async('string')) as Record<string, unknown>;
+      // Keep the shape valid so the loader still parses it; only bytes move.
+      meta['info'] = 'tampered';
+      zip.file(name, JSON.stringify(meta));
+    });
+    const report = await validateMutated(buf);
+
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('fail');
+    const detection = report.bundleDetections!.find((c) => c.id === 'log_bytes_match')!;
+    expect(detection.detail).toContain('.slog.meta');
+  });
+
+  it('forging a checkpoint signature fails checkpoint_chain_valid', async () => {
+    // The .slog.meta digest is repaired after the edit, so log_bytes_match is
+    // satisfied and ONLY the checkpoint verification can catch this. That is
+    // the point of having both defences.
+    const buf = await mutateZip(bundlePath, async (zip) => {
+      const name = `${slogName}.meta`;
+      const meta = JSON.parse(await zip.file(name)!.async('string')) as {
+        checkpoints: Array<{ seq: number; hash: string; sig: string }>;
+      };
+      expect(meta.checkpoints.length).toBeGreaterThan(0);
+      meta.checkpoints[0]!.sig = 'f'.repeat(128);
+      const text = JSON.stringify(meta);
+      zip.file(name, text);
+
+      // Re-point the SIGNED manifest at the new meta bytes. (A real attacker
+      // cannot do this — they have no signing key — but doing it here isolates
+      // the checkpoint defence from the log-bytes one.)
+      const manifest = JSON.parse(await zip.file('manifest.json')!.async('string')) as {
+        sessions: Array<{ meta_sha256: string }>;
+      };
+      manifest.sessions[0]!.meta_sha256 = sha256OfString(text);
+      zip.file('manifest.json', JSON.stringify(manifest));
+    });
+    const report = await validateMutated(buf);
+
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('pass');
+    expect(detectionStatusOf(report, 'checkpoint_chain_valid')).toBe('fail');
+    const cp = report.bundleDetections!.find((c) => c.id === 'checkpoint_chain_valid')!;
+    expect(cp.detail).toContain('does not verify against the session public key');
   });
 
   it('the clean bundle is still green after all mutations (no shared-state leak)', async () => {

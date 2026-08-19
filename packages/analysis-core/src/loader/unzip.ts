@@ -25,9 +25,35 @@
  */
 
 import JSZip from 'jszip';
-import { ok, err, parseRollingManifestFilename } from '@provenance/log-core';
+import { ok, err, parseRollingManifestFilename, sha256Hex } from '@provenance/log-core';
 import type { Result } from '@provenance/log-core';
 import type { BundleFiles, LoaderError, RawRollingSealFiles } from './types.js';
+
+/**
+ * Decode a log file's bytes to text AND hash the bytes, in one decompression.
+ *
+ * The hash MUST be taken over the bytes exactly as they sit in the ZIP, because
+ * that is what the signed manifest's `slog_sha256` / `meta_sha256` commit to
+ * (see `validation/verify-log-bytes.ts`). Hashing the decoded string instead
+ * would round-trip through UTF-8 re-encoding, which is lossy for any byte
+ * sequence that is not valid UTF-8 — turning "these bytes were replaced with
+ * garbage" into a hash that silently matched whatever the decoder produced.
+ *
+ * `ignoreBOM: true` keeps the returned text byte-for-byte what
+ * `zipObject.async('string')` used to return: JSZip's UTF-8 decode does not
+ * strip a leading BOM, and `TextDecoder` does unless told otherwise. Every
+ * caller downstream parses this text, so a silently-dropped BOM would be a
+ * behaviour change unrelated to this module's job.
+ */
+async function readLogFile(zipObject: {
+  async(type: 'uint8array'): Promise<Uint8Array>;
+}): Promise<{ text: string; sha256: string }> {
+  const bytes = await zipObject.async('uint8array');
+  return {
+    text: new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes),
+    sha256: sha256Hex(bytes),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -89,8 +115,8 @@ export async function unzipBundle(
   const rollingSig = new Map<string, string>();
   const slogIds = new Set<string>();
   const metaIds = new Set<string>();
-  const slogContents = new Map<string, string>();
-  const metaContents = new Map<string, string>();
+  const slogContents = new Map<string, { text: string; sha256: string }>();
+  const metaContents = new Map<string, { text: string; sha256: string }>();
   // Deferred: entries that are neither manifest/sig nor slog/meta — may be
   // submission files (whitelisted below) or genuinely unexpected files.
   type ZipFileObject = Awaited<ReturnType<typeof JSZip.loadAsync>>['files'][string];
@@ -129,7 +155,7 @@ export async function unzipBundle(
     if (slogMatch !== null) {
       const sessionId = slogMatch[1]!;
       slogIds.add(sessionId);
-      slogContents.set(sessionId, await zipObject.async('string'));
+      slogContents.set(sessionId, await readLogFile(zipObject));
       continue;
     }
 
@@ -137,7 +163,7 @@ export async function unzipBundle(
     if (metaMatch !== null) {
       const sessionId = metaMatch[1]!;
       metaIds.add(sessionId);
-      metaContents.set(sessionId, await zipObject.async('string'));
+      metaContents.set(sessionId, await readLogFile(zipObject));
       continue;
     }
 
@@ -238,11 +264,17 @@ export async function unzipBundle(
   // 6. Build the result.
   // ---------------------------------------------------------------------------
 
-  const sessions = Array.from(slogIds).map((sessionId) => ({
-    sessionId,
-    slogText: slogContents.get(sessionId)!,
-    metaJson: metaContents.get(sessionId)!,
-  }));
+  const sessions = Array.from(slogIds).map((sessionId) => {
+    const slog = slogContents.get(sessionId)!;
+    const meta = metaContents.get(sessionId)!;
+    return {
+      sessionId,
+      slogText: slog.text,
+      metaJson: meta.text,
+      slogSha256: slog.sha256,
+      metaSha256: meta.sha256,
+    };
+  });
 
   const rollingSeals: RawRollingSealFiles[] = rollingSealIds.map((sessionId) => ({
     sessionId,

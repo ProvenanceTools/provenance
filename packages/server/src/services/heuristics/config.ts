@@ -150,7 +150,7 @@ export const DEFAULT_PER_FLAG_ENTRY: Readonly<PerFlagEntry> = Object.freeze({
  * Predictability for pre-existing rows is provided by normalizeStoredConfig,
  * which materializes the same default into the config on read (and by
  * migration 0022, which materializes it in the stored rows), so a 24-entry row
- * behaves identically to the 26-entry row a staff member would write today.
+ * behaves identically to the 29-entry row a staff member would write today.
  */
 export function resolvePerFlag(config: ServerHeuristicConfig, heuristicId: string): PerFlagEntry {
   return config.per_flag[heuristicId] ?? DEFAULT_PER_FLAG_ENTRY;
@@ -161,9 +161,11 @@ export function resolvePerFlag(config: ServerHeuristicConfig, heuristicId: strin
  *
  * Read-side upgrade path for `heuristic_configs.config` rows written before a
  * flag id existed. Rows backfilled by migration 0010 carry 24 entries; the
- * known set is now 26. Without this, the analyzer would GET a 24-entry config
- * and PUT it straight back, and validateConfig would 422 it for the two
- * entries the row could not possibly have contained when it was written.
+ * known set is now 29 (the three 2026-08 bundle-level tamper detections were
+ * the most recent additions, and no stored row predating them carries an entry
+ * for any of the three). Without this, the analyzer would GET a short config
+ * and PUT it straight back, and validateConfig would 422 it for the entries
+ * the row could not possibly have contained when it was written.
  *
  * Entries that ARE present are returned untouched — including `enabled: false`
  * ones, which are recorded staff intent. Unknown ids are preserved rather than

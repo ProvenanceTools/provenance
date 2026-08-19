@@ -53,6 +53,16 @@ export type SessionFiles = {
   slogText: string;
   /** Raw JSON text of the .slog.meta file. */
   metaJson: string;
+  /**
+   * Hex sha256 of the .slog file's bytes EXACTLY as they sat in the ZIP.
+   *
+   * Taken before any decoding, so it is directly comparable to the
+   * `slog_sha256` the signed manifest commits to. See
+   * `validation/verify-log-bytes.ts`.
+   */
+  slogSha256: string;
+  /** Hex sha256 of the .slog.meta file's bytes exactly as they sat in the ZIP. */
+  metaSha256: string;
 };
 
 /**
@@ -166,6 +176,18 @@ export type ParsedSession = {
   sessionId: string;
   events: readonly HashedEnvelope[];
   meta: SlogMeta;
+  /**
+   * Hex sha256 of this session's `.slog` bytes as loaded, carried through from
+   * {@link SessionFiles} so validation can compare it against the signed
+   * manifest's commitment without re-reading the ZIP.
+   *
+   * Only the 64-char digest is retained, never the raw bytes: the server holds
+   * parsed bundles in an LRU cache, and keeping a second full copy of every log
+   * would roughly double that cache's footprint for no analytical gain.
+   */
+  slogSha256: string;
+  /** Hex sha256 of this session's `.slog.meta` bytes as loaded. */
+  metaSha256: string;
   /** Narrowed to session.start — guaranteed to be the first event. */
   firstEvent: HashedEnvelope<'session.start'> & { data: SessionStartPayload };
 };

@@ -12,6 +12,13 @@ import { buildTestBundle } from '../test-support/build-test-bundle.js';
 import { unzipBundle } from './unzip.js';
 import type { SlogMeta } from '@provenance/log-core';
 
+/**
+ * Byte digests the loader would have computed from the ZIP. These tests are
+ * about parse semantics, not the digests, so any well-formed pair does; they
+ * are asserted for pass-through in the dedicated case below.
+ */
+const TEST_HASHES = { slogSha256: 'a'.repeat(64), metaSha256: 'b'.repeat(64) };
+
 // ---------------------------------------------------------------------------
 // Helper: extract raw files for the first session from a freshly built bundle.
 // ---------------------------------------------------------------------------
@@ -50,7 +57,7 @@ function makeMeta(sessionId: string, sessionPubkey: string): string {
 describe('parseSession', () => {
   it('round-trips a valid slog + meta into a typed ParsedSession', async () => {
     const sf = await getSessionFiles(0);
-    const result = parseSession(sf.slogText, sf.metaJson);
+    const result = parseSession(sf.slogText, sf.metaJson, TEST_HASHES);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -64,7 +71,7 @@ describe('parseSession', () => {
 
   it('firstEvent is narrowed to session.start with data typed as SessionStartPayload', async () => {
     const sf = await getSessionFiles(0);
-    const result = parseSession(sf.slogText, sf.metaJson);
+    const result = parseSession(sf.slogText, sf.metaJson, TEST_HASHES);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -83,7 +90,7 @@ describe('parseSession', () => {
     if (!unzipResult.ok) throw new Error('unzip failed in test setup');
     const sf = unzipResult.value.sessions[0]!;
 
-    const result = parseSession(sf.slogText, sf.metaJson);
+    const result = parseSession(sf.slogText, sf.metaJson, TEST_HASHES);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
@@ -102,7 +109,7 @@ describe('parseSession', () => {
     if (!unzipResult.ok) throw new Error('unzip failed');
     const sf = unzipResult.value.sessions[0]!;
 
-    const result = parseSession(sf.slogText, sf.metaJson);
+    const result = parseSession(sf.slogText, sf.metaJson, TEST_HASHES);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -114,7 +121,7 @@ describe('parseSession', () => {
 
   it('returns meta_invalid_shape for malformed meta JSON text', async () => {
     const sf = await getSessionFiles(0);
-    const result = parseSession(sf.slogText, 'NOT { valid json }');
+    const result = parseSession(sf.slogText, 'NOT { valid json }', TEST_HASHES);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -125,7 +132,7 @@ describe('parseSession', () => {
     const sf = await getSessionFiles(0);
     // Valid JSON but wrong shape (missing required fields)
     const badMeta = JSON.stringify({ format_version: '1.0', session_id: 'x' });
-    const result = parseSession(sf.slogText, badMeta);
+    const result = parseSession(sf.slogText, badMeta, TEST_HASHES);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -149,7 +156,7 @@ describe('parseSession', () => {
     lines[0] = JSON.stringify(firstLineObj);
     const tamperedSlog = lines.join('\n') + '\n';
 
-    const result = parseSession(tamperedSlog, sf.metaJson);
+    const result = parseSession(tamperedSlog, sf.metaJson, TEST_HASHES);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -168,7 +175,7 @@ describe('parseSession', () => {
       originalMeta.session_pubkey,
     );
 
-    const result = parseSession(sf.slogText, mismatchedMeta);
+    const result = parseSession(sf.slogText, mismatchedMeta, TEST_HASHES);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;

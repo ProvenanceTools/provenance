@@ -11,19 +11,27 @@ describe('known-flag-ids', () => {
     expect(PER_SUBMISSION_HEURISTIC_IDS).toHaveLength(18);
   });
 
-  it('has 6 validation-derived integrity flags', () => {
-    expect(INTEGRITY_FLAG_IDS).toHaveLength(6);
+  it('has 9 validation-derived integrity flags', () => {
+    expect(INTEGRITY_FLAG_IDS).toHaveLength(9);
     // The two ids a 2026-08 audit found missing from one enumeration or the
     // other — regression guard for the specific bug that prompted this file.
     expect(INTEGRITY_FLAG_IDS).toContain('submitted_code_match');
+    // The three bundle-level detections. These are NOT among the PRD §5.4
+    // eight (they ride on ValidationReport.bundleDetections), but they route
+    // through CHECK_META and are ordinary tunable Flag rows once produced, so
+    // they must be in this category — otherwise the tuning UI, the server's
+    // KNOWN_HEURISTIC_IDS and docs/heuristics.md all silently omit them.
+    expect(INTEGRITY_FLAG_IDS).toContain('log_bytes_match');
+    expect(INTEGRITY_FLAG_IDS).toContain('checkpoint_chain_valid');
+    expect(INTEGRITY_FLAG_IDS).toContain('manifest_downgrade');
   });
 
   it('has 2 cross-submission heuristics', () => {
     expect(CROSS_SUBMISSION_HEURISTIC_IDS).toHaveLength(2);
   });
 
-  it('ALL_FLAG_IDS is the union of all three categories, 26 ids total', () => {
-    expect(ALL_FLAG_IDS).toHaveLength(26);
+  it('ALL_FLAG_IDS is the union of all three categories, 29 ids total', () => {
+    expect(ALL_FLAG_IDS).toHaveLength(29);
     expect(ALL_FLAG_IDS).toEqual([
       ...PER_SUBMISSION_HEURISTIC_IDS,
       ...INTEGRITY_FLAG_IDS,

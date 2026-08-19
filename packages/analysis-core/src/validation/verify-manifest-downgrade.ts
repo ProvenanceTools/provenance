@@ -83,12 +83,16 @@
  * PRD §5.4's eight checks are a frozen, persisted contract: the server has
  * eight `check_N_status` columns, asserts `checks.length === 8` at ingest, and
  * reconstructs stored reports on the same assumption. So this check is
- * deliberately NOT added to `runValidation`'s report. It is run by the
- * integrity-flag adapter directly off the bundle
- * (`heuristics/integrity-flags.ts`), which is also what keeps it idempotent
- * between ingest and recompute: recompute re-parses the real bundle, so the
- * flag is recomputed rather than resurrected from a stored row that never
- * carried it.
+ * deliberately NOT added to `ValidationReport.checks`.
+ *
+ * It is instead computed by `runValidation` alongside the other bundle-level
+ * detections and returned on `ValidationReport.bundleDetections`, from where
+ * `heuristics/integrity-flags.ts` turns it into a `Flag` through the same
+ * `CHECK_META` mapping it uses for the eight. That placement is what keeps it
+ * idempotent between ingest and recompute: both call `runValidation` against a
+ * freshly parsed bundle, so the verdict is recomputed every time rather than
+ * resurrected from a stored row that never carried it. `bundleDetections` is
+ * deliberately excluded from `overall`, which stays derived from the eight.
  */
 
 import { MANIFEST_FORMAT_VERSION_LEGACY } from '@provenance/log-core';

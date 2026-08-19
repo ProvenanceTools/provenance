@@ -11,6 +11,15 @@
  *   - check 6 (monotonic_wall): wall-time regression → 'medium'
  *   - check 8 (submitted_code_match): submitted file mismatch → 'high' (1.1+ bundles)
  *
+ * Bundle-level detections surfaced (NOT among the PRD §5.4 eight — they arrive
+ * on `ValidationReport.bundleDetections`, see check-types.ts):
+ *   - log_bytes_match: .slog/.slog.meta bytes differ from the digests the
+ *     SIGNED manifest commits to → 'high'
+ *   - checkpoint_chain_valid: a signed PRD §4.6 checkpoint is forged, or is
+ *     contradicted by the log it commits to → 'high'
+ *   - manifest_downgrade: a 1.x assignment manifest carrying Manifest 2.0-only
+ *     fields → 'high'
+ *
  * Checks NOT surfaced here:
  *   - check 4 (seq_gaps): surfaced if needed; not in PRD §7.4 flag list.
  *   - check 7 (doc_save_hashes): surfaced separately.
@@ -89,6 +98,48 @@ export const CHECK_META: Partial<Record<ValidationCheckId, CheckMeta>> = {
     confidence: 1.0,
     fallbackDescription: 'The submitted file differs from the last recorded on-disk state.',
   },
+
+  // -------------------------------------------------------------------------
+  // Bundle-level detections. Same Flag shape, same table, but sourced from
+  // `report.bundleDetections` rather than `report.checks` — see the module
+  // docstring and `validation/check-types.ts`.
+  //
+  // All three are severity 'high' at confidence 1.0, and that is a deliberate
+  // choice rather than a default. Each is a CRYPTOGRAPHIC contradiction, not a
+  // behavioural inference: a digest that a signed manifest fixed at seal time
+  // does not match; a checkpoint signed by the session key is refuted by the
+  // log; a signed 1.x manifest carries fields no 1.x signer can emit. None has
+  // a benign explanation, none has a threshold to tune, and none can fire by
+  // accident — every "cannot evaluate" path in the three verifiers returns
+  // `skipped`, so a flag here only ever exists because evidence was present and
+  // contradicted. A log-bytes mismatch in particular is the single strongest
+  // signal the system can produce, and grading it below 'high' would rank
+  // proof-of-tampering under heuristics that are merely suggestive.
+  // -------------------------------------------------------------------------
+  log_bytes_match: {
+    heuristic: 'log_bytes_match',
+    title: 'Session log bytes do not match the signed manifest',
+    severity: 'high',
+    confidence: 1.0,
+    fallbackDescription:
+      'A session .slog or .slog.meta file does not hash to the value the signed bundle manifest commits to. The log was modified after the bundle was sealed.',
+  },
+  checkpoint_chain_valid: {
+    heuristic: 'checkpoint_chain_valid',
+    title: 'Signed session checkpoint contradicts the log',
+    severity: 'high',
+    confidence: 1.0,
+    fallbackDescription:
+      'A signed seq/hash checkpoint in .slog.meta failed verification, or names an entry the log no longer contains or no longer matches. The log was rewritten or truncated after that checkpoint was signed.',
+  },
+  manifest_downgrade: {
+    heuristic: 'manifest_downgrade',
+    title: 'Assignment manifest carries fields its signature does not cover',
+    severity: 'high',
+    confidence: 1.0,
+    fallbackDescription:
+      'A sub-2.0 embedded assignment manifest carries Manifest 2.0-only fields, which no 1.x signer emits. The manifest was modified after it was signed, even though the modification granted nothing.',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -106,7 +157,13 @@ export const CHECK_META: Partial<Record<ValidationCheckId, CheckMeta>> = {
 export function integrityFlagsFromReport(report: ValidationReport): Flag[] {
   const flags: Flag[] = [];
 
-  for (const check of report.checks) {
+  // The eight, then the bundle-level detections. Both are `ValidationCheck`s
+  // and both route through CHECK_META, so the mapping below is shared; only
+  // the source array differs. `bundleDetections` is optional because a report
+  // rebuilt from the stored eight-column row has none — an absent array yields
+  // no flags, which is correct: it means nobody evaluated them, not that they
+  // passed.
+  for (const check of [...report.checks, ...(report.bundleDetections ?? [])]) {
     if (check.status !== 'fail') continue;
 
     const meta = CHECK_META[check.id];

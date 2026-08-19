@@ -28,7 +28,20 @@ export type ValidationCheckId =
    * because it IS one — same verdict vocabulary, same supporting seqs, same
    * route into a Flag through `CHECK_META`.
    */
-  | 'manifest_downgrade';
+  | 'manifest_downgrade'
+  /**
+   * NOT one of the eight, for the same reason as `manifest_downgrade` — see
+   * `verify-log-bytes.ts`. Enforces the signed manifest's `slog_sha256` /
+   * `meta_sha256` commitment to each session's log file bytes, which nothing
+   * read until 2026-08.
+   */
+  | 'log_bytes_match'
+  /**
+   * NOT one of the eight — see `verify-checkpoint-chain.ts`. Verifies the
+   * PRD §4.6 signed `(seq, hash)` checkpoints in `.slog.meta`, which nothing
+   * verified until 2026-08.
+   */
+  | 'checkpoint_chain_valid';
 
 // ---------------------------------------------------------------------------
 // Single check result
@@ -63,6 +76,27 @@ export type ValidationCheck = {
  * Check 8 is 'skipped' there and the best they can score is 'warn'.
  */
 export type ValidationReport = {
+  /** The PRD §5.4 eight, in spec order. ALWAYS exactly 8 — see above. */
   checks: ValidationCheck[];
+  /**
+   * Bundle-level tamper detections that are deliberately NOT among the eight.
+   *
+   * The eight are a frozen, persisted contract: the server has eight
+   * `check_N_status` columns and `runAndStoreValidation` throws unless
+   * `checks.length === 8`. These detections post-date that contract, so they
+   * ride here instead, and `heuristics/integrity-flags.ts` turns each failing
+   * one into a `Flag` exactly as it does for a failing check.
+   *
+   * Deliberately NOT folded into `overall`: `overall` is persisted and is
+   * derived from the eight, and widening it would silently change the stored
+   * validation verdict of every bundle.
+   *
+   * Optional because a `ValidationReport` reconstructed from the stored
+   * `validation_results` row carries only the eight columns. That is safe for
+   * flag production: both paths that produce flags — ingest and recompute —
+   * call `runValidation` against the freshly parsed bundle, so these are
+   * always recomputed and never resurrected from a row that never held them.
+   */
+  bundleDetections?: ValidationCheck[];
   overall: 'pass' | 'warn' | 'fail';
 };

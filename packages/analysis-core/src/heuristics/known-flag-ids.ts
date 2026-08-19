@@ -18,7 +18,13 @@
  *   - `CHECK_META` (integrity-flags.ts): flags synthesized from a *failing*
  *     bundle-validation check (recorder PRD §5.4) — `manifest_sig_invalid`,
  *     `session_binding_invalid`, `chain_broken`, `monotonic_t_regression`,
- *     `monotonic_wall_regression`, `submitted_code_match`. These are not
+ *     `monotonic_wall_regression`, `submitted_code_match` — plus three
+ *     BUNDLE-LEVEL detections that deliberately sit outside the frozen eight
+ *     and ride on `ValidationReport.bundleDetections` instead:
+ *     `log_bytes_match`, `checkpoint_chain_valid`, `manifest_downgrade`.
+ *     The distinction matters to `validation/check-types.ts` and to the
+ *     server's eight `check_N_status` columns, but not here: all nine reach
+ *     staff through the same adapter and are the same kind of row. These are not
  *     "heuristics" in the traditional sense (integrity-flags.ts's own
  *     comment: "an adapter, not a heuristic") — no event-stream analysis, no
  *     tunable thresholds — but they ARE ordinary `Flag` rows once produced,

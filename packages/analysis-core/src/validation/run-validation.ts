@@ -31,6 +31,9 @@ import { verifyMonotonicT } from './verify-monotonic-t.js';
 import { verifyMonotonicWall } from './verify-monotonic-wall.js';
 import { verifyDocSaveHashes } from './verify-doc-save-hashes.js';
 import { verifySubmittedCode } from './verify-submitted-code.js';
+import { verifyLogBytes } from './verify-log-bytes.js';
+import { verifyCheckpointChain } from './verify-checkpoint-chain.js';
+import { verifyManifestDowngrade } from './verify-manifest-downgrade.js';
 
 // ---------------------------------------------------------------------------
 // overall computation
@@ -81,8 +84,30 @@ export async function runValidation(
     check8,
   ];
 
+  // ---------------------------------------------------------------------------
+  // Bundle-level tamper detections — NOT among the PRD §5.4 eight.
+  //
+  // These are the format's two designed-but-never-wired tamper defences
+  // (the manifest's commitment to the log bytes, and the signed checkpoints)
+  // plus the manifest-downgrade reader. They live outside `checks` because the
+  // eight are a frozen persisted contract — see ValidationReport.
+  //
+  // They run HERE, rather than in the flag adapter, for one reason: this is the
+  // function both ingest and recompute call against a freshly parsed bundle, so
+  // computing them here is what guarantees the two agree and that a recompute
+  // recomputes them instead of resurrecting a stored row.
+  //
+  // `overall` is deliberately left derived from the eight alone.
+  // ---------------------------------------------------------------------------
+  const bundleDetections: ValidationCheck[] = [
+    verifyLogBytes(bundle),
+    await verifyCheckpointChain(bundle),
+    verifyManifestDowngrade(bundle),
+  ];
+
   return {
     checks,
+    bundleDetections,
     overall: computeOverall(checks),
   };
 }
