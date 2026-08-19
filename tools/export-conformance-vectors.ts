@@ -493,6 +493,35 @@ async function buildManifestV2Vectors(): Promise<unknown> {
   const legacyManifest = { ...legacyFields, sig: await signManifest(legacyFields, seed(9)) };
   const legacyParsed = parseManifest(JSON.stringify(legacyManifest));
 
+  // The 1.x downgrade attack, built with NO private key: a genuinely 61B-signed
+  // 1.x manifest, plus 61B's real (public, copyable) certificate, plus the
+  // unsigned fields a 1.x payload does not cover.
+  const attackLegacyFields = {
+    assignment_id: 'hw3',
+    semester: 'fa25',
+    issued_at: '2026-09-01T00:00:00Z',
+    files_under_review: ['a.py'],
+  };
+  const downgradeAttack: Manifest = {
+    ...attackLegacyFields,
+    sig: await signManifest(attackLegacyFields, COURSE_PRIV),
+    course_cert: cert,
+    course_id: COURSE_ID,
+    collaboration: 'group',
+    submission: 'git',
+    scope: 'repo',
+    policy: {
+      capture: {
+        selection_change: false,
+        focus_change: false,
+        terminal: false,
+        doc_open_close: false,
+        inline_content: false,
+        heartbeat_interval_ms: 120000,
+      },
+    },
+  };
+
   return {
     note:
       'Manifest 2.0 conformance vectors (program spec §3). Two independent signature scopes ' +
@@ -552,7 +581,14 @@ async function buildManifestV2Vectors(): Promise<unknown> {
     },
 
     chain_note:
-      'The four verification steps run IN THIS ORDER and the order is load-bearing: ' +
+      'Step 0 gates on format_version === "2.0" before anything else, and that gate is a ' +
+      'SECURITY CONTROL. At 1.x, course_id / collaboration / submission / scope / policy are ' +
+      'all outside the signed payload, so a student holding any genuinely-signed 1.x manifest ' +
+      'from their own course can staple on that course’s (public, root-signed, copyable) ' +
+      'certificate, add a matching course_id to satisfy step 3, and staple on a policy that ' +
+      'disables capture — with every individual signature still verifying. See the ' +
+      'downgrade_1x_with_stapled_cert case. Then: ' +
+      'the four verification steps run IN THIS ORDER and the order is load-bearing: ' +
       '(1) course_cert minus root_sig against the embedded root pubkey; ' +
       '(2) payload minus sig and course_cert against course_cert.course_pubkey; ' +
       '(3) manifest.course_id === course_cert.course_id; ' +
@@ -585,9 +621,23 @@ async function buildManifestV2Vectors(): Promise<unknown> {
         expiredWindow,
       ),
       await chainCase(
-        'missing_course_cert',
-        'A 1.x manifest has no cert to chain.',
+        'not_manifest_2_0',
+        'Step 0. A 1.x manifest has no trust chain by definition.',
         legacyManifest as Manifest,
+      ),
+      await chainCase(
+        'missing_course_cert',
+        'A 2.0 manifest with the cert removed.',
+        (() => {
+          const stripped = { ...valid };
+          delete stripped.course_cert;
+          return stripped;
+        })(),
+      ),
+      await chainCase(
+        'downgrade_1x_with_stapled_cert',
+        'MANDATORY. Step 0. Needs no private key: a genuinely-signed 1.x manifest, plus the course’s real certificate copied out of any 2.0 manifest, plus a course_id chosen to satisfy step 3, plus an INVENTED policy that turns capture off. verifyCourseCert passes, verifyManifest passes, and course_id matches — every signature is genuine. Only the format_version gate refuses it. An implementation that walks steps 1-4 without checking the version hands students an off switch.',
+        downgradeAttack,
       ),
     ],
   };

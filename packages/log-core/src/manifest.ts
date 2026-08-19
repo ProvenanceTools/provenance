@@ -110,6 +110,19 @@ export type ManifestError =
  * reported on the success value instead.
  */
 export type ManifestChainError =
+  /**
+   * Step 0: the manifest is not 2.0, so there is no trust chain to walk.
+   *
+   * This gate is a security control, not a convenience. At 1.x, `course_id`,
+   * `collaboration`, `submission`, `scope`, and `policy` are NOT in the signed
+   * payload. Without this check a student holding any legitimately-issued 1.x
+   * manifest from their own course could staple on that course's (public)
+   * certificate, add a matching `course_id` to satisfy step 3, and staple on an
+   * arbitrary unsigned `policy` — and the whole chain would return ok. That
+   * would let a student turn capture off, which is exactly what the policy block
+   * living inside the signed payload exists to prevent.
+   */
+  | { kind: 'not_manifest_2_0'; format_version: string }
   | { kind: 'missing_course_cert' }
   | { kind: 'invalid_cert_shape'; field?: string; reason?: string }
   /** Step 1: `course_cert` does not verify against the root public key. */
@@ -475,6 +488,16 @@ export async function verifyManifestChain(
   manifest: Manifest,
   rootPubkeyHex: string,
 ): Promise<Result<ManifestChainOk, ManifestChainError>> {
+  // Step 0 — the chain exists only at 2.0. Refusing a 1.x manifest here closes a
+  // downgrade attack: at 1.x, course_id / collaboration / submission / scope /
+  // policy are all OUTSIDE the signed payload, so a student could staple their
+  // course's public cert and a capture-disabling policy onto a genuinely signed
+  // 1.x manifest and walk the chain successfully. See ManifestChainError.
+  const formatVersion = manifestFormatVersion(manifest);
+  if (formatVersion !== MANIFEST_FORMAT_VERSION_2) {
+    return err({ kind: 'not_manifest_2_0', format_version: formatVersion });
+  }
+
   if (manifest.course_cert === undefined) {
     return err({ kind: 'missing_course_cert' });
   }

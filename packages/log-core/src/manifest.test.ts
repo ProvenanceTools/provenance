@@ -932,7 +932,7 @@ describe('verifyManifestChain', () => {
     expect((await verifyManifestChain(a.manifest, b.rootPubkeyHex)).ok).toBe(false);
   });
 
-  it('rejects a 1.x manifest, which carries no cert to chain', async () => {
+  it('step 0: rejects a 1.x manifest — there is no chain to walk below 2.0', async () => {
     const { text } = await makeSignedManifest();
     const parsed = parseManifest(text);
     expect(parsed.ok).toBe(true);
@@ -940,6 +940,84 @@ describe('verifyManifestChain', () => {
     const result = await verifyManifestChain(parsed.value, await pub(ROOT_PRIV));
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.kind).toBe('missing_course_cert');
+    expect(result.error).toEqual({ kind: 'not_manifest_2_0', format_version: '1.0' });
+  });
+
+  it('step 0 closes the 1.x DOWNGRADE attack: a stapled cert + unsigned policy must not chain', async () => {
+    // The whole attack needs no private key. The student has:
+    //   - a genuine 1.x manifest their course issued and signed, and
+    //   - their course's certificate, which is public (it ships in every 2.0
+    //     manifest and is root-signed, so it cannot be forged but CAN be copied).
+    // At 1.x, course_id / collaboration / submission / scope / policy are all
+    // outside the signed payload, so the student can invent them freely.
+    const legacyFields = {
+      assignment_id: 'hw3',
+      semester: 'fa25',
+      issued_at: '2026-09-01T00:00:00Z',
+      files_under_review: ['a.py'] as readonly string[],
+    };
+    const genuineLegacySig = await signManifest(legacyFields, COURSE_PRIV);
+    const { manifest: real, rootPubkeyHex } = await makeV2Manifest();
+
+    const forged: Manifest = {
+      ...legacyFields,
+      sig: genuineLegacySig,
+      course_cert: real.course_cert as CourseCert,
+      // Chosen to satisfy step 3 — it is unsigned at 1.x, so it is free.
+      course_id: 'berkeley-cs61b',
+      collaboration: 'group',
+      submission: 'git',
+      scope: 'repo',
+      // The payload of the attack: capture turned off by the student.
+      policy: {
+        capture: {
+          selection_change: false,
+          focus_change: false,
+          terminal: false,
+          doc_open_close: false,
+          inline_content: false,
+          heartbeat_interval_ms: 120000,
+        },
+      },
+    };
+
+    // Every individual signature in the forgery is genuine...
+    expect((await verifyCourseCert(forged.course_cert as CourseCert, rootPubkeyHex)).ok).toBe(true);
+    expect((await verifyManifest(forged, await pub(COURSE_PRIV))).ok).toBe(true);
+    expect(forged.course_id).toBe((forged.course_cert as CourseCert).course_id);
+
+    // ...and the chain must still refuse it, on the version gate.
+    const result = await verifyManifestChain(forged, rootPubkeyHex);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toEqual({ kind: 'not_manifest_2_0', format_version: '1.0' });
+  });
+
+  it('parseManifest drops the 2.0 fields from a 1.x manifest, so they can never be read as signed', async () => {
+    const parsed = parseManifest(
+      JSON.stringify({
+        assignment_id: 'hw3',
+        semester: 'fa25',
+        issued_at: '2026-09-01T00:00:00Z',
+        files_under_review: ['a.py'],
+        sig: 'a'.repeat(128),
+        // All unsigned at 1.x; a parser that carried them through would let a
+        // caller mistake attacker-controlled values for course-signed ones.
+        course_id: 'berkeley-cs61b',
+        collaboration: 'group',
+        submission: 'git',
+        scope: 'repo',
+        policy: { capture: { selection_change: false } },
+        course_cert: { course_id: 'x' },
+      }),
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.course_id).toBeUndefined();
+    expect(parsed.value.collaboration).toBeUndefined();
+    expect(parsed.value.submission).toBeUndefined();
+    expect(parsed.value.scope).toBeUndefined();
+    expect(parsed.value.policy).toBeUndefined();
+    expect(parsed.value.course_cert).toBeUndefined();
   });
 });
