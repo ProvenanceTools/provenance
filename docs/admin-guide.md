@@ -584,6 +584,30 @@ Document the time taken and any issues found. Update this runbook if needed.
 | `SMTP_PASS`                        | No         | —                                                   | SMTP password                                                                  |
 | `SMTP_FROM`                        | No         | `provenance@example.edu`                            | From address for invitation emails                                             |
 | `LOG_LEVEL`                        | No         | `info`                                              | Pino log level: `trace`, `debug`, `info`, `warn`, `error`                      |
+| `PROVENANCE_ROOT_PUBLIC_KEY_HEX`   | No         | —                                                   | Hex ed25519 ROOT public key for the Manifest 2.0 trust chain. See below.       |
+
+### The Manifest 2.0 root public key
+
+`PROVENANCE_ROOT_PUBLIC_KEY_HEX` anchors the trust chain a 2.0 bundle carries:
+root → `course_cert` → `.provenance-manifest` → session. Validation check 2 uses
+it to verify, entirely offline and without trusting anything the server stored,
+that the course key which signed an assignment manifest was itself vouched for
+by the root key.
+
+Leaving it unset is a supported state, and is correct until a root key has been
+issued:
+
+- **1.0 / 1.1 bundles** never consult it. They carry no chain, and check 2 keeps
+  doing exactly what it always did — confirming every session in the bundle
+  binds to the same assignment manifest. Archived submissions are unaffected,
+  permanently.
+- **2.0 bundles** get check 2 = `skipped` (which makes the submission's overall
+  validation `warn`), never a false `pass`.
+
+The analyzer front end takes the same key at build time as
+`VITE_ROOT_PUBLIC_KEY_HEX`, which is what lets the standalone `/local` route
+verify a chain in the browser. It is a public key — baking it into the client
+bundle is intended.
 
 ---
 
