@@ -36,6 +36,7 @@ import React, {
 import { loadBundle, parseBundles } from '@provenance/analysis-core/loader/parse-bundle.js';
 import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
 import { runValidation } from '@provenance/analysis-core/validation/run-validation.js';
+import { localValidationOptions } from '../lib/root-key.js';
 import { runHeuristics } from '@provenance/analysis-core/heuristics/run-heuristics.js';
 import type {
   Bundle,
@@ -165,7 +166,7 @@ export function BundleProvider({ children }: { children: ReactNode }) {
       const idx = buildIndex(bundle);
 
       setLoadingStage('validate');
-      const report = await runValidation(bundle);
+      const report = await runValidation(bundle, localValidationOptions());
 
       setLoadingStage('heuristics');
       const heuristicFlags = runHeuristics(idx, bundle, report);
@@ -256,7 +257,7 @@ export function BundleProvider({ children }: { children: ReactNode }) {
         const idx = buildIndex(bundle);
 
         setLoadingStage('validate');
-        const report = await runValidation(bundle);
+        const report = await runValidation(bundle, localValidationOptions());
 
         setLoadingStage('heuristics');
         const heuristicFlags = runHeuristics(idx, bundle, report);

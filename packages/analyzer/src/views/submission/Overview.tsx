@@ -33,6 +33,7 @@ import {
 import { SessionsCard } from './SessionsCard.js';
 import { collectActiveExtensions } from '../../extensions/collect-active-extensions.js';
 import { ActiveExtensionsCard } from '../../extensions/ActiveExtensionsCard.js';
+import { AssignmentManifestCard } from '../../components/AssignmentManifestCard.js';
 import { StatusRegion } from '../../components/a11y/StatusRegion.js';
 import { ErrorRegion } from '../../components/a11y/ErrorRegion.js';
 
@@ -261,6 +262,10 @@ export function Overview() {
           </div>
         </dl>
       </section>
+
+      {/* Manifest 2.0 metadata — renders nothing for a 1.x bundle with no
+          disabled capture signals. */}
+      <AssignmentManifestCard manifest={summary.assignment_manifest} />
 
       {/* Sessions — only rendered when there's more than one. */}
       <SessionsCard sessions={sessions} onOpenSession={handleOpenSession} />
