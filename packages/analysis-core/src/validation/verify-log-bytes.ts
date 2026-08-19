@@ -63,8 +63,8 @@
  * exactly those four. Both inputs to this check are on that list, and the
  * stripper copies entries verbatim (DEFLATE is lossless), so the digests are
  * bit-identical before and after stripping. Stripping cannot make this check
- * fail. `verify-log-bytes.stripped.test.ts` asserts it against a genuinely
- * stripped bundle rather than trusting this paragraph.
+ * fail. `verify-log-bytes.test.ts` asserts it against a genuinely stripped
+ * bundle rather than trusting this paragraph.
  *
  * ## Absent is not wrong
  *

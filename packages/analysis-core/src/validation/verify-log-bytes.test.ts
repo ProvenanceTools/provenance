@@ -127,7 +127,8 @@ describe('verifyLogBytes — catches post-seal modification', () => {
 
     const tampered = await rewriteZip(zipBuffer, async (zip) => {
       const bytes = await zip.file(slogName(sid))!.async('uint8array');
-      bytes[Math.floor(bytes.length / 2)] ^= 0x01;
+      const i = Math.floor(bytes.length / 2);
+      bytes[i] = bytes[i]! ^ 0x01;
       zip.file(slogName(sid), bytes);
     });
 

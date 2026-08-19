@@ -66,8 +66,8 @@
  * `.slog.meta` is on `strip-bundle.ts`'s `isProvenanceEntry` allowlist and is
  * copied verbatim, as is the `.slog` this compares it against. Nothing this
  * check reads is stripped, so it is fully re-runnable server-side — asserted
- * against a genuinely stripped bundle in `verify-log-bytes.stripped.test.ts`
- * rather than assumed.
+ * against a genuinely stripped bundle in `verify-log-bytes.test.ts` rather
+ * than assumed.
  *
  * ## Not one of the eight
  *
