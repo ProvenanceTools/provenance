@@ -5,6 +5,7 @@
  *
  *   /                  → public LandingView (no auth)
  *   /login             → LoginView (no auth required)
+ *   /enroll            → RequireAuth + EnrollView (STUDENT-facing, no AppShell)
  *   /home              → RequireAuth + AppShell + HomeView
  *   /s/:courseSlug/:semesterSlug/* → cohort + drill-in views (Phases 21–24)
  *
@@ -115,6 +116,9 @@ const AdminAuditView = lazy(() =>
   import('./views/admin/AdminAuditView.js').then((m) => ({ default: m.AdminAuditView })),
 );
 const ArchitectureView = lazy(() => import('./views/architecture/ArchitectureView.js'));
+const EnrollView = lazy(() =>
+  import('./views/enroll/EnrollView.js').then((m) => ({ default: m.EnrollView })),
+);
 
 // ---------------------------------------------------------------------------
 // Lazy chunks: /local routes (v2 standalone, staff-gated)
@@ -448,6 +452,21 @@ export function App() {
         <Route path="/timeline" element={<Navigate to="/local/timeline" replace />} />
         <Route path="/compare" element={<Navigate to="/local/compare" replace />} />
         <Route path="/replay/:sessionId" element={<LegacyReplayRedirect />} />
+
+        {/* ── student enrollment (program spec §5a) ────────────────────────── */}
+        {/* RequireAuth ONLY — deliberately no RequireStaff and no AppShell.    */}
+        {/* A student has no memberships row, so RequireStaff would bounce them */}
+        {/* to /home and AppShell would wrap the page in staff chrome they can  */}
+        {/* not use. RequireAuth is safe here: GET /me returns 200 with an      */}
+        {/* empty memberships array for a student session.                     */}
+        <Route
+          path="/enroll"
+          element={
+            <RequireAuth>
+              <EnrollView />
+            </RequireAuth>
+          }
+        />
 
         {/* ── public architecture documentation ──────────────────────────── */}
         <Route path="/architecture" element={<ArchitectureView />} />

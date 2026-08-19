@@ -22,7 +22,7 @@ import { sha512 } from '@noble/hashes/sha2.js';
 import { App } from './App.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { mswServer } from './test-setup.js';
-import { meUnauthorizedHandler } from './test/msw-handlers.js';
+import { meNoSemestersHandler, meUnauthorizedHandler } from './test/msw-handlers.js';
 
 // Wire SHA-512 override.
 ed.hashes.sha512 = sha512;
@@ -68,6 +68,25 @@ describe('App routing', () => {
       expect(screen.getByRole('button', { name: /sign in with google/i })).toBeInTheDocument();
     });
     expect(screen.queryByTestId('drop-zone')).not.toBeInTheDocument();
+  });
+
+  it('renders /enroll for a student with no memberships', async () => {
+    // The point of the route: a student session has memberships: [], which
+    // RequireStaff would bounce to /home. /enroll must be reachable anyway.
+    mswServer.use(meNoSemestersHandler());
+    renderApp('/enroll');
+    await waitFor(() => {
+      expect(screen.getByTestId('enroll-form')).toBeInTheDocument();
+    });
+  });
+
+  it('sends an anonymous visitor at /enroll to the login page', async () => {
+    mswServer.use(meUnauthorizedHandler());
+    renderApp('/enroll');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /sign in with google/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('enroll-form')).not.toBeInTheDocument();
   });
 
   it('renders /local/load for an authenticated staff member', async () => {
