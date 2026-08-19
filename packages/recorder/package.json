@@ -29,6 +29,22 @@
       {
         "command": "provenance.prepareSubmissionBundle",
         "title": "Provenance: Prepare Submission Bundle"
+      },
+      {
+        "command": "provenance.showEnrollmentKey",
+        "title": "Provenance: Show My Enrollment Key"
+      },
+      {
+        "command": "provenance.importEnrollmentToken",
+        "title": "Provenance: Import Enrollment Token"
+      },
+      {
+        "command": "provenance.exportIdentitySecret",
+        "title": "Provenance: Export Student Identity Secret"
+      },
+      {
+        "command": "provenance.importIdentitySecret",
+        "title": "Provenance: Import Student Identity Secret"
       }
     ]
   },
