@@ -340,6 +340,9 @@ const CHECK_DISPLAY_NAMES: Record<ValidationCheckId, string> = {
   monotonic_wall: 'Monotonic wall clock',
   doc_save_hashes: 'doc.save hash consistency',
   submitted_code_match: 'Submitted-code hash match',
+  // Not one of the PRD §5.4 eight and never present in a ValidationReport, but
+  // the union is exhaustive by design — see verify-manifest-downgrade.ts.
+  manifest_downgrade: 'Manifest downgrade',
 };
 
 function checkDisplayName(check: ValidationCheck): string {

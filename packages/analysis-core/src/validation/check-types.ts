@@ -15,7 +15,20 @@ export type ValidationCheckId =
   | 'monotonic_t'
   | 'monotonic_wall'
   | 'doc_save_hashes'
-  | 'submitted_code_match';
+  | 'submitted_code_match'
+  /**
+   * NOT one of the PRD §5.4 eight, and deliberately never in
+   * {@link ValidationReport.checks} — see `verify-manifest-downgrade.ts`.
+   *
+   * The eight are a frozen, persisted contract: the server has eight
+   * `check_N_status` columns, asserts `checks.length === 8` at ingest, and
+   * reconstructs stored reports on the same assumption. This detection
+   * post-dates that contract, so it is run straight off the bundle by the
+   * integrity-flag adapter instead. It shares the `ValidationCheck` shape
+   * because it IS one — same verdict vocabulary, same supporting seqs, same
+   * route into a Flag through `CHECK_META`.
+   */
+  | 'manifest_downgrade';
 
 // ---------------------------------------------------------------------------
 // Single check result
