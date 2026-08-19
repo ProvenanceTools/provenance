@@ -288,6 +288,71 @@ describe('buildIndex — performance', () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildIndex — globalIdx is PERSISTED. Guard against a silent re-key.
+// ---------------------------------------------------------------------------
+
+describe('buildIndex — globalIdx is a persisted key, not an implementation detail', () => {
+  /**
+   * `flags.supporting_seqs` and `cross_flag_participants.supporting_seqs` in
+   * Postgres are `int[]` of `globalIdx` values (`packages/server/src/db/schema.ts`).
+   * Re-keying `globalIdx` therefore silently repoints every stored finding's
+   * evidence at different events — a grader would be shown the wrong events for
+   * a months-old academic-integrity finding against a named student, with no
+   * error raised anywhere.
+   *
+   * Tier 2.1 (`order/happens-before.ts`) deliberately does NOT re-key it: `≺` is
+   * a separate artifact. This test pins the contract so that a future change to
+   * the primary sort key fails loudly here instead of corrupting evidence at
+   * rest. If you are changing this test, you are changing the meaning of data
+   * already written to a production database — that needs a migration and an
+   * explicit product decision, not a passing test suite.
+   */
+  it('numbers globalIdx densely over the wall-derived order', async () => {
+    const { zipBuffer } = await buildTestBundle({
+      sessions: [{ eventCount: 5 }, { eventCount: 5 }],
+    });
+    const result = await loadBundle(new Blob([zipBuffer]), 'test.zip');
+    if (!result.ok) throw new Error('Expected successful bundle load');
+    const index = buildIndex(result.value);
+
+    // Dense, gapless, and positionally identical to `ordered`.
+    index.ordered.forEach((event, i) => {
+      expect(event.globalIdx).toBe(i);
+    });
+
+    // Primary key is wall, ties broken by (sessionId, seq) — unchanged by ≺.
+    const keys = index.ordered.map((e) => [e.wall, e.sessionId, e.seq] as const);
+    const resorted = [...keys].sort((a, b) => {
+      if (a[0] !== b[0]) return a[0] < b[0] ? -1 : 1;
+      if (a[1] !== b[1]) return a[1] < b[1] ? -1 : 1;
+      return a[2] - b[2];
+    });
+    expect(keys).toEqual(resorted);
+  });
+
+  it('exposes no second ordering integer that could be confused with globalIdx', async () => {
+    // A sibling `orderIdx` on IndexedEvent would be two interchangeable-looking
+    // numbers on one object, one of which is written to Postgres. Tier 2.1
+    // deliberately ships none; `≺` is queried through a five-valued string API
+    // (`order/happens-before.ts`) that cannot even be passed to Array.sort.
+    const { zipBuffer } = await buildTestBundle({ sessions: [{ eventCount: 3 }] });
+    const result = await loadBundle(new Blob([zipBuffer]), 'test.zip');
+    if (!result.ok) throw new Error('Expected successful bundle load');
+    const index = buildIndex(result.value);
+
+    const event = index.ordered[0];
+    expect(event).toBeDefined();
+    const numericFields = Object.entries(event as unknown as Record<string, unknown>)
+      .filter(([, v]) => typeof v === 'number')
+      .map(([k]) => k)
+      .sort();
+    // `seq` (chain position) and `t` (monotonic ms) are not orderings across
+    // sessions and were never persisted as evidence pointers. `globalIdx` is.
+    expect(numericFields).toEqual(['globalIdx', 'seq', 't']);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildIndex — tie-break rule
 // ---------------------------------------------------------------------------
 
