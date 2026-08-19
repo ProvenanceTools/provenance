@@ -23,3 +23,8 @@ irb/
 # Python bytecode / test caches (tools/)
 __pycache__/
 .pytest_cache/
+
+# Local working notes + DEV key material (dev-keypair.json, dev-root-keypair.json).
+# Machine-local only: these hold PRIVATE keys. Previously covered solely by
+# .git/info/exclude, which is never shared, so a fresh clone had no protection.
+.notes/
