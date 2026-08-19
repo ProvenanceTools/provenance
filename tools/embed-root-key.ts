@@ -28,20 +28,17 @@
  * The script never logs the dev key in error messages. It does log the production
  * key (which is, by definition, public) for build-transparency confirmation.
  *
- * KNOWN INTERIM STATE: as of this tool's rework, the recorder source constant this
- * script rewrites is still named `COURSE_PUBLIC_KEY_HEX`, in
- * `packages/recorder/src/activation/course-public-key.ts` — renaming that constant
- * (and the file) to `ROOT_PUBLIC_KEY_HEX` / `root-public-key.ts` per program spec §2
- * is a `packages/recorder/src` change and out of this tool's scope (see repo
- * CLAUDE.md: `tools/` may not reach into recorder `src`). Update TARGET and the
- * regex below to match once that rename lands.
+ * The rename to `ROOT_PUBLIC_KEY_HEX` / `root-public-key.ts` (program spec §2) has
+ * landed, so TARGET and the regex below point at the real constant. The constant is
+ * kept as a single-line, single-quoted 64-hex literal specifically so this regex
+ * keeps matching — do not reformat it across lines.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
-const TARGET = path.join(REPO_ROOT, 'packages/recorder/src/activation/course-public-key.ts');
+const TARGET = path.join(REPO_ROOT, 'packages/recorder/src/activation/root-public-key.ts');
 
 const HEX_64 = /^[0-9a-f]{64}$/;
 
@@ -86,12 +83,12 @@ function main(): void {
 
   // Replace the constant. The source file commits to a single-line definition for
   // exactly this reason; a regex over multi-line bodies would be fragile.
-  const pattern = /(export const COURSE_PUBLIC_KEY_HEX\s*=\s*)['"][0-9a-f]{64}['"]/;
+  const pattern = /(export const ROOT_PUBLIC_KEY_HEX\s*=\s*)['"][0-9a-f]{64}['"]/;
   if (!pattern.test(original)) {
     die(
       `Could not locate the embedded-key constant in ${TARGET}.\n` +
         'The file shape may have drifted from what tools/embed-root-key.ts expects ' +
-        '(see this file\'s "KNOWN INTERIM STATE" docstring note).\n' +
+        '(the constant must stay a single-line 64-hex literal).\n' +
         'Either update the regex in this script or restore the file from git.',
     );
   }
