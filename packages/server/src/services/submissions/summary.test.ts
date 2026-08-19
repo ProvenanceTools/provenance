@@ -18,6 +18,11 @@ import { withTestMinio } from '../../../test/helpers/minio.js';
 import { putSubmissionBundle } from '../../../test/helpers/seed-bundle.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import {
+  buildTrustChainKeys,
+  buildManifest2,
+  sessionStart2,
+} from '@provenance/analysis-core/test-support/build-manifest-2.js';
+import {
   courses,
   semesters,
   roster_entries,
@@ -334,6 +339,125 @@ describe('getSubmissionSummary — sessions[]', () => {
           expect(s.started_at).not.toBeNull();
           expect(Number.isNaN(Date.parse(s.started_at!))).toBe(false);
         }
+      });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// assignment_manifest (Manifest 2.0, program spec §3/§4)
+// ---------------------------------------------------------------------------
+
+describe('getSubmissionSummary — assignment_manifest', () => {
+  it('reports the legacy shape for a 1.x bundle, with no disabled signals', async () => {
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const user = await seedUser(db);
+        const { semester } = await seedCourseAndSemester(db);
+        const student = await seedStudent(db, semester.id, { sid: 's1', displayName: 'S One' });
+        const assignment = await seedAssignment(db, semester.id);
+        const job = await seedIngestJob(db, semester.id, user.id);
+        const sub = await seedSubmission(db, {
+          semesterId: semester.id,
+          assignmentId: assignment.id,
+          studentId: student.id,
+          ingestJobId: job.id,
+          sourceFilename: 'hw01.zip',
+        });
+        await seedBundleForSubmission(db, client, sub.id);
+
+        const keys = await buildTrustChainKeys();
+        // Even with a root key configured, a 1.x bundle has no chain to walk.
+        const summary = await getSubmissionSummary(db, client, sub.id, false, keys.rootPubkeyHex);
+
+        expect(summary!.assignment_manifest).toMatchObject({
+          format_version: '1.x',
+          course_id: null,
+          collaboration: null,
+          disabled_signals: [],
+          heartbeat_interval_ms: 30_000,
+          cert: null,
+          trust_chain: 'legacy',
+        });
+      });
+    });
+  });
+
+  it('surfaces course id, capability flags, cert and disabled signals for a 2.0 bundle', async () => {
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const user = await seedUser(db);
+        const { semester } = await seedCourseAndSemester(db);
+        const student = await seedStudent(db, semester.id, { sid: 's1', displayName: 'S One' });
+        const assignment = await seedAssignment(db, semester.id);
+        const job = await seedIngestJob(db, semester.id, user.id);
+        const sub = await seedSubmission(db, {
+          semesterId: semester.id,
+          assignmentId: assignment.id,
+          studentId: student.id,
+          ingestJobId: job.id,
+          sourceFilename: 'hw01.zip',
+        });
+
+        const keys = await buildTrustChainKeys();
+        const manifest = await buildManifest2({
+          keys,
+          collaboration: 'group',
+          submission: 'git',
+          scope: 'repo',
+          policy: { capture: { terminal: false } },
+        });
+        const { zipBuffer } = await buildTestBundle({
+          sessions: [{ sessionId: crypto.randomUUID(), sessionStart: sessionStart2(manifest) }],
+        });
+        await putSubmissionBundle(db, client, sub.id, new Uint8Array(zipBuffer));
+
+        const summary = await getSubmissionSummary(db, client, sub.id, false, keys.rootPubkeyHex);
+
+        expect(summary!.assignment_manifest).toMatchObject({
+          format_version: '2.0',
+          course_id: 'berkeley-cs61b',
+          collaboration: 'group',
+          submission: 'git',
+          scope: 'repo',
+          disabled_signals: ['terminal'],
+          trust_chain: 'verified',
+          trust_chain_detail: null,
+        });
+        expect(summary!.assignment_manifest.cert).toMatchObject({
+          course_id: 'berkeley-cs61b',
+          course_pubkey: keys.coursePubkeyHex,
+          in_window: true,
+        });
+      });
+    });
+  });
+
+  it('reports trust_chain "unconfigured" for a 2.0 bundle when no root key is set', async () => {
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const user = await seedUser(db);
+        const { semester } = await seedCourseAndSemester(db);
+        const student = await seedStudent(db, semester.id, { sid: 's1', displayName: 'S One' });
+        const assignment = await seedAssignment(db, semester.id);
+        const job = await seedIngestJob(db, semester.id, user.id);
+        const sub = await seedSubmission(db, {
+          semesterId: semester.id,
+          assignmentId: assignment.id,
+          studentId: student.id,
+          ingestJobId: job.id,
+          sourceFilename: 'hw01.zip',
+        });
+
+        const keys = await buildTrustChainKeys();
+        const manifest = await buildManifest2({ keys });
+        const { zipBuffer } = await buildTestBundle({
+          sessions: [{ sessionId: crypto.randomUUID(), sessionStart: sessionStart2(manifest) }],
+        });
+        await putSubmissionBundle(db, client, sub.id, new Uint8Array(zipBuffer));
+
+        const summary = await getSubmissionSummary(db, client, sub.id, false);
+        expect(summary!.assignment_manifest.trust_chain).toBe('unconfigured');
       });
     });
   });

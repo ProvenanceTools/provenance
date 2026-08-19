@@ -16,6 +16,11 @@ import { describe, it, expect } from 'vitest';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { loadBundle } from '@provenance/analysis-core/loader/parse-bundle.js';
 import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
+import {
+  buildTrustChainKeys,
+  buildManifest2,
+  sessionStart2,
+} from '@provenance/analysis-core/test-support/build-manifest-2.js';
 import { extractCrossFeaturesFromIndex } from './extract-cross-features.js';
 
 const SESSION = '11111111-1111-1111-1111-111111111111';
@@ -111,5 +116,64 @@ describe('extractCrossFeaturesFromIndex', () => {
     expect(features.eventCount).toBe(1);
     expect(features.kindNgrams.size).toBe(0);
     expect(features.pastes).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Capture policy (program spec §4)
+//
+// editing_pattern_clone fingerprints the event-KIND stream, so a course that
+// disables a gated kind shrinks the alphabet and inflates Jaccard similarity
+// across the whole cohort. The features must carry the recorded policy for the
+// heuristic to be able to decline the comparison.
+// ---------------------------------------------------------------------------
+
+describe('extractCrossFeaturesFromIndex — capture policy', () => {
+  it('reports no disabled signals when the bundle is not passed (1.x default)', async () => {
+    const { zipBuffer } = await buildTestBundle({ sessions: [{ sessionId: SESSION }] });
+    const parsed = await loadBundle(zipBuffer, 'b.zip');
+    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+
+    const { features } = extractCrossFeaturesFromIndex(
+      buildIndex(parsed.value),
+      'sub-1',
+      'bundle-1',
+    );
+    expect(features.disabledCaptureSignals).toBeUndefined();
+  });
+
+  it('reports an empty list for a 1.x bundle passed explicitly', async () => {
+    const { zipBuffer } = await buildTestBundle({ sessions: [{ sessionId: SESSION }] });
+    const parsed = await loadBundle(zipBuffer, 'b.zip');
+    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+
+    const { features } = extractCrossFeaturesFromIndex(
+      buildIndex(parsed.value),
+      'sub-1',
+      'bundle-1',
+      parsed.value,
+    );
+    expect(features.disabledCaptureSignals).toEqual([]);
+  });
+
+  it("carries a 2.0 bundle's disabled signals through to the cross-heuristics", async () => {
+    const keys = await buildTrustChainKeys();
+    const manifest = await buildManifest2({
+      keys,
+      policy: { capture: { terminal: false, focus_change: false } },
+    });
+    const { zipBuffer } = await buildTestBundle({
+      sessions: [{ sessionId: SESSION, sessionStart: sessionStart2(manifest) }],
+    });
+    const parsed = await loadBundle(zipBuffer, 'b.zip');
+    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+
+    const { features } = extractCrossFeaturesFromIndex(
+      buildIndex(parsed.value),
+      'sub-1',
+      'bundle-1',
+      parsed.value,
+    );
+    expect(features.disabledCaptureSignals).toEqual(['focus_change', 'terminal']);
   });
 });
