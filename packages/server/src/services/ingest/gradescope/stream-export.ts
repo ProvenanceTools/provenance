@@ -316,8 +316,9 @@ export async function openLocalExport(
         };
       }
       // Scopes that exist but produce no submission are reported, never
-      // silently dropped — an unsealed `.provenance/` is the normal git case
-      // today and staff need to see it in the job summary.
+      // silently dropped — a `.provenance/` that nothing seals (neither a
+      // classic nor a rolling manifest), or one excluded by scope config,
+      // still needs to be visible in the job summary.
       for (const unusable of [...discovered.unusable, ...resolved.rejected]) {
         yield {
           kind: 'skipped',
