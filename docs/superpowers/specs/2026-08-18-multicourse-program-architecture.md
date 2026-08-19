@@ -83,7 +83,27 @@ Fixed decisions:
   silent non-activation. `LEGACY_COURSE_PUBLIC_KEY_HEX`
   (`packages/recorder/src/activation/legacy-course-public-key.ts`) grandfathers
   that one key back in: `manifest-loader.ts` routes by `format_version` — 2.0 to
-  `ROOT_PUBLIC_KEY_HEX`, 1.x to `LEGACY_COURSE_PUBLIC_KEY_HEX`. `tools/embed-course-key.ts`
+  `ROOT_PUBLIC_KEY_HEX`, 1.x to `LEGACY_COURSE_PUBLIC_KEY_HEX`.
+
+  **Each recorder grandfathers ITS OWN prior embedded constant — the three are not
+  the same key.** The whole point is "keep accepting the 1.x manifests you already
+  accepted", and the key that signed those is whatever that specific recorder was
+  verifying against:
+
+  | recorder | legacy anchor     | nature                                     |
+  | -------- | ----------------- | ------------------------------------------ |
+  | VS Code  | `46f91d59…bf4838` | dev key; production injected at build time |
+  | provjet  | `958d262b…d5564b` | dev key; production injected at build time |
+  | provnvim | `b5bca59f…985e25` | **the real maintainer-held master key**    |
+
+  provnvim is the case that makes this load-bearing: it has no build step, so its
+  constant is not a dev placeholder — it shipped in every tagged release and signed
+  every real 1.x manifest in the field. Cross-wiring another recorder's key there
+  would silently kill recording for every existing user, which is the precise
+  failure this clause exists to prevent. The **root** key, by contrast, genuinely is
+  one shared value across all three.
+
+  `tools/embed-course-key.ts`
   is retired in favor of `tools/embed-root-key.ts`, which embeds both constants —
   the root one from `PROVENANCE_ROOT_PUBLIC_KEY_HEX` (required) and the legacy one
   from `PROVENANCE_LEGACY_COURSE_PUBLIC_KEY_HEX` (optional: a deployment build with
@@ -95,6 +115,7 @@ Fixed decisions:
   `legacy-course-public-key.ts`, its `course-keys.ts` re-export, the 1.x-routing
   branch in `manifest-loader.ts`, and the legacy-key embedding step in
   `tools/embed-root-key.ts` in one PR.
+
 - **`course_cert` travels inline in `.provenance-manifest`**, outside the
   course-signed payload. One file to discover, one to distribute, no chance of the
   two being separated by a copy or a `.gitignore`.
