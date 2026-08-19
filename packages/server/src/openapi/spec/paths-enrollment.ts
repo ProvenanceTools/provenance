@@ -1,78 +1,17 @@
 /**
- * OpenAPI path declarations for student enrollment (program spec §5a — S2).
+ * OpenAPI path declarations for student enrollment (identity 2.1).
  *
  * The only route on this server intended for students rather than course staff.
+ *
+ * The 2.0 sibling, `POST /semesters/{semesterId}/enrollment`, was retired before
+ * it shipped — it is superseded by `/identity/credential` and required a roster
+ * match that could not exist before a student's first submission. Its removal
+ * retired MINTING only: identity 2.0 VERIFICATION stays live forever, in
+ * `log-core` and `analysis-core`, and is walked from inside the bundle without
+ * ever consulting this server.
  */
 
 export const enrollmentPaths = {
-  '/semesters/{semesterId}/enrollment': {
-    post: {
-      tags: ['Enrollment'],
-      summary: 'Mint an enrollment token for the authenticated student',
-      description: [
-        'Binds a public key the student generated to their roster identity, signed by the',
-        'course-certified enrollment key. The student pastes the result back into their',
-        'recorder, which stores it and countersigns each session key with the matching',
-        'private half.',
-        '',
-        'Requires an interactive Google session on an allowed hosted domain; API tokens are',
-        'refused (ENROLLMENT_SESSION_REQUIRED), as is a superadmin in view-as mode. The',
-        'authenticated account must match exactly one roster entry in the target semester.',
-        '',
-        'Re-enrolling is expected and additive: the same key re-issues (reissued=true), a new',
-        'key supersedes the old one in the server-side record while every already-issued',
-        'token remains cryptographically valid until it expires.',
-        '',
-        'Rate: write.misc.',
-      ].join('\n'),
-      security: [{ SessionCookie: [] }],
-      parameters: [
-        {
-          name: 'semesterId',
-          in: 'path',
-          required: true,
-          schema: { $ref: '#/components/schemas/UUID' },
-        },
-      ],
-      requestBody: {
-        required: true,
-        content: {
-          'application/json': {
-            schema: { $ref: '#/components/schemas/EnrollmentRequest' },
-          },
-        },
-      },
-      responses: {
-        '200': {
-          description: 'Minted enrollment token plus the certificate authorizing its signer',
-          content: {
-            'application/json': {
-              schema: { $ref: '#/components/schemas/EnrollmentResponse' },
-            },
-          },
-        },
-        '400': { description: 'VALIDATION — student_pubkey is not 64 lowercase hex characters' },
-        '401': { description: 'AUTH_REQUIRED' },
-        '403': {
-          description:
-            'ENROLLMENT_SESSION_REQUIRED (API token), VIEW_AS_READ_ONLY, or ' +
-            'ENROLLMENT_NOT_ON_ROSTER',
-        },
-        '404': { description: 'NOT_FOUND — no such semester' },
-        '409': {
-          description: 'ENROLLMENT_ROSTER_AMBIGUOUS — several roster entries share this email',
-        },
-        '429': { description: 'RATE_LIMITED' },
-        '503': {
-          description:
-            'ENROLLMENT_UNAVAILABLE — no enrollment key configured for this semester, its ' +
-            'certificate is outside its validity window, or the configured private key does ' +
-            'not match the certificate',
-        },
-      },
-    },
-  },
-
   '/identity/credential': {
     post: {
       tags: ['Enrollment'],
@@ -83,9 +22,8 @@ export const enrollmentPaths = {
         'the result back into their recorder, which stores it and countersigns each session',
         'key with the matching private half.',
         '',
-        'Unlike POST /semesters/{semesterId}/enrollment there is no path scope, because a',
-        'credential names no course, semester, or assignment: a student obtains ONE',
-        'credential, once, and it serves every course.',
+        'There is no path scope, because a credential names no course, semester, or',
+        'assignment: a student obtains ONE credential, once, and it serves every course.',
         '',
         'Requires an interactive Google session on an allowed hosted domain; API tokens are',
         'refused (CREDENTIAL_SESSION_REQUIRED), as is a superadmin in view-as mode. That is',

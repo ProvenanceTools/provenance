@@ -62,11 +62,6 @@ export type ApiErrorCode =
   | 'EVENT_QUERY_LIMIT_EXCEEDED'
   | 'EVENT_QUERY_RANGE_INVALID'
   | 'EXPORT_FORMAT_UNSUPPORTED'
-  // Student enrollment (program spec §5a)
-  | 'ENROLLMENT_SESSION_REQUIRED'
-  | 'ENROLLMENT_NOT_ON_ROSTER'
-  | 'ENROLLMENT_ROSTER_AMBIGUOUS'
-  | 'ENROLLMENT_UNAVAILABLE'
   // Student credentials (identity 2.1 — institution-scoped). There is no
   // CREDENTIAL_NOT_ON_ROSTER sibling, deliberately: a roster precondition is
   // the deadlock 2.1 removes.
@@ -272,59 +267,6 @@ export const Errors = {
 
   notFound(): ApiError {
     return new ApiError('NOT_FOUND', 404, 'Resource not found (or not visible)');
-  },
-
-  // -------------------------------------------------------------------------
-  // Student enrollment (program spec §5a)
-  // -------------------------------------------------------------------------
-
-  /**
-   * Minting an enrollment token requires an interactive Google session, not an
-   * API token. The token it mints binds a public key to a named student for the
-   * rest of the semester, so a stolen long-lived bearer secret must not be able
-   * to produce one; the Google login stays in the loop.
-   */
-  enrollmentSessionRequired(): ApiError {
-    return new ApiError(
-      'ENROLLMENT_SESSION_REQUIRED',
-      403,
-      'Enrollment requires an interactive login; API tokens cannot mint enrollment tokens',
-    );
-  },
-
-  /**
-   * The authenticated account matches no roster entry in this semester. Never
-   * mint for an unknown identity — a token IS the attribution claim.
-   */
-  enrollmentNotOnRoster(): ApiError {
-    return new ApiError(
-      'ENROLLMENT_NOT_ON_ROSTER',
-      403,
-      'This account does not match a student on the roster for this semester',
-    );
-  },
-
-  /**
-   * More than one roster entry shares this email address. Refuse rather than
-   * pick: the wrong choice silently attributes a semester of work to the wrong
-   * student.
-   */
-  enrollmentRosterAmbiguous(matches: number): ApiError {
-    return new ApiError(
-      'ENROLLMENT_ROSTER_AMBIGUOUS',
-      409,
-      'Multiple roster entries share this email address; course staff must resolve the duplicate',
-      { matches },
-    );
-  },
-
-  /**
-   * The semester exists but cannot mint right now: no enrollment key is
-   * configured for it, or its certificate is outside its validity window.
-   * Deliberately does not distinguish those to the caller beyond `reason`.
-   */
-  enrollmentUnavailable(reason: string): ApiError {
-    return new ApiError('ENROLLMENT_UNAVAILABLE', 503, 'Enrollment is not available', { reason });
   },
 
   // -------------------------------------------------------------------------
