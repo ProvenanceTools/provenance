@@ -55,6 +55,8 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { createHash } from 'node:crypto';
 import JSZip from 'jszip';
+import * as ed from '@noble/ed25519';
+import { bytesToHex } from '@noble/hashes/utils.js';
 
 import {
   FixedClock,
@@ -75,6 +77,7 @@ import { createSessionHost } from '../packages/recorder/dist/session/session-hos
 import { SessionWriter } from '../packages/recorder/dist/io/session-writer.js';
 import { MetaWriter } from '../packages/recorder/dist/io/meta-writer.js';
 import { sealBundle } from '../packages/recorder/dist/commands/seal.js';
+import { writeRollingSeal } from '../packages/recorder/dist/io/rolling-seal-writer.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -754,5 +757,462 @@ describe('mutation tests: a corrupted recorder bundle must be caught', () => {
   it('the clean bundle is still green after all mutations (no shared-state leak)', async () => {
     const again = await loadAndValidate(bundlePath);
     expectAllChecksPass(again.report);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE ROLLING SEAL (program spec §8) — same gate, git-submitted shape.
+//
+// A git-submitted assignment never runs `seal`, so there is no `manifest.json`
+// at all. The recorder instead rewrites `manifest-<session_id>.json` + `.sig` on
+// every checkpoint. This section drives the REAL `writeRollingSeal` from the
+// recorder's build output and reads the result back with the REAL loadBundle +
+// runValidation, exactly as the classic path above.
+//
+// The one thing the test supplies is the ZIP. That is deliberate and it is not
+// a hand-built artifact: for a git submission the archive is produced by the
+// grader cloning the repo, not by any recorder code, so there is no production
+// zipper to call. Every byte INSIDE it — manifest, signature, .slog, .meta —
+// comes from production code.
+// ---------------------------------------------------------------------------
+
+/** ZIP a `.provenance/` plus the workspace files, as a grader's clone would. */
+async function zipRepo(opts: {
+  root: string;
+  provenanceDir: string;
+  submissionFiles: Map<string, string>;
+  outputPath: string;
+  /** Entries to leave out, for the "seal was deleted" mutations. */
+  omitProvenanceEntries?: Set<string>;
+}): Promise<string> {
+  const { root, provenanceDir, submissionFiles, outputPath } = opts;
+  const omit = opts.omitProvenanceEntries ?? new Set<string>();
+  const zip = new JSZip();
+
+  for (const filename of await fsPromises.readdir(provenanceDir)) {
+    if (filename.includes('.corrupt-') || filename.endsWith('.tmp')) continue;
+    if (omit.has(filename)) continue;
+    zip.file(filename, await fsPromises.readFile(path.join(provenanceDir, filename)));
+  }
+  for (const rel of submissionFiles.keys()) {
+    zip.file(rel, await fsPromises.readFile(path.join(root, rel)));
+  }
+
+  const out = await zip.generateAsync({ type: 'nodebuffer' });
+  await fsPromises.writeFile(outputPath, out);
+  return outputPath;
+}
+
+type RollingScenario = {
+  root: string;
+  provenanceDir: string;
+  sessions: RecordedSession[];
+  bundlePath: string;
+  finalContent: Map<string, string>;
+};
+
+/**
+ * Record N sessions and roll a seal for each, through production code.
+ *
+ * Each session is sealed AFTER its own content is materialized, mirroring what
+ * the live recorder does: a session's rolling manifest records the on-disk state
+ * as of that session's last checkpoint. The union the loader synthesizes then
+ * takes the newest session's hash for each file, which is what check 8 compares
+ * the zipped bytes against.
+ */
+async function buildRollingSealedBundle(opts: {
+  root: string;
+  sessionCount: number;
+  files: Array<{ path: string; initial: string; append: string }>;
+  filesUnderReview?: string[];
+}): Promise<RollingScenario> {
+  const { root, sessionCount, files } = opts;
+  const provenanceDir = path.join(root, '.provenance');
+  await fsPromises.mkdir(provenanceDir, { recursive: true });
+
+  const sessions: RecordedSession[] = [];
+  let prev: string | null = null;
+  let finalContent = new Map<string, string>();
+
+  for (let i = 0; i < sessionCount; i++) {
+    const sessionId = uuid(i + 1);
+    const recorded = await recordSession({
+      provenanceDir,
+      sessionId,
+      prevSessionId: prev,
+      files: files.map((f) => ({ ...f, append: `${f.append}// session ${i + 1}\n` })),
+    });
+    sessions.push(recorded);
+    finalContent = recorded.finalContent;
+    await writeWorkspaceFiles(root, finalContent);
+
+    const filesUnderReview = opts.filesUnderReview ?? [...finalContent.keys()];
+
+    // The REAL write path, signing with THIS session's own key.
+    const result = await writeRollingSeal({
+      provenanceDir,
+      sessionId,
+      prevSessionId: prev,
+      slogPath: path.join(provenanceDir, `session-${sessionId}.slog`),
+      assignmentRoot: root,
+      assignmentId: ASSIGNMENT_ID,
+      semester: SEMESTER,
+      filesUnderReview,
+      sessionPrivkey: recorded.keypair.privateKey,
+      extensionHash: EXTENSION_HASH,
+    });
+    if (result.kind !== 'written') {
+      throw new Error(`writeRollingSeal did not succeed: ${JSON.stringify(result)}`);
+    }
+
+    prev = sessionId;
+  }
+
+  const bundlePath = await zipRepo({
+    root,
+    provenanceDir,
+    submissionFiles: finalContent,
+    outputPath: path.join(root, 'git-clone.zip'),
+  });
+
+  return { root, provenanceDir, sessions, bundlePath, finalContent };
+}
+
+describe('rolling seal → analysis-core load + validate (git-submitted shape)', () => {
+  describe('single-session repo with no manifest.json at all', () => {
+    let scenario: RollingScenario;
+    let verified: Verified;
+
+    beforeAll(async () => {
+      const root = await makeRoot('rolling-single');
+      scenario = await buildRollingSealedBundle({
+        root,
+        sessionCount: 1,
+        files: [{ path: 'main.py', initial: 'def solve():\n    pass\n', append: 'solve()\n' }],
+      });
+      verified = await loadAndValidate(scenario.bundlePath);
+    });
+
+    it('carries no classic seal whatsoever', async () => {
+      const zip = await JSZip.loadAsync(await fsPromises.readFile(scenario.bundlePath));
+      expect(zip.file('manifest.json')).toBeNull();
+      expect(zip.file('manifest.sig')).toBeNull();
+      expect(zip.file(`manifest-${scenario.sessions[0]!.sessionId}.json`)).not.toBeNull();
+      expect(zip.file(`manifest-${scenario.sessions[0]!.sessionId}.sig`)).not.toBeNull();
+    });
+
+    it('loads through the real loadBundle as a 1.2 rolling bundle', () => {
+      expect(verified.bundle.sessions).toHaveLength(1);
+      expect(verified.bundle.manifest.format_version).toBe('1.2');
+      expect(verified.bundle.manifest.assignment_id).toBe(ASSIGNMENT_ID);
+      expect(verified.bundle.manifest.semester).toBe(SEMESTER);
+      expect(verified.bundle.manifest.extension_hash).toBe(EXTENSION_HASH);
+      // The loader recorded a rolling seal, and found nothing wrong with it.
+      expect(verified.bundle.rollingSeal?.seals).toHaveLength(1);
+      expect(verified.bundle.rollingSeal?.defects).toEqual([]);
+    });
+
+    it('passes all 8 validation checks', () => {
+      expectAllChecksPass(verified.report);
+    });
+
+    it('verifies the seal against the session’s OWN key, named in the detail', () => {
+      const check1 = verified.report.checks.find((c) => c.id === 'manifest_sig')!;
+      expect(check1.status).toBe('pass');
+      expect(check1.detail).toContain('1 rolling manifest(s) verified');
+      expect(check1.detail).toContain(scenario.sessions[0]!.sessionId);
+    });
+  });
+
+  describe('multi-session repo — one seal per session, each with its own key', () => {
+    let scenario: RollingScenario;
+    let verified: Verified;
+
+    beforeAll(async () => {
+      const root = await makeRoot('rolling-multi');
+      scenario = await buildRollingSealedBundle({
+        root,
+        sessionCount: 3,
+        files: [{ path: 'main.py', initial: 'x = 1\n', append: 'y = 2\n' }],
+      });
+      verified = await loadAndValidate(scenario.bundlePath);
+    });
+
+    it('produces one seal per session, each covering exactly itself', async () => {
+      const zip = await JSZip.loadAsync(await fsPromises.readFile(scenario.bundlePath));
+      for (const s of scenario.sessions) {
+        const raw = await zip.file(`manifest-${s.sessionId}.json`)!.async('string');
+        const parsed = JSON.parse(raw) as {
+          format_version: string;
+          sessions: Array<{ session_id: string }>;
+        };
+        expect(parsed.format_version).toBe('1.2');
+        expect(parsed.sessions).toHaveLength(1);
+        expect(parsed.sessions[0]!.session_id).toBe(s.sessionId);
+      }
+    });
+
+    it('synthesizes a union manifest spanning all three sessions', () => {
+      expect(verified.bundle.manifest.sessions.map((s) => s.session_id)).toEqual(
+        scenario.sessions.map((s) => s.sessionId),
+      );
+      expect(verified.bundle.rollingSeal?.defects).toEqual([]);
+    });
+
+    it('passes all 8 validation checks', () => {
+      expectAllChecksPass(verified.report);
+      expect(verified.report.checks.find((c) => c.id === 'manifest_sig')!.detail).toContain(
+        '3 rolling manifest(s) verified',
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The classic seal must be exactly what it was. This is the regression that
+  // matters most: rolling seals now sit in the same `.provenance/` a classic
+  // seal is taken over.
+  // -------------------------------------------------------------------------
+  describe('the classic seal is unaffected by rolling seals sharing its directory', () => {
+    it('produces byte-identical manifest.json and manifest.sig either way', async () => {
+      // ONE recording, sealed classically twice: once with no rolling manifests
+      // in the directory, once after they are there. Two separate recordings
+      // could not answer this — the per-session keypair is random, so their
+      // .slog bytes (and therefore their slog_sha256) legitimately differ.
+      const root = await makeRoot('classic-unaffected');
+      const provenanceDir = path.join(root, '.provenance');
+      await fsPromises.mkdir(provenanceDir, { recursive: true });
+
+      const sessionId = uuid(1);
+      const recorded = await recordSession({
+        provenanceDir,
+        sessionId,
+        prevSessionId: null,
+        files: [{ path: 'main.py', initial: 'a = 1\n', append: 'b = 2\n' }],
+      });
+      await writeWorkspaceFiles(root, recorded.finalContent);
+
+      const seal = async (): Promise<string> => {
+        const result = await sealBundle({
+          assignmentRoot: root,
+          provenanceDir,
+          assignmentId: ASSIGNMENT_ID,
+          semester: SEMESTER,
+          filesUnderReview: [...recorded.finalContent.keys()],
+          sessionPrivkey: recorded.keypair.privateKey,
+          sessionPubkeyHex: recorded.keypair.publicKeyHex,
+          computeExtensionHash: async () => EXTENSION_HASH,
+          outputDir: root,
+          now: () => new Date('2026-05-19T14:30:00.000Z'),
+        });
+        if (result.kind !== 'ok') throw new Error('sealBundle failed');
+        return result.manifestSha256;
+      };
+
+      const shaBefore = await seal();
+      const manifestBefore = await fsPromises.readFile(
+        path.join(provenanceDir, 'manifest.json'),
+        'utf8',
+      );
+      const sigBefore = await fsPromises.readFile(path.join(provenanceDir, 'manifest.sig'), 'utf8');
+
+      // Now roll a seal into the very same directory — what every recorder does
+      // from this change on — and seal again.
+      const rolled = await writeRollingSeal({
+        provenanceDir,
+        sessionId,
+        prevSessionId: null,
+        slogPath: path.join(provenanceDir, `session-${sessionId}.slog`),
+        assignmentRoot: root,
+        assignmentId: ASSIGNMENT_ID,
+        semester: SEMESTER,
+        filesUnderReview: [...recorded.finalContent.keys()],
+        sessionPrivkey: recorded.keypair.privateKey,
+        extensionHash: EXTENSION_HASH,
+      });
+      expect(rolled.kind).toBe('written');
+      expect((await fsPromises.readdir(provenanceDir)).sort()).toContain(
+        `manifest-${sessionId}.json`,
+      );
+
+      const shaAfter = await seal();
+
+      // Byte-for-byte. The rolling seal contributes nothing to the classic
+      // manifest: it is not a session, and it is not a submission file.
+      expect(await fsPromises.readFile(path.join(provenanceDir, 'manifest.json'), 'utf8')).toBe(
+        manifestBefore,
+      );
+      expect(await fsPromises.readFile(path.join(provenanceDir, 'manifest.sig'), 'utf8')).toBe(
+        sigBefore,
+      );
+      expect(shaAfter).toBe(shaBefore);
+    });
+
+    it('a both-shapes bundle still passes all 8 checks, satisfying BOTH seals', async () => {
+      const root = await makeRoot('both-shapes');
+      const scenario = await buildRollingSealedBundle({
+        root,
+        sessionCount: 1,
+        files: [{ path: 'main.py', initial: 'a = 1\n', append: 'b = 2\n' }],
+      });
+
+      // Now take a classic seal over the same directory — which is exactly what
+      // "Prepare Submission Bundle" does on a recorder that rolls seals.
+      const sealed = await sealBundle({
+        assignmentRoot: root,
+        provenanceDir: scenario.provenanceDir,
+        assignmentId: ASSIGNMENT_ID,
+        semester: SEMESTER,
+        filesUnderReview: [...scenario.finalContent.keys()],
+        sessionPrivkey: scenario.sessions[0]!.keypair.privateKey,
+        sessionPubkeyHex: scenario.sessions[0]!.keypair.publicKeyHex,
+        computeExtensionHash: async () => EXTENSION_HASH,
+        outputDir: root,
+        now: () => new Date('2026-05-19T14:30:00.000Z'),
+      });
+      if (sealed.kind !== 'ok') throw new Error('sealBundle failed');
+
+      const zip = await JSZip.loadAsync(await fsPromises.readFile(sealed.bundlePath));
+      expect(zip.file('manifest.json')).not.toBeNull();
+      expect(zip.file(`manifest-${scenario.sessions[0]!.sessionId}.json`)).not.toBeNull();
+
+      const verified = await loadAndValidate(sealed.bundlePath);
+      // The classic manifest still wins as `bundle.manifest`…
+      expect(verified.bundle.manifest.format_version).toBe('1.1');
+      // …and the rolling seal is verified alongside it, not instead of it.
+      expect(verified.report.checks.find((c) => c.id === 'manifest_sig')!.detail).toContain(
+        'Classic manifest.json also verified',
+      );
+      expectAllChecksPass(verified.report);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Mutations. Each breaks exactly one rolling-seal rule and must go red.
+  // -------------------------------------------------------------------------
+  describe('mutations: a broken rolling seal must be caught', () => {
+    let scenario: RollingScenario;
+    let sessionId: string;
+    let otherKey: SessionKeypair;
+
+    beforeAll(async () => {
+      const root = await makeRoot('rolling-mutate');
+      scenario = await buildRollingSealedBundle({
+        root,
+        sessionCount: 2,
+        files: [{ path: 'main.py', initial: 'a = 1\n', append: 'b = 2\n' }],
+      });
+      sessionId = scenario.sessions[0]!.sessionId;
+      otherKey = await generateSessionKeypair();
+
+      // Sanity: green before every mutation below.
+      expectAllChecksPass((await loadAndValidate(scenario.bundlePath)).report);
+    });
+
+    it('flipping a byte in a rolling .sig fails check 1', async () => {
+      const buf = await mutateZip(scenario.bundlePath, async (zip) => {
+        const sig = await zip.file(`manifest-${sessionId}.sig`)!.async('string');
+        zip.file(`manifest-${sessionId}.sig`, (sig[0] === '0' ? '1' : '0') + sig.slice(1));
+      });
+      const report = await validateMutated(buf);
+      expect(statusOf(report, 'manifest_sig')).toBe('fail');
+      expect(report.checks.find((c) => c.id === 'manifest_sig')!.detail).toContain(sessionId);
+    });
+
+    it('signing with the WRONG session key fails check 1', async () => {
+      const buf = await mutateZip(scenario.bundlePath, async (zip) => {
+        const json = await zip.file(`manifest-${sessionId}.json`)!.async('string');
+        // A perfectly valid signature — over the right bytes, by the wrong key.
+        const resigned = await ed.signAsync(new TextEncoder().encode(json), otherKey.privateKey);
+        zip.file(`manifest-${sessionId}.sig`, bytesToHex(resigned));
+      });
+      const report = await validateMutated(buf);
+      expect(statusOf(report, 'manifest_sig')).toBe('fail');
+      expect(report.checks.find((c) => c.id === 'manifest_sig')!.detail).toContain(
+        `did not verify against session ${sessionId}`,
+      );
+    });
+
+    it('renaming a seal to manifest.json (the classic name) breaks the bundle', async () => {
+      // The mutation the writer must never make: emit the classic filename.
+      // A 1.2 manifest at `manifest.json` has no matching `.sig`, and the loader
+      // rejects a classic manifest with no classic signature outright.
+      const buf = await mutateZip(scenario.bundlePath, async (zip) => {
+        const json = await zip.file(`manifest-${sessionId}.json`)!.async('string');
+        zip.remove(`manifest-${sessionId}.json`);
+        zip.remove(`manifest-${sessionId}.sig`);
+        zip.file('manifest.json', json);
+      });
+      await expect(validateMutated(buf)).rejects.toThrow(/missing_signature/);
+    });
+
+    it('a manifest covering TWO sessions in one file fails check 1', async () => {
+      const buf = await mutateZip(scenario.bundlePath, async (zip) => {
+        const mine = JSON.parse(
+          await zip.file(`manifest-${sessionId}.json`)!.async('string'),
+        ) as Record<string, unknown>;
+        const theirs = JSON.parse(
+          await zip.file(`manifest-${scenario.sessions[1]!.sessionId}.json`)!.async('string'),
+        ) as { sessions: unknown[] };
+        mine['sessions'] = [...(mine['sessions'] as unknown[]), ...theirs.sessions];
+        zip.file(`manifest-${sessionId}.json`, JSON.stringify(mine));
+      });
+      const report = await validateMutated(buf);
+      expect(statusOf(report, 'manifest_sig')).toBe('fail');
+      expect(report.checks.find((c) => c.id === 'manifest_sig')!.detail).toContain(
+        'must cover exactly one session',
+      );
+    });
+
+    it('a seal copied sideways under another session’s filename fails check 1', async () => {
+      // manifest-A.json holding B's seal: it IS B's manifest, signed by B's key,
+      // so only the filename ↔ session_id binding catches it.
+      const other = scenario.sessions[1]!.sessionId;
+      const buf = await mutateZip(scenario.bundlePath, async (zip) => {
+        const theirJson = await zip.file(`manifest-${other}.json`)!.async('string');
+        const theirSig = await zip.file(`manifest-${other}.sig`)!.async('string');
+        zip.file(`manifest-${sessionId}.json`, theirJson);
+        zip.file(`manifest-${sessionId}.sig`, theirSig);
+      });
+      const report = await validateMutated(buf);
+      expect(statusOf(report, 'manifest_sig')).toBe('fail');
+      expect(report.checks.find((c) => c.id === 'manifest_sig')!.detail).toContain(
+        'but the manifest covers',
+      );
+    });
+
+    it('deleting a session’s .sig fails check 1 (an unsigned manifest is not a seal)', async () => {
+      const buf = await mutateZip(scenario.bundlePath, (zip) => {
+        zip.remove(`manifest-${sessionId}.sig`);
+      });
+      const report = await validateMutated(buf);
+      expect(statusOf(report, 'manifest_sig')).toBe('fail');
+      expect(report.checks.find((c) => c.id === 'manifest_sig')!.detail).toContain(
+        'the manifest is unsigned',
+      );
+    });
+
+    it('deleting a session’s whole seal fails check 1 (unsealed_session)', async () => {
+      const buf = await mutateZip(scenario.bundlePath, (zip) => {
+        zip.remove(`manifest-${sessionId}.json`);
+        zip.remove(`manifest-${sessionId}.sig`);
+      });
+      const report = await validateMutated(buf);
+      expect(statusOf(report, 'manifest_sig')).toBe('fail');
+      expect(report.checks.find((c) => c.id === 'manifest_sig')!.detail).toContain(
+        'is not covered by any seal',
+      );
+    });
+
+    it('editing a submitted file after the roll fails check 8', async () => {
+      const buf = await mutateZip(scenario.bundlePath, (zip) => {
+        zip.file('main.py', '# swapped out after the seal\n');
+      });
+      const report = await validateMutated(buf);
+      expect(statusOf(report, 'submitted_code_match')).toBe('fail');
+    });
+
+    it('the clean rolling bundle is still green after all mutations', async () => {
+      expectAllChecksPass((await loadAndValidate(scenario.bundlePath)).report);
+    });
   });
 });
