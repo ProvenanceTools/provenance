@@ -4,6 +4,7 @@
 
 export * from './loader/parse-bundle.js';
 export * from './loader/types.js';
+export * from './manifest/bundle-manifest.js';
 export * from './validation/run-validation.js';
 export * from './validation/check-types.js';
 export * from './validation/verify-submitted-code.js';
