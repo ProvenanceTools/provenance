@@ -6,7 +6,16 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { validateConfig, KNOWN_HEURISTIC_IDS, DEFAULT_SERVER_CONFIG } from './config.js';
+import { ALL_FLAG_IDS } from '@provenance/analysis-core/heuristics/known-flag-ids.js';
+import {
+  validateConfig,
+  KNOWN_HEURISTIC_IDS,
+  DEFAULT_SERVER_CONFIG,
+  DEFAULT_PER_FLAG_ENTRY,
+  resolvePerFlag,
+  normalizeStoredConfig,
+} from './config.js';
+import type { ServerHeuristicConfig } from './config.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -207,5 +216,139 @@ describe('validateConfig', () => {
     for (const id of KNOWN_HEURISTIC_IDS) {
       expect(DEFAULT_SERVER_CONFIG.per_flag[id]).toBeDefined();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Single source of truth: KNOWN_HEURISTIC_IDS is derived from analysis-core
+// ---------------------------------------------------------------------------
+
+describe('KNOWN_HEURISTIC_IDS vs analysis-core ALL_FLAG_IDS', () => {
+  it('is exactly the set of ids analysis-core can emit (fails if either drifts)', () => {
+    // Sorted-array comparison rather than set-size equality so a failure names
+    // the drifted ids instead of just reporting two different numbers.
+    expect([...KNOWN_HEURISTIC_IDS].sort()).toEqual([...ALL_FLAG_IDS].sort());
+  });
+
+  it('has no duplicate ids across the three analysis-core registries', () => {
+    expect(KNOWN_HEURISTIC_IDS.size).toBe(ALL_FLAG_IDS.length);
+  });
+
+  it('includes the two ids the hand-maintained 24-entry set was missing', () => {
+    // Regression guard for the drift found 2026-08: both fired and scored at
+    // ingest, then were silently dropped by every recompute because they had
+    // no per_flag entry and recompute read "missing" as "disabled".
+    expect(KNOWN_HEURISTIC_IDS.has('inter_session_external_change')).toBe(true);
+    expect(KNOWN_HEURISTIC_IDS.has('submitted_code_match')).toBe(true);
+  });
+
+  it('DEFAULT_SERVER_CONFIG covers every analysis-core flag id and nothing else', () => {
+    for (const id of ALL_FLAG_IDS) {
+      expect(DEFAULT_SERVER_CONFIG.per_flag[id]).toBeDefined();
+    }
+    expect(Object.keys(DEFAULT_SERVER_CONFIG.per_flag)).toHaveLength(ALL_FLAG_IDS.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolvePerFlag — the ONE definition of "what does a missing entry mean"
+// ---------------------------------------------------------------------------
+
+/** A stored config in the pre-fix shape: the 24 ids migration 0010 backfilled. */
+function legacy24Config(): ServerHeuristicConfig {
+  const perFlag: ServerHeuristicConfig['per_flag'] = {};
+  for (const id of ALL_FLAG_IDS) {
+    if (id === 'inter_session_external_change' || id === 'submitted_code_match') continue;
+    perFlag[id] = { enabled: true, weight: 1.0 };
+  }
+  return {
+    per_flag: perFlag,
+    severity_weights: { info: 0, low: 1, medium: 3, high: 8 },
+    config_format_version: 1,
+  };
+}
+
+describe('resolvePerFlag', () => {
+  it('returns the stored entry when one exists', () => {
+    const cfg = legacy24Config();
+    cfg.per_flag['large_paste'] = { enabled: false, weight: 0.25 };
+    expect(resolvePerFlag(cfg, 'large_paste')).toEqual({ enabled: false, weight: 0.25 });
+  });
+
+  it('treats a MISSING entry as enabled at weight 1.0', () => {
+    const cfg = legacy24Config();
+    expect(cfg.per_flag['submitted_code_match']).toBeUndefined();
+    expect(resolvePerFlag(cfg, 'submitted_code_match')).toEqual(DEFAULT_PER_FLAG_ENTRY);
+    expect(resolvePerFlag(cfg, 'submitted_code_match').enabled).toBe(true);
+    expect(resolvePerFlag(cfg, 'inter_session_external_change').enabled).toBe(true);
+  });
+
+  it('an explicit enabled:false still disables (the default only fills absence)', () => {
+    const cfg = legacy24Config();
+    cfg.per_flag['chain_broken'] = { enabled: false, weight: 1.0 };
+    expect(resolvePerFlag(cfg, 'chain_broken').enabled).toBe(false);
+  });
+
+  it('does not mutate the config it reads', () => {
+    const cfg = legacy24Config();
+    resolvePerFlag(cfg, 'submitted_code_match');
+    expect(cfg.per_flag['submitted_code_match']).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// normalizeStoredConfig — the upgrade path for pre-existing 24-entry rows
+// ---------------------------------------------------------------------------
+
+describe('normalizeStoredConfig', () => {
+  it('fills every known id a stored row is missing, with the enabled default', () => {
+    const normalized = normalizeStoredConfig(legacy24Config());
+
+    expect(Object.keys(normalized.per_flag)).toHaveLength(ALL_FLAG_IDS.length);
+    expect(normalized.per_flag['submitted_code_match']).toEqual(DEFAULT_PER_FLAG_ENTRY);
+    expect(normalized.per_flag['inter_session_external_change']).toEqual(DEFAULT_PER_FLAG_ENTRY);
+  });
+
+  it('leaves entries that ARE present untouched, including disabled ones', () => {
+    const stored = legacy24Config();
+    stored.per_flag['large_paste'] = { enabled: false, weight: 0 };
+    stored.per_flag['chain_broken'] = { enabled: true, weight: 2.5, thresholds: { a: 1 } };
+
+    const normalized = normalizeStoredConfig(stored);
+    expect(normalized.per_flag['large_paste']).toEqual({ enabled: false, weight: 0 });
+    expect(normalized.per_flag['chain_broken']).toEqual({
+      enabled: true,
+      weight: 2.5,
+      thresholds: { a: 1 },
+    });
+  });
+
+  it('does not mutate its input', () => {
+    const stored = legacy24Config();
+    normalizeStoredConfig(stored);
+    expect(stored.per_flag['submitted_code_match']).toBeUndefined();
+    expect(Object.keys(stored.per_flag)).toHaveLength(ALL_FLAG_IDS.length - 2);
+  });
+
+  it('output of a legacy 24-entry row passes validateConfig (GET then PUT round-trip)', () => {
+    // Without normalization the analyzer would GET a 24-entry config and PUT it
+    // straight back, which the widened known set now 422s on.
+    expect(validateConfig(legacy24Config()).ok).toBe(false);
+    expect(validateConfig(normalizeStoredConfig(legacy24Config())).ok).toBe(true);
+  });
+
+  it('preserves unknown ids rather than dropping staff intent silently', () => {
+    const stored = normalizeStoredConfig(legacy24Config());
+    stored.per_flag['retired_heuristic'] = { enabled: false, weight: 0 };
+    const normalized = normalizeStoredConfig(stored);
+    expect(normalized.per_flag['retired_heuristic']).toEqual({ enabled: false, weight: 0 });
+  });
+
+  it('severity_weights and format version survive normalization', () => {
+    const stored = legacy24Config();
+    stored.severity_weights = { info: 1, low: 2, medium: 4, high: 9 };
+    const normalized = normalizeStoredConfig(stored);
+    expect(normalized.severity_weights).toEqual({ info: 1, low: 2, medium: 4, high: 9 });
+    expect(normalized.config_format_version).toBe(1);
   });
 });
