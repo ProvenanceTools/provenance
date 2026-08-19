@@ -580,6 +580,25 @@ async function buildManifestV2Vectors(): Promise<unknown> {
       }),
     },
 
+    unknown_keys_ignored: await (async () => {
+      const withUnknown = { ...valid, some_future_field: 'ignored', another_one: [1, 2] };
+      const parsed = parseManifest(JSON.stringify(withUnknown));
+      return {
+        note:
+          'MANDATORY. Unknown top-level keys MUST be ignored, for forward compatibility. This ' +
+          'is safe precisely because canonicalization operates on the NAMED fields only, so an ' +
+          'unknown key can never silently change the signed bytes — the signature below still ' +
+          'verifies with the extra keys present.',
+        manifest_json: JSON.stringify(withUnknown),
+        expected: {
+          parses: parsed.ok,
+          chain: parsed.ok
+            ? chainOutcome(await verifyManifestChain(parsed.value, rootPubkeyHex))
+            : null,
+        },
+      };
+    })(),
+
     chain_note:
       'Step 0 gates on format_version === "2.0" before anything else, and that gate is a ' +
       'SECURITY CONTROL. At 1.x, course_id / collaboration / submission / scope / policy are ' +
