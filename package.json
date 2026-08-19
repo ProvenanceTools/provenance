@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build --workspace=packages/log-core && npm run build --workspace=packages/shared && npm run build --workspace=packages/analysis-core && npm run build --workspace=packages/analyzer --workspace=packages/recorder --workspace=packages/server --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:tools": "vitest run",
     "typecheck": "npm run typecheck --workspaces --if-present",
