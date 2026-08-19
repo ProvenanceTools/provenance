@@ -91,17 +91,17 @@
  *
  * Cost: **O(N)** to bucket events and locate doors (one pass), **O(G + S)**
  * nodes, and a bitset reachability fixpoint over that small graph. No pass is
- * quadratic in N, and queries are O(1) after construction. See
- * `happens-before.bench.test.ts` for the measurement.
+ * quadratic in N, and queries are O(1) after construction.
+ *
+ * Measured: holding commits fixed at 100 and scaling events 10k → 200k moves
+ * construction from 4.4ms to 12.4ms (linear), while 100 → 800 commits at fixed
+ * event count is what actually costs (4.4ms → 260ms) — i.e. the expense tracks
+ * the small dimension by design. See the `performance` block in
+ * `happens-before.test.ts` for the guard rail.
  */
 
 import type { EventKind, HashedEnvelope } from '@provenance/log-core';
-import {
-  ASSUMED_SINGLE_REPOSITORY,
-  ancestorsOfCommit,
-  type ObservedDag,
-  type RepositoryKey,
-} from '../git/observed-dag.js';
+import { ancestorsOfCommit, type ObservedDag, type RepositoryKey } from '../git/observed-dag.js';
 import { compareContributors, type SessionContributor } from '../identity/types.js';
 
 // ---------------------------------------------------------------------------

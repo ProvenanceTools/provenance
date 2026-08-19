@@ -361,10 +361,21 @@ describe('L3 — wall clock generates nothing', () => {
 // Determinism
 // ---------------------------------------------------------------------------
 
-function allRefs(sessions: Sessions): EventRef[] {
-  const out: EventRef[] = [];
+/**
+ * Refs carrying `wall`, exactly as a real `IndexedEvent` does.
+ *
+ * The clock field is present ON PURPOSE. `presentationSort` is generic over
+ * `T extends EventRef`, so its real callers hand it whole events — and a
+ * regression that started keying the list on `wall` would be invisible to a
+ * fixture of bare `{sessionId, seq}` pairs. Mutation testing caught exactly that
+ * hole; the clock has to be reachable for the skew tests to mean anything.
+ */
+type WallRef = EventRef & { wall: string };
+
+function allRefs(sessions: Sessions): WallRef[] {
+  const out: WallRef[] = [];
   for (const [sessionId, events] of Object.entries(sessions)) {
-    for (const e of events) out.push({ sessionId, seq: e.seq });
+    for (const e of events) out.push({ sessionId, seq: e.seq, wall: e.wall });
   }
   return out;
 }
