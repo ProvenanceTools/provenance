@@ -101,6 +101,19 @@ export type StartSessionDeps = {
    */
   isOwnedByThisRoot?: (fsPath: string) => boolean;
   /**
+   * Ownership filter for a git REPOSITORY ROOT, used only by the git wiring.
+   *
+   * Separate from {@link isOwnedByThisRoot} because the two questions are not the
+   * same one: a file is owned by the assignment root that CONTAINS it, whereas a
+   * repository root normally CONTAINS the assignment root. Reusing the file
+   * predicate here dropped every `git.event` on nested-assignment layouts (spec
+   * §3 S14(a)). Callers pass `isRepoOwnedByRoot` from `session-router.ts`.
+   *
+   * Defaults to {@link isOwnedByThisRoot} so existing callers and tests that only
+   * supply the file predicate keep their current behaviour.
+   */
+  isRepoOwnedByThisRoot?: (repoRootFsPath: string) => boolean;
+  /**
    * Mount a status bar item for THIS session. Defaults to a no-op — extension.ts
    * mounts one global status bar, not one per session (plan decision 5).
    */
@@ -144,6 +157,7 @@ export function defaultHeartbeatDeps(): HeartbeatVscodeDeps {
 export async function startSession(deps: StartSessionDeps): Promise<ActiveSession> {
   const { assignmentRoot, manifest, extension, vscodeVersion, platform, clock } = deps;
   const isOwnedByThisRoot = deps.isOwnedByThisRoot ?? (() => true);
+  const isRepoOwnedByThisRoot = deps.isRepoOwnedByThisRoot ?? isOwnedByThisRoot;
   const ownDisposables: vscode.Disposable[] = [];
 
   // Optional per-session status bar. extension.ts mounts a single global status
@@ -156,37 +170,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   const provenanceDir = deps.provenanceDirOverride ?? path.join(assignmentRoot, '.provenance');
   await fsPromises.mkdir(provenanceDir, { recursive: true });
 
-  // Step 3b: Chain recovery — inspect the provenanceDir for a previous session.
-  // PRD §4.8: on extension crash → set prev_session_id. On corrupt log → quarantine.
-  const recovery = await recoverPreviousSession({
-    provenanceDir,
-    readSlogFile: async (p) => {
-      try {
-        const text = await fsPromises.readFile(p, 'utf8');
-        return { ok: true, text };
-      } catch (e) {
-        const code = (e as NodeJS.ErrnoException).code;
-        return { ok: false, reason: code === 'ENOENT' ? 'not_found' : 'read_error' };
-      }
-    },
-    rename: fsPromises.rename,
-    listSlogFiles: async (dir) => {
-      try {
-        const entries = await fsPromises.readdir(dir);
-        return entries.filter((f) => f.endsWith('.slog'));
-      } catch {
-        return [];
-      }
-    },
-    now: () => new Date(),
-  });
-
-  // Determine prev_session_id from recovery result.
-  // Only set for dangling sessions (crashes) — not for cleanly ended sessions.
-  const prevSessionId: string | null =
-    recovery.kind === 'previous_session_dangling' ? recovery.prevSessionId : null;
-
-  // Step 3b-bis: Resolve the course's capture policy from the ALREADY-VERIFIED
+  // Step 3b: Resolve the course's capture policy from the ALREADY-VERIFIED
   // manifest (program spec §4). Resolved exactly once, here, and passed down as
   // plain booleans: nothing on the event path may re-parse or re-verify anything,
   // because `doc.change` fires per keystroke.
@@ -236,6 +220,53 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
       console.warn(`[provenance] no session identity emitted: ${outcome.reason.kind}`);
     }
   }
+
+  // Step 3c-ter: Chain recovery — inspect the provenanceDir for a previous session.
+  // PRD §4.8: on extension crash → set prev_session_id. On corrupt log → quarantine.
+  //
+  // ORDERING: this used to run at step 3b, before the keypair and the identity
+  // existed. It now runs AFTER step 3c-bis because it needs this session's
+  // `student_ref` to tell our own `.slog` files from a partner's in a shared,
+  // committed `.provenance/` (git-collaboration spec §3 S9/S19/S22, Tier 0.1+0.2).
+  // Nothing between 3a and here depends on the recovery result, and `prevSessionId`
+  // is not consumed until step 3d, so the move is behaviour-preserving apart from
+  // the ownership gate itself.
+  //
+  // `ownStudentRef` is null whenever `buildSessionIdentity` did not emit — not
+  // enrolled, no keyring, lapsed cert. That is the common case today and it is
+  // handled explicitly inside `recoverPreviousSession`; it must never throw or
+  // block recording.
+  const recovery = await recoverPreviousSession({
+    provenanceDir,
+    readSlogFile: async (p) => {
+      try {
+        const text = await fsPromises.readFile(p, 'utf8');
+        return { ok: true, text };
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        return { ok: false, reason: code === 'ENOENT' ? 'not_found' : 'read_error' };
+      }
+    },
+    rename: fsPromises.rename,
+    listSlogFiles: async (dir) => {
+      try {
+        const entries = await fsPromises.readdir(dir);
+        return entries.filter((f) => f.endsWith('.slog'));
+      } catch {
+        return [];
+      }
+    },
+    now: () => new Date(),
+    ownStudentRef: identity?.enrollment.student_ref ?? null,
+  });
+
+  // Determine prev_session_id from recovery result.
+  // Only set for dangling sessions (crashes) — not for cleanly ended sessions.
+  // The session it names is now guaranteed to be one of THIS contributor's, so
+  // the back-pointer is a real intra-contributor chain link rather than "whoever
+  // wrote last by wall clock" (program spec §7 mechanism 1).
+  const prevSessionId: string | null =
+    recovery.kind === 'previous_session_dangling' ? recovery.prevSessionId : null;
 
   // Step 3d: Build recorder context (generates sessionId, machineId, etc.).
   const recorderContext = buildRecorderContext({
@@ -517,7 +548,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     emit: (d) => sessionHost.emit('git.event', d),
     getGitExtension: () => vscode.extensions.getExtension('vscode.git'),
     explanationTagger,
-    isOwnedByThisRoot,
+    isRepoOwnedByThisRoot,
   });
   ownDisposables.push(gitW);
 

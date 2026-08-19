@@ -124,11 +124,20 @@ export type GitWiringDeps = {
   /** If present, markGit() is called after each emitted git.event. */
   explanationTagger?: ExplanationTagger;
   /**
-   * Ownership filter: returns true if the given absolute fsPath belongs to THIS
-   * session's assignment root. Gates git.event emission by the repository's
-   * rootUri. Defaults to "always owned" when omitted.
+   * Ownership filter for a REPOSITORY ROOT — not for a file.
+   *
+   * The argument is always `repo.rootUri.fsPath`, and a repository root is
+   * normally an ANCESTOR of the assignment root it serves (one repo, one
+   * `.provenance/` per assignment beneath it). A file-containment predicate such
+   * as `resolveOwnerRoot(fsPath, roots) === root` therefore returns `null` for
+   * every repository above the assignment and silently drops 100% of this
+   * session's `git.event`s — spec §3 S14(a). Callers must supply
+   * `isRepoOwnedByRoot` from `session/session-router.ts`, which handles both
+   * directions.
+   *
+   * Defaults to "always owned" when omitted.
    */
-  isOwnedByThisRoot?: (fsPath: string) => boolean;
+  isRepoOwnedByThisRoot?: (repoRootFsPath: string) => boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -142,7 +151,7 @@ function inertWiring(): GitWiring {
 
 export function startGitWiring(deps: GitWiringDeps): GitWiring {
   const { emit, getGitExtension, explanationTagger } = deps;
-  const isOwnedByThisRoot = deps.isOwnedByThisRoot ?? (() => true);
+  const isRepoOwnedByThisRoot = deps.isRepoOwnedByThisRoot ?? (() => true);
 
   const gitExtension = getGitExtension();
   if (gitExtension === undefined) {
@@ -210,7 +219,7 @@ export function startGitWiring(deps: GitWiringDeps): GitWiring {
         // Ownership is a routing decision, so it is made BEFORE the graph read:
         // fetching the commit graph of a repo this session does not own is work
         // it should never do.
-        if (!isOwnedByThisRoot(repo.rootUri.fsPath)) {
+        if (!isRepoOwnedByThisRoot(repo.rootUri.fsPath)) {
           return;
         }
 
