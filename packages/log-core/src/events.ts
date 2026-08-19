@@ -4,6 +4,7 @@
  */
 
 import type { Manifest } from './manifest.js';
+import type { SessionIdentity } from './enrollment.js';
 
 // ---------------------------------------------------------------------------
 // Shared geometry types
@@ -43,37 +44,19 @@ export type HostInfo = {
 };
 
 /**
- * A course-signed statement that a student pubkey belongs to a student in a
- * course. Signed by the course key, which the root-signed `course_cert`
- * authorizes (program spec §2).
+ * The identity types now live in `enrollment.ts`, alongside the parse/sign/verify
+ * logic that gives them meaning, and are re-exported here so `session.start`
+ * readers keep importing them from one place.
  *
- * `student_ref` is an **opaque UUID, never a raw SID**. In a shared CS 61B repo
- * one partner can read the other's `session.start`; the server maps
- * `student_ref` → `roster_entries.id`, so a partner sees only a UUID.
- *
- * TYPES ONLY at this stage. Key derivation, token issuance, and the countersign
- * flow are S2 — nothing in `log-core` derives or validates these yet.
+ * They changed shape in S2. The earlier sketch had the COURSE key signing each
+ * enrollment token directly (`course_sig`), which cannot work: the course
+ * manifest-signing key is deliberately offline, and minting a token per student
+ * per semester is an on-demand server operation. An `enrollment_cert` — the
+ * course certifying a server-held enrollment key, exactly as the root certifies
+ * a course key — resolves that, so a token now carries `enrollment_sig` and the
+ * cert travels beside it. See `enrollment.ts` for the full chain.
  */
-export type EnrollmentToken = {
-  /** Opaque roster reference. Never a student ID number, name, or email. */
-  student_ref: string;
-  course_id: string;
-  /** Hex ed25519 public key of the student's per-course key. */
-  student_pubkey: string;
-  issued_at: string;
-  expires_at: string;
-  /** Hex ed25519 signature by the COURSE key over the token. */
-  course_sig: string;
-};
-
-export type SessionIdentity = {
-  enrollment: EnrollmentToken;
-  /**
-   * The student per-course key's signature over `session_pubkey`. This is the
-   * link that binds an ephemeral session key to a named contributor.
-   */
-  session_pubkey_sig: string;
-};
+export type { EnrollmentCert, EnrollmentToken, SessionIdentity } from './enrollment.js';
 
 export type SessionStartPayload = {
   format_version: string;
