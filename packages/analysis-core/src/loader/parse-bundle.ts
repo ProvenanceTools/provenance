@@ -12,15 +12,35 @@
  *   5. Assign a stable id via crypto.randomUUID() (WebCrypto, available in browsers + jsdom).
  *   6. Return Bundle.
  *
+ * TWO SEAL SHAPES. A classic bundle is sealed once into `manifest.json` +
+ * `manifest.sig`. A git-submitted bundle is ROLLING-sealed: one
+ * `manifest-<session_id>.json` + `.sig` per session, each covering only its own
+ * session and signed by that session's own key (program spec §8). Both are
+ * accepted here. For a rolling bundle `bundle.manifest` is the SYNTHESIZED union
+ * at `format_version: '1.2'` and `bundle.rollingSeal` carries the per-session
+ * seals that check 1 verifies individually. A bundle with no rolling manifests
+ * takes the identical path it always took and never gets a `rollingSeal`.
+ *
  * NOTE: signature verification is NOT done here — that is Phase 2
  * (validation/verify-manifest-sig.ts). The loader checks structure only.
  */
 
 import { validateBundleManifestShape, sha256Hex, ok, err } from '@provenance/log-core';
-import type { Result } from '@provenance/log-core';
+import type { BundleManifest, Result } from '@provenance/log-core';
 import { unzipBundle } from './unzip.js';
 import { parseSession } from './parse-session.js';
-import type { Bundle, LoaderError, SessionParseError } from './types.js';
+import {
+  validateRollingSeals,
+  reconcileRollingSealsWithSessions,
+  synthesizeRollingUnionManifest,
+} from './rolling-seal.js';
+import type {
+  Bundle,
+  BundleRollingSeal,
+  LoaderError,
+  RollingSealDefect,
+  SessionParseError,
+} from './types.js';
 
 // ---------------------------------------------------------------------------
 // Multi-bundle types
@@ -68,6 +88,7 @@ export async function loadBundle(
   const {
     manifestJson,
     manifestSigHex,
+    rollingSeals: rawRollingSeals,
     sessions: sessionFiles,
     submissionFiles: bundleSubmissionFiles,
   } = unzipResult.value;
@@ -80,31 +101,44 @@ export async function loadBundle(
   // Structural validation of manifest.json: invalid JSON or wrong shape both
   // surface as 'invalid_manifest' so callers can distinguish them from the
   // ZIP-itself-couldn't-be-read case.
-  let parsedManifestRaw: unknown;
-  try {
-    parsedManifestRaw = JSON.parse(manifestJson);
-  } catch (e) {
-    return err({
-      kind: 'invalid_manifest',
-      detail: `manifest.json is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
-    });
+  let classicManifest: BundleManifest | null = null;
+  if (manifestJson !== null) {
+    let parsedManifestRaw: unknown;
+    try {
+      parsedManifestRaw = JSON.parse(manifestJson);
+    } catch (e) {
+      return err({
+        kind: 'invalid_manifest',
+        detail: `manifest.json is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+
+    const manifestResult = validateBundleManifestShape(parsedManifestRaw);
+    if (!manifestResult.ok) {
+      const me = manifestResult.error;
+      const detail =
+        me.kind === 'not_object'
+          ? 'not_object'
+          : me.kind === 'wrong_version'
+            ? `wrong_version: ${String(me.actual)}`
+            : me.kind === 'missing_field'
+              ? `missing_field: ${me.field}`
+              : `invalid_field: ${me.field} — ${me.reason}`;
+      return err({ kind: 'invalid_manifest', detail: `manifest.json shape invalid: ${detail}` });
+    }
+
+    classicManifest = manifestResult.value;
   }
 
-  const manifestResult = validateBundleManifestShape(parsedManifestRaw);
-  if (!manifestResult.ok) {
-    const me = manifestResult.error;
-    const detail =
-      me.kind === 'not_object'
-        ? 'not_object'
-        : me.kind === 'wrong_version'
-          ? `wrong_version: ${String(me.actual)}`
-          : me.kind === 'missing_field'
-            ? `missing_field: ${me.field}`
-            : `invalid_field: ${me.field} — ${me.reason}`;
-    return err({ kind: 'invalid_manifest', detail: `manifest.json shape invalid: ${detail}` });
-  }
-
-  const manifest = manifestResult.value;
+  // ---------------------------------------------------------------------------
+  // Step 2b: Validate the rolling seals, if this bundle has any.
+  //
+  // Shape + the filename ↔ session_id binding only; the signatures need session
+  // public keys and are check 1's job. Defects never fail the load — see the
+  // module docstring of rolling-seal.ts.
+  // ---------------------------------------------------------------------------
+  const rollingValidation =
+    rawRollingSeals.length > 0 ? validateRollingSeals(rawRollingSeals) : null;
 
   // ---------------------------------------------------------------------------
   // Step 3: Parse all sessions in parallel (they are order-independent).
@@ -137,6 +171,72 @@ export async function loadBundle(
   );
 
   // ---------------------------------------------------------------------------
+  // Step 4b: Resolve the rolling seal against the sessions that actually parsed,
+  // and synthesize the union manifest.
+  //
+  // This has to happen after the sort: `submission_files` is merged in session
+  // order (oldest → newest), so the newest session's recorded hash for a file is
+  // the one the union carries. See synthesizeRollingUnionManifest.
+  // ---------------------------------------------------------------------------
+  let rollingSeal: BundleRollingSeal | undefined;
+  let unionManifest: BundleManifest | null = null;
+
+  if (rollingValidation !== null) {
+    const defects: RollingSealDefect[] = [...rollingValidation.defects];
+
+    defects.push(
+      ...reconcileRollingSealsWithSessions(
+        rawRollingSeals.map((s) => s.sessionId),
+        parsedSessions.map((s) => s.sessionId),
+        classicManifest !== null,
+      ),
+    );
+
+    const synthesized = synthesizeRollingUnionManifest(
+      rollingValidation.seals,
+      parsedSessions.map((s) => s.sessionId),
+    );
+    if (synthesized !== null) {
+      unionManifest = synthesized.manifest;
+      defects.push(...synthesized.defects);
+    }
+
+    rollingSeal = { seals: rollingValidation.seals, defects };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step 4c: Pick the manifest the rest of analysis-core reads.
+  //
+  // The classic `manifest.json` wins whenever it is present, so a classic bundle
+  // — and a bundle that carries both shapes — behaves exactly as it always has.
+  // The rolling seals of a both-shapes bundle are still verified by check 1
+  // alongside the classic signature; nothing is discarded.
+  // ---------------------------------------------------------------------------
+  const manifest = classicManifest ?? unionManifest;
+  if (manifest === null) {
+    // Rolling manifests were present but not one of them was usable, and there is
+    // no classic manifest either, so there is nothing to synthesize a manifest
+    // from. Report why, per file.
+    const why = (rollingSeal?.defects ?? []).map((d) => d.detail).join(' | ');
+    return err({
+      kind: 'invalid_manifest',
+      detail: `no usable manifest: every rolling manifest was rejected. ${why}`,
+    });
+  }
+
+  // A synthesized union must satisfy the same shape contract as an on-disk
+  // manifest. Cheap, and it stops a synthesis bug being mistaken for a bad bundle.
+  if (classicManifest === null) {
+    const unionShape = validateBundleManifestShape(manifest);
+    if (!unionShape.ok) {
+      return err({
+        kind: 'invalid_manifest',
+        detail: `synthesized rolling union manifest is not a valid manifest: ${unionShape.error.kind}`,
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Step 5: Build the submissionFiles map from manifest.submission_files.
   //
   // For each entry in the (optional) submission_files array, re-verify the
@@ -167,6 +267,7 @@ export async function loadBundle(
     id: crypto.randomUUID(),
     manifest,
     manifestSigHex,
+    ...(rollingSeal !== undefined ? { rollingSeal } : {}),
     sessions: parsedSessions,
     sourceFilename,
     loadedAt: nowFn(),

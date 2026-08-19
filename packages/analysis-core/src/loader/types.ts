@@ -13,6 +13,7 @@ import type {
   HashedEnvelope,
   SlogMeta,
   BundleManifest,
+  RollingSessionManifest,
   SessionStartPayload,
 } from '@provenance/log-core';
 
@@ -54,15 +55,108 @@ export type SessionFiles = {
   metaJson: string;
 };
 
+/**
+ * A raw `manifest-<session_id>.json` / `.sig` pair as the unzipper found it.
+ *
+ * Either half may be absent — the unzipper reports what is on disk and
+ * `loader/rolling-seal.ts` decides what that means. A candidate with both halves
+ * `null` is never produced.
+ */
+export type RawRollingSealFiles = {
+  /** Session id taken from the FILENAME, via `parseRollingManifestFilename`. */
+  sessionId: string;
+  /** Raw text of `manifest-<session_id>.json`, or null if that file is absent. */
+  manifestJson: string | null;
+  /** Trimmed hex from `manifest-<session_id>.sig`, or null if that file is absent. */
+  sigHex: string | null;
+};
+
 export type BundleFiles = {
-  /** Raw text content of manifest.json. */
-  manifestJson: string;
-  /** Raw hex content of manifest.sig. */
-  manifestSigHex: string;
+  /**
+   * Raw text content of the classic `manifest.json`.
+   *
+   * `null` only on a rolling-sealed bundle that carries no classic manifest. A
+   * bundle with neither a classic manifest nor any rolling manifest is rejected
+   * with `missing_manifest`, so this is never null without `rollingSeals` being
+   * non-empty.
+   */
+  manifestJson: string | null;
+  /** Raw hex content of the classic `manifest.sig`. `null` iff `manifestJson` is. */
+  manifestSigHex: string | null;
+  /**
+   * Rolling seal files found in the ZIP (program spec §8). Empty on a classic
+   * sealed bundle — `parseRollingManifestFilename` does not match
+   * `manifest.json`, so a classic bundle can never populate this.
+   */
+  rollingSeals: RawRollingSealFiles[];
   /** One entry per session pair found in the ZIP. */
   sessions: SessionFiles[];
   /** Raw bytes of each submitted file present in the zip, keyed by manifest path. */
   submissionFiles: Map<string, Uint8Array>;
+};
+
+// ---------------------------------------------------------------------------
+// Rolling seal (program spec §8, S3) — see loader/rolling-seal.ts
+// ---------------------------------------------------------------------------
+
+/**
+ * One session's on-disk rolling seal, shape-validated and bound to its filename.
+ *
+ * `manifest` has already passed `validateRollingSessionManifest`, so it covers
+ * exactly one session whose `session_id` equals `sessionId`.
+ */
+export type RollingSeal = {
+  /** Session id from the filename, which the manifest is proven to agree with. */
+  sessionId: string;
+  /** Raw text of the `.json` file, kept verbatim; never rewritten. */
+  manifestJson: string;
+  manifest: RollingSessionManifest;
+  /**
+   * Hex signature from `manifest-<session_id>.sig`, or `null` when that file is
+   * absent. A null signature is always accompanied by a `missing_sig` defect and
+   * makes check 1 fail: an unsigned manifest is not a seal.
+   */
+  sigHex: string | null;
+};
+
+/**
+ * Something wrong with a bundle's rolling seals.
+ *
+ * Defects do NOT fail the load — they are evidence, and the channel for evidence
+ * is the validation report. Check 1 (`manifest_sig`) reports every one of them.
+ * See the module docstring of `loader/rolling-seal.ts` for why.
+ */
+export type RollingSealDefect = {
+  /** The session named by the offending FILENAME. */
+  sessionId: string;
+  kind:
+    /** `.json` present, `.sig` absent — the manifest is unsigned. */
+    | 'missing_sig'
+    /** `.sig` present, `.json` absent — the sealed manifest was removed. */
+    | 'missing_manifest'
+    /** `.json` is not parseable JSON. */
+    | 'invalid_json'
+    /** `.json` fails `validateBundleManifestShape`. */
+    | 'invalid_shape'
+    /** `.json` is not a 1.2 single-session manifest. */
+    | 'not_rolling'
+    /** `.json` covers a different session than its filename names. */
+    | 'session_id_mismatch'
+    /** A seal names a session with no `.slog` in the bundle. */
+    | 'no_session_log'
+    /** A session's `.slog` is covered by no seal at all. */
+    | 'unsealed_session'
+    /** Two seals disagree on assignment_id / semester / extension_hash. */
+    | 'divergent_scope';
+  detail: string;
+};
+
+/** A bundle's rolling seals, as resolved by the loader. */
+export type BundleRollingSeal = {
+  /** Seals that passed shape + filename-binding validation, session order. */
+  seals: RollingSeal[];
+  /** Everything wrong with the seals. Check 1 reports all of these. */
+  defects: RollingSealDefect[];
 };
 
 // ---------------------------------------------------------------------------
@@ -110,9 +204,33 @@ export type Bundle = {
    * with a root public key says otherwise.
    */
   capturePolicyTrust?: CapturePolicyTrust;
+  /**
+   * The bundle's manifest.
+   *
+   * On a classic sealed bundle this is `manifest.json`, unchanged. On a
+   * rolling-sealed bundle (program spec §8) there is no `manifest.json`, and this
+   * is the SYNTHESIZED union at `format_version: '1.2'` spanning every
+   * per-session rolling manifest found — see `loader/rolling-seal.ts`. On a bundle
+   * carrying both, the classic manifest wins and the rolling seals are still
+   * verified alongside it.
+   */
   manifest: BundleManifest;
-  /** Hex-encoded ed25519 signature over canonical manifest JSON. */
-  manifestSigHex: string;
+  /**
+   * Hex-encoded ed25519 signature over canonical manifest JSON.
+   *
+   * `null` on a rolling-sealed bundle with no classic `manifest.sig`: there is no
+   * single bundle-wide signature there, because each session's manifest is signed
+   * by that session's own key. Those live in {@link Bundle.rollingSeal}.
+   */
+  manifestSigHex: string | null;
+  /**
+   * Present iff the bundle carried at least one `manifest-<session_id>.json`.
+   *
+   * `undefined` on a classic sealed bundle, which is what keeps the classic path
+   * byte-for-byte identical: every consumer that does not know about the rolling
+   * seal simply never sees it.
+   */
+  rollingSeal?: BundleRollingSeal;
   /** Sessions sorted oldest → newest by firstEvent.wall. */
   sessions: ParsedSession[];
   /** Original filename of the ZIP that was loaded. */

@@ -15,6 +15,7 @@ import {
   sha256Hex,
   canonicalize,
   serializeEntry,
+  rollingManifestFilenames,
   GENESIS_PREV_HASH,
 } from '@provenance/log-core';
 import type { BundleManifest, SlogMeta } from '@provenance/log-core';
@@ -66,9 +67,60 @@ export type SubmissionFileSpec = {
   manifestSha256Override?: string;
 };
 
+/**
+ * Build a ROLLING-sealed bundle (program spec §8) — `manifest-<session_id>.json`
+ * + `.sig` per session instead of a single `manifest.json`.
+ *
+ * When this is set, each session gets its OWN ed25519 keypair (a classic bundle
+ * keeps sharing one, unchanged) and each session's rolling manifest is signed by
+ * that session's own key — which is the property the reader has to enforce.
+ */
+export type RollingSealSpec = {
+  /**
+   * Also emit the classic `manifest.json` + `manifest.sig`, producing a bundle
+   * that carries BOTH seal shapes.
+   */
+  alsoClassic?: boolean;
+  tamper?: {
+    /** Session indices whose `manifest-<id>.sig` is omitted (unsigned manifest). */
+    omitSigFor?: number[];
+    /** Session indices whose `manifest-<id>.json` is omitted (stray sig). */
+    omitJsonFor?: number[];
+    /** Session indices whose rolling seal is omitted entirely (unsealed session). */
+    omitSealFor?: number[];
+    /**
+     * Emit a rolling seal naming a session id that has no `.slog` in the bundle.
+     * The manifest is a copy of session 0's with the id swapped, signed by
+     * session 0's key.
+     */
+    extraSealForSessionId?: string;
+    /**
+     * A SIDEWAYS COPY: write `manifestOfSessionIndex`'s manifest content under
+     * `sessionIndex`'s filenames, signed with `sessionIndex`'s OWN key.
+     *
+     * This is the adversarial case the filename ↔ session_id binding exists for:
+     * the signature verifies (right key, right bytes), so only
+     * `validateRollingSessionManifest(manifest, sessionIdFromFilename)` can catch
+     * it.
+     */
+    sidewaysCopyFor?: { sessionIndex: number; manifestOfSessionIndex: number };
+    /** Sign one session's rolling manifest with a DIFFERENT session's key. */
+    signWithKeyOf?: { sessionIndex: number; keyOfSessionIndex: number };
+    /** Replace one session's `manifest-<id>.json` with arbitrary text. */
+    replaceJsonFor?: { sessionIndex: number; text: string };
+    /** Override `assignment_id` in one session's rolling manifest. */
+    assignmentIdFor?: { sessionIndex: number; assignmentId: string };
+  };
+};
+
 export type BuildBundleOpts = {
   assignmentId?: string;
   semester?: string;
+  /**
+   * Emit a rolling seal (program spec §8) rather than / as well as the classic
+   * `manifest.json`. See {@link RollingSealSpec}.
+   */
+  rollingSeal?: RollingSealSpec;
   /**
    * Submission files to include (makes this a 1.1 bundle).
    * If undefined, the manifest is 1.0 and no submission_files are present.
@@ -172,6 +224,16 @@ export type BuiltBundle = {
   manifest: BundleManifest;
   /** Hex-encoded ed25519 private key used to sign the manifest. */
   sessionPrivkeyHex: string;
+  /**
+   * Session ids in build order (index 0 = first session spec). Handy for asserting
+   * against rolling-seal filenames and per-session check details.
+   */
+  sessionIds: string[];
+  /**
+   * The per-session rolling manifests actually emitted, keyed by session id.
+   * Empty unless `rollingSeal` was requested.
+   */
+  rollingManifests: Map<string, BundleManifest>;
 };
 
 // ---------------------------------------------------------------------------
@@ -359,11 +421,25 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
   const sessionSpecs = opts?.sessions ?? [{}];
   const tamper = opts?.tamper ?? {};
 
+  const rollingSpec = opts?.rollingSeal;
+
   // Generate one keypair shared across sessions (manifest sig is all that matters here).
   const privkey = ed.utils.randomSecretKey();
   const pubkey = await ed.getPublicKeyAsync(privkey);
   const pubkeyHex = bytesToHex(pubkey);
   const sessionPrivkeyHex = bytesToHex(privkey);
+
+  // A ROLLING-sealed bundle gets one keypair PER SESSION, because that is the
+  // real thing: each session signs its own manifest with its own ephemeral key,
+  // and in a shared 61B repo a partner's sessions carry a partner's keys. A
+  // classic bundle keeps the single shared keypair above, unchanged.
+  const perSessionKeys: Array<{ privkey: Uint8Array; pubkeyHex: string }> = [];
+  if (rollingSpec !== undefined) {
+    for (let i = 0; i < sessionSpecs.length; i++) {
+      const sk = ed.utils.randomSecretKey();
+      perSessionKeys.push({ privkey: sk, pubkeyHex: bytesToHex(await ed.getPublicKeyAsync(sk)) });
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // 1. Build each session's slog + meta.
@@ -386,7 +462,7 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
     const { slogText, metaJson } = await buildSession({
       sessionId,
       sessionIndex: i,
-      pubkeyHex,
+      pubkeyHex: perSessionKeys[i]?.pubkeyHex ?? pubkeyHex,
       eventCount,
       ...(walls !== undefined ? { walls } : {}),
       assignmentId,
@@ -617,22 +693,132 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
 
   // ---------------------------------------------------------------------------
   // 4. Sign manifest.
+  //
+  // A rolling bundle's sessions have their own keys, so the shared `privkey`
+  // would match nothing. Sign the classic manifest with the LAST session's key,
+  // which is what the real seal command does (the active session signs).
   // ---------------------------------------------------------------------------
+  const classicSigningKey =
+    perSessionKeys.length > 0 ? perSessionKeys[perSessionKeys.length - 1]!.privkey : privkey;
   const canonicalManifest = canonicalize(manifest);
   const canonicalBytes = new TextEncoder().encode(canonicalManifest);
-  const sigBytes = await ed.signAsync(canonicalBytes, privkey);
+  const sigBytes = await ed.signAsync(canonicalBytes, classicSigningKey);
   const sigHex = bytesToHex(sigBytes);
+
+  // ---------------------------------------------------------------------------
+  // 4b. Build + sign the per-session ROLLING manifests (program spec §8).
+  //
+  // Each one covers exactly its own session and is signed by that session's own
+  // key. The tamper options deliberately produce the adversarial shapes the
+  // reader has to refuse.
+  // ---------------------------------------------------------------------------
+  const rollingManifests = new Map<string, BundleManifest>();
+  /** filename → text, applied to the zip below. */
+  const rollingFiles = new Map<string, string>();
+
+  if (rollingSpec !== undefined) {
+    const rTamper = rollingSpec.tamper ?? {};
+
+    /** Build session i's own rolling manifest. */
+    const rollingManifestFor = (i: number): BundleManifest => {
+      const s = sessions[i]!;
+      return {
+        format_version: '1.2',
+        assignment_id:
+          rTamper.assignmentIdFor?.sessionIndex === i
+            ? rTamper.assignmentIdFor.assignmentId
+            : assignmentId,
+        semester,
+        extension_hash: 'a'.repeat(64),
+        sessions: [
+          {
+            session_id: s.sessionId,
+            prev_session_id: null,
+            slog_sha256: s.slogSha256,
+            meta_sha256: s.metaSha256,
+          },
+        ],
+        submission_files: submissionEntries,
+      };
+    };
+
+    for (let i = 0; i < sessions.length; i++) {
+      if (rTamper.omitSealFor?.includes(i) === true) continue;
+
+      const sessionId = sessions[i]!.sessionId;
+      const names = rollingManifestFilenames(sessionId);
+
+      // A sideways copy: another session's manifest content under THIS session's
+      // filenames, signed with THIS session's own key. The signature is valid, so
+      // only the filename ↔ session_id binding can catch it.
+      const contentIndex =
+        rTamper.sidewaysCopyFor?.sessionIndex === i
+          ? rTamper.sidewaysCopyFor.manifestOfSessionIndex
+          : i;
+      const rolling = rollingManifestFor(contentIndex);
+      rollingManifests.set(sessionId, rolling);
+
+      const canonicalRolling = canonicalize(rolling);
+      const signingIndex =
+        rTamper.signWithKeyOf?.sessionIndex === i ? rTamper.signWithKeyOf.keyOfSessionIndex : i;
+      const rollingSigHex = bytesToHex(
+        await ed.signAsync(
+          new TextEncoder().encode(canonicalRolling),
+          perSessionKeys[signingIndex]!.privkey,
+        ),
+      );
+
+      if (rTamper.omitJsonFor?.includes(i) !== true) {
+        rollingFiles.set(
+          names.json,
+          rTamper.replaceJsonFor?.sessionIndex === i
+            ? rTamper.replaceJsonFor.text
+            : canonicalRolling,
+        );
+      }
+      if (rTamper.omitSigFor?.includes(i) !== true) {
+        rollingFiles.set(names.sig, rollingSigHex);
+      }
+    }
+
+    // A seal naming a session that has no .slog in this bundle.
+    if (rTamper.extraSealForSessionId !== undefined) {
+      const ghostId = rTamper.extraSealForSessionId;
+      const base = rollingManifestFor(0);
+      const ghost: BundleManifest = {
+        ...base,
+        sessions: [{ ...base.sessions[0]!, session_id: ghostId }],
+      };
+      const names = rollingManifestFilenames(ghostId);
+      const canonicalGhost = canonicalize(ghost);
+      rollingFiles.set(names.json, canonicalGhost);
+      rollingFiles.set(
+        names.sig,
+        bytesToHex(
+          await ed.signAsync(new TextEncoder().encode(canonicalGhost), perSessionKeys[0]!.privkey),
+        ),
+      );
+      rollingManifests.set(ghostId, ghost);
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // 5. Build ZIP, applying tamper mutations.
   // ---------------------------------------------------------------------------
   const zip = new JSZip();
 
-  if (!tamper.omitManifest) {
+  // A rolling-sealed bundle has no classic manifest at all unless the test asks
+  // for the both-shapes case.
+  const emitClassic = rollingSpec === undefined || rollingSpec.alsoClassic === true;
+
+  if (emitClassic && !tamper.omitManifest) {
     zip.file('manifest.json', canonicalManifest);
   }
-  if (!tamper.omitSig) {
+  if (emitClassic && !tamper.omitSig) {
     zip.file('manifest.sig', sigHex);
+  }
+  for (const [name, text] of rollingFiles) {
+    zip.file(name, text);
   }
 
   if (!tamper.omitAllSlogs) {
@@ -673,5 +859,12 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
   const zipBuffer = await zip.generateAsync({ type: 'arraybuffer' });
   const blob = new Blob([zipBuffer], { type: 'application/zip' });
 
-  return { blob, zipBuffer, manifest, sessionPrivkeyHex };
+  return {
+    blob,
+    zipBuffer,
+    manifest,
+    sessionPrivkeyHex,
+    sessionIds: sessions.map((s) => s.sessionId),
+    rollingManifests,
+  };
 }

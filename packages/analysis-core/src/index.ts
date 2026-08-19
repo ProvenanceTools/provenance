@@ -3,6 +3,7 @@
 // "@provenance/analysis-core/loader/parse-bundle.js") or from this barrel.
 
 export * from './loader/parse-bundle.js';
+export * from './loader/rolling-seal.js';
 export * from './loader/types.js';
 export * from './manifest/bundle-manifest.js';
 export * from './validation/run-validation.js';
