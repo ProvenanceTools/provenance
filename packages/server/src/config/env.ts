@@ -158,6 +158,18 @@ const rawEnvSchema = z.object({
   SOCKET_PATH: z.string().optional(),
   // Directory of the built analyzer SPA served from the same origin as the API.
   PUBLIC_DIR: z.string().min(1).default('./public'),
+  /**
+   * Hex ed25519 ROOT public key of the Manifest 2.0 trust chain (program spec
+   * §2). Used by validation check 2 to verify a bundle's `course_cert` offline.
+   *
+   * Optional: an unset key makes check 2 report `skipped` for 2.0 bundles
+   * rather than guessing, and is ignored entirely for 1.0/1.1 bundles, which
+   * carry no chain to walk. Empty string means "not configured".
+   */
+  PROVENANCE_ROOT_PUBLIC_KEY_HEX: z
+    .string()
+    .regex(/^([0-9a-f]{64})?$/, 'must be 64 lowercase hex chars, or empty')
+    .default(''),
   // Storage quota watched by the hourly quota-check cron (default 1 TiB).
   STORAGE_QUOTA_BYTES: intStr(1099511627776),
   STORAGE_QUOTA_WARN_PCT: intStr(80),

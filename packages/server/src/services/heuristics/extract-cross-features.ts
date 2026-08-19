@@ -28,6 +28,8 @@ import type {
   CrossPasteFeature,
 } from '@provenance/analysis-core/heuristics/cross/types.js';
 import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
+import type { Bundle } from '@provenance/analysis-core/loader/types.js';
+import { resolveBundleCapturePolicy } from '@provenance/analysis-core/manifest/bundle-manifest.js';
 
 export type ExtractedCrossFeatures = {
   features: CrossSubmissionFeatures;
@@ -52,6 +54,16 @@ export function extractCrossFeaturesFromIndex(
   index: EventIndex,
   submissionId: string,
   bundleId: string,
+  /**
+   * The parsed bundle the index came from, used only to read the recorded
+   * capture policy. Optional so callers holding an index alone keep working;
+   * absent means "nothing disabled", which is the truth for every 1.x bundle.
+   *
+   * editing_pattern_clone needs this: a course that switches a gated event kind
+   * off shrinks the kind alphabet the fingerprint is built from, which inflates
+   * Jaccard similarity across the whole cohort at once.
+   */
+  bundle?: Bundle,
 ): ExtractedCrossFeatures {
   const ordered = index.ordered;
 
@@ -95,6 +107,9 @@ export function extractCrossFeaturesFromIndex(
     kindNgrams,
     eventCount: ordered.length,
     representativeSeqKeys,
+    ...(bundle === undefined
+      ? {}
+      : { disabledCaptureSignals: resolveBundleCapturePolicy(bundle).disabledSignals }),
   };
 
   return { features, globalIdxBySeqKey };

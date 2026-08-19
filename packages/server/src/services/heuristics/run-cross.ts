@@ -145,11 +145,12 @@ export async function runAndStoreCrossHeuristics(
 
   for (const subRow of submissionRows) {
     const bundleId = crypto.randomUUID();
-    const { index } = await loadSubmissionIndex(db, storage, subRow.id);
+    const { bundle, index } = await loadSubmissionIndex(db, storage, subRow.id);
     const { features: f, globalIdxBySeqKey } = extractCrossFeaturesFromIndex(
       index,
       subRow.id,
       bundleId,
+      bundle,
     );
     features.push(f);
     bundleIdToSubmissionId.set(bundleId, subRow.id);

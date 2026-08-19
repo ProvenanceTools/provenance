@@ -13,7 +13,7 @@
  * but we still guard against null index/validationReport for type safety.
  */
 
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useBundle } from '../../context/BundleContext.js';
 import { Actions } from './Actions.js';
@@ -23,6 +23,10 @@ import { FlagDashboardPanel } from './FlagDashboardPanel.js';
 import { toFlagViewFromLocal, type SupportingRef } from './flag-view.js';
 import { collectActiveExtensions } from '../../extensions/collect-active-extensions.js';
 import { ActiveExtensionsCard } from '../../extensions/ActiveExtensionsCard.js';
+import { AssignmentManifestCard } from '../../components/AssignmentManifestCard.js';
+import { summarizeBundleManifest } from '@provenance/analysis-core/manifest/bundle-manifest.js';
+import type { BundleManifestSummary } from '@provenance/analysis-core/manifest/bundle-manifest.js';
+import { getRootPublicKeyHex } from '../../lib/root-key.js';
 
 export function OverviewView() {
   const { bundles, selectedBundleId, index, validationReport, flags } = useBundle();
@@ -48,6 +52,26 @@ export function OverviewView() {
     () => flags.map((flag) => toFlagViewFromLocal(flag, index)),
     [flags, index],
   );
+
+  // Manifest 2.0 metadata. Computed here rather than in BundleContext because
+  // it is the only async, display-only derivation in the view and no other
+  // consumer needs it; a bad or absent manifest must never block the overview
+  // from rendering, hence the local state + null default.
+  const activeBundle = bundles.find((b) => b.id === selectedBundleId) ?? bundles[0];
+  const [manifestSummary, setManifestSummary] = useState<BundleManifestSummary | null>(null);
+  useEffect(() => {
+    if (activeBundle === undefined) {
+      setManifestSummary(null);
+      return;
+    }
+    let cancelled = false;
+    void summarizeBundleManifest(activeBundle, getRootPublicKeyHex()).then((summary) => {
+      if (!cancelled) setManifestSummary(summary);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBundle]);
 
   // Session id → 1-based ordinal, so the drawer can say "Session 2" rather than
   // a truncated uuid. Bundle order is chronological.
@@ -77,6 +101,7 @@ export function OverviewView() {
       <Actions />
       <ValidationReportPanel report={validationReport} />
       <SummaryStatsPanel index={index} bundle={bundle} />
+      <AssignmentManifestCard manifest={manifestSummary ?? undefined} />
       <ActiveExtensionsCard extensions={activeExtensions} />
       <FlagDashboardPanel
         flags={flagViews}

@@ -15,6 +15,7 @@
 
 import type { Bundle } from '../loader/types.js';
 import type { ValidationCheck, ValidationReport } from './check-types.js';
+import type { SessionBindingOptions } from './verify-session-binding.js';
 import { verifyManifestSig } from './verify-manifest-sig.js';
 import { verifySessionBinding } from './verify-session-binding.js';
 import { verifyChain } from './verify-chain.js';
@@ -38,10 +39,23 @@ function computeOverall(checks: ValidationCheck[]): 'pass' | 'warn' | 'fail' {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function runValidation(bundle: Bundle): Promise<ValidationReport> {
-  // Checks 1 (async) and 2–7 (sync) run in spec order.
+/**
+ * Options threaded into the individual checks.
+ *
+ * `rootPubkeyHex` is the ROOT public key of the Manifest 2.0 trust chain, used
+ * by check 2. It is a parameter and never a constant in this package —
+ * `analysis-core` is isomorphic and must stay pure, and one deployment's root
+ * key is not another's. 1.x bundles ignore it entirely.
+ */
+export type ValidationOptions = SessionBindingOptions;
+
+export async function runValidation(
+  bundle: Bundle,
+  options: ValidationOptions = {},
+): Promise<ValidationReport> {
+  // Checks 1–2 (async) and 3–8 (sync) run in spec order.
   const check1 = await verifyManifestSig(bundle);
-  const check2 = verifySessionBinding(bundle);
+  const check2 = await verifySessionBinding(bundle, options);
   const check3 = verifyChain(bundle);
   const check4 = verifySeq(bundle);
   const check5 = verifyMonotonicT(bundle);

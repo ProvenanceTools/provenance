@@ -42,6 +42,37 @@ import type {
 } from './types.js';
 import { NGRAM_SIZE } from './features.js';
 
+/**
+ * Capture signals whose absence changes the event-KIND alphabet this heuristic
+ * fingerprints. `inline_content` is deliberately not here: it strips content
+ * fields off `paste` / `fs.external_change` payloads without removing the
+ * events, so the kind stream is untouched.
+ */
+const KIND_STREAM_SIGNALS = ['selection_change', 'focus_change', 'terminal', 'doc_open_close'];
+
+/**
+ * Does this submission's recorded capture policy distort the kind-stream
+ * fingerprint?
+ *
+ * The absence-vs-disabled rule (program spec §4) bites hard here. Jaccard over
+ * 3-grams of the event-kind stream measures similarity against the size of the
+ * kind alphabet: switch `selection.change` and `terminal.*` off and the alphabet
+ * shrinks, the 3-gram vocabulary collapses toward "type, save, type, save", and
+ * two students who have never met start scoring above the threshold. Because a
+ * whole course shares one policy, that inflation would hit every pair in the
+ * cohort at once — a cross-submission flag storm manufactured entirely by the
+ * professor's capture settings.
+ *
+ * Renormalising the threshold per alphabet is a tuning decision, not a coding
+ * one, so this heuristic takes the conservative reading the rule prescribes and
+ * returns not-applicable for the affected submissions instead.
+ */
+function fingerprintIsPolicyDistorted(features: CrossSubmissionFeatures): boolean {
+  const disabled = features.disabledCaptureSignals;
+  if (disabled === undefined) return false;
+  return disabled.some((s) => KIND_STREAM_SIGNALS.includes(s));
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -83,6 +114,11 @@ function run(features: CrossSubmissionFeatures[], config: CrossHeuristicConfig):
     for (let j = i + 1; j < eligible.length; j++) {
       const aEntry = eligible[i]!;
       const bEntry = eligible[j]!;
+
+      // Absence-vs-disabled (program spec §4): one policy-distorted fingerprint
+      // is enough to make the comparison meaningless in the false-positive
+      // direction, so the whole pair is not-applicable.
+      if (fingerprintIsPolicyDistorted(aEntry) || fingerprintIsPolicyDistorted(bEntry)) continue;
 
       const score = jaccard(aEntry.kindNgrams, bEntry.kindNgrams);
       if (score < threshold) continue;

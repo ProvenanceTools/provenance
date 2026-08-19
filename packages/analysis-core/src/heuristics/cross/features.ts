@@ -20,6 +20,7 @@
 import type { Bundle } from '../../loader/types.js';
 import type { EventIndex } from '../../index/event-index.js';
 import type { CrossSubmissionFeatures, CrossPasteFeature } from './types.js';
+import { resolveBundleCapturePolicy } from '../../manifest/bundle-manifest.js';
 
 /** 3-gram size for the editing-pattern kind-stream fingerprint. */
 export const NGRAM_SIZE = 3;
@@ -76,5 +77,6 @@ export function extractCrossFeatures(bundle: Bundle, index: EventIndex): CrossSu
     representativeSeqKeys: index.ordered
       .slice(0, REPRESENTATIVE_EVENT_COUNT)
       .map((e) => `${e.sessionId}:${e.seq}`),
+    disabledCaptureSignals: resolveBundleCapturePolicy(bundle).disabledSignals,
   };
 }

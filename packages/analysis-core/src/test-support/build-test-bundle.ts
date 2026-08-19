@@ -86,6 +86,15 @@ export type BuildBundleOpts = {
     /** Override session.start.data.recorder.extension_id (recorder identity). Defaults to 'provenance.recorder'. */
     extensionId?: string;
     /**
+     * Shallow-merged into `session.start.data` before the entry is chained.
+     *
+     * This is how a test builds a Manifest 2.0 bundle: set
+     * `{ format_version: '2.0', manifest, manifest_sig: manifest.sig, host }`.
+     * The merge happens BEFORE chaining, so the resulting bundle is chain- and
+     * signature-consistent (unlike the `tamper.*` options, which patch after).
+     */
+    sessionStart?: Record<string, unknown>;
+    /**
      * If true, append a doc.save event at the end whose sha256 matches the
      * in-memory content built by the doc.change events. Used for check 7 tests.
      */
@@ -198,6 +207,7 @@ async function buildSession(opts: {
   events?: EventSpec[];
   machineId?: string;
   extensionId?: string;
+  sessionStart?: Record<string, unknown>;
 }): Promise<{ slogText: string; metaJson: string }> {
   const {
     sessionId,
@@ -211,6 +221,7 @@ async function buildSession(opts: {
     events: explicitEvents,
     machineId,
     extensionId,
+    sessionStart,
   } = opts;
 
   const lines: string[] = [];
@@ -232,6 +243,7 @@ async function buildSession(opts: {
       vscode: { version: '1.90.0', commit: '', platform: 'darwin' },
       recorder: { version: '0.0.1', extension_id: extensionId ?? 'provenance.recorder' },
       session_pubkey: pubkeyHex,
+      ...(sessionStart ?? {}),
     },
   };
 
@@ -383,6 +395,7 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
       ...(spec.events !== undefined ? { events: spec.events } : {}),
       ...(spec.machineId !== undefined ? { machineId: spec.machineId } : {}),
       ...(spec.extensionId !== undefined ? { extensionId: spec.extensionId } : {}),
+      ...(spec.sessionStart !== undefined ? { sessionStart: spec.sessionStart } : {}),
     });
 
     sessions.push({

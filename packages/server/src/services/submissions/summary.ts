@@ -33,6 +33,8 @@ import {
 import type { DrizzleDb } from '../../db/client.js';
 import type { StorageClient } from '../storage/client.js';
 import { loadSubmissionIndex } from '../bundle/load-index.js';
+import { summarizeBundleManifest } from '@provenance/analysis-core/manifest/bundle-manifest.js';
+import type { BundleManifestSummary } from '@provenance/analysis-core/manifest/bundle-manifest.js';
 import { projectStudent, maskFilename, protectedLabel } from '../protect.js';
 
 // ---------------------------------------------------------------------------
@@ -65,6 +67,18 @@ export type SubmissionSummary = {
    */
   sessions: { session_id: string; started_at: string | null; event_count: number }[];
   files: { path: string; final_length: number; saves: number }[];
+  /**
+   * The assignment manifest carried inside the bundle (program spec §3).
+   *
+   * Derived from the same `loadSubmissionIndex` call that produces
+   * `session_ids`, so it costs no extra query and no extra blob parse. For a
+   * 1.0/1.1 bundle this is the "nothing recorded" shape: `format_version:
+   * '1.x'`, every field null, no disabled signals, `trust_chain: 'legacy'`.
+   *
+   * Staff need `disabled_signals` in particular: it is what tells them a signal
+   * is absent by course policy rather than by student omission.
+   */
+  assignment_manifest: BundleManifestSummary;
   superseded: boolean;
   superseded_by_submission_id: string | null;
   heuristic_config_version: number;
@@ -109,6 +123,14 @@ export async function getSubmissionSummary(
   storage: StorageClient,
   submissionId: string,
   protectedMode: boolean,
+  /**
+   * Manifest 2.0 ROOT public key, for the `assignment_manifest.trust_chain`
+   * verdict. A parameter rather than a config read so this service stays
+   * testable without a full env; the route supplies `rootPublicKeyHex()`.
+   * Omitted means the chain is reported as `unconfigured` for 2.0 bundles and
+   * `legacy` for 1.x ones.
+   */
+  rootPubkeyHex?: string,
 ): Promise<SubmissionSummary | null> {
   // Query 1: core submission + assignment + student JOINs
   const rows = await db
@@ -164,6 +186,7 @@ export async function getSubmissionSummary(
   // Query 3: session_ids from the stored bundle's sessions (events are no longer
   // persisted in Postgres; the bundle blob is the source of the event stream).
   const { bundle, index } = await loadSubmissionIndex(db, storage, submissionId);
+  const assignment_manifest = await summarizeBundleManifest(bundle, rootPubkeyHex);
   const session_ids = bundle.sessions.map((s) => s.sessionId);
   const sessions = bundle.sessions.map((s) => ({
     session_id: s.sessionId,
@@ -233,6 +256,7 @@ export async function getSubmissionSummary(
     session_ids,
     sessions,
     files,
+    assignment_manifest,
     superseded: row.superseded_by_submission_id !== null,
     superseded_by_submission_id: row.superseded_by_submission_id,
     heuristic_config_version: row.heuristic_config_version,

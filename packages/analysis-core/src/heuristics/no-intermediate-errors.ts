@@ -32,6 +32,7 @@ import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
+import { isSignalCaptured } from '../manifest/bundle-manifest.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -45,7 +46,13 @@ function flagId(prefix: string, sessionId: string, idx: number): string {
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, _config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, _config: HeuristicConfig): Flag[] {
+  // Absence-vs-disabled (program spec §4). With terminal capture switched off
+  // there are no terminal.open / terminal.command events to reason about, and
+  // "no non-zero exit codes were observed" would be an artefact of policy
+  // rather than of how the student worked.
+  if (!isSignalCaptured(bundle, 'terminal')) return [];
+
   const flags: Flag[] = [];
   let flagIndex = 0;
 

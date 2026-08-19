@@ -28,6 +28,7 @@ import { authorize } from '../../../auth/authorize.js';
 import { findMembership } from '../../../auth/membership-cache.js';
 import { resolveSemesterFromSubmission } from '../../../services/submissions/resolve.js';
 import { getSubmissionSummary } from '../../../services/submissions/summary.js';
+import { rootPublicKeyHex } from '../../../config/root-key.js';
 import { getSubmissionFlags } from '../../../services/submissions/flags.js';
 import { getSubmissionStats } from '../../../services/submissions/stats.js';
 import { getSubmissionValidation } from '../../../services/submissions/validation.js';
@@ -80,7 +81,13 @@ export function createSubmissionsRouter(): Hono {
 
     const protectedMode = principal.user.protected;
     const summaryStorage = getStorageClient();
-    const summary = await getSubmissionSummary(db, summaryStorage, submissionId, protectedMode);
+    const summary = await getSubmissionSummary(
+      db,
+      summaryStorage,
+      submissionId,
+      protectedMode,
+      rootPublicKeyHex(),
+    );
     if (summary === null) {
       return c.json(Errors.notFound().toBody(), 404);
     }

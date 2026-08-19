@@ -79,6 +79,7 @@ import type { ServerHeuristicConfig } from '../heuristics/config.js';
 import { reconstructBundleFromDb } from '../heuristics/reconstruct-bundle.js';
 import { runValidation } from '@provenance/analysis-core/validation/run-validation.js';
 import { runAndStoreValidation } from '../ingest/validation.js';
+import { configuredValidationOptions } from '../../config/root-key.js';
 import { computeAndStoreStats } from '../ingest/stats.js';
 import { computeScore } from './compute.js';
 import { computeFlagCounts, computeTopFlags } from './denorm.js';
@@ -281,9 +282,10 @@ export async function recomputeSubmission(
   //
   // simulate = dry-run: compute the report but persist nothing.
   // -------------------------------------------------------------------------
+  const validationOptions = configuredValidationOptions();
   const validationReport = simulate
-    ? await runValidation(bundle)
-    : await runAndStoreValidation(db, submissionId, bundle);
+    ? await runValidation(bundle, validationOptions)
+    : await runAndStoreValidation(db, submissionId, bundle, validationOptions);
 
   // -------------------------------------------------------------------------
   // Step 2: Build EventIndex and run heuristics.

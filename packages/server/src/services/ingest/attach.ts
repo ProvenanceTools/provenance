@@ -56,6 +56,7 @@ import { parseBundlePhase } from './parse-bundle-phase.js';
 import { createSubmission } from './create-submission.js';
 import { computeAndStoreStats } from './stats.js';
 import { runAndStoreValidation } from './validation.js';
+import { configuredValidationOptions } from '../../config/root-key.js';
 import { runAndStoreHeuristics } from '../heuristics/run-per-submission.js';
 import { enqueueCrossFlagsJob } from '../../jobs/recompute-cross-flags.js';
 import { Errors } from '../../api/v1/errors.js';
@@ -275,7 +276,12 @@ export async function attachUnmatchedFile(
 
     let validationReport;
     try {
-      validationReport = await runAndStoreValidation(tx, submissionResult.submissionId, bundle);
+      validationReport = await runAndStoreValidation(
+        tx,
+        submissionResult.submissionId,
+        bundle,
+        configuredValidationOptions(),
+      );
     } catch (e) {
       const cause = e instanceof Error ? e.message : String(e);
       throw Object.assign(new Error(cause), { phase: 'run_validation' as const });

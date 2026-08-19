@@ -601,6 +601,54 @@ export const CrossFlagSummarySchema = z.object({
 });
 export type CrossFlagSummary = z.infer<typeof CrossFlagSummarySchema>;
 
+/**
+ * The assignment manifest carried inside the submission's bundle (program spec
+ * §3, Manifest 2.0).
+ *
+ * Every field is nullable or defaulted so a 1.0/1.1 submission — which carries
+ * no manifest inside the bundle at all — round-trips as the "nothing recorded"
+ * shape rather than as an error. `disabled_signals` is the load-bearing one for
+ * staff: it says which capture signals are absent by COURSE POLICY rather than
+ * by student omission, which is the difference between "they never opened a
+ * terminal" and "this course does not record terminals".
+ */
+export const AssignmentManifestSchema = z.object({
+  /** '1.x' for every pre-2.0 bundle — 1.0 and 1.1 are indistinguishable from inside. */
+  format_version: z.enum(['1.x', '2.0']),
+  course_id: z.string().nullable(),
+  collaboration: z.enum(['solo', 'group']).nullable(),
+  submission: z.enum(['bundle', 'git']).nullable(),
+  scope: z.enum(['directory', 'repo']).nullable(),
+  /** Gated capture signals the course switched off. Empty for 1.x. */
+  disabled_signals: z.array(
+    z.enum(['selection_change', 'focus_change', 'terminal', 'doc_open_close', 'inline_content']),
+  ),
+  heartbeat_interval_ms: z.number().int(),
+  /**
+   * The root-signed course certificate. `in_window` is evaluated against the
+   * manifest's `issued_at`, never wall-clock now: a Fall 2026 bundle must still
+   * verify in 2028 for an adjudication case.
+   */
+  cert: z
+    .object({
+      course_id: z.string(),
+      course_pubkey: z.string(),
+      valid_from: z.string(),
+      valid_until: z.string(),
+      in_window: z.boolean(),
+      window_reason: z.string().nullable(),
+    })
+    .nullable(),
+  /**
+   * 'legacy' — a 1.x bundle, no chain to walk.
+   * 'unconfigured' — a 2.0 bundle, but the server has no root public key set.
+   * 'verified' / 'invalid' — the chain was walked.
+   */
+  trust_chain: z.enum(['legacy', 'unconfigured', 'verified', 'invalid']),
+  trust_chain_detail: z.string().nullable(),
+});
+export type AssignmentManifest = z.infer<typeof AssignmentManifestSchema>;
+
 export const SubmissionSummarySchema = z.object({
   id: z.string().uuid(),
   student: z.object({
@@ -637,6 +685,12 @@ export const SubmissionSummarySchema = z.object({
       }),
     )
     .optional(),
+  /**
+   * Manifest 2.0 metadata read out of the bundle. Optional so a client talking
+   * to a server that predates it keeps parsing; absent is read the same as a
+   * 1.x manifest.
+   */
+  assignment_manifest: AssignmentManifestSchema.optional(),
 });
 export type SubmissionSummary = z.infer<typeof SubmissionSummarySchema>;
 

@@ -44,6 +44,7 @@ import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
+import { isSignalCaptured } from '../manifest/bundle-manifest.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -57,7 +58,12 @@ function flagId(sessionId: string, seq: number): string {
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, _config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, _config: HeuristicConfig): Flag[] {
+  // Absence-vs-disabled (program spec §4). "No terminal was open when the file
+  // changed externally" is a real statement only when terminals were being
+  // recorded at all.
+  if (!isSignalCaptured(bundle, 'terminal')) return [];
+
   const flags: Flag[] = [];
 
   for (const [, sessionEvents] of index.bySessionId) {

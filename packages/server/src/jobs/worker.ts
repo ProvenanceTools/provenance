@@ -39,6 +39,7 @@ import { getBoss, stopBoss, JOB_KINDS } from './pg-boss.js';
 import { getLogger } from '../logging.js';
 import { getDb } from '../db/client.js';
 import { getConfig } from '../config/index.js';
+import { configuredValidationOptions } from '../config/root-key.js';
 import { ingest_files, ingest_jobs, semesters } from '../db/schema.js';
 import { createStorageClient, storageConfigFromEnv } from '../services/storage/client.js';
 import { ingestStagingKey } from '../services/storage/keys.js';
@@ -439,7 +440,12 @@ export async function startWorker(): Promise<() => Promise<void>> {
             let validationReport;
             try {
               validationReport = await timePhase('run_validation', () =>
-                runAndStoreValidation(tx, submissionResult.submissionId, bundle),
+                runAndStoreValidation(
+                  tx,
+                  submissionResult.submissionId,
+                  bundle,
+                  configuredValidationOptions(),
+                ),
               );
             } catch (e) {
               const cause = e instanceof Error ? e.message : String(e);

@@ -437,9 +437,95 @@ export const components = {
             superseded_by_submission_id: {
               oneOf: [{ $ref: '#/components/schemas/UUID' }, { type: 'null' }],
             },
+            assignment_manifest: { $ref: '#/components/schemas/AssignmentManifest' },
           },
         },
       ],
+    },
+
+    AssignmentManifest: {
+      type: 'object',
+      description:
+        'The assignment manifest carried inside the submission bundle (Manifest 2.0). ' +
+        'A 1.0/1.1 bundle carries none, and reports format_version "1.x" with every ' +
+        'field null and trust_chain "legacy". `disabled_signals` names the capture ' +
+        'signals the COURSE switched off, so a reader can tell a signal that is absent ' +
+        'by policy from one absent because the student never produced it.',
+      required: [
+        'format_version',
+        'course_id',
+        'collaboration',
+        'submission',
+        'scope',
+        'disabled_signals',
+        'heartbeat_interval_ms',
+        'cert',
+        'trust_chain',
+        'trust_chain_detail',
+      ],
+      properties: {
+        format_version: { type: 'string', enum: ['1.x', '2.0'] },
+        course_id: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+        collaboration: {
+          oneOf: [{ type: 'string', enum: ['solo', 'group'] }, { type: 'null' }],
+        },
+        submission: {
+          oneOf: [{ type: 'string', enum: ['bundle', 'git'] }, { type: 'null' }],
+        },
+        scope: {
+          oneOf: [{ type: 'string', enum: ['directory', 'repo'] }, { type: 'null' }],
+        },
+        disabled_signals: {
+          type: 'array',
+          items: {
+            type: 'string',
+            enum: [
+              'selection_change',
+              'focus_change',
+              'terminal',
+              'doc_open_close',
+              'inline_content',
+            ],
+          },
+        },
+        heartbeat_interval_ms: { type: 'integer' },
+        cert: {
+          description:
+            'The root-signed course certificate. `in_window` is evaluated against the ' +
+            "manifest's issued_at, never wall-clock now.",
+          oneOf: [
+            {
+              type: 'object',
+              required: [
+                'course_id',
+                'course_pubkey',
+                'valid_from',
+                'valid_until',
+                'in_window',
+                'window_reason',
+              ],
+              properties: {
+                course_id: { type: 'string' },
+                course_pubkey: { type: 'string' },
+                valid_from: { type: 'string' },
+                valid_until: { type: 'string' },
+                in_window: { type: 'boolean' },
+                window_reason: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+              },
+            },
+            { type: 'null' },
+          ],
+        },
+        trust_chain: {
+          type: 'string',
+          enum: ['legacy', 'unconfigured', 'verified', 'invalid'],
+          description:
+            '"legacy" — a 1.x bundle, no chain to walk. "unconfigured" — a 2.0 bundle ' +
+            'but the server has no root public key set. "verified"/"invalid" — the ' +
+            'chain was walked.',
+        },
+        trust_chain_detail: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+      },
     },
 
     // -------------------------------------------------------------------------

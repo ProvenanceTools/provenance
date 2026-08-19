@@ -21,6 +21,41 @@ Severity / confidence semantics:
 - **Severity** is the heuristic's claim about how serious the signal is in isolation: `high`, `medium`, `low`, `info`. `info` is informational context (e.g. "an AI extension was active"), not an integrity claim by itself.
 - **Confidence** is how reliable the signal is on this particular bundle (0.0–1.0). A high-severity flag with 0.6 confidence is "loud signal, less sure"; a medium with 0.95 confidence is "subtle but reliable". Both are surfaced; staff decide weighting.
 
+## Capture policy and the absence-vs-disabled rule
+
+From Manifest 2.0 on, a course can turn individual capture signals down via the
+signed `policy.capture` block (program spec
+[§4](./superpowers/specs/2026-08-18-multicourse-program-architecture.md)):
+`selection_change`, `focus_change`, `terminal`, `doc_open_close`,
+`inline_content`, and the `heartbeat_interval_ms` cadence. The effective policy
+travels into the bundle inside `session.start.data.manifest`, so the analyzer
+can tell "this student produced no `terminal.open` events" from "this course
+disabled terminal capture".
+
+**Any heuristic that consumes a policy-gated signal returns _not-applicable_
+(zero flags) when the course disabled it** — never a flag, never a zero. The
+signed policy decides, not what happens to be in the event stream, so a
+hand-edited log cannot re-enable a heuristic the course turned off.
+
+| Heuristic                                | Gated on                | Behaviour when disabled                                     |
+| ---------------------------------------- | ----------------------- | ----------------------------------------------------------- |
+| `no_intermediate_errors`                 | `terminal`              | no flags                                                    |
+| `shell_integration_disabled`             | `terminal`              | no flags                                                    |
+| `terminal_active_during_external_change` | `terminal`              | no flags                                                    |
+| `time_to_first_save_anomaly`             | `doc_open_close`        | no flags                                                    |
+| `inter_session_external_change`          | `doc_open_close`        | no flags                                                    |
+| `gap_in_heartbeats`                      | `heartbeat_interval_ms` | threshold becomes `max(configured, 10 x recorded interval)` |
+| `editing_pattern_clone` (cross)          | any kind-stream signal  | pair skipped — a shrunken kind alphabet inflates Jaccard    |
+
+Every 1.0/1.1 bundle resolves to the default policy (everything on, 30 s
+heartbeat), so archived submissions score exactly as they always did.
+`low_typing_high_output` reads `doc.open` but is deliberately **not** gated: the
+`doc.open` content is both its `startLength` anchor and the reconstruction seed,
+so its absence cancels out of the ratio instead of inflating it.
+
+The audit lives in
+[`policy-gating.test.ts`](../packages/analysis-core/src/heuristics/policy-gating.test.ts).
+
 ## Process-shape heuristics (Phases 4, 16)
 
 These detect AI-assistance patterns inside a single submission.
