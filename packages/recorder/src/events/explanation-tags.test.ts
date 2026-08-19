@@ -131,7 +131,7 @@ describe('ExplanationTagger', () => {
     });
 
     it('repeating the same path is idempotent and costs no budget', () => {
-      let now = 0;
+      const now = 0;
       const tagger = new ExplanationTagger({ getNow: () => now, windowMs: 2000, maxPaths: 2 });
 
       tagger.markGit();
