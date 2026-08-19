@@ -619,7 +619,12 @@ export const AssignmentManifestSchema = z.object({
   collaboration: z.enum(['solo', 'group']).nullable(),
   submission: z.enum(['bundle', 'git']).nullable(),
   scope: z.enum(['directory', 'repo']).nullable(),
-  /** Gated capture signals the course switched off. Empty for 1.x. */
+  /**
+   * Gated capture signals the course switched off. Empty for 1.x — and empty
+   * whenever `trust_chain` is not `'verified'`: an unverified policy is not
+   * honoured, because `policy` arrives from a file the student can edit. When a
+   * refused policy asked for signals to be disabled, `trust_chain_detail` says so.
+   */
   disabled_signals: z.array(z.enum(['selection_change', 'focus_change', 'terminal'])),
   heartbeat_interval_ms: z.number().int(),
   /**
@@ -643,6 +648,10 @@ export const AssignmentManifestSchema = z.object({
    * 'verified' / 'invalid' — the chain was walked.
    */
   trust_chain: z.enum(['legacy', 'unconfigured', 'verified', 'invalid']),
+  /**
+   * Why the chain is not `'verified'`, and — when the unverified manifest asked
+   * for capture signals to be switched off — that the request was refused.
+   */
   trust_chain_detail: z.string().nullable(),
 });
 export type AssignmentManifest = z.infer<typeof AssignmentManifestSchema>;

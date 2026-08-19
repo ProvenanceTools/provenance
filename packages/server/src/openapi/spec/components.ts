@@ -477,6 +477,11 @@ export const components = {
         },
         disabled_signals: {
           type: 'array',
+          description:
+            'Empty unless trust_chain is "verified": the capture policy lives inside the ' +
+            'course-signed payload, and a policy whose signature was not checked is not ' +
+            'honoured. If an unverified manifest asked for signals to be switched off, ' +
+            'trust_chain_detail says which, and that they were refused.',
           items: {
             type: 'string',
             enum: ['selection_change', 'focus_change', 'terminal'],
@@ -518,7 +523,12 @@ export const components = {
             'but the server has no root public key set. "verified"/"invalid" — the ' +
             'chain was walked.',
         },
-        trust_chain_detail: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+        trust_chain_detail: {
+          description:
+            'Why the chain is not "verified", and — when the unverified manifest asked ' +
+            'for capture signals to be switched off — that the request was refused.',
+          oneOf: [{ type: 'string' }, { type: 'null' }],
+        },
       },
     },
 

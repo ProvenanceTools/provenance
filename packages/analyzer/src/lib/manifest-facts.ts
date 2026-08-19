@@ -53,9 +53,13 @@ export function trustChainFact(manifest: AssignmentManifest): ManifestFact {
         tone: 'normal',
       };
     case 'unconfigured':
+      // The detail is present only when the unverifiable manifest asked for
+      // signals to be switched off. That request was refused, so staff must see
+      // it: `disabled_signals: []` on a bundle that plainly carries a policy is
+      // otherwise indistinguishable from a bundle that never asked.
       return {
         label: 'Trust chain',
-        value: 'Not verified — no root key configured',
+        value: manifest.trust_chain_detail ?? 'Not verified — no root key configured',
         tone: 'warn',
       };
     case 'invalid':
