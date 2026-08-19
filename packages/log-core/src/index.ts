@@ -38,6 +38,7 @@ export type { Checkpoint } from './checkpoint-signer.js';
 // Assignment manifest (.provenance-manifest / provenance-manifest)
 export {
   parseManifest,
+  parseManifestValue,
   verifyManifest,
   signManifest,
   verifyManifestChain,

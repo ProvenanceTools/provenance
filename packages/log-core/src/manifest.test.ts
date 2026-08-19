@@ -3,6 +3,7 @@ import * as ed from '@noble/ed25519';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import {
   parseManifest,
+  parseManifestValue,
   verifyManifest,
   signManifest,
   verifyManifestChain,
@@ -748,16 +749,122 @@ describe('2.0 signed payload', () => {
     expect((await verifyManifestChain(parsed.value, rootPubkeyHex)).ok).toBe(true);
   });
 
-  it('every key in the 2.0 signed payload is ASCII (Lua bytewise-sort parity)', async () => {
+  it.each([
+    ['a top-level policy key', { ａ: true }],
+    ['a key inside capture', { capture: { sélection: true } }],
+    ['an astral-plane key', { '\u{10000}': 1 }],
+  ])('rejects %s that is not printable ASCII', async (_label, policy) => {
+    // `policy` is the ONLY signed field with open-ended keys, so it is the only
+    // place a non-ASCII key can enter a signed payload. provnvim's hand-rolled
+    // Lua JCS sorts keys bytewise; JS and Kotlin sort by UTF-16 code unit. The
+    // two orderings agree for ASCII and diverge above U+007F, so such a manifest
+    // would canonicalize to different bytes on different recorders and verify on
+    // one while failing on another.
     const { manifest } = await makeV2Manifest();
-    const walk = (value: unknown): void => {
-      if (typeof value !== 'object' || value === null || Array.isArray(value)) return;
-      for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-        expect(key, `non-ASCII key ${key}`).toMatch(/^[\x20-\x7e]+$/);
-        walk(child);
+    const result = parseManifest(JSON.stringify({ ...manifest, policy }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    if (result.error.kind !== 'invalid_shape') throw new Error('expected invalid_shape');
+    expect(result.error.reason).toBe('object keys must be printable ASCII');
+  });
+
+  it('the UTF-16 vs bytewise sort orders really do disagree above U+007F', () => {
+    // The premise of the rule above, stated as an executable fact rather than a
+    // claim in a comment.
+    const keys = ['\u{10000}', 'ａ'];
+    const utf16Sorted = [...keys].sort();
+    const enc = new TextEncoder();
+    const byteSorted = [...keys].sort((a, b) => {
+      const [x, y] = [enc.encode(a), enc.encode(b)];
+      for (let i = 0; i < Math.min(x.length, y.length); i++) {
+        if (x[i] !== y[i]) return (x[i] as number) - (y[i] as number);
       }
+      return x.length - y.length;
+    });
+    expect(utf16Sorted).not.toEqual(byteSorted);
+  });
+
+  it('strips a toJSON that would decouple the signed bytes from what readers see', async () => {
+    // `canonicalize` honours toJSON. Without rebuilding the block as plain data,
+    // a policy carrying one signs as capture-everything while
+    // resolveCapturePolicy reads capture-nothing off the same object.
+    const { manifest, rootPubkeyHex } = await makeV2Manifest();
+    const masked = {
+      capture: {
+        selection_change: false,
+        focus_change: false,
+        terminal: false,
+        doc_open_close: false,
+        inline_content: false,
+        heartbeat_interval_ms: 120000,
+      },
+      toJSON: () => V2_POLICY,
     };
-    walk({ ...manifest, sig: undefined, course_cert: undefined });
+    const chained = await verifyManifestChain({ ...manifest, policy: masked }, rootPubkeyHex);
+    expect(chained.ok).toBe(false);
+    if (chained.ok) return;
+    expect(chained.error.kind).toBe('invalid_manifest_shape');
+  });
+
+  it('rejects a non-finite number in policy rather than throwing out of canonicalize', () => {
+    const result = parseManifestValue({
+      format_version: '2.0',
+      course_id: 'c',
+      assignment_id: 'a',
+      semester: 's',
+      issued_at: '2026-09-08T00:00:00Z',
+      files_under_review: [],
+      collaboration: 'solo',
+      submission: 'bundle',
+      scope: 'directory',
+      policy: { capture: { heartbeat_interval_ms: NaN } },
+      course_cert: {
+        course_id: 'c',
+        course_pubkey: 'a'.repeat(64),
+        valid_from: '2026-01-01',
+        valid_until: '2026-12-31',
+        root_sig: 'b'.repeat(128),
+      },
+      sig: 'c'.repeat(128),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    if (result.error.kind !== 'invalid_shape') throw new Error('expected invalid_shape');
+    expect(result.error.reason).toBe('must be a finite number');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verifyManifest — errors are values, never exceptions
+// ---------------------------------------------------------------------------
+
+describe('verifyManifest returns rather than throws on hostile input', () => {
+  it('returns invalid_signature for a non-hex sig instead of throwing out of hexToBytes', async () => {
+    const { manifest } = await makeV2Manifest();
+    const result = await verifyManifest({ ...manifest, sig: 'not-hex' }, await pub(COURSE_PRIV));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('invalid_signature');
+  });
+
+  it('returns invalid_signature when canonicalization of a hostile policy would throw', async () => {
+    const { manifest } = await makeV2Manifest();
+    const result = await verifyManifest(
+      { ...manifest, policy: { capture: { heartbeat_interval_ms: NaN } } },
+      await pub(COURSE_PRIV),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('invalid_signature');
+  });
+
+  it('does not reject a sig of the right length but wrong case (regression guard on the hex regex)', async () => {
+    // Documents current behaviour rather than asserting it is desirable: hex is
+    // matched lowercase-only, so an uppercase sig reads as invalid_signature.
+    const { manifest } = await makeV2Manifest();
+    const upper = { ...manifest, sig: manifest.sig.toUpperCase() };
+    const result = await verifyManifest(upper, await pub(COURSE_PRIV));
+    expect(result.ok).toBe(false);
   });
 });
 
@@ -786,7 +893,7 @@ describe('verifyManifestChain', () => {
     expect(result.error.kind).toBe('missing_course_cert');
   });
 
-  it('step 0: reports a malformed course_cert without attempting a signature check', async () => {
+  it('validates the whole manifest before any signature work: a malformed course_cert', async () => {
     const { manifest, rootPubkeyHex } = await makeV2Manifest();
     const broken: Manifest = {
       ...manifest,
@@ -795,8 +902,39 @@ describe('verifyManifestChain', () => {
     const result = await verifyManifestChain(broken, rootPubkeyHex);
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.kind).toBe('invalid_cert_shape');
+    expect(result.error).toEqual({
+      kind: 'invalid_manifest_shape',
+      field: 'course_cert.root_sig',
+      reason: 'must be a 128-char hex string',
+    });
   });
+
+  it.each(['course_id', 'collaboration', 'submission', 'scope', 'policy'])(
+    'refuses to chain a hand-built 2.0 manifest missing %s',
+    async (field) => {
+      // The field-completeness check is NOT cosmetic. `canonicalize` omits
+      // undefined-valued keys, so a 2.0 manifest built without `policy` signs and
+      // verifies against a payload that simply has no policy key — and "the chain
+      // verified" would stop implying "the course signed a capture policy".
+      // parseManifest would reject such an object, but program spec §5 carries a
+      // full Manifest inside session.start, so consumers receive already-parsed
+      // objects and would otherwise skip that check entirely.
+      const { manifest, rootPubkeyHex } = await makeV2Manifest();
+      const incomplete = { ...manifest } as Record<string, unknown>;
+      delete incomplete[field];
+      const unsigned = { ...incomplete } as Omit<Manifest, 'sig'>;
+      // Re-sign so the signature genuinely covers the incomplete payload.
+      const forged = { ...incomplete, sig: await signManifest(unsigned, COURSE_PRIV) } as Manifest;
+
+      // The signature really is valid over the shortened payload...
+      expect((await verifyManifest(forged, await pub(COURSE_PRIV))).ok).toBe(true);
+      // ...and the chain must still refuse it.
+      const result = await verifyManifestChain(forged, rootPubkeyHex);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.kind).toBe('invalid_manifest_shape');
+    },
+  );
 
   it('step 1: rejects a cert not signed by the root key (bad root sig)', async () => {
     const { manifest } = await makeV2Manifest({ rootPriv: WRONG_ROOT_PRIV });
@@ -863,20 +1001,19 @@ describe('verifyManifestChain', () => {
     });
   });
 
-  it('step 3: a manifest with no course_id at all does not slip past the comparison', async () => {
-    const { manifest, rootPubkeyHex } = await makeV2Manifest();
-    const withoutCourseId = { ...manifest };
-    delete withoutCourseId.course_id;
-    const resigned: Manifest = {
-      ...withoutCourseId,
-      sig: await signManifest(withoutCourseId, COURSE_PRIV),
-    };
-    const result = await verifyManifestChain(resigned, rootPubkeyHex);
+  it('step 3: an EMPTY course_id does not slip past the comparison', async () => {
+    // Absent course_id is caught earlier, by the shape validation (covered
+    // above). This pins the adjacent case: a present-but-degenerate value must
+    // not compare equal to the cert's.
+    const { manifest, rootPubkeyHex } = await makeV2Manifest({
+      manifestOverrides: { course_id: ' ' },
+    });
+    const result = await verifyManifestChain(manifest, rootPubkeyHex);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toEqual({
       kind: 'course_id_mismatch',
-      manifest_course_id: null,
+      manifest_course_id: ' ',
       cert_course_id: 'berkeley-cs61b',
     });
   });

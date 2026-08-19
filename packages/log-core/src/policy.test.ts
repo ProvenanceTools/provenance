@@ -137,10 +137,33 @@ describe('resolveCapturePolicy heartbeat clamping', () => {
 // ---------------------------------------------------------------------------
 
 describe('the hard floor', () => {
-  it('is enforced by the schema: no floor kind has a key in policy.capture', () => {
+  it('is disjoint from the policy-gated set: no kind is both floor and gated', () => {
     const gated = Object.keys(POLICY_GATED_EVENT_KINDS);
     for (const kind of FLOOR_EVENT_KINDS) {
       expect(gated).not.toContain(kind);
+    }
+  });
+
+  it('cannot be switched off: no capture key resolves to a gate for a floor kind', () => {
+    // The stated property of the schema, exercised rather than asserted
+    // structurally: drive every combination of every boolean knob and confirm no
+    // floor kind ever reads as uncaptured.
+    const knobs = [
+      'selection_change',
+      'focus_change',
+      'terminal',
+      'doc_open_close',
+      'inline_content',
+    ] as const;
+    for (let mask = 0; mask < 1 << knobs.length; mask++) {
+      const capture: Record<string, boolean> = {};
+      knobs.forEach((knob, i) => {
+        capture[knob] = (mask & (1 << i)) !== 0;
+      });
+      const policy = resolveCapturePolicy({ capture });
+      for (const kind of FLOOR_EVENT_KINDS) {
+        expect(isEventKindCaptured(kind, policy), `${kind} under mask ${mask}`).toBe(true);
+      }
     }
   });
 

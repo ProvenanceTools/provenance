@@ -27,6 +27,14 @@
  * mitigation is short validity windows (one semester per cert). This is a real,
  * accepted limitation — see program spec §2.
  *
+ * **That server-side list must key on `course_pubkey`, not on a certificate.**
+ * The certificate travels outside the course-signed payload by design, so a
+ * manifest does not bind to *which* cert authorized it: the student chooses
+ * which of the course's certs to ship. A list keyed on certificate identity is
+ * therefore defeated by stapling any other non-revoked cert carrying the same
+ * `course_pubkey`, and the `window` this module reports is likewise
+ * student-selected among every cert the root ever issued for that key.
+ *
  * ## Permanent constraint: no user-derived object keys in a signed payload
  *
  * Every object KEY that ends up inside a canonicalized, signed payload — here,
@@ -136,7 +144,13 @@ export function parseIsoInstantMs(value: string): number | null {
 
   if (month < 1 || month > 12) return null;
   if (day < 1 || day > 31) return null;
-  if (hour > 23 || minute > 59 || second > 60) return null;
+  // `second > 59` rejects leap seconds (`:60`) explicitly. `java.time` accepts
+  // them and `Date` does not, so leaving the decision to downstream arithmetic
+  // would put the three ports' accepting sets out of sync. Likewise `hour > 23`
+  // rejects the legal-ISO `24:00:00`, which `java.time` accepts and normalizes
+  // to next-day midnight — the Kotlin port must reject it to match. Both are
+  // pinned in the exported `timestamp_parse_cases`.
+  if (hour > 23 || minute > 59 || second > 59) return null;
 
   // `Date.UTC` maps years 0-99 onto 1900-1999, so a four-digit year like '0026'
   // would silently become 1926. Build the date and set the full year explicitly.
@@ -208,10 +222,36 @@ export function parseCourseCert(value: unknown): Result<CourseCert, CourseCertEr
   }
   const obj = value as Record<string, unknown>;
 
-  for (const field of ['course_id', 'valid_from', 'valid_until'] as const) {
-    if (typeof obj[field] !== 'string' || (obj[field] as string).length === 0) {
+  if (typeof obj['course_id'] !== 'string' || obj['course_id'].length === 0) {
+    return err({ kind: 'invalid_shape', field: 'course_id', reason: 'must be a non-empty string' });
+  }
+
+  // The validity bounds must actually parse. Program spec §2 names short
+  // validity windows as THE mitigation for having no offline revocation, so a
+  // bound that silently never binds undercuts the only offline control there is:
+  // an unparseable bound yields `unparseable_timestamp`, step 4 is non-fatal, and
+  // the result is a root-signed certificate with an inert window. Certificates
+  // are new in 2.0, so there is no archived-manifest compatibility cost to
+  // enforcing this — unlike `manifest.issued_at`, which is deliberately left
+  // lenient because 1.x manifests in the wild predate any such rule.
+  const bounds: Record<'valid_from' | 'valid_until', number> = { valid_from: 0, valid_until: 0 };
+  for (const field of ['valid_from', 'valid_until'] as const) {
+    const value = obj[field];
+    if (typeof value !== 'string' || value.length === 0) {
       return err({ kind: 'invalid_shape', field, reason: 'must be a non-empty string' });
     }
+    const ms = parseIsoInstantMs(value);
+    if (ms === null) {
+      return err({ kind: 'invalid_shape', field, reason: 'must be an ISO 8601 date or timestamp' });
+    }
+    bounds[field] = ms;
+  }
+  if (bounds.valid_from > bounds.valid_until) {
+    return err({
+      kind: 'invalid_shape',
+      field: 'valid_until',
+      reason: 'must not be earlier than valid_from',
+    });
   }
   if (typeof obj['course_pubkey'] !== 'string' || !HEX_64_RE.test(obj['course_pubkey'])) {
     return err({

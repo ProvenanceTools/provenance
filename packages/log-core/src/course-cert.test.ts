@@ -73,12 +73,22 @@ describe('buildCourseCertSignedPayload', () => {
     expect(buildCourseCertSignedPayload(reordered)).toEqual(buildCourseCertSignedPayload(cert));
   });
 
-  it('every key in the signed payload is ASCII (Lua bytewise-sort parity)', async () => {
+  it('has a closed, all-ASCII key set — a cert cannot introduce a user-derived key', async () => {
+    // Unlike the manifest's `policy` block, the cert payload has no open-ended
+    // keys at all: unknown keys on the input are dropped, so no course_id or
+    // other user string can ever become a key here. That is what keeps the Lua
+    // bytewise sort and the JS/Kotlin UTF-16 sort in agreement.
     const { cert } = await makeCert();
-    const json = new TextDecoder().decode(buildCourseCertSignedPayload(cert));
-    for (const key of Object.keys(JSON.parse(json) as Record<string, unknown>)) {
-      expect(key).toMatch(/^[\x20-\x7e]+$/);
-    }
+    const withHostileKey = { ...cert, ['ｎｏｔ-ascii']: 'value' };
+    const json = new TextDecoder().decode(
+      buildCourseCertSignedPayload(withHostileKey as unknown as CourseCert),
+    );
+    expect(Object.keys(JSON.parse(json) as Record<string, unknown>)).toEqual([
+      'course_id',
+      'course_pubkey',
+      'valid_from',
+      'valid_until',
+    ]);
   });
 });
 
@@ -138,6 +148,51 @@ describe('parseCourseCert', () => {
       field: 'course_pubkey',
       reason: 'must be a 64-char hex string',
     });
+  });
+
+  it.each(['valid_from', 'valid_until'] as const)(
+    'rejects a %s that is not a parseable ISO 8601 instant',
+    async (field) => {
+      // Program spec §2 names short validity windows as THE mitigation for having
+      // no offline revocation. An unparseable bound yields unparseable_timestamp,
+      // step 4 is non-fatal, and the result is a root-signed cert whose window
+      // never binds — silently removing the only offline control there is.
+      const { cert } = await makeCert();
+      const result = parseCourseCert({ ...cert, [field]: 'next semester' });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toEqual({
+        kind: 'invalid_shape',
+        field,
+        reason: 'must be an ISO 8601 date or timestamp',
+      });
+    },
+  );
+
+  it('rejects an inverted window', async () => {
+    const { cert } = await makeCert();
+    const result = parseCourseCert({
+      ...cert,
+      valid_from: '2027-01-15',
+      valid_until: '2026-08-20',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toEqual({
+      kind: 'invalid_shape',
+      field: 'valid_until',
+      reason: 'must not be earlier than valid_from',
+    });
+  });
+
+  it('accepts a zero-width window (valid_from === valid_until)', async () => {
+    const { cert } = await makeCert();
+    const result = parseCourseCert({
+      ...cert,
+      valid_from: '2026-08-20',
+      valid_until: '2026-08-20',
+    });
+    expect(result.ok).toBe(true);
   });
 
   it('rejects a missing root_sig distinctly from a malformed one', async () => {
@@ -280,6 +335,36 @@ describe('parseIsoInstantMs', () => {
 
   it('accepts a real leap day', () => {
     expect(parseIsoInstantMs('2028-02-29')).toBe(Date.UTC(2028, 1, 29));
+  });
+
+  it.each(['+99:00', '+00:99', '-99:59'])('rejects the out-of-range UTC offset %s', (offset) => {
+    // The regex admits any two-digit pair; only the explicit range check
+    // rejects these.
+    expect(parseIsoInstantMs(`2026-09-08T00:00:00${offset}`)).toBeNull();
+  });
+
+  it('accepts the extreme in-range offsets', () => {
+    expect(parseIsoInstantMs('2026-09-08T00:00:00+23:59')).not.toBeNull();
+    expect(parseIsoInstantMs('2026-09-08T00:00:00-23:59')).not.toBeNull();
+  });
+
+  it('rejects a leap second, which java.time would accept', () => {
+    // Stated as a deliberate divergence the Kotlin port must reproduce, not an
+    // oversight: `Date` cannot represent :60, so accepting it would mean three
+    // ports disagreeing about the same string.
+    expect(parseIsoInstantMs('2026-12-31T23:59:60Z')).toBeNull();
+  });
+
+  it('rejects 24:00:00, which is legal ISO 8601 and accepted by java.time', () => {
+    expect(parseIsoInstantMs('2026-09-08T24:00:00Z')).toBeNull();
+  });
+
+  it('does not let a trailing newline slip past the anchors', () => {
+    // JS `$` without the `m` flag does not match before a trailing newline, so
+    // this is already safe — pinned because it is a classic Python/Perl trap and
+    // the Lua port uses a different regex engine.
+    expect(parseIsoInstantMs('2026-09-08\n')).toBeNull();
+    expect(parseIsoInstantMs('\n2026-09-08')).toBeNull();
   });
 
   it('does not map a four-digit year below 100 onto the 1900s', () => {

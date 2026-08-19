@@ -124,7 +124,13 @@ export type ManifestChainError =
    */
   | { kind: 'not_manifest_2_0'; format_version: string }
   | { kind: 'missing_course_cert' }
-  | { kind: 'invalid_cert_shape'; field?: string; reason?: string }
+  /**
+   * The manifest itself does not satisfy the 2.0 shape. Reported before any
+   * signature work, because a 2.0 manifest with a required field missing
+   * canonicalizes to a payload without that key — so an unvalidated object could
+   * chain successfully while carrying no `policy` at all.
+   */
+  | { kind: 'invalid_manifest_shape'; field?: string; reason?: string }
   /** Step 1: `course_cert` does not verify against the root public key. */
   | { kind: 'invalid_root_signature' }
   /** Step 2: the payload does not verify against `course_cert.course_pubkey`. */
@@ -167,6 +173,76 @@ export const MANIFEST_FORMAT_VERSION_2 = '2.0';
 const COLLABORATION_VALUES: readonly string[] = ['solo', 'group'];
 const SUBMISSION_VALUES: readonly string[] = ['bundle', 'git'];
 const SCOPE_VALUES: readonly string[] = ['directory', 'repo'];
+
+/** Printable ASCII. See {@link sanitizeSignedValue}. */
+const ASCII_KEY_RE = /^[\x20-\x7e]+$/;
+
+/**
+ * Deep-rebuild an attacker-influenced sub-tree destined for the signed payload,
+ * rejecting anything that would make the signed bytes disagree with what the
+ * rest of the system reads.
+ *
+ * `policy` is the only signed field with open-ended contents, so it is the only
+ * place these hazards can enter. Three things are enforced:
+ *
+ *  - **Printable-ASCII keys.** The permanent constraint documented in
+ *    `course-cert.ts`: provnvim's hand-rolled Lua JCS sorts object keys bytewise
+ *    while JS and Kotlin sort by UTF-16 code unit, and the two orderings diverge
+ *    above U+007F. `{"ａ":1,"\u{10000}":2}` canonicalizes to different bytes
+ *    in Lua than in JS, so the same manifest would verify on one recorder and
+ *    fail on another. Documenting the rule in three docstrings and enforcing it
+ *    nowhere was not enough.
+ *  - **Plain data only.** Rebuilding drops `toJSON` methods and accessor
+ *    properties. `canonicalize` honours `toJSON`, so a `policy` carrying one
+ *    signs as one thing and is read as another — the signature would cover a
+ *    capture-everything block while `resolveCapturePolicy` saw
+ *    capture-nothing. Not reachable from `JSON.parse`, but very reachable once
+ *    a `Manifest` can arrive as an in-process object (see
+ *    {@link parseManifestValue}).
+ *  - **Finite numbers.** `canonicalize` throws on `NaN`/`Infinity`; rejecting
+ *    here turns that into a value rather than an exception.
+ *
+ * Key ORDER is deliberately not preserved: JCS sorts keys, so rebuilding cannot
+ * change the canonical bytes of an otherwise-valid block.
+ */
+function sanitizeSignedValue(value: unknown, path: string): Result<unknown, ManifestError> {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+    return ok(value);
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      return err({ kind: 'invalid_shape', field: path, reason: 'must be a finite number' });
+    }
+    return ok(value);
+  }
+  if (Array.isArray(value)) {
+    const out: unknown[] = [];
+    for (let i = 0; i < value.length; i++) {
+      const child = sanitizeSignedValue(value[i], `${path}[${i}]`);
+      if (!child.ok) return child;
+      out.push(child.value);
+    }
+    return ok(out);
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      if (!ASCII_KEY_RE.test(key)) {
+        return err({
+          kind: 'invalid_shape',
+          field: path,
+          reason: 'object keys must be printable ASCII',
+        });
+      }
+      const child = sanitizeSignedValue((value as Record<string, unknown>)[key], `${path}.${key}`);
+      if (!child.ok) return child;
+      out[key] = child.value;
+    }
+    return ok(out);
+  }
+  // function, symbol, bigint, undefined — none are valid JSON.
+  return err({ kind: 'invalid_shape', field: path, reason: 'must be JSON data' });
+}
 
 /**
  * Resolve a manifest's format version.
@@ -253,7 +329,20 @@ export function parseManifest(text: string): Result<Manifest, ManifestError> {
     const message = e instanceof Error ? e.message : String(e);
     return err({ kind: 'invalid_json', message });
   }
+  return parseManifestValue(parsed);
+}
 
+/**
+ * The same validation as {@link parseManifest}, on an already-deserialized value.
+ *
+ * Needed because a manifest does not only arrive as file text any more: program
+ * spec §5 puts the full `Manifest` inside `session.start`, so the analyzer and
+ * server receive one as a parsed object embedded in a larger payload. Without an
+ * object-taking validator those consumers would skip validation entirely and
+ * hand an unchecked object to {@link verifyManifestChain}, which is exactly how
+ * "the chain verified" stops implying "the course signed a policy".
+ */
+export function parseManifestValue(parsed: unknown): Result<Manifest, ManifestError> {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     return err({ kind: 'invalid_shape', reason: 'must be an object' });
   }
@@ -359,10 +448,15 @@ export function parseManifest(text: string): Result<Manifest, ManifestError> {
   const scope = enumField<ManifestScope>('scope', SCOPE_VALUES);
   if (!scope.ok) return scope;
 
-  const policy = obj['policy'];
-  if (typeof policy !== 'object' || policy === null || Array.isArray(policy)) {
+  const rawPolicy = obj['policy'];
+  if (typeof rawPolicy !== 'object' || rawPolicy === null || Array.isArray(rawPolicy)) {
     return err({ kind: 'invalid_shape', field: 'policy', reason: 'must be an object' });
   }
+  // Rebuilt as plain data with ASCII keys — see sanitizeSignedValue. Contents are
+  // otherwise preserved verbatim, unknown keys included, so the block still
+  // round-trips through signature verification byte-for-byte.
+  const policy = sanitizeSignedValue(rawPolicy, 'policy');
+  if (!policy.ok) return policy;
 
   if (obj['course_cert'] === undefined) {
     return err({ kind: 'invalid_shape', field: 'course_cert', reason: 'missing' });
@@ -386,8 +480,9 @@ export function parseManifest(text: string): Result<Manifest, ManifestError> {
     collaboration: collaboration.value,
     submission: submission.value,
     scope: scope.value,
-    // Kept verbatim (unknown keys included) so the signed bytes round-trip.
-    policy: policy as CapturePolicyBlock,
+    // Contents kept verbatim (unknown keys included) so the signed bytes
+    // round-trip; only the container is rebuilt as plain data.
+    policy: policy.value as CapturePolicyBlock,
     course_cert: cert.value,
   });
 }
@@ -426,6 +521,13 @@ export async function signManifest(
  *
  * This entry point is unchanged for 1.x callers: same signature, same bytes,
  * same result.
+ *
+ * **This is NOT chain verification.** At 2.0 it answers only "did this public key
+ * sign this payload", and the public key you would naturally reach for —
+ * `manifest.course_cert.course_pubkey` — comes out of a student-editable file.
+ * Calling `verifyManifest(m, m.course_cert.course_pubkey)` and treating the
+ * result as trust is self-referential and proves nothing. Use
+ * {@link verifyManifestChain}, which roots the key in the root signature first.
  */
 export async function verifyManifest(
   manifest: Manifest,
@@ -434,16 +536,29 @@ export async function verifyManifest(
   if (!HEX_64_RE.test(pubkey)) {
     return err({ kind: 'invalid_signature' });
   }
-
-  const sigBytes = hexToBytes(manifest.sig);
-  const pubkeyBytes = hexToBytes(pubkey);
-  const payloadBytes = buildSignedPayload(manifest);
+  // Pre-check rather than letting hexToBytes throw: a malformed sig is an
+  // expected input (it comes from a file a student can edit), and expected
+  // failures are values here, not exceptions.
+  if (!HEX_128_RE.test(manifest.sig)) {
+    return err({ kind: 'invalid_signature' });
+  }
 
   let valid: boolean;
   try {
+    // Everything that can throw on hostile input lives inside the try:
+    // `hexToBytes` on a malformed hex string, and `buildSignedPayload`, which
+    // canonicalizes an attacker-influenced `policy` block and throws on NaN,
+    // Infinity, or a circular reference.
+    const sigBytes = hexToBytes(manifest.sig);
+    const pubkeyBytes = hexToBytes(pubkey);
+    const payloadBytes = buildSignedPayload(manifest);
     // `@noble/ed25519` v3 defaults to ZIP215 verification semantics (more permissive than RFC8032
-    // about non-canonical point encodings). Safe here since the course public key is hardcoded;
-    // reconsider if the key ever becomes user-supplied.
+    // about non-canonical point encodings). At 1.x the verifying key was hardcoded into the
+    // recorder build, which made this a non-issue. At 2.0 it is `course_cert.course_pubkey`,
+    // i.e. it arrives in a student-editable file — but `verifyManifestChain` root-verifies the
+    // certificate carrying that key BEFORE reaching this call, so the key is still trusted by
+    // the time it is used. That ordering is what keeps ZIP215 acceptable; do not call this
+    // function with an unverified key and call the result trust.
     valid = await ed.verifyAsync(sigBytes, payloadBytes, pubkeyBytes);
   } catch {
     return err({ kind: 'invalid_signature' });
@@ -493,30 +608,39 @@ export async function verifyManifestChain(
   // policy are all OUTSIDE the signed payload, so a student could staple their
   // course's public cert and a capture-disabling policy onto a genuinely signed
   // 1.x manifest and walk the chain successfully. See ManifestChainError.
-  const formatVersion = manifestFormatVersion(manifest);
-  if (formatVersion !== MANIFEST_FORMAT_VERSION_2) {
-    return err({ kind: 'not_manifest_2_0', format_version: formatVersion });
+  const declaredVersion = manifestFormatVersion(manifest);
+  if (declaredVersion !== MANIFEST_FORMAT_VERSION_2) {
+    return err({ kind: 'not_manifest_2_0', format_version: declaredVersion });
   }
 
   if (manifest.course_cert === undefined) {
     return err({ kind: 'missing_course_cert' });
   }
 
-  // Re-validate the cert shape: `manifest` may have been hand-built rather than
-  // produced by parseManifest.
-  const certResult = parseCourseCert(manifest.course_cert);
-  if (!certResult.ok) {
-    const inner = certResult.error;
-    if (inner.kind === 'invalid_shape') {
-      return err({
-        kind: 'invalid_cert_shape',
-        ...(inner.field === undefined ? {} : { field: inner.field }),
-        ...(inner.reason === undefined ? {} : { reason: inner.reason }),
-      });
-    }
-    return err({ kind: 'invalid_root_signature' });
+  // Re-validate the WHOLE manifest, not just the certificate: `manifest` may
+  // have been hand-built, or (per program spec §5) lifted straight out of a
+  // `session.start` payload without going through parseManifest. Skipping this
+  // would let a 2.0 manifest missing `policy` verify happily — `canonicalize`
+  // omits undefined-valued keys, so the absent field simply drops out of the
+  // signed payload — and "the chain verified" would stop implying "the course
+  // signed a capture policy", which is the entire point of §4.
+  const validated = parseManifestValue(manifest);
+  if (!validated.ok) {
+    const inner = validated.error;
+    return err({
+      kind: 'invalid_manifest_shape',
+      ...(inner.kind === 'invalid_shape' && inner.field !== undefined
+        ? { field: inner.field }
+        : {}),
+      ...(inner.kind === 'invalid_shape' && inner.reason !== undefined
+        ? { reason: inner.reason }
+        : {}),
+    });
   }
-  const cert = certResult.value;
+  // Verify against the validated copy: its `policy` is plain data with ASCII
+  // keys, so the bytes checked here are the bytes every later reader sees.
+  const checked = validated.value;
+  const cert = checked.course_cert as CourseCert;
 
   // Step 1 — cert vs root.
   const rootOk = await verifyCourseCert(cert, rootPubkeyHex);
@@ -525,16 +649,16 @@ export async function verifyManifestChain(
   }
 
   // Step 2 — payload vs course_pubkey.
-  const courseOk = await verifyManifest(manifest, cert.course_pubkey);
+  const courseOk = await verifyManifest(checked, cert.course_pubkey);
   if (!courseOk.ok) {
     return err({ kind: 'invalid_course_signature' });
   }
 
   // Step 3 — the manifest may not claim a course its cert does not cover.
-  if (manifest.course_id !== cert.course_id) {
+  if (checked.course_id !== cert.course_id) {
     return err({
       kind: 'course_id_mismatch',
-      manifest_course_id: manifest.course_id ?? null,
+      manifest_course_id: checked.course_id ?? null,
       cert_course_id: cert.course_id,
     });
   }
@@ -544,6 +668,6 @@ export async function verifyManifestChain(
     course_id: cert.course_id,
     course_pubkey: cert.course_pubkey,
     cert,
-    window: checkCertWindow(cert, manifest.issued_at),
+    window: checkCertWindow(cert, checked.issued_at),
   });
 }
