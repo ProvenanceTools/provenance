@@ -31,6 +31,7 @@ import type { SecretStore } from '../identity/secret-store.js';
 import { createSessionHost } from './session-host.js';
 import { SessionWriter } from '../io/session-writer.js';
 import { MetaWriter } from '../io/meta-writer.js';
+import { writeRollingSeal } from '../io/rolling-seal-writer.js';
 import { startHeartbeat } from '../events/heartbeat.js';
 import { startClockWatcher } from '../events/clock-watcher.js';
 import { startDocWiring } from '../wiring/doc-wiring.js';
@@ -296,6 +297,76 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     encryptedPrivkey,
   });
 
+  // Step 4c: The ROLLING SEAL (program spec §8). A git-submitted assignment has
+  // no seal step, so the recorder rewrites this session's own
+  // `.provenance/manifest-<session_id>.json` + `.sig` on every checkpoint —
+  // whatever gets committed is then always a valid seal of that moment. See
+  // io/rolling-seal-writer.ts.
+  //
+  // `extension_hash` is resolved lazily and exactly once. computeExtensionHash
+  // walks the whole dist/ tree, so doing it per checkpoint would be pathological;
+  // doing it eagerly here would add directory-walk latency to activation, which
+  // is the one moment the recorder must not be slow. The first checkpoint is 100
+  // entries away, long after activation has finished.
+  const extensionDistPath =
+    deps.extensionDistPath ??
+    (typeof extension.extensionPath === 'string'
+      ? path.join(extension.extensionPath, 'dist')
+      : undefined);
+  let extensionHashOnce: Promise<string> | undefined;
+  const getExtensionHashOnce = (): Promise<string> => {
+    extensionHashOnce ??= computeExtensionHash(extensionDistPath ?? '');
+    return extensionHashOnce;
+  };
+
+  /**
+   * Serializes every rolling-seal rewrite — the one at session start, the one
+   * per checkpoint, and the final one in dispose(). Two concurrent rewrites
+   * would interleave their `.json` and `.sig` renames and could leave a
+   * mismatched pair on disk, which is the one thing the atomic write exists to
+   * prevent. dispose() awaits this chain so the last seal is never lost.
+   */
+  let rollingSealChain: Promise<void> = Promise.resolve();
+
+  /**
+   * Rewrite the rolling seal. Never throws and never rejects: a seal failure
+   * must not abort the checkpoint that carries it, and must never stop
+   * recording. Recording is more important than sealing.
+   */
+  function rewriteRollingSeal(): Promise<void> {
+    rollingSealChain = rollingSealChain.then(() => rollingSealOnce());
+    return rollingSealChain;
+  }
+
+  async function rollingSealOnce(): Promise<void> {
+    try {
+      const result = await writeRollingSeal({
+        provenanceDir,
+        sessionId: recorderContext.session_id,
+        prevSessionId,
+        slogPath,
+        assignmentRoot,
+        assignmentId: manifest.assignment_id,
+        semester: manifest.semester,
+        filesUnderReview: manifest.files_under_review,
+        sessionPrivkey: keypair.privateKey,
+        extensionHash: await getExtensionHashOnce(),
+      });
+      if (result.kind === 'error') {
+        // Degrade exactly like every other non-fatal write problem: surface it
+        // and carry on. Deliberately NOT routed into DiskFullHandler — that
+        // switches the session to a critical-events-only ring buffer, and
+        // throwing away the student's event stream because a seal could not be
+        // rewritten would trade the recording for the receipt.
+        console.error('[provenance] rolling seal write error:', result.message);
+      }
+    } catch (e) {
+      // Defensive: writeRollingSeal is documented not to throw, and the only
+      // other await here is the memoized extension hash.
+      console.error('[provenance] rolling seal unexpected error:', e);
+    }
+  }
+
   // Step 5: Create the session host.
   // Hook checkpoints: every CHECKPOINT_INTERVAL entries, sign + write.
   // Fire-and-forget on the append path; tracked via pendingCheckpoint so dispose()
@@ -329,7 +400,12 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
           .then((cp) => metaWriter.appendCheckpoint(cp))
           .catch((e: unknown) => {
             console.error('[provenance] checkpoint sign/write error:', e);
-          });
+          })
+          // The rolling seal runs AFTER the checkpoint has landed in the .meta,
+          // so `meta_sha256` covers it, and after the .catch above so a failed
+          // checkpoint still gets the best seal available. rewriteRollingSeal
+          // never rejects, so it cannot poison the chain dispose() awaits.
+          .then(() => rewriteRollingSeal());
       }
     },
   });
@@ -346,6 +422,21 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
       quarantined_path: recovery.quarantinedPath,
     });
   }
+
+  // Step 6c: Seal immediately, before the first checkpoint is anywhere near due.
+  //
+  // Checkpoints land every 100 entries, so a session that records only
+  // session.start would never reach one — and in a git-submitted repo that
+  // session's `.slog` would be committed with no seal covering it at all
+  // (`unsealed_session`). Sealing here means a session is sealed from its first
+  // instant and every later rewrite is an update, never the first write.
+  //
+  // AWAITED on purpose. Fire-and-forget would let a seal write outlive the
+  // startSession call that spawned it, landing in a `.provenance/` that the
+  // caller (or a test's teardown) has already torn down. The cost is one
+  // dist/ walk plus one ed25519 sign at activation, alongside the keypair
+  // generation and encrypted-privkey write already happening here.
+  await rewriteRollingSeal();
 
   // Step 7: Start heartbeat (PRD §4.2: session.heartbeat every 30s).
   const hbDeps = deps.heartbeatDeps ?? defaultHeartbeatDeps();
@@ -521,9 +612,6 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   });
   ownDisposables.push(gitW);
 
-  // computeExtensionHash is referenced by the caller (extension.ts) at seal time, not here.
-  void computeExtensionHash;
-
   /**
    * Tear down exactly this session: emit session.end, flush the writer, drain the
    * pending checkpoint, dispose the metaWriter, then dispose ownDisposables in LIFO
@@ -560,6 +648,19 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
       await metaWriter.dispose();
     } catch {
       // Ignore — best effort.
+    }
+    // Final rolling-seal rewrite, last of the three file-touching steps so it
+    // covers the fully flushed `.slog` (session.end included) and the drained
+    // `.meta`. A session killed without dispose() — the editor crashing, the
+    // machine losing power — simply keeps whichever seal the last checkpoint
+    // left, which is the whole point of maintaining it continuously.
+    //
+    // Awaiting rewriteRollingSeal() also drains any checkpoint seal still in
+    // flight, since both share rollingSealChain.
+    try {
+      await rewriteRollingSeal();
+    } catch {
+      // Ignore — best effort. rewriteRollingSeal does not reject anyway.
     }
     // Dispose this session's own subscriptions in LIFO order.
     for (const d of [...ownDisposables].reverse()) {
