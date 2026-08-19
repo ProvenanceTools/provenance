@@ -129,8 +129,7 @@ export type RollingSeal = {
 export type RollingSealDefect = {
   /** The session named by the offending FILENAME. */
   sessionId: string;
-  kind:
-    /** `.json` present, `.sig` absent — the manifest is unsigned. */
+  kind: /** `.json` present, `.sig` absent — the manifest is unsigned. */
     | 'missing_sig'
     /** `.sig` present, `.json` absent — the sealed manifest was removed. */
     | 'missing_manifest'

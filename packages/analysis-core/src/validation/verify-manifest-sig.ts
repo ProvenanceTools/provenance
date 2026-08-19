@@ -66,10 +66,7 @@ function hexToBytes(hex: string): Uint8Array | null {
 // nothing else, and gets exactly the verdict it got before the rolling seal.
 // ---------------------------------------------------------------------------
 
-async function verifyClassicSeal(
-  bundle: Bundle,
-  manifestSigHex: string,
-): Promise<ValidationCheck> {
+async function verifyClassicSeal(bundle: Bundle, manifestSigHex: string): Promise<ValidationCheck> {
   const sigBytes = hexToBytes(manifestSigHex);
   if (sigBytes === null) {
     return {

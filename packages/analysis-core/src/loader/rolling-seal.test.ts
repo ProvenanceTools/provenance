@@ -267,7 +267,10 @@ describe('a rolling-sealed bundle loads', () => {
     const built = await buildTestBundle({
       rollingSeal: {},
       submissionFiles: [{ path: '/test/file.py', status: 'present', content: 'x3x2x1' }],
-      sessions: [{ eventCount: 3, machineId: 'partner-a' }, { eventCount: 3, machineId: 'partner-b' }],
+      sessions: [
+        { eventCount: 3, machineId: 'partner-a' },
+        { eventCount: 3, machineId: 'partner-b' },
+      ],
     });
 
     const result = await loadBundle(built.blob, 'repo.zip', fixedNow);
