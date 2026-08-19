@@ -667,6 +667,25 @@ describe('unzipBundle rolling recognition', () => {
     expect(second.sigHex).not.toBeNull();
   });
 
+  it('uses log-core’s filename pattern, so a stray manifest-*.json outside its charset is still unexpected_file', async () => {
+    // The session-id charset is hex + dashes, matching `session-<uuid>.slog`.
+    // A hand-rolled looser pattern here would silently swallow arbitrary files as
+    // rolling seals; log-core owns the pattern precisely so it cannot drift.
+    expect(parseRollingManifestFilename('manifest-notes.json')).toBeNull();
+    expect(parseRollingManifestFilename('manifest.json')).toBeNull();
+    expect(parseRollingManifestFilename('manifest.sig')).toBeNull();
+
+    const built = await buildTestBundle({
+      rollingSeal: {},
+      sessions: [{ eventCount: 3 }],
+      tamper: { addStrayFile: { name: 'manifest-notes.json', content: '{}' } },
+    });
+    const result = await unzipBundle(built.zipBuffer);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('unexpected_file');
+  });
+
   it('does not treat a rolling manifest as an unexpected_file', async () => {
     const built = await buildTestBundle({
       rollingSeal: {},
