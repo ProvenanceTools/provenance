@@ -7,6 +7,13 @@
  * reach overall 'pass'. 1.0 bundles still yield overall 'warn' because Check
  * 8 is skipped (empty submissionFiles → skipped).
  *
+ * ORDERING: run this BEFORE `runHeuristics`. Check 2 is what establishes the
+ * bundle's Manifest 2.0 trust verdict (see verify-session-binding.ts), and the
+ * course-signed capture policy is only honoured once that verdict says
+ * `verified`. Running heuristics first is not unsafe — an unstamped bundle
+ * resolves to the default "everything captured" policy — but it would ignore a
+ * legitimate course policy and over-report.
+ *
  * overall rules:
  *   - Any 'fail' → 'fail'.
  *   - No 'fail' but ≥1 'skipped' → 'warn'.

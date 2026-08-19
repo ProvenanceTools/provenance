@@ -15,6 +15,15 @@
  * The stored bundle is provenance-only (source files stripped at ingest). That
  * is fine here: reconstruction, heuristics, and the event stream derive entirely
  * from the `.slog` logs — they never read submitted source bytes.
+ *
+ * Every bundle handed out from here has had its Manifest 2.0 trust chain walked
+ * and the verdict stamped on it (`establishBundleTrust`). That is what lets the
+ * course-signed capture policy gate heuristics: an unverified policy is not
+ * honoured, so a student cannot edit their own manifest to switch signals — and
+ * with them the cross-submission comparisons — off. Validation check 2 stamps
+ * the same verdict on the ingest path; this covers the read paths that never
+ * re-run validation, above all the cross-flag job (`run-cross.ts`). Doing it
+ * here rather than at each call site means a new read path cannot forget.
  */
 
 import { eq } from 'drizzle-orm';
@@ -22,6 +31,8 @@ import { loadBundle } from '@provenance/analysis-core/loader/parse-bundle.js';
 import type { Bundle } from '@provenance/analysis-core/loader/types.js';
 import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
 import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
+import { establishBundleTrust } from '@provenance/analysis-core/manifest/bundle-manifest.js';
+import { rootPublicKeyHexIfConfigured } from '../../config/root-key.js';
 import { getBlob } from '../storage/blobs.js';
 import type { StorageClient } from '../storage/client.js';
 import { submissions } from '../../db/schema.js';
@@ -138,6 +149,9 @@ export async function loadSubmissionIndex(
   }
 
   const bundle = parsed.value;
+  // Before anything reads the capture policy off this bundle. Cached with it,
+  // so the verdict is computed once per parse, not once per read path.
+  await establishBundleTrust(bundle, rootPublicKeyHexIfConfigured());
   const index = buildIndex(bundle);
   const result: SubmissionIndex = { bundle, index };
   cache.set(cacheKey, result);

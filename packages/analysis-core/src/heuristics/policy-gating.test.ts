@@ -34,7 +34,7 @@ import { gapInHeartbeatsHeuristic, effectiveGapThresholdMs } from './gap-in-hear
 import { editingPatternCloneHeuristic } from './cross/editing-pattern-clone.js';
 import { classifyInternalMoves } from './internal-move.js';
 import { iterateCandidatePastes } from './candidate-pastes.js';
-import { resolveBundleCapturePolicy } from '../manifest/bundle-manifest.js';
+import { resolveBundleCapturePolicy, establishBundleTrust } from '../manifest/bundle-manifest.js';
 import { DEFAULT_CROSS_HEURISTIC_CONFIG } from './cross/types.js';
 import type { CrossSubmissionFeatures } from './cross/types.js';
 
@@ -46,6 +46,14 @@ type SessionSpec = NonNullable<BuildOpts['sessions']>[number];
 /**
  * Build the same sessions twice: once as a 1.x bundle, once under a 2.0
  * manifest carrying `policy`.
+ *
+ * The 2.0 half has its trust chain established against the real root key before
+ * it is returned, because an UNVERIFIED policy is not a policy: heuristics gate
+ * only on a signature that actually checked out. Every case below is therefore
+ * about "a course really did switch this off", which is what these tests are
+ * for. The complementary property — that a policy whose chain did not verify
+ * narrows nothing — is pinned end to end in
+ * `validation/manifest-2-trust-chain.e2e.test.ts` §6.
  */
 async function buildPair(sessions: SessionSpec[], policy: CapturePolicyBlock) {
   const legacy = await buildAndIndex(sessions);
@@ -56,6 +64,10 @@ async function buildPair(sessions: SessionSpec[], policy: CapturePolicyBlock) {
   const gated = await buildAndIndex(
     sessions.map((s) => ({ ...s, sessionStart: { ...(s.sessionStart ?? {}), ...start } })),
   );
+  const chain = await establishBundleTrust(gated.bundle, keys.rootPubkeyHex);
+  // If the fixture ever stops producing a verifiable chain, every "gated"
+  // assertion below would start passing for the wrong reason.
+  expect(chain.kind).toBe('verified');
 
   return { legacy, gated };
 }

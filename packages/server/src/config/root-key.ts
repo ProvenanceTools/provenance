@@ -22,6 +22,29 @@ export function rootPublicKeyHex(): string | undefined {
 }
 
 /**
+ * The configured root public key, or `undefined` — including when the process
+ * has no validated config at all.
+ *
+ * For call sites on the bundle READ path (`loadSubmissionIndex`), which run in
+ * two very different contexts: a live server, where `src/index.ts` parses and
+ * caches the env before it serves anything so `getConfig()` cannot throw; and
+ * unit tests that construct a DB and a blob store directly and never load an
+ * env. Letting the second case throw would make bundle parsing depend on OAuth
+ * credentials being present, which it plainly does not.
+ *
+ * The degradation is in the safe direction: no key means no verified trust
+ * chain, which means no course capture policy is honoured, which means
+ * heuristics fire rather than being silently gated away.
+ */
+export function rootPublicKeyHexIfConfigured(): string | undefined {
+  try {
+    return rootPublicKeyHex();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Validation options carrying the root key, for `runValidation` /
  * `runAndStoreValidation`.
  */

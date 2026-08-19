@@ -708,6 +708,14 @@ describe('a signed policy that disables terminal capture', () => {
             },
           ],
         });
+        // The chain must be walked before the policy counts — a cross-feature
+        // blob is extracted from a bundle the server re-parsed, so this mirrors
+        // `loadSubmissionIndex` establishing the verdict at parse time. Without
+        // it the pair would be scored, not skipped (see §6).
+        expect(
+          check(await runValidation(b, { rootPubkeyHex: keys.rootPubkeyHex }), 'session_binding')
+            .status,
+        ).toBe('pass');
         return extractCrossFeatures(b, buildIndex(b));
       }),
     );
@@ -719,7 +727,153 @@ describe('a signed policy that disables terminal capture', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. A suppressed event leaves no seq hole.
+// 6. An UNVERIFIED policy is not a policy.
+//
+//    Section 5 proves a signed policy narrows what the analyzer expects. This
+//    section proves the converse, which is the security-relevant half: a policy
+//    whose chain did not verify must narrow nothing. The failure direction is
+//    deliberate — when in doubt, heuristics fire and staff review. Never
+//    silently fewer flags.
+// ---------------------------------------------------------------------------
+
+describe('an unverified capture policy', () => {
+  const ALL_ON = { capture: { selection_change: true, focus_change: true, terminal: true } };
+  const TERMINAL_OFF = { capture: { selection_change: true, focus_change: true, terminal: false } };
+
+  /** A genuinely-signed manifest whose `policy` was edited afterwards. */
+  async function tamperedPolicyManifest(): Promise<Manifest> {
+    const genuine = await buildManifest2({
+      keys,
+      courseId: COURSE_ID,
+      assignmentId: ASSIGNMENT_ID,
+      semester: SEMESTER,
+      issuedAt: ISSUED_AT,
+      filesUnderReview: [FILE],
+      policy: ALL_ON,
+    });
+    return { ...genuine, policy: TERMINAL_OFF };
+  }
+
+  /** A genuinely-signed manifest that really does disable terminal capture. */
+  async function signedTerminalOffManifest(): Promise<Manifest> {
+    return buildManifest2({
+      keys,
+      courseId: COURSE_ID,
+      assignmentId: ASSIGNMENT_ID,
+      semester: SEMESTER,
+      issuedAt: ISSUED_AT,
+      filesUnderReview: [FILE],
+      policy: TERMINAL_OFF,
+    });
+  }
+
+  /**
+   * The terminal-heavy stream under `manifest`. A recorder that honoured a
+   * terminal-off policy would not have written these events — which is the
+   * point: the student edited the policy in *after* recording, precisely to have
+   * the analyzer discount events that are already in the log.
+   */
+  async function bundleWith(manifest: Manifest): Promise<Bundle> {
+    return buildBundle({
+      sessions: [{ sessionStart: sessionStart2(manifest), events: terminalHeavySession() }],
+    });
+  }
+
+  it('is ignored when the policy was edited after signing — the heuristics still fire', async () => {
+    const bundle = await bundleWith(await tamperedPolicyManifest());
+
+    const report = await runValidation(bundle, { rootPubkeyHex: keys.rootPubkeyHex });
+    expect(check(report, 'session_binding').status).toBe('fail');
+
+    // The edited policy must not have narrowed anything.
+    const resolved = resolveBundleCapturePolicy(bundle);
+    expect(resolved.disabledSignals).toEqual([]);
+    expect(resolved.effective.terminal).toBe(true);
+    expect(isSignalCaptured(bundle, 'terminal')).toBe(true);
+    // …but the attempt is recorded, so staff can see what was reached for.
+    expect(resolved.source).toBe('unverified_manifest');
+    expect(resolved.claimedDisabledSignals).toEqual(['terminal']);
+
+    const fired = new Set(
+      runHeuristics(buildIndex(bundle), bundle, report).map((f) => f.heuristic),
+    );
+    for (const id of TERMINAL_HEURISTICS) expect(fired).toContain(id);
+    expect(fired).toContain('session_binding_invalid');
+
+    // And the summary must not present the edited policy as course-sanctioned.
+    const summary = await summarizeBundleManifest(bundle, keys.rootPubkeyHex);
+    expect(summary.trust_chain).toBe('invalid');
+    expect(summary.disabled_signals).toEqual([]);
+    expect(summary.trust_chain_detail).toContain('terminal');
+  });
+
+  it('is ignored when no root key is configured, even though the signature is genuine', async () => {
+    // A deployment that never set the root key cannot verify anything, so it
+    // cannot honour a policy either. This IS a behaviour change for such a
+    // deployment — a course that legitimately disabled terminal capture will see
+    // these heuristics fire again — and it is the correct direction: an
+    // unconfigured root key is a deployment error, and the failure must be
+    // visible (flags + a `skipped` check 2) rather than silent suppression.
+    const bundle = await bundleWith(await signedTerminalOffManifest());
+
+    const report = await runValidation(bundle);
+    expect(check(report, 'session_binding').status).toBe('skipped');
+
+    const resolved = resolveBundleCapturePolicy(bundle);
+    expect(resolved.disabledSignals).toEqual([]);
+    expect(resolved.source).toBe('unverified_manifest');
+    expect(resolved.claimedDisabledSignals).toEqual(['terminal']);
+
+    const fired = new Set(
+      runHeuristics(buildIndex(bundle), bundle, report).map((f) => f.heuristic),
+    );
+    for (const id of TERMINAL_HEURISTICS) expect(fired).toContain(id);
+
+    const summary = await summarizeBundleManifest(bundle);
+    expect(summary.trust_chain).toBe('unconfigured');
+    expect(summary.disabled_signals).toEqual([]);
+    expect(summary.trust_chain_detail).toContain('terminal');
+  });
+
+  it('control: the same policy IS honoured once the chain verifies', async () => {
+    const bundle = await bundleWith(await signedTerminalOffManifest());
+
+    const report = await runValidation(bundle, { rootPubkeyHex: keys.rootPubkeyHex });
+    expect(check(report, 'session_binding').status).toBe('pass');
+
+    const resolved = resolveBundleCapturePolicy(bundle);
+    expect(resolved.source).toBe('manifest_2_0');
+    expect(resolved.disabledSignals).toEqual(['terminal']);
+
+    const fired = new Set(
+      runHeuristics(buildIndex(bundle), bundle, report).map((f) => f.heuristic),
+    );
+    for (const id of TERMINAL_HEURISTICS) expect(fired).not.toContain(id);
+  });
+
+  it('cannot be used to shield a collusion partner from cross-submission flags', async () => {
+    // The worst consequence of an unverified policy is not the self-inflicted
+    // one. `editing_pattern_clone` is not-applicable when EITHER side had a
+    // kind-stream signal disabled, so a student who tampers with their own
+    // manifest absorbs a `session_binding_invalid` flag and in exchange shields
+    // their counterpart, against whom nothing is recorded at all.
+    const honest = await bundleWith(await buildManifest2({ keys, courseId: COURSE_ID }));
+    const tampered = await bundleWith(await tamperedPolicyManifest());
+
+    for (const b of [honest, tampered]) {
+      await runValidation(b, { rootPubkeyHex: keys.rootPubkeyHex });
+    }
+
+    const features = [honest, tampered].map((b) => extractCrossFeatures(b, buildIndex(b)));
+    expect(features.map((f) => f.disabledCaptureSignals)).toEqual([[], []]);
+    expect(editingPatternCloneHeuristic.run(features, DEFAULT_CROSS_HEURISTIC_CONFIG)).toHaveLength(
+      1,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. A suppressed event leaves no seq hole.
 // ---------------------------------------------------------------------------
 
 describe('policy suppression and the hash chain', () => {

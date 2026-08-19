@@ -21,6 +21,7 @@ import {
   buildManifest2,
   sessionStart2,
 } from '@provenance/analysis-core/test-support/build-manifest-2.js';
+import { establishBundleTrust } from '@provenance/analysis-core/manifest/bundle-manifest.js';
 import { extractCrossFeaturesFromIndex } from './extract-cross-features.js';
 
 const SESSION = '11111111-1111-1111-1111-111111111111';
@@ -156,7 +157,7 @@ describe('extractCrossFeaturesFromIndex — capture policy', () => {
     expect(features.disabledCaptureSignals).toEqual([]);
   });
 
-  it("carries a 2.0 bundle's disabled signals through to the cross-heuristics", async () => {
+  it("carries a VERIFIED 2.0 bundle's disabled signals through to the cross-heuristics", async () => {
     const keys = await buildTrustChainKeys();
     const manifest = await buildManifest2({
       keys,
@@ -167,6 +168,9 @@ describe('extractCrossFeaturesFromIndex — capture policy', () => {
     });
     const parsed = await loadBundle(zipBuffer, 'b.zip');
     if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+    // What loadSubmissionIndex does for every bundle it hands out. Without it
+    // the policy is not honoured at all — see the next case.
+    await establishBundleTrust(parsed.value, keys.rootPubkeyHex);
 
     const { features } = extractCrossFeaturesFromIndex(
       buildIndex(parsed.value),
@@ -175,5 +179,33 @@ describe('extractCrossFeaturesFromIndex — capture policy', () => {
       parsed.value,
     );
     expect(features.disabledCaptureSignals).toEqual(['focus_change', 'terminal']);
+  });
+
+  it('reports no disabled signals for a 2.0 bundle whose trust chain did not verify', async () => {
+    // The evasion this closes: `editing_pattern_clone` declines the comparison
+    // when EITHER side had a kind-stream signal disabled, so a student who
+    // tampers with their own manifest would suppress every cross-flag between
+    // themselves and a collusion partner — who would have nothing recorded
+    // against them at all. An unverified policy must narrow nothing.
+    const keys = await buildTrustChainKeys();
+    const wrongRoot = await buildTrustChainKeys(0x33, 0x44);
+    const manifest = await buildManifest2({
+      keys,
+      policy: { capture: { terminal: false, focus_change: false } },
+    });
+    const { zipBuffer } = await buildTestBundle({
+      sessions: [{ sessionId: SESSION, sessionStart: sessionStart2(manifest) }],
+    });
+    const parsed = await loadBundle(zipBuffer, 'b.zip');
+    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+    await establishBundleTrust(parsed.value, wrongRoot.rootPubkeyHex);
+
+    const { features } = extractCrossFeaturesFromIndex(
+      buildIndex(parsed.value),
+      'sub-1',
+      'bundle-1',
+      parsed.value,
+    );
+    expect(features.disabledCaptureSignals).toEqual([]);
   });
 });

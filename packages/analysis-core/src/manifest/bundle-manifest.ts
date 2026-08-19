@@ -34,6 +34,46 @@
  * {@link isSignalCaptured} (or {@link bundleHeartbeatIntervalMs}) and return
  * not-applicable rather than a flag or a zero.
  *
+ * ## An UNVERIFIED policy is not a policy
+ *
+ * The policy block lives inside the course-signed payload so that "a professor
+ * can turn capture down, a student cannot turn it off". That guarantee is only
+ * real if the signature is checked BEFORE the policy is honoured — and
+ * `session.start.data.manifest` arrives from a file the student can edit.
+ *
+ * So {@link resolveBundleCapturePolicy} honours an embedded policy only when
+ * `bundle.capturePolicyTrust` is `'verified'`. Anything else — a tampered
+ * payload, a rogue certificate, a 1.x downgrade, or simply a deployment with no
+ * root public key configured — resolves to {@link DEFAULT_CAPTURE_POLICY}, i.e.
+ * everything captured. The failure direction is deliberate: when in doubt,
+ * heuristics fire and staff review. Never silently fewer flags.
+ *
+ * That mattered most for the cross-submission heuristics. `editing_pattern_clone`
+ * is not-applicable when EITHER side had a kind-stream signal disabled, so
+ * before this gate a student could tamper with their own manifest, absorb a
+ * `session_binding_invalid` flag, and in exchange suppress every cross-flag
+ * between themselves and a collusion partner — against whom nothing at all
+ * would be recorded. That is an evasion path, not an inconsistency.
+ *
+ * ### The seam
+ *
+ * Verification is async; `isSignalCaptured` is called inline by synchronous
+ * heuristics. So the verdict is established ONCE, by {@link establishBundleTrust},
+ * and stamped onto the bundle; policy resolution then reads a boolean instead of
+ * doing crypto. Two callers stamp it, and between them they cover every
+ * consumer:
+ *
+ *  - **validation check 2** (`verify-session-binding.ts`) — it already walks the
+ *    chain, so every path that runs `runValidation` before `runHeuristics` is
+ *    covered: server ingest, server recompute, and the browser `/local` route
+ *    (`BundleContext`), which validates before it runs heuristics or extracts
+ *    cross-features.
+ *  - **the server's `loadSubmissionIndex`** — the single re-parse point for
+ *    every stored bundle, covering read paths that do NOT re-run validation,
+ *    notably the cross-flag job (`run-cross.ts`).
+ *
+ * An unstamped bundle is untrusted, so a path nobody thought about fails safe.
+ *
  * ## Why "most restrictive wins" when sessions disagree
  *
  * A bundle's sessions should all carry the same manifest — check 2 fails if
@@ -60,7 +100,7 @@ import type {
   CapturePolicy,
   CertWindowStatus,
 } from '@provenance/log-core';
-import type { Bundle } from '../loader/types.js';
+import type { Bundle, CapturePolicyTrust } from '../loader/types.js';
 
 // ---------------------------------------------------------------------------
 // Session-level extraction
@@ -141,29 +181,53 @@ export const CAPTURE_SIGNALS: readonly CaptureSignal[] = [
 
 export type BundleCapturePolicy = {
   /**
-   * `'manifest_2_0'` when at least one session carried a 2.0 manifest with a
-   * policy block; `'default'` for every 1.x bundle.
+   * - `'manifest_2_0'` — at least one session carried a 2.0 manifest AND the
+   *   bundle's trust chain verified, so `effective` is the course's own policy.
+   * - `'unverified_manifest'` — a 2.0 manifest is present but unverified (chain
+   *   invalid, or no root key configured). `effective` is the DEFAULT policy;
+   *   what the manifest asked for is in `claimedDisabledSignals`.
+   * - `'default'` — no embedded manifest at all, i.e. every 1.x bundle.
    */
-  source: 'manifest_2_0' | 'default';
+  source: 'manifest_2_0' | 'unverified_manifest' | 'default';
   /** The policy heuristics must gate on. See the module docstring for the merge. */
   effective: CapturePolicy;
   /** Per-session resolved policy, for consumers that reason per session. */
   bySession: Map<string, CapturePolicy>;
-  /** Gated signals the course switched off. Always empty when `source` is `'default'`. */
+  /**
+   * Gated signals that are genuinely off: the course signed for it and the
+   * signature verified. Empty unless `source` is `'manifest_2_0'`.
+   */
   disabledSignals: CaptureSignal[];
+  /**
+   * What the embedded policy asks to disable, verified or not. Identical to
+   * `disabledSignals` when the chain verified; when it did not, this is the
+   * suppression that was refused — the analyzer reports it so staff can see
+   * what was reached for rather than silently dropping it.
+   */
+  claimedDisabledSignals: CaptureSignal[];
 };
+
+/** The trust verdict stamped on a bundle; `'unverified'` until proven otherwise. */
+export function bundleCapturePolicyTrust(bundle: Bundle): CapturePolicyTrust {
+  return bundle.capturePolicyTrust ?? 'unverified';
+}
 
 /**
  * Resolve the effective capture policy recorded in a bundle.
  *
  * Cheap (one pass over sessions) and pure, so heuristics call it directly
- * rather than threading it through the `Heuristic.run` signature.
+ * rather than threading it through the `Heuristic.run` signature. An embedded
+ * policy is honoured ONLY when the bundle's trust chain has been verified — see
+ * "An UNVERIFIED policy is not a policy" in the module docstring.
  */
 export function resolveBundleCapturePolicy(bundle: Bundle): BundleCapturePolicy {
+  const trusted = bundleCapturePolicyTrust(bundle) === 'verified';
+
   const bySession = new Map<string, CapturePolicy>();
   let sawManifest = false;
 
   const effective: CapturePolicy = { ...DEFAULT_CAPTURE_POLICY };
+  const claimed: CapturePolicy = { ...DEFAULT_CAPTURE_POLICY };
   let intervalSeen = false;
 
   for (const binding of readSessionManifests(bundle)) {
@@ -175,22 +239,28 @@ export function resolveBundleCapturePolicy(bundle: Bundle): BundleCapturePolicy 
     }
     sawManifest = true;
     const resolved = resolveCapturePolicy(binding.manifest.policy);
-    bySession.set(binding.sessionId, resolved);
+    // Per-session too: an unverified policy narrows nothing, anywhere.
+    bySession.set(binding.sessionId, trusted ? resolved : { ...DEFAULT_CAPTURE_POLICY });
 
     for (const signal of CAPTURE_SIGNALS) {
-      if (!resolved[signal]) effective[signal] = false;
+      if (!resolved[signal]) {
+        claimed[signal] = false;
+        if (trusted) effective[signal] = false;
+      }
     }
-    effective.heartbeat_interval_ms = intervalSeen
-      ? Math.max(effective.heartbeat_interval_ms, resolved.heartbeat_interval_ms)
+    claimed.heartbeat_interval_ms = intervalSeen
+      ? Math.max(claimed.heartbeat_interval_ms, resolved.heartbeat_interval_ms)
       : resolved.heartbeat_interval_ms;
+    if (trusted) effective.heartbeat_interval_ms = claimed.heartbeat_interval_ms;
     intervalSeen = true;
   }
 
   return {
-    source: sawManifest ? 'manifest_2_0' : 'default',
+    source: !sawManifest ? 'default' : trusted ? 'manifest_2_0' : 'unverified_manifest',
     effective,
     bySession,
     disabledSignals: CAPTURE_SIGNALS.filter((s) => !effective[s]),
+    claimedDisabledSignals: CAPTURE_SIGNALS.filter((s) => !claimed[s]),
   };
 }
 
@@ -198,7 +268,8 @@ export function resolveBundleCapturePolicy(bundle: Bundle): BundleCapturePolicy 
  * Was `signal` captured for this bundle?
  *
  * The gate every policy-sensitive heuristic calls. `true` for every 1.x bundle,
- * so pre-2.0 behaviour is byte-for-byte unchanged.
+ * so pre-2.0 behaviour is byte-for-byte unchanged — and `true` for any 2.0
+ * bundle whose chain has not been verified.
  */
 export function isSignalCaptured(bundle: Bundle, signal: CaptureSignal): boolean {
   return resolveBundleCapturePolicy(bundle).effective[signal];
@@ -339,6 +410,32 @@ export async function verifyBundleTrustChain(
   return { kind: 'verified', manifest, chain: chain.value };
 }
 
+/**
+ * Walk the trust chain AND stamp the verdict onto the bundle, so that the
+ * synchronous, crypto-free {@link resolveBundleCapturePolicy} can consult it.
+ *
+ * This is the seam described in the module docstring. It mutates its argument —
+ * the one piece of mutation in this module — because every holder of the
+ * Bundle reference (the server's LRU-cached `{ bundle, index }`, the browser's
+ * `BundleContext` state, the heuristics that receive it) must see the same
+ * verdict, and a copy would silently leave the originals untrusted.
+ *
+ * Idempotent, and cheap to repeat relative to bundle parsing. Callers that need
+ * the chain detail (check 2, the summary) use the return value; callers that
+ * only need the gate to be correct (`loadSubmissionIndex`) can ignore it.
+ */
+export async function establishBundleTrust(
+  bundle: Bundle,
+  rootPubkeyHex?: string,
+): Promise<BundleTrustChain> {
+  const chain = await verifyBundleTrustChain(bundle, rootPubkeyHex);
+  // `legacy` is stamped unverified too: a 1.x bundle carries no policy to
+  // honour, so the two verdicts are indistinguishable for policy resolution and
+  // the narrower one is the honest label.
+  bundle.capturePolicyTrust = chain.kind === 'verified' ? 'verified' : 'unverified';
+  return chain;
+}
+
 // ---------------------------------------------------------------------------
 // UI/API-facing summary
 // ---------------------------------------------------------------------------
@@ -370,7 +467,15 @@ export type BundleManifestSummary = {
   heartbeat_interval_ms: number;
   cert: BundleManifestCert | null;
   trust_chain: 'legacy' | 'unconfigured' | 'verified' | 'invalid';
-  /** Human-readable cause when `trust_chain` is `'invalid'`. */
+  /**
+   * Human-readable cause when `trust_chain` is `'invalid'`.
+   *
+   * Also set when the chain did not verify (`'invalid'` OR `'unconfigured'`)
+   * and the unverified manifest asked for signals to be switched off: staff
+   * must be able to see that a suppression was requested and REFUSED, rather
+   * than reading `disabled_signals: []` and concluding the manifest was
+   * ordinary. `null` whenever there is nothing to say.
+   */
   trust_chain_detail: string | null;
 };
 
@@ -406,15 +511,34 @@ export function describeTrustChainError(error: BundleTrustChainError): string {
 }
 
 /**
+ * Explain a capture policy the analyzer refused to honour.
+ *
+ * `disabled_signals: []` on a manifest that plainly carries a policy is exactly
+ * the state a tampering student wants to look unremarkable, so it never goes
+ * out unannotated.
+ */
+function refusedPolicyNote(refused: CaptureSignal[], chainKind: BundleTrustChain['kind']): string {
+  const lead =
+    chainKind === 'unconfigured'
+      ? `No root public key is configured, so the trust chain could not be verified. ` +
+        `The manifest asks to disable ${refused.join(', ')}`
+      : `The manifest also asks to disable ${refused.join(', ')}`;
+  return `${lead} — an unverified policy is not honoured, so every signal is treated as captured and the heuristics that read them still run.`;
+}
+
+/**
  * Summarize a bundle's assignment manifest, verifying the trust chain when a
  * root public key is available.
+ *
+ * Establishes the trust verdict first (see {@link establishBundleTrust}), so
+ * the `disabled_signals` it reports are the ones heuristics actually gate on.
  */
 export async function summarizeBundleManifest(
   bundle: Bundle,
   rootPubkeyHex?: string,
 ): Promise<BundleManifestSummary> {
+  const chain = await establishBundleTrust(bundle, rootPubkeyHex);
   const policy = resolveBundleCapturePolicy(bundle);
-  const chain = await verifyBundleTrustChain(bundle, rootPubkeyHex);
 
   const manifest = chain.kind === 'legacy' ? null : chain.manifest;
   const isV2 = manifest !== null && manifestFormatVersion(manifest) === MANIFEST_FORMAT_VERSION_2;
@@ -441,6 +565,12 @@ export async function summarizeBundleManifest(
     };
   }
 
+  const refused = policy.source === 'unverified_manifest' ? policy.claimedDisabledSignals : [];
+  const details = [
+    chain.kind === 'invalid' ? describeTrustChainError(chain.error) : null,
+    refused.length > 0 ? refusedPolicyNote(refused, chain.kind) : null,
+  ].filter((d): d is string => d !== null);
+
   return {
     format_version: isV2 ? '2.0' : '1.x',
     course_id: manifest?.course_id ?? null,
@@ -451,6 +581,6 @@ export async function summarizeBundleManifest(
     heartbeat_interval_ms: policy.effective.heartbeat_interval_ms,
     cert,
     trust_chain: chain.kind,
-    trust_chain_detail: chain.kind === 'invalid' ? describeTrustChainError(chain.error) : null,
+    trust_chain_detail: details.length === 0 ? null : details.join('. '),
   };
 }

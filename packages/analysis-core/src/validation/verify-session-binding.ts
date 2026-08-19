@@ -49,11 +49,20 @@
  * `analysis-core` is isomorphic and must stay pure — it never hardcodes a key.
  * When no root key is configured the 2.0 chain cannot be walked, and the check
  * reports `skipped` rather than pretending either way.
+ *
+ * ## This check has one side effect, and it is load-bearing
+ *
+ * It stamps the trust verdict onto the bundle (`establishBundleTrust`). The
+ * course-signed capture policy gates heuristics, so it may only be honoured
+ * once its signature has actually been checked — and the check happens here.
+ * A `skipped` verdict therefore also means "the policy was not honoured": a
+ * deployment with no root key gets flags it might have gated away, which is the
+ * correct direction for a deployment error. See `manifest/bundle-manifest.ts`.
  */
 
 import type { Bundle } from '../loader/types.js';
 import type { ValidationCheck } from './check-types.js';
-import { verifyBundleTrustChain, describeTrustChainError } from '../manifest/bundle-manifest.js';
+import { establishBundleTrust, describeTrustChainError } from '../manifest/bundle-manifest.js';
 
 const LABEL = 'Session binding to assignment manifest';
 
@@ -119,7 +128,12 @@ export async function verifySessionBinding(
     };
   }
 
-  const chain = await verifyBundleTrustChain(bundle, options.rootPubkeyHex);
+  // `establishBundleTrust`, not `verifyBundleTrustChain`: this check is the
+  // place the chain is walked, so it is also the place that records whether it
+  // verified. Everything downstream — every policy-gated heuristic, via
+  // `isSignalCaptured` — reads that verdict instead of redoing async crypto in
+  // a synchronous call site. See the seam note in `manifest/bundle-manifest.ts`.
+  const chain = await establishBundleTrust(bundle, options.rootPubkeyHex);
 
   switch (chain.kind) {
     case 'legacy':

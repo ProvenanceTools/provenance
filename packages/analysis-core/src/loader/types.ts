@@ -81,6 +81,20 @@ export type ParsedSession = {
 // Bundle — fully loaded, sorted, validated
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether this bundle's Manifest 2.0 trust chain has actually been verified.
+ *
+ * The one input `resolveBundleCapturePolicy` consults before honouring a
+ * course-signed capture policy. It lives on the Bundle — rather than being
+ * threaded through `Heuristic.run` — because signature verification is async
+ * and `isSignalCaptured` must stay pure, synchronous and cheap enough for a
+ * heuristic to call inline. See `manifest/bundle-manifest.ts`.
+ *
+ * `undefined` means nobody has verified this bundle yet and is treated exactly
+ * like `'unverified'`: an unverified policy is not a policy.
+ */
+export type CapturePolicyTrust = 'verified' | 'unverified';
+
 export type Bundle = {
   /**
    * Stable per-bundle identifier. Computed at load time via crypto.randomUUID()
@@ -88,6 +102,14 @@ export type Bundle = {
    * BundleContext's per-bundle maps (indicesByBundle, etc.).
    */
   id: string;
+  /**
+   * Trust-chain verdict, stamped by `establishBundleTrust` (which check 2 and
+   * the server's `loadSubmissionIndex` both call). Deliberately mutable and
+   * deliberately absent from the loader's output: `loadBundle` performs no
+   * signature work, so a freshly parsed bundle is untrusted until something
+   * with a root public key says otherwise.
+   */
+  capturePolicyTrust?: CapturePolicyTrust;
   manifest: BundleManifest;
   /** Hex-encoded ed25519 signature over canonical manifest JSON. */
   manifestSigHex: string;

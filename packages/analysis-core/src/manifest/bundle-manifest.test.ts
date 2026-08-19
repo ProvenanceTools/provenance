@@ -14,6 +14,7 @@ import {
   isSignalCaptured,
   bundleHeartbeatIntervalMs,
   verifyBundleTrustChain,
+  establishBundleTrust,
   summarizeBundleManifest,
 } from './bundle-manifest.js';
 
@@ -67,7 +68,7 @@ describe('resolveBundleCapturePolicy', () => {
     expect(resolved.disabledSignals).toEqual([]);
   });
 
-  it('reads the course policy out of a 2.0 manifest', async () => {
+  it('reads the course policy out of a VERIFIED 2.0 manifest', async () => {
     const keys = await buildTrustChainKeys();
     const manifest = await buildManifest2({
       keys,
@@ -78,6 +79,8 @@ describe('resolveBundleCapturePolicy', () => {
     const bundle = await load(
       await buildTestBundle({ sessions: [{ sessionStart: sessionStart2(manifest) }] }),
     );
+    await establishBundleTrust(bundle, keys.rootPubkeyHex);
+
     const resolved = resolveBundleCapturePolicy(bundle);
     expect(resolved.source).toBe('manifest_2_0');
     expect(resolved.effective.selection_change).toBe(false);
@@ -85,6 +88,40 @@ describe('resolveBundleCapturePolicy', () => {
     expect(resolved.effective.focus_change).toBe(true);
     expect(resolved.effective.heartbeat_interval_ms).toBe(90_000);
     expect(resolved.disabledSignals).toEqual(['selection_change', 'terminal']);
+    expect(resolved.claimedDisabledSignals).toEqual(['selection_change', 'terminal']);
+  });
+
+  it('ignores the policy of a 2.0 manifest whose chain has not been verified', async () => {
+    // The gate the whole policy mechanism rests on: `policy` lives inside the
+    // signed payload so a professor can turn capture down and a student cannot
+    // turn it off, and that only holds if the signature is checked FIRST. An
+    // unstamped bundle — nobody ran check 2, or it failed — resolves to the
+    // defaults: everything captured, heuristics fire, staff review.
+    const keys = await buildTrustChainKeys();
+    const manifest = await buildManifest2({
+      keys,
+      policy: {
+        capture: { selection_change: false, terminal: false, heartbeat_interval_ms: 90_000 },
+      },
+    });
+    const bundle = await load(
+      await buildTestBundle({ sessions: [{ sessionStart: sessionStart2(manifest) }] }),
+    );
+
+    const resolved = resolveBundleCapturePolicy(bundle);
+    expect(resolved.source).toBe('unverified_manifest');
+    expect(resolved.effective).toEqual(DEFAULT_CAPTURE_POLICY);
+    expect(resolved.disabledSignals).toEqual([]);
+    // …but the refused request is still reported, so staff can see it.
+    expect(resolved.claimedDisabledSignals).toEqual(['selection_change', 'terminal']);
+    expect(isSignalCaptured(bundle, 'terminal')).toBe(true);
+    expect(bundleHeartbeatIntervalMs(bundle)).toBe(30_000);
+
+    // A failed verification is not merely "not yet verified": stamping the
+    // verdict from a chain that did not check out must leave it ignored too.
+    const wrongRoot = await buildTrustChainKeys(0x33, 0x44);
+    await establishBundleTrust(bundle, wrongRoot.rootPubkeyHex);
+    expect(resolveBundleCapturePolicy(bundle).disabledSignals).toEqual([]);
   });
 
   it('takes the most restrictive value when sessions disagree', async () => {
@@ -102,6 +139,11 @@ describe('resolveBundleCapturePolicy', () => {
         ],
       }),
     );
+    // Both manifests are genuinely signed; the sessions disagreeing is what is
+    // under test, so the bundle is stamped verified directly rather than
+    // through the chain walk (which rejects a mixed `manifest_sig` bundle).
+    bundle.capturePolicyTrust = 'verified';
+
     const resolved = resolveBundleCapturePolicy(bundle);
     // Disabled anywhere → treated as disabled everywhere: absence is explained.
     expect(resolved.effective.focus_change).toBe(false);
