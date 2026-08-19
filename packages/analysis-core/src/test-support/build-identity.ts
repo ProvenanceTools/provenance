@@ -118,10 +118,10 @@ export async function buildInstitutionIdentity(
     sessionPubkeyHex,
     institutionId = 'berkeley',
     studentRef = '9c8e1a70-2f2b-4c55-8f1e-6b4a0d9c7e21',
-    issuedAt = '2026-09-01T00:00:00Z',
-    expiresAt = '2027-01-15',
-    validFrom = '2026-08-20',
-    validUntil = '2027-01-15',
+    issuedAt = '2025-12-15T00:00:00Z',
+    expiresAt = '2026-12-31',
+    validFrom = '2025-12-01',
+    validUntil = '2026-12-31',
   } = opts;
 
   const unsignedCert: Omit<InstitutionCert, 'root_sig'> = {
@@ -200,10 +200,10 @@ export async function buildCourseIdentity(
     sessionPubkeyHex,
     courseId = 'berkeley-cs61b',
     studentRef = '5f0c2b31-7d44-4a19-9c88-1e2f3a4b5c6d',
-    issuedAt = '2026-09-01T00:00:00Z',
-    expiresAt = '2027-01-15',
-    validFrom = '2026-08-20',
-    validUntil = '2027-01-15',
+    issuedAt = '2025-12-15T00:00:00Z',
+    expiresAt = '2026-12-31',
+    validFrom = '2025-12-01',
+    validUntil = '2026-12-31',
   } = opts;
 
   const unsignedCert: Omit<EnrollmentCert, 'course_sig'> = {
