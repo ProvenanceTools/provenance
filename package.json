@@ -9,6 +9,7 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
+    "test:tools": "vitest run",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint 'packages/log-core/src' 'packages/analysis-core/src' 'packages/recorder/src' 'packages/analyzer/src' 'packages/server/src' 'packages/shared/src' && prettier --check .",
     "package:recorder": "npm run build && npm run package --workspace=packages/recorder",
