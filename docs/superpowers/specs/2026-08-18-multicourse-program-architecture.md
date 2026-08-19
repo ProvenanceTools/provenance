@@ -91,11 +91,15 @@ Fixed decisions:
 - **The session-key KDF is unchanged.** `session-keys.ts` still uses the manifest
   signature as HKDF IKM; that signature is now produced by a course key instead of
   the single embedded key.
-- **Revocation is server-side only.** An offline recorder cannot learn that a key
-  was revoked without breaking recorder PRD NG2. The analyzer/server keeps a
-  revoked-cert list and flags submissions signed under one. Mitigation for the gap
-  is short validity windows — one semester per cert. This is a real, accepted
-  limitation and must be written into the S0 spec, not papered over.
+- **Revocation is server-side only, and MUST key on `course_pubkey`, not on cert
+  identity.** The cert sits outside the signed payload, so the student's copy of it is
+  whatever travelled with their repo — they choose which cert ships. Revoking "that
+  certificate" is therefore meaningless; revoking the public key it vouches for is not.
+  An offline recorder cannot learn about revocation at all without breaking recorder
+  PRD NG2, so this lives in the analyzer/server, which flags any submission whose
+  chain terminates in a revoked `course_pubkey`. Mitigation for the offline gap is
+  short validity windows — one semester per cert. A real, accepted limitation; write
+  it into the S0 spec rather than papering over it.
 - **Enrollment tokens carry an opaque `student_ref`, never a raw SID.** In a shared
   61B repo, one partner can read the other's `session.start`. The server maps
   `student_ref` → `roster_entries.id`; a partner sees only a UUID.
@@ -110,29 +114,30 @@ Fixed decisions:
 {
   "format_version": "2.0",
 
-  "course_id":          "berkeley-cs61b",   // ┐
-  "assignment_id":      "proj2",            // │
-  "semester":           "fa26",             // ├─ canonicalized + signed by COURSE key
-  "issued_at":          "2026-09-08T00:00:00Z", // │
-  "files_under_review": ["..."],            // │
-  "collaboration":      "solo",             // │  "solo" | "group"
-  "submission":         "bundle",           // │  "bundle" | "git"
-  "scope":              "directory",        // │  "directory" | "repo"
-  "policy":             { "...": "..." },   // ┘  see §4
+  "course_id": "berkeley-cs61b", // ┐
+  "assignment_id": "proj2", // │
+  "semester": "fa26", // ├─ canonicalized + signed by COURSE key
+  "issued_at": "2026-09-08T00:00:00Z", // │
+  "files_under_review": ["..."], // │
+  "collaboration": "solo", // │  "solo" | "group"
+  "submission": "bundle", // │  "bundle" | "git"
+  "scope": "directory", // │  "directory" | "repo"
+  "policy": { "...": "..." }, // ┘  see §4
   "sig": "9c2e…",
 
-  "course_cert": {                          // ┐
-    "course_id":     "berkeley-cs61b",      // ├─ canonicalized + signed by ROOT key
-    "course_pubkey": "a91f…",               // │
-    "valid_from":    "2026-08-20",          // │
-    "valid_until":   "2027-01-15",          // ┘
-    "root_sig": "4b70…"
-  }
+  "course_cert": {
+    // ┐
+    "course_id": "berkeley-cs61b", // ├─ canonicalized + signed by ROOT key
+    "course_pubkey": "a91f…", // │
+    "valid_from": "2026-08-20", // │
+    "valid_until": "2027-01-15", // ┘
+    "root_sig": "4b70…",
+  },
 }
 ```
 
 **`Manifest` has no `format_version` field today.** 1.x manifests are therefore
-identified by its *absence*; the parser MUST default a missing `format_version` to
+identified by its _absence_; the parser MUST default a missing `format_version` to
 `"1.0"` and continue, never reject. Conformance vector required.
 
 `buildSignedPayload` excludes `sig` **and** `course_cert` — the course does not
@@ -140,11 +145,28 @@ sign its own certificate.
 
 Verification order (identical in all three recorders):
 
+0. **Assert `format_version === "2.0"` before walking the chain at all.** This gate is
+   a security control, not a formality. At 1.x, `course_id`, `collaboration`,
+   `submission`, `scope`, and `policy` are NOT in the signed payload — so a student
+   holding any legitimately issued 1.x manifest from their own course could staple on
+   that course's certificate (public, root-signed, freely copyable from any 2.0
+   manifest), add a matching `course_id` to satisfy step 3, and staple on an invented
+   `policy` disabling all capture. Every signature would verify. Without step 0, the
+   policy block's entire reason for living inside the signed payload is defeated and
+   students get the off switch. Chain-verify 2.0 only; 1.x manifests take the legacy
+   `verifyManifest` path and have no policy.
+   0b. **Validate the 2.0 shape before any signature work.** `canonicalize` omits keys
+   whose value is `undefined`, so a 2.0 manifest missing `policy` entirely would sign
+   and chain cleanly while carrying no policy at all.
 1. `course_cert` minus `root_sig` → verify against embedded root pubkey. Fail → do not activate.
 2. Payload minus `sig` and `course_cert` → verify against `course_cert.course_pubkey`. Fail → do not activate.
 3. Assert `manifest.course_id === course_cert.course_id`. Fail → do not activate.
 4. Check `issued_at` falls within `[valid_from, valid_until]`. **Out of window does
    NOT block activation** — see §4.
+
+All 2.0 fields are **required**, not optional. A fixed key set means the Kotlin and Lua
+ports canonicalize without needing a "which optionals were present" rule — which would
+be a divergence risk across three hand-written implementations.
 
 Unknown top-level keys MUST be ignored, for forward compatibility. Note this means
 unknown keys are also unsigned-payload-affecting: canonicalization operates on the
@@ -175,8 +197,8 @@ never be disabled**, because validation checks 3–8 and the integrity story dep
 on them:
 
 `session.start`, `session.end`, `session.resumed`, `doc.change`, `doc.save`,
-`paste`, `fs.external_change`, `git.event`, `clock.skew`, `chain.broken`,
-`ext.snapshot`, `ext.activate`, `recorder.degraded`,
+`paste`, `paste.anomaly`, `fs.external_change`, `git.event`, `clock.skew`,
+`chain.broken`, `ext.snapshot`, `ext.activate`, `recorder.degraded`,
 `recorder.recovered_from_corruption`, `session.heartbeat`
 
 The floor is enforced by the schema itself: floor events simply have no key in
@@ -188,15 +210,15 @@ is tunable.
 because otherwise the analyzer cannot distinguish "this student produced no
 `selection.change` events" from "this course disabled `selection.change`", and
 heuristics will mis-fire on the difference. Any heuristic that consumes an optional
-signal MUST consult the recorded policy and return *not-applicable* rather than a
+signal MUST consult the recorded policy and return _not-applicable_ rather than a
 flag or a zero. **The S1 spec must include an audit of all 25 heuristics against
 this rule.**
 
 **Expired cert does not stop recording.** If a course lets a cert lapse mid-semester,
 refusing to activate would silently stop recording for an entire class — a worse
 failure for an integrity tool than recording under a stale key. The recorder records
-and stamps the expiry into `session.start`; the analyzer decides. *(Product call —
-flagged for approval, see §11.)*
+and stamps the expiry into `session.start`; the analyzer decides. _(Product call —
+flagged for approval, see §11.)_
 
 ---
 
@@ -207,27 +229,35 @@ ignore what they do not know.
 
 ```ts
 // retained, unchanged
-format_version, session_id, prev_session_id, assignment, manifest_sig,
-machine_id, recorder, session_pubkey
+(format_version,
+  session_id,
+  prev_session_id,
+  assignment,
+  manifest_sig,
+  machine_id,
+  recorder,
+  session_pubkey);
 
 // NEW in 2.0
-manifest: Manifest        // the FULL manifest: payload + sig + course_cert
+manifest: Manifest; // the FULL manifest: payload + sig + course_cert
 identity: {
-  enrollment: {           // signed by the course key
-    student_ref: string   // opaque UUID, never a raw SID
-    course_id: string
-    student_pubkey: string
-    issued_at: string
-    expires_at: string
-    course_sig: string
+  enrollment: {
+    // signed by the course key
+    student_ref: string; // opaque UUID, never a raw SID
+    course_id: string;
+    student_pubkey: string;
+    issued_at: string;
+    expires_at: string;
+    course_sig: string;
   }
-  session_pubkey_sig: string   // student per-course key's sig over session_pubkey
+  session_pubkey_sig: string; // student per-course key's sig over session_pubkey
 }
-host: {                   // replaces the VS Code-shaped `vscode` block
-  editor: 'vscode' | 'jetbrains' | 'neovim'
-  editor_version: string
-  editor_build: string    // '' permitted — VS Code does not expose this
-  platform: string
+host: {
+  // replaces the VS Code-shaped `vscode` block
+  editor: 'vscode' | 'jetbrains' | 'neovim';
+  editor_version: string;
+  editor_build: string; // '' permitted — VS Code does not expose this
+  platform: string;
 }
 ```
 
@@ -248,7 +278,7 @@ Two consequences worth stating:
 
 A discovered `.provenance/` is already self-identifying: both `.provenance-manifest`
 and the sealed `manifest.json` carry `assignment_id` and `semester`. So ingest does
-not need to be told *where to look* — it needs to be told *what to accept*.
+not need to be told _where to look_ — it needs to be told _what to accept_.
 
 Default: walk the whole tree, find every bundle, filter by declared `assignment_id`.
 That covers all three observed repo shapes (manifest at root; manifest in one
@@ -303,15 +333,15 @@ Peer witnessing needs a new event kind and is therefore a tri-repo change.
 
 ## 8. Sub-projects and dependency order
 
-| | Sub-project | Repos touched | Unblocks |
-|---|---|---|---|
-| **S0** | Root key → course cert hierarchy | 3 recorders, server | Any second course, group or not |
-| **S1** | Manifest 2.0: policy + capability flags | 3 recorders, analysis-core, analyzer | Professor capture controls; `collaboration`/`submission` flags |
-| **S2** | Student identity + enrollment tokens | 3 recorders, server | Attribution that survives a denial |
-| **S3** | Git-native ingest: scope discovery, fan-out, rolling seal | server, 3 recorders | 61B/61C for solo assignments |
-| **S4** | Contributor model + peer witnessing | server, analyzer, 3 recorders | Group submissions as first-class |
-| **S5** | Commit-graph capture + branching replay | 3 recorders, analyzer | Replay matching real pair workflow |
-| **S6** | CPHS amendment, partner-visibility consent, quota | docs, ops | Deployment gate; runs in parallel |
+|        | Sub-project                                               | Repos touched                        | Unblocks                                                       |
+| ------ | --------------------------------------------------------- | ------------------------------------ | -------------------------------------------------------------- |
+| **S0** | Root key → course cert hierarchy                          | 3 recorders, server                  | Any second course, group or not                                |
+| **S1** | Manifest 2.0: policy + capability flags                   | 3 recorders, analysis-core, analyzer | Professor capture controls; `collaboration`/`submission` flags |
+| **S2** | Student identity + enrollment tokens                      | 3 recorders, server                  | Attribution that survives a denial                             |
+| **S3** | Git-native ingest: scope discovery, fan-out, rolling seal | server, 3 recorders                  | 61B/61C for solo assignments                                   |
+| **S4** | Contributor model + peer witnessing                       | server, analyzer, 3 recorders        | Group submissions as first-class                               |
+| **S5** | Commit-graph capture + branching replay                   | 3 recorders, analyzer                | Replay matching real pair workflow                             |
+| **S6** | CPHS amendment, partner-visibility consent, quota         | docs, ops                            | Deployment gate; runs in parallel                              |
 
 S0–S3 are prerequisites for S4 and S5 regardless of scheduling.
 
@@ -346,20 +376,30 @@ justifies this program.
 
 ## 10. Conformance vectors — the cross-repo mechanism
 
-The format contract is written **once**, in `log-core`, as golden JSON vectors —
-generalizing the pattern `hash-chain.test.ts` already uses:
+**This mechanism already exists — do not build a new one.**
+`tools/export-conformance-vectors.ts` is the single generated source of truth for
+cross-language format parity, and both recorder repos already consume its output:
 
-```
-packages/log-core/vectors/
-  manifest-2.0/valid-*.json         cert chains, policy blocks, 1.x-without-format_version
-  manifest-2.0/invalid-*.json       bad root sig, course_id mismatch, issued_at out of window
-  canonicalization/*.json           JCS inputs → expected bytes
-  policy-resolution/*.json          manifest policy → effective capture set
-```
+- provjet — `core/src/test/resources/conformance/*.json`, via `ConformanceTest.kt`'s `vector(name)`
+- provnvim — `tests/conformance/fixtures/*.json`, via `conformance_spec.lua`'s
+  `load_fixture(name)`, regenerated by its Makefile `vectors` target shelling out to
+  this script in `$PROVENANCE_REPO`
 
-Each vector is `{name, input, expected}`. `log-core` runs them under Vitest; provjet
-runs the same files from a Kotlin test; provnvim from a Lua test. Vectors are
-vendored into each recorder repo with a checksum check against upstream, so drift
+New format work extends that script's `--out` family, following its one-file-per-primitive
+convention. Manifest 2.0 added three siblings: `manifest-v2.json`, `course-cert.json`,
+`capture-policy.json`.
+
+Two properties are load-bearing and must survive every future change: the script uses
+**fixed** ed25519 seeds and HKDF salt/nonce fills so regeneration reproduces committed
+fixtures byte-for-byte (that drift check is what proves the export faithful), and a
+change that perturbs an existing vector's bytes is a **breaking change to two other
+repos**, not a refactor.
+
+Known pre-existing debt: `golden-bundle.{json,zip}` is non-deterministic despite the
+script's comment claiming otherwise (`buildTestBundle` generates a random session
+keypair), and provnvim's committed `manifest.json` fixture has already drifted from
+provjet's. Neither was introduced by this program; both should be fixed before they
+mask a real divergence. Vectors are
 surfaces as a failing test rather than as a subtly divergent signature
 implementation discovered later in an OSC case.
 
