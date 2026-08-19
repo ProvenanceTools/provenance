@@ -1379,6 +1379,17 @@ async function buildRollingManifestVectors(): Promise<unknown> {
 
   const signed = await signBundleManifest(manifest, sessionPriv);
 
+  // The FINAL marker. Identical manifest plus `final: true`, which is what the
+  // recorder's dispose()-time roll writes. Kept as a SEPARATE object so the
+  // non-final vector above stays byte-identical: two other recorder repos pin
+  // these bytes, and perturbing one is a breaking change to both.
+  const finalManifest = { ...manifest, final: true as const };
+  const signedFinal = await signBundleManifest(finalManifest, sessionPriv);
+
+  // A downgrade attempt: delete `final` and keep the final signature. The
+  // canonical bytes are then the non-final ones, so the signature cannot verify.
+  const downgradedCanonicalJson = canonicalize(manifest);
+
   return {
     note:
       'Rolling seal (S3). One manifest per session, signed by that session key, ' +
@@ -1401,6 +1412,63 @@ async function buildRollingManifestVectors(): Promise<unknown> {
     manifest,
     canonical_json: signed.canonicalJson,
     signature_hex: signed.signatureHex,
+    /**
+     * The `final` marker — whole-file vs. prefix semantics.
+     *
+     * A rolling seal is signed BEFORE the log's trailing bytes exist (it is
+     * rewritten at session start, at each checkpoint, and at dispose), so its
+     * `slog_sha256` normally commits only to a PREFIX of the file. That is what
+     * keeps an honest mid-session archive — a git push from an editor that is
+     * still open — from being read as tampering.
+     *
+     * The dispose()-time roll is the exception: it runs after session.end is
+     * recorded and both log files are flushed and closed, so the log is
+     * finished. It sets `final: true` INSIDE the signed payload, and a reader
+     * that sees it must switch to WHOLE-FILE equality, which is what catches an
+     * entry appended after the session ended.
+     *
+     * Implementation requirements for a conforming recorder/reader:
+     *   1. Write `final: true` on the dispose roll ONLY. Never on session start,
+     *      never on a checkpoint — the log is still growing there, and claiming
+     *      otherwise turns the student's next keystroke into a finding.
+     *   2. OMIT the key entirely when not final. Do not write `final: false`;
+     *      `non_final.canonical_json` below is the byte-exact expectation.
+     *   3. Treat ONLY a literal boolean `true` as final. Anything else — absent,
+     *      false, the string "true", 1 — falls back to prefix semantics, which
+     *      is the safer reading.
+     *   4. Absence is NEVER a finding. A crash, a power cut, a full disk, a
+     *      read-only checkout, or `.provenance/` removed by a `git checkout` all
+     *      leave a non-final seal. Report the unattested tail; do not accuse.
+     */
+    final_marker: {
+      non_final: {
+        note: 'every roll but the last: the key is absent, not false',
+        is_final: false,
+        manifest,
+        canonical_json: signed.canonicalJson,
+        signature_hex: signed.signatureHex,
+      },
+      final: {
+        note: 'the dispose()-time roll, over a finished log — read WHOLE-FILE',
+        is_final: true,
+        manifest: finalManifest,
+        canonical_json: signedFinal.canonicalJson,
+        signature_hex: signedFinal.signatureHex,
+      },
+      /** Values a reader must NOT treat as final. */
+      not_final_values: [null, false, 'true', 1, {}],
+      /**
+       * The DOWNGRADE: strip `final` from the signed manifest to get prefix
+       * semantics back, keeping the signature. Verifying `signature_hex` over
+       * `canonical_json` MUST fail — that is what makes the marker unforgeable.
+       */
+      downgrade_rejects: {
+        note: 'final stripped, final signature kept — must NOT verify',
+        canonical_json: downgradedCanonicalJson,
+        signature_hex: signedFinal.signatureHex,
+        verifies: false,
+      },
+    },
     /** Each of these must be REFUSED as a rolling manifest file for `session_id`. */
     rejects: [
       {

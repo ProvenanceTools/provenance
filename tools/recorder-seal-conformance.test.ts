@@ -60,6 +60,7 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 
 import {
   FixedClock,
+  canonicalize,
   chainEntry,
   generateSessionKeypair,
   encryptSessionPrivkey,
@@ -961,8 +962,21 @@ async function buildRollingSealedBundle(opts: {
   sessionCount: number;
   files: Array<{ path: string; initial: string; append: string }>;
   filesUnderReview?: string[];
+  /**
+   * Mark each seal FINAL, as the recorder's `dispose()` does.
+   *
+   * Defaults to TRUE because that is genuinely the ordering here: `recordSession`
+   * emits session.end and disposes both writers before the roll, so this seal is
+   * taken over a finished log — precisely the state `dispose()` seals and the
+   * only one a whole-file digest can honestly describe.
+   *
+   * The mid-session shape, where the seal is signed while the log is still
+   * growing, is exercised by `openLiveSession` further down and stays non-final.
+   */
+  final?: boolean;
 }): Promise<RollingScenario> {
   const { root, sessionCount, files } = opts;
+  const sealIsFinal = opts.final !== false;
   const provenanceDir = path.join(root, '.provenance');
   await fsPromises.mkdir(provenanceDir, { recursive: true });
 
@@ -996,6 +1010,7 @@ async function buildRollingSealedBundle(opts: {
       filesUnderReview,
       sessionPrivkey: recorded.keypair.privateKey,
       extensionHash: EXTENSION_HASH,
+      ...(sealIsFinal ? { final: true } : {}),
     });
     if (result.kind !== 'written') {
       throw new Error(`writeRollingSeal did not succeed: ${JSON.stringify(result)}`);
@@ -1959,5 +1974,281 @@ describe('a both-shapes bundle keeps WHOLE-FILE semantics', () => {
     expect(report.bundleDetections!.find((c) => c.id === 'log_bytes_match')!.detail).toContain(
       'modified after sealing',
     );
+  });
+});
+
+// ===========================================================================
+// THE FINAL SEAL — closing the last gap in rolling-seal append detection.
+//
+// A rolling seal is signed BEFORE the log's trailing bytes exist, so it can
+// only commit to a PREFIX. That is what stops an honest mid-session archive
+// being read as tampering (the HONEST STUDENT section above), and it is also
+// what left an append past the final checkpoint indistinguishable from honest
+// growth (the CHARACTERIZATION above).
+//
+// `dispose()` takes one last roll after session.end is emitted and both writers
+// are closed, and marks it `final: true` INSIDE the signed payload. That seal
+// has no future left to be incapable of attesting to, so it is read whole-file
+// and the append fails.
+//
+// Everything below runs the REAL writeRollingSeal over the REAL recorder's
+// output and reads it back with the REAL loadBundle + runValidation.
+// ===========================================================================
+
+describe('a FINAL rolling seal closes the append hole', () => {
+  let scenario: RollingScenario;
+  let verified: Verified;
+  let slogName: string;
+
+  beforeAll(async () => {
+    const root = await makeRoot('rolling-final');
+    // A full clean session: record, emit session.end, dispose both writers, and
+    // only then seal — the ordering dispose() produces.
+    scenario = await buildRollingSealedBundle({
+      root,
+      sessionCount: 1,
+      files: [{ path: 'main.py', initial: 'def solve():\n    pass\n', append: 'solve()\n' }],
+    });
+    verified = await loadAndValidate(scenario.bundlePath);
+    slogName = `session-${scenario.sessions[0]!.sessionId}.slog`;
+  });
+
+  it('writes a seal marked final, signed by the session’s own key', async () => {
+    const sessionId = scenario.sessions[0]!.sessionId;
+    const json = await fsPromises.readFile(
+      path.join(scenario.provenanceDir, `manifest-${sessionId}.json`),
+      'utf8',
+    );
+    expect((JSON.parse(json) as { final?: boolean }).final).toBe(true);
+
+    // Check 1 verifies the rolling seal against the session pubkey in
+    // session.start, so a passing check 1 IS the proof that `final` is signed.
+    expect(statusOf(verified.report, 'manifest_sig')).toBe('pass');
+  });
+
+  it('the loader reads it whole-file, with no prefix search', () => {
+    const coverage = verified.bundle.rollingSeal!.coverage!;
+    expect(coverage).toHaveLength(1);
+    expect(coverage[0]!.final).toBe(true);
+    // `exact`, never `partial` — a final seal covers every byte.
+    expect(coverage[0]!.slog).toEqual({ kind: 'exact' });
+    expect(coverage[0]!.meta).toEqual({ kind: 'exact' });
+  });
+
+  it('is clean end-to-end: all 8 checks pass and no detection fires', () => {
+    expectAllChecksPass(verified.report);
+    expectNoBundleDetections(verified.report);
+  });
+
+  it('reports the log as covered in full rather than merely sealed', () => {
+    const detection = verified.report.bundleDetections!.find((c) => c.id === 'log_bytes_match')!;
+    expect(detection.status).toBe('pass');
+    expect(detection.detail).toContain('covered in full');
+    expect(detection.detail).not.toContain('written after the last seal');
+  });
+
+  // -------------------------------------------------------------------------
+  // THE DECISIVE ONE. This is the case the previously-failing test in
+  // analysis-core recorded, driven end-to-end through real recorder output.
+  // -------------------------------------------------------------------------
+
+  it('FAILS log_bytes_match on an entry appended after the session ended', async () => {
+    const buf = await mutateZip(scenario.bundlePath, async (zip) => {
+      const lines = (await zip.file(slogName)!.async('string')).trim().split('\n');
+      const last = JSON.parse(lines[lines.length - 1]!) as {
+        seq: number;
+        t: number;
+        wall: string;
+        hash: string;
+      };
+      // A genuinely re-chained, well-formed entry — the strongest version of
+      // the attack. It self-verifies under check 3 and keeps seq/t/wall
+      // monotonic, so nothing in the event stream contradicts it.
+      const appended = chainEntry(last.hash, {
+        seq: last.seq + 1,
+        t: last.t + 1000,
+        wall: new Date(new Date(last.wall).getTime() + 1000).toISOString(),
+        kind: 'session.heartbeat',
+        data: { focused: true, active_file: null, idle_since_ms: 0 },
+      });
+      zip.file(slogName, `${lines.join('\n')}\n${serializeEntry(appended)}`);
+    });
+
+    const report = await validateMutated(buf);
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('fail');
+
+    const detection = report.bundleDetections!.find((c) => c.id === 'log_bytes_match')!;
+    expect(detection.detail).toContain(scenario.sessions[0]!.sessionId);
+    expect(detection.detail).toContain('FINAL');
+    expect(detection.detail).toContain('after the session ended');
+  });
+
+  it('and the eight checks STILL do not see it — the final seal is the only thing that does', async () => {
+    // The same append, measured against the eight. This is why the detection
+    // has to exist at all: a correctly-chained append contradicts none of them.
+    const buf = await mutateZip(scenario.bundlePath, async (zip) => {
+      const lines = (await zip.file(slogName)!.async('string')).trim().split('\n');
+      const last = JSON.parse(lines[lines.length - 1]!) as {
+        seq: number;
+        t: number;
+        wall: string;
+        hash: string;
+      };
+      const appended = chainEntry(last.hash, {
+        seq: last.seq + 1,
+        t: last.t + 1000,
+        wall: new Date(new Date(last.wall).getTime() + 1000).toISOString(),
+        kind: 'session.heartbeat',
+        data: { focused: true, active_file: null, idle_since_ms: 0 },
+      });
+      zip.file(slogName, `${lines.join('\n')}\n${serializeEntry(appended)}`);
+    });
+
+    const report = await validateMutated(buf);
+    expect(report.checks.filter((c) => c.status === 'fail')).toEqual([]);
+  });
+
+  it('still catches a truncation, and a flipped byte, in the finished log', async () => {
+    const truncated = await mutateZip(scenario.bundlePath, async (zip) => {
+      const lines = (await zip.file(slogName)!.async('string')).trim().split('\n');
+      zip.file(slogName, `${lines.slice(0, -1).join('\n')}\n`);
+    });
+    expect(detectionStatusOf(await validateMutated(truncated), 'log_bytes_match')).toBe('fail');
+
+    const flipped = await mutateZip(scenario.bundlePath, async (zip) => {
+      // Flip a nibble inside a quoted 64-hex value (session.start's machine_id),
+      // which keeps the file valid NDJSON — so this detection, not the parser,
+      // is what catches it.
+      const text = await zip.file(slogName)!.async('string');
+      const out = text.replace(
+        /"([0-9a-f]{64})"/,
+        (_m, hex: string) => `"${hex[0] === '0' ? '1' : '0'}${hex.slice(1)}"`,
+      );
+      expect(out).not.toBe(text);
+      zip.file(slogName, out);
+    });
+    expect(detectionStatusOf(await validateMutated(flipped), 'log_bytes_match')).toBe('fail');
+  });
+
+  it('STRIPPING the final marker to buy back prefix semantics fails check 1', async () => {
+    // The obvious attack: delete one key from the manifest so the reader falls
+    // back to the lenient prefix reading, then append freely. `final` is inside
+    // the signed payload, so removing it changes the canonical bytes and the
+    // seal no longer verifies against the session's own public key.
+    const buf = await mutateZip(scenario.bundlePath, async (zip) => {
+      const name = `manifest-${scenario.sessions[0]!.sessionId}.json`;
+      const manifest = JSON.parse(await zip.file(name)!.async('string')) as Record<string, unknown>;
+      expect(manifest['final']).toBe(true);
+      delete manifest['final'];
+      zip.file(name, canonicalize(manifest));
+    });
+
+    const report = await validateMutated(buf);
+    expect(statusOf(report, 'manifest_sig')).toBe('fail');
+  });
+
+  it('FLIPPING the final marker to false also fails check 1', async () => {
+    const buf = await mutateZip(scenario.bundlePath, async (zip) => {
+      const name = `manifest-${scenario.sessions[0]!.sessionId}.json`;
+      const manifest = JSON.parse(await zip.file(name)!.async('string')) as Record<string, unknown>;
+      manifest['final'] = false;
+      zip.file(name, canonicalize(manifest));
+    });
+
+    const report = await validateMutated(buf);
+    expect(statusOf(report, 'manifest_sig')).toBe('fail');
+  });
+
+  it('the final-sealed bundle is still clean after all mutations', async () => {
+    expectNoBundleDetections((await loadAndValidate(scenario.bundlePath)).report);
+  });
+});
+
+// ===========================================================================
+// THE CONTROL, and the DOWNGRADE.
+//
+// The append above must fail ONLY because the seal claimed to be final. The
+// identical bytes under a non-final seal are an honest student whose editor was
+// still open, and accusing them is the failure mode this whole design exists to
+// prevent.
+//
+// It is also what a student gets by restoring an earlier, genuinely-signed
+// non-final seal in place of their final one. Nothing crypto can refute that —
+// both seals are true statements by the same key — and it is byte-for-byte
+// identical to the honest case. So it stays a PASS, and the unattested tail is
+// REPORTED rather than passing silently as "sealed".
+// ===========================================================================
+
+describe('the same append under a NON-final seal is not a finding', () => {
+  let scenario: RollingScenario;
+  let slogName: string;
+
+  beforeAll(async () => {
+    const root = await makeRoot('rolling-nonfinal');
+    scenario = await buildRollingSealedBundle({
+      root,
+      sessionCount: 1,
+      files: [{ path: 'main.py', initial: 'def solve():\n    pass\n', append: 'solve()\n' }],
+      final: false,
+    });
+    slogName = `session-${scenario.sessions[0]!.sessionId}.slog`;
+  });
+
+  it('carries no final marker and is read as a prefix commitment', async () => {
+    const sessionId = scenario.sessions[0]!.sessionId;
+    const json = await fsPromises.readFile(
+      path.join(scenario.provenanceDir, `manifest-${sessionId}.json`),
+      'utf8',
+    );
+    expect(JSON.parse(json)).not.toHaveProperty('final');
+
+    const verified = await loadAndValidate(scenario.bundlePath);
+    expect(verified.bundle.rollingSeal!.coverage![0]!.final).toBe(false);
+    expectAllChecksPass(verified.report);
+    expectNoBundleDetections(verified.report);
+  });
+
+  it('does NOT accuse, and names the unattested tail and the missing final seal', async () => {
+    const buf = await mutateZip(scenario.bundlePath, async (zip) => {
+      const lines = (await zip.file(slogName)!.async('string')).trim().split('\n');
+      const last = JSON.parse(lines[lines.length - 1]!) as {
+        seq: number;
+        t: number;
+        wall: string;
+        hash: string;
+      };
+      const appended = chainEntry(last.hash, {
+        seq: last.seq + 1,
+        t: last.t + 1000,
+        wall: new Date(new Date(last.wall).getTime() + 1000).toISOString(),
+        kind: 'session.heartbeat',
+        data: { focused: true, active_file: null, idle_since_ms: 0 },
+      });
+      zip.file(slogName, `${lines.join('\n')}\n${serializeEntry(appended)}`);
+    });
+
+    const report = await validateMutated(buf);
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('pass');
+
+    const detection = report.bundleDetections!.find((c) => c.id === 'log_bytes_match')!;
+    expect(detection.detail).toContain('written after the last seal');
+    expect(detection.detail).toContain('NOT marked');
+    expect(detection.detail).toContain('could not be detected');
+  });
+
+  it('but the sealed PREFIX is still enforced', async () => {
+    // Making finality the trigger for strictness must not cost the enforcement
+    // that already existed. Editing inside the sealed region reproduces no
+    // state the file ever passed through.
+    const buf = await mutateZip(scenario.bundlePath, async (zip) => {
+      const text = await zip.file(slogName)!.async('string');
+      const out = text.replace(
+        /"([0-9a-f]{64})"/,
+        (_m, hex: string) => `"${hex[0] === '0' ? '1' : '0'}${hex.slice(1)}"`,
+      );
+      expect(out).not.toBe(text);
+      zip.file(slogName, out);
+    });
+    expect(detectionStatusOf(await validateMutated(buf), 'log_bytes_match')).toBe('fail');
   });
 });
