@@ -41,20 +41,15 @@ export type PastePayloadFields = {
  * content_head / content_tail: set when length > MAX_INLINE_BYTES.
  *   Uses character slices (not byte slices) to avoid splitting multi-byte codepoints.
  *
- * @param inlineContent  `policy.capture.inline_content` (program spec §4). When
- *   false, no snippet is emitted at any size — no `content`, no head, no tail —
- *   while `length` and `sha256` are still recorded. The `paste` EVENT is on the
- *   hard floor and is never suppressed; this knob only controls whether the
- *   student's pasted text itself lands in the log. Defaults to true, which is
- *   1.x behaviour.
+ * The size cap is the ONLY thing that suppresses content. There was briefly a
+ * `policy.capture.inline_content` knob that stripped the snippet at any size;
+ * it was removed because `internal_move` reads paste content to DOWNGRADE a
+ * `large_paste` flag, so stripping it made the system more likely to falsely
+ * accuse a student relocating their own code (program spec §4).
  */
-export function buildPastePayload(text: string, inlineContent = true): PastePayloadFields {
+export function buildPastePayload(text: string): PastePayloadFields {
   const byteLength = Buffer.byteLength(text, 'utf8');
   const hashHex = bytesToHex(sha256(new TextEncoder().encode(text)));
-
-  if (!inlineContent) {
-    return { length: byteLength, sha256: hashHex };
-  }
 
   if (byteLength <= MAX_INLINE_BYTES) {
     return {

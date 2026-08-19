@@ -44,9 +44,14 @@ import { NGRAM_SIZE } from './features.js';
 
 /**
  * Capture signals whose absence changes the event-KIND alphabet this heuristic
- * fingerprints. `inline_content` is deliberately not here: it strips content
- * fields off `paste` / `fs.external_change` payloads without removing the
- * events, so the kind stream is untouched.
+ * fingerprints.
+ *
+ * This is currently every gated signal there is — `inline_content` used to be the
+ * one exception, because it stripped content fields without removing any event,
+ * and it has since been removed from the policy entirely. The list stays explicit
+ * rather than collapsing to "anything disabled" because what matters here is the
+ * *reason* a signal counts: it removes kinds from the stream. A future knob that
+ * only thins a payload would belong outside this list, not inside it.
  */
 const KIND_STREAM_SIGNALS = ['selection_change', 'focus_change', 'terminal'];
 

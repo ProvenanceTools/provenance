@@ -357,7 +357,6 @@ describe('loadAndVerifyManifest — Manifest 2.0 trust chain', () => {
           selection_change: true,
           focus_change: true,
           terminal: true,
-          inline_content: true,
           heartbeat_interval_ms: 30000,
         },
       },
@@ -493,7 +492,6 @@ describe('loadAndVerifyManifest — Manifest 2.0 trust chain', () => {
             selection_change: false,
             focus_change: false,
             terminal: false,
-            inline_content: false,
             heartbeat_interval_ms: 1_000,
           },
         },
@@ -507,7 +505,6 @@ describe('loadAndVerifyManifest — Manifest 2.0 trust chain', () => {
         selection_change: false,
         focus_change: false,
         terminal: false,
-        inline_content: false,
         // Clamped up from 1000 to the [5000, 120000] floor.
         heartbeat_interval_ms: 5_000,
       });
@@ -529,7 +526,7 @@ describe('loadAndVerifyManifest — Manifest 2.0 trust chain', () => {
     const folder = await write({
       ...manifestData,
       sig: sigHex,
-      policy: { capture: { selection_change: false, terminal: false, inline_content: false } },
+      policy: { capture: { selection_change: false, terminal: false } },
     });
 
     const result = await loadAndVerifyManifest(folder, pubkeyHex);
@@ -676,7 +673,6 @@ describe('loadAndVerifyManifest — legacy course key grandfathering (default ro
           selection_change: true,
           focus_change: true,
           terminal: true,
-          inline_content: true,
           heartbeat_interval_ms: 30000,
         },
       },

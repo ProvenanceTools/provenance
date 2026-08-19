@@ -107,29 +107,16 @@ describe('buildExternalChangeContent', () => {
     expect(result.new_content_size).toBe(0);
   });
 
-  // --- policy.capture.inline_content = false (program spec §4) ---------------
+  // --- the size cap is the ONLY thing that suppresses content ---------------
 
-  it('omits the inline snippet when inline content is disabled, keeping the size', () => {
-    const text = 'def solve(): return 42\n';
-    const gated = buildExternalChangeContent(text, false);
-    expect(gated.new_content).toBeUndefined();
-    expect(gated.new_content_head).toBeUndefined();
-    expect(gated.new_content_tail).toBeUndefined();
-    // fs.external_change is on the FLOOR; only the snippet is suppressed, so the
-    // event still lands with its size for the external-change heuristics.
-    expect(gated.new_content_size).toBe(Buffer.byteLength(text, 'utf8'));
+  it('takes exactly one argument — there is no capture-policy knob for content', () => {
+    // The `inline_content` policy key was removed; see paste-payload.test.ts for
+    // the reasoning. Pinning the arity means reintroducing a suppression
+    // parameter fails here rather than silently re-enabling the knob.
+    expect(buildExternalChangeContent).toHaveLength(1);
   });
 
-  it('omits head/tail too when the file is over the cap and inline content is disabled', () => {
-    const big = 'z'.repeat(MAX_INLINE_BYTES + 10);
-    const gated = buildExternalChangeContent(big, false);
-    expect(gated.new_content).toBeUndefined();
-    expect(gated.new_content_head).toBeUndefined();
-    expect(gated.new_content_tail).toBeUndefined();
-    expect(gated.new_content_size).toBe(MAX_INLINE_BYTES + 10);
-  });
-
-  it('inlines by default, so a 1.x manifest is unaffected', () => {
+  it('inlines content unconditionally below the cap', () => {
     expect(buildExternalChangeContent('hello').new_content).toBe('hello');
   });
 });

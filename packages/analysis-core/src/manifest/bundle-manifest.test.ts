@@ -112,7 +112,7 @@ describe('resolveBundleCapturePolicy', () => {
   it('isSignalCaptured / bundleHeartbeatIntervalMs are 1.x-safe', async () => {
     const bundle = await load(await buildTestBundle({ sessions: [{}] }));
     expect(isSignalCaptured(bundle, 'terminal')).toBe(true);
-    expect(isSignalCaptured(bundle, 'inline_content')).toBe(true);
+    expect(isSignalCaptured(bundle, 'selection_change')).toBe(true);
     expect(bundleHeartbeatIntervalMs(bundle)).toBe(30_000);
   });
 });
@@ -229,7 +229,7 @@ describe('summarizeBundleManifest', () => {
       collaboration: 'group',
       submission: 'git',
       scope: 'repo',
-      policy: { capture: { focus_change: false, inline_content: false } },
+      policy: { capture: { focus_change: false, terminal: false } },
     });
     const bundle = await load(
       await buildTestBundle({ sessions: [{ sessionStart: sessionStart2(manifest) }] }),
@@ -240,7 +240,7 @@ describe('summarizeBundleManifest', () => {
     expect(summary.collaboration).toBe('group');
     expect(summary.submission).toBe('git');
     expect(summary.scope).toBe('repo');
-    expect(summary.disabled_signals).toEqual(['focus_change', 'inline_content']);
+    expect(summary.disabled_signals).toEqual(['focus_change', 'terminal']);
     expect(summary.trust_chain).toBe('verified');
     expect(summary.cert).toEqual({
       course_id: 'berkeley-cs61b',

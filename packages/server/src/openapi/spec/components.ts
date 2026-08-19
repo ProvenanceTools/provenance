@@ -479,13 +479,7 @@ export const components = {
           type: 'array',
           items: {
             type: 'string',
-            enum: [
-              'selection_change',
-              'focus_change',
-              'terminal',
-              'doc_open_close',
-              'inline_content',
-            ],
+            enum: ['selection_change', 'focus_change', 'terminal'],
           },
         },
         heartbeat_interval_ms: { type: 'integer' },

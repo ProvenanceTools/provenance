@@ -620,9 +620,7 @@ export const AssignmentManifestSchema = z.object({
   submission: z.enum(['bundle', 'git']).nullable(),
   scope: z.enum(['directory', 'repo']).nullable(),
   /** Gated capture signals the course switched off. Empty for 1.x. */
-  disabled_signals: z.array(
-    z.enum(['selection_change', 'focus_change', 'terminal', 'doc_open_close', 'inline_content']),
-  ),
+  disabled_signals: z.array(z.enum(['selection_change', 'focus_change', 'terminal'])),
   heartbeat_interval_ms: z.number().int(),
   /**
    * The root-signed course certificate. `in_window` is evaluated against the

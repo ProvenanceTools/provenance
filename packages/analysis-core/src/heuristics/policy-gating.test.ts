@@ -32,6 +32,9 @@ import { shellIntegrationDisabledHeuristic } from './shell-integration-disabled.
 import { terminalActiveDuringExternalChangeHeuristic } from './terminal-active-during-external-change.js';
 import { gapInHeartbeatsHeuristic, effectiveGapThresholdMs } from './gap-in-heartbeats.js';
 import { editingPatternCloneHeuristic } from './cross/editing-pattern-clone.js';
+import { classifyInternalMoves } from './internal-move.js';
+import { iterateCandidatePastes } from './candidate-pastes.js';
+import { resolveBundleCapturePolicy } from '../manifest/bundle-manifest.js';
 import { DEFAULT_CROSS_HEURISTIC_CONFIG } from './cross/types.js';
 import type { CrossSubmissionFeatures } from './cross/types.js';
 
@@ -86,10 +89,13 @@ describe('doc.open is on the floor', () => {
       selection_change: false,
       focus_change: false,
       terminal: false,
-      inline_content: false,
-      // Retired key, deliberately present: an unknown key must be ignored, not
-      // resurrect the gate.
+      // Retired keys, deliberately present: an unknown key must be ignored, not
+      // resurrect the gate. `doc_open_close` was removed because doc.open is the
+      // reconstruction seed; `inline_content` because internal_move needs paste
+      // content to DOWNGRADE large_paste, so stripping it made the system more
+      // likely to falsely accuse a student relocating their own code.
       doc_open_close: false,
+      inline_content: false,
     } as NonNullable<CapturePolicyBlock['capture']>,
   };
 
@@ -224,6 +230,99 @@ describe('doc.open is on the floor', () => {
     expect(lowTypingHighOutputHeuristic.run(withoutOpen.index, withoutOpen.bundle, config)).toEqual(
       [],
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Paste content is on the floor — there is no inline_content knob
+// ---------------------------------------------------------------------------
+
+describe('paste content is on the floor', () => {
+  /**
+   * `inline_content` was briefly a `policy.capture` key and was removed.
+   *
+   * It is the mirror image of the usual gating case, and that is exactly why it
+   * had to go. Every other knob makes the system see LESS evidence against a
+   * student; this one made it see less evidence FOR one. `internal_move` reads
+   * the paste's inline content to match it against the student's own prior typed
+   * code, and a match DOWNGRADES `large_paste` — it is how the system recognises
+   * a student cutting their own helper out of one file and pasting it into
+   * another, which is entirely legitimate. Strip the content and the exculpatory
+   * check cannot run, so `internal_move` falls back to `unknown`, which callers
+   * treat as a full-severity external paste.
+   *
+   * A course must not be able to configure the system into falsely accusing its
+   * own students, so this is not a knob. The key resolves as an unknown key.
+   */
+  const RETIRED_INLINE_CONTENT: CapturePolicyBlock = {
+    capture: { inline_content: false } as NonNullable<CapturePolicyBlock['capture']>,
+  };
+
+  /** A 5-line, >40-char block: the thing being relocated. */
+  const BLOCK = [
+    'def helper(values):',
+    '    total = 0',
+    '    for v in values:',
+    '        total += v',
+    '    return total',
+    '',
+  ].join('\n');
+
+  /** Type BLOCK into utils.py, then paste it into hw.py — a textbook internal move. */
+  const moveSessions: SessionSpec[] = [
+    {
+      events: [
+        { kind: 'doc.open', data: { path: '/t/utils.py', content: '' } },
+        {
+          kind: 'doc.change',
+          data: {
+            path: '/t/utils.py',
+            source: 'typed',
+            deltas: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+                text: BLOCK,
+              },
+            ],
+          },
+        },
+        { kind: 'doc.open', data: { path: '/t/hw.py', content: '' } },
+        {
+          kind: 'paste',
+          data: {
+            path: '/t/hw.py',
+            content: BLOCK,
+            length: BLOCK.length,
+            sha256: 'inline',
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          },
+        },
+      ],
+    },
+  ];
+
+  it('internal_move still exculpates under a policy carrying the retired key', async () => {
+    const { legacy, gated } = await buildPair(moveSessions, RETIRED_INLINE_CONTENT);
+
+    for (const [label, built] of [
+      ['1.x', legacy],
+      ['2.0 + retired key', gated],
+    ] as const) {
+      const results = classifyInternalMoves(built.index, config);
+      const [candidate] = [...iterateCandidatePastes(built.index)];
+      expect(candidate, label).toBeDefined();
+      const verdict = results.get(candidate!.ordinal);
+      expect(verdict?.classification, label).toBe('internal_move');
+      expect(verdict?.sourcePath, label).toBe('/t/utils.py');
+    }
+  });
+
+  it('reports no disabled signal for the retired key', async () => {
+    const { gated } = await buildPair(moveSessions, RETIRED_INLINE_CONTENT);
+    // An unknown key is ignored, so nothing is reported as switched off — the
+    // analyzer must not tell staff a signal was disabled when it was not.
+    expect(resolveBundleCapturePolicy(gated.bundle).disabledSignals).toEqual([]);
+    expect(resolveBundleCapturePolicy(gated.bundle).source).toBe('manifest_2_0');
   });
 });
 
@@ -408,7 +507,11 @@ describe('editing_pattern_clone', () => {
     expect(flags).toEqual([]);
   });
 
-  it('still runs when only inline_content was disabled — the kind stream is intact', () => {
+  it('ignores a retired signal name that no longer exists in the policy', () => {
+    // `inline_content` was removed from CapturePolicy, so resolveBundleCapturePolicy
+    // can never report it. If one reaches this heuristic anyway — a hand-edited
+    // feature blob, a stale caller — it must not distort the kind-stream verdict,
+    // because it never removed a kind from the stream in the first place.
     const flags = editingPatternCloneHeuristic.run(
       [features('A', shared, ['inline_content']), features('B', shared, ['inline_content'])],
       DEFAULT_CROSS_HEURISTIC_CONFIG,

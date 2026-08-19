@@ -29,7 +29,6 @@ export const CAPTURE_SIGNAL_LABELS: Record<string, string> = {
   selection_change: 'Cursor & selection',
   focus_change: 'Window focus',
   terminal: 'Terminal',
-  inline_content: 'Inline paste content',
 };
 
 export function captureSignalLabel(signal: string): string {

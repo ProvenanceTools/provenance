@@ -72,13 +72,6 @@ export type FsWatcherDeps = {
   /** Read the on-disk file content (relative path within workspace). */
   readFile: (relativePath: string) => Promise<string>;
   explanationTagger?: ExplanationTagger;
-  /**
-   * `policy.capture.inline_content` from the verified manifest (program spec §4).
-   * `fs.external_change` itself is on the hard floor and is always emitted; this
-   * only controls whether the post-change file bytes ride along inline.
-   * Defaults to true (1.x behaviour).
-   */
-  inlineContent?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -100,7 +93,6 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
     getNow,
     readFile,
     explanationTagger,
-    inlineContent = true,
   } = deps;
   const tolerance = deps.recentDocChangeToleranceMs ?? 250;
 
@@ -166,7 +158,7 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
             old_hash: oldHash,
             new_hash: newHash,
             diff_size,
-            ...buildExternalChangeContent(onDiskContent, inlineContent),
+            ...buildExternalChangeContent(onDiskContent),
             ...(explanation !== undefined ? { explanation } : {}),
           };
 
@@ -210,7 +202,7 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
               old_hash: existing.hash,
               new_hash: newHash,
               diff_size,
-              ...buildExternalChangeContent(onDiskContent, inlineContent),
+              ...buildExternalChangeContent(onDiskContent),
               ...(explanation !== undefined ? { explanation } : {}),
             });
             existing.reset(onDiskContent);
@@ -225,7 +217,7 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
             old_hash: '',
             new_hash: newHash,
             diff_size: onDiskContent.length,
-            ...buildExternalChangeContent(onDiskContent, inlineContent),
+            ...buildExternalChangeContent(onDiskContent),
             ...(explanation !== undefined ? { explanation } : {}),
           });
           // Seed the registry so subsequent edits chain from this baseline.

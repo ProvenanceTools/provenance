@@ -12,7 +12,6 @@
  *     "selection_change":      true,
  *     "focus_change":          true,
  *     "terminal":              true,
- *     "inline_content":        true,   // paste + fs.external_change content snippets
  *     "heartbeat_interval_ms": 30000   // clamped to [5000, 120000]
  *   }
  * }
@@ -29,13 +28,29 @@
  *
  * ## Where the floor is drawn
  *
- * **The floor is defined by what reconstruction and validation depend on, not by
- * privacy sensitivity.** A signal being sensitive is an argument *for* giving it
- * a knob; a signal being load-bearing is a *veto* on one. Nothing critical to
- * reconstruction may be disableable by capture policy — if it were, a course
- * could switch off file reconstruction, replay, and the Source tab for its whole
- * cohort with nothing warning it that it had. Apply that test before adding any
- * key here.
+ * **A signal whose absence degrades correctness — rather than merely detail —
+ * must not be a policy knob.** The floor is defined by what reconstruction,
+ * validation, and the heuristics' *exculpatory* checks depend on, not by privacy
+ * sensitivity. A signal being sensitive is an argument *for* giving it a knob; a
+ * signal being load-bearing is a *veto* on one. Apply that test before adding
+ * any key here.
+ *
+ * Two knobs failed it and were removed. `doc_open_close`, because
+ * `DocOpenPayload.content` is the reconstruction seed: a course could switch off
+ * file reconstruction, replay, and the Source tab for its whole cohort with
+ * nothing warning it that it had. And `inline_content`, because `internal_move`
+ * needs the paste content to **downgrade** a `large_paste` flag — it is how the
+ * system recognises a student cutting their own code out of one file and pasting
+ * it into another, which is entirely legitimate. Strip the content and that
+ * exculpatory check cannot run, so genuine self-relocations keep full severity
+ * on a flag used in academic-integrity proceedings. A course being able to make
+ * the system more likely to falsely accuse its own students is not a legitimate
+ * configuration.
+ *
+ * Note the size cap is a different mechanism and stays: `paste` and
+ * `fs.external_change` content over the recorder's inline limit is still
+ * truncated to head/tail, because unbounded file bytes in the hash chain is a
+ * payload problem, not a policy one.
  *
  * ## The absence-vs-disabled rule
  *
@@ -76,7 +91,6 @@ export type CapturePolicyBlock = {
     selection_change?: boolean;
     focus_change?: boolean;
     terminal?: boolean;
-    inline_content?: boolean;
     heartbeat_interval_ms?: number;
   };
 };
@@ -89,12 +103,6 @@ export type CapturePolicy = {
   focus_change: boolean;
   /** Capture `terminal.open` and `terminal.command` events. */
   terminal: boolean;
-  /**
-   * Inline content snippets in `paste` and `fs.external_change` payloads.
-   * Not an event gate — the events themselves are on the floor; this controls
-   * whether their `content` / `new_content` fields are populated.
-   */
-  inline_content: boolean;
   /** Heartbeat cadence in milliseconds, always within the clamp range. */
   heartbeat_interval_ms: number;
 };
@@ -112,7 +120,6 @@ export const DEFAULT_CAPTURE_POLICY: CapturePolicy = {
   selection_change: true,
   focus_change: true,
   terminal: true,
-  inline_content: true,
   heartbeat_interval_ms: 30_000,
 };
 
@@ -146,6 +153,13 @@ export const HEARTBEAT_INTERVAL_MAX_MS = 120_000;
  * `DocClosePayload` is `{ path }` only — no content, no reconstruction role, and
  * so negligible privacy exposure: a knob governing a bare path is surface for
  * nothing. Both are floor.
+ *
+ * `paste` and `fs.external_change` were always floor as *events*; what changed is
+ * that their content fields are too. There was briefly an `inline_content` knob
+ * that stripped the snippets while leaving the events, and it was removed for the
+ * reason set out in the module docstring: `internal_move` reads paste content to
+ * downgrade `large_paste`, so stripping it makes the system *more* accusatory,
+ * not less informative.
  */
 export const FLOOR_EVENT_KINDS = [
   'session.start',
@@ -231,7 +245,6 @@ export function resolveCapturePolicy(block?: CapturePolicyBlock | unknown): Capt
     selection_change: resolveBool(c['selection_change'], DEFAULT_CAPTURE_POLICY.selection_change),
     focus_change: resolveBool(c['focus_change'], DEFAULT_CAPTURE_POLICY.focus_change),
     terminal: resolveBool(c['terminal'], DEFAULT_CAPTURE_POLICY.terminal),
-    inline_content: resolveBool(c['inline_content'], DEFAULT_CAPTURE_POLICY.inline_content),
     heartbeat_interval_ms: resolveHeartbeatInterval(c['heartbeat_interval_ms']),
   };
 }

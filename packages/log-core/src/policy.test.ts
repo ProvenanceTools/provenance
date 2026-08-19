@@ -25,9 +25,20 @@ describe('resolveCapturePolicy defaults', () => {
       selection_change: true,
       focus_change: true,
       terminal: true,
-      inline_content: true,
       heartbeat_interval_ms: 30_000,
     });
+  });
+
+  it('exposes exactly the keys the spec lists — no more, no less', () => {
+    // The key set IS the contract: every key here is a way for a course to make
+    // the system see less. A key that should never have existed is removed, not
+    // deprecated, so a manifest carrying it resolves as an unknown key.
+    expect(Object.keys(DEFAULT_CAPTURE_POLICY).sort()).toEqual([
+      'focus_change',
+      'heartbeat_interval_ms',
+      'selection_change',
+      'terminal',
+    ]);
   });
 
   it('resolves an empty block, an empty capture object, and a null block to the defaults', () => {
@@ -68,14 +79,12 @@ describe('resolveCapturePolicy defaults', () => {
           selection_change: false,
           focus_change: false,
           terminal: false,
-          inline_content: false,
         },
       }),
     ).toEqual({
       selection_change: false,
       focus_change: false,
       terminal: false,
-      inline_content: false,
       heartbeat_interval_ms: 30_000,
     });
   });
@@ -96,6 +105,23 @@ describe('resolveCapturePolicy defaults', () => {
     expect(resolved).not.toHaveProperty('doc_open_close');
     expect(isEventKindCaptured('doc.open', resolved)).toBe(true);
     expect(isEventKindCaptured('doc.close', resolved)).toBe(true);
+  });
+
+  it('ignores a retired inline_content key rather than resurrecting the knob', () => {
+    // inline_content was removed for the same reason doc_open_close was: its
+    // absence degraded correctness rather than detail. `internal_move` needs the
+    // paste content to DOWNGRADE a large_paste flag — that is how the system
+    // recognises a student relocating their own code. With the content stripped
+    // the exculpatory check cannot run and a legitimate self-relocation keeps
+    // full severity on a flag used in academic-integrity proceedings. A course
+    // must not be able to make the system more likely to falsely accuse its own
+    // students.
+    const resolved = resolveCapturePolicy({ capture: { inline_content: false } as never });
+    expect(resolved).toEqual(DEFAULT_CAPTURE_POLICY);
+    expect(resolved).not.toHaveProperty('inline_content');
+    // Both content-carrying kinds are floor and stay captured regardless.
+    expect(isEventKindCaptured('paste', resolved)).toBe(true);
+    expect(isEventKindCaptured('fs.external_change', resolved)).toBe(true);
   });
 });
 
@@ -157,7 +183,7 @@ describe('the hard floor', () => {
     // The stated property of the schema, exercised rather than asserted
     // structurally: drive every combination of every boolean knob and confirm no
     // floor kind ever reads as uncaptured.
-    const knobs = ['selection_change', 'focus_change', 'terminal', 'inline_content'] as const;
+    const knobs = ['selection_change', 'focus_change', 'terminal'] as const;
     for (let mask = 0; mask < 1 << knobs.length; mask++) {
       const capture: Record<string, boolean> = {};
       knobs.forEach((knob, i) => {
@@ -225,7 +251,6 @@ describe('isEventKindCaptured', () => {
     selection_change: false,
     focus_change: false,
     terminal: false,
-    inline_content: false,
     heartbeat_interval_ms: 5_000,
   };
 
@@ -245,10 +270,15 @@ describe('isEventKindCaptured', () => {
     expect(isEventKindCaptured(kind, { ...allOff, [gate]: true })).toBe(true);
   });
 
-  it('does not treat inline_content as an event gate', () => {
-    // inline_content controls content snippets inside paste / fs.external_change
-    // payloads; both events are on the floor and are always emitted.
-    expect(isEventKindCaptured('paste', allOff)).toBe(true);
-    expect(isEventKindCaptured('fs.external_change', allOff)).toBe(true);
+  it('gates exactly the four kinds in POLICY_GATED_EVENT_KINDS and nothing else', () => {
+    // The gated set is the complete list of what a course can switch off. Pinning
+    // it here means removing a knob (or adding one) has to be a deliberate edit
+    // to this expectation, not a silent widening of what a course may disable.
+    expect(Object.keys(POLICY_GATED_EVENT_KINDS).sort()).toEqual([
+      'focus.change',
+      'selection.change',
+      'terminal.command',
+      'terminal.open',
+    ]);
   });
 });

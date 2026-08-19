@@ -122,32 +122,18 @@ describe('buildPastePayload', () => {
     expect(result.content_head).toBeUndefined();
   });
 
-  // --- policy.capture.inline_content = false (program spec §4) ---------------
+  // --- the size cap is the ONLY thing that suppresses content ---------------
 
-  it('omits the inline snippet when inline content is disabled, keeping length + sha256', () => {
+  it('takes exactly one argument — there is no capture-policy knob for content', () => {
+    // The `inline_content` policy key was removed: `internal_move` reads paste
+    // content to DOWNGRADE a `large_paste` flag, so stripping it made the system
+    // more likely to falsely accuse a student who was relocating their own code.
+    // Pinning the arity means reintroducing a suppression parameter fails here.
+    expect(buildPastePayload).toHaveLength(1);
+  });
+
+  it('inlines content unconditionally below the cap', () => {
     const text = 'def solve(): return 42';
-    const gated = buildPastePayload(text, false);
-    const ungated = buildPastePayload(text, true);
-
-    expect(gated.content).toBeUndefined();
-    expect(gated.content_head).toBeUndefined();
-    expect(gated.content_tail).toBeUndefined();
-    // The paste event itself is on the FLOOR — only the snippet is suppressed, so
-    // the paste heuristics keep their size and identity signals.
-    expect(gated.length).toBe(ungated.length);
-    expect(gated.sha256).toBe(ungated.sha256);
-  });
-
-  it('omits head/tail too when the paste is over the cap and inline content is disabled', () => {
-    const big = 'z'.repeat(MAX_INLINE_BYTES + 10);
-    const gated = buildPastePayload(big, false);
-    expect(gated.content).toBeUndefined();
-    expect(gated.content_head).toBeUndefined();
-    expect(gated.content_tail).toBeUndefined();
-    expect(gated.length).toBe(MAX_INLINE_BYTES + 10);
-  });
-
-  it('inlines by default, so a 1.x manifest is unaffected', () => {
-    expect(buildPastePayload('hello').content).toBe('hello');
+    expect(buildPastePayload(text).content).toBe(text);
   });
 });

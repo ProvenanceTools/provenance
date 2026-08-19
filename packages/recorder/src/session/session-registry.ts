@@ -383,7 +383,6 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     readFile: prodReadFile,
     readFileSync: prodReadFileSync,
     explanationTagger,
-    inlineContent: capturePolicy.inline_content,
     isOwnedByThisRoot,
   });
   ownDisposables.push(docWiring);
@@ -400,7 +399,6 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     getNow: () => clock.now(),
     readFile: prodReadFile,
     explanationTagger,
-    inlineContent: capturePolicy.inline_content,
   });
   ownDisposables.push(fsWatcher);
 

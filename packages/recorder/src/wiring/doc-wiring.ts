@@ -99,13 +99,6 @@ export type DocWiringDeps = {
   /** Optional explanation tagger (Phase 8 will hook formatters/git into it). */
   explanationTagger?: ExplanationTagger;
   /**
-   * `policy.capture.inline_content` from the verified manifest (program spec §4).
-   * Controls only whether `paste` and `fs.external_change` carry the student's
-   * bytes inline — both EVENTS are on the hard floor and are emitted either way.
-   * Defaults to true (1.x behaviour).
-   */
-  inlineContent?: boolean;
-  /**
    * Ownership filter (spec Design §3): returns true if the given absolute fsPath
    * belongs to THIS session's assignment root (per nearest-ancestor resolution —
    * see session/session-router.ts). Defaults to "always owned" so single-session
@@ -155,7 +148,6 @@ export function startDocWiring(deps: DocWiringDeps): DocWiringHandle {
     readFile,
     readFileSync,
     explanationTagger,
-    inlineContent = true,
   } = deps;
 
   const isOwnedByThisRoot = deps.isOwnedByThisRoot ?? (() => true);
@@ -359,7 +351,7 @@ export function startDocWiring(deps: DocWiringDeps): DocWiringHandle {
               old_hash: oldHash,
               new_hash: newHash,
               diff_size: Math.abs(newContent.length - oldLength),
-              ...buildExternalChangeContent(newContent, inlineContent),
+              ...buildExternalChangeContent(newContent),
               ...(explanation !== undefined ? { explanation } : {}),
             });
             ec.reset(newContent);
@@ -441,7 +433,7 @@ export function startDocWiring(deps: DocWiringDeps): DocWiringHandle {
         pasteDelta !== null && Buffer.byteLength(pasteDelta.text, 'utf8') <= MAX_INLINE_BYTES;
 
       if (isSinglePasteShaped && isInlineable) {
-        const fields = buildPastePayload(pasteDelta.text, inlineContent);
+        const fields = buildPastePayload(pasteDelta.text);
         const pastePayload = transformPaste(relativePath, pasteDelta.range, fields);
         emitPaste(pastePayload);
       } else {
@@ -512,7 +504,7 @@ export function startDocWiring(deps: DocWiringDeps): DocWiringHandle {
                 old_hash: result.old_hash,
                 new_hash: result.new_hash,
                 diff_size: result.diff_size,
-                ...buildExternalChangeContent(onDiskContent, inlineContent),
+                ...buildExternalChangeContent(onDiskContent),
                 ...(explanation !== undefined ? { explanation } : {}),
               });
               // Reset expected content to the on-disk reality before emitting doc.save.

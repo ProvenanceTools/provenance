@@ -165,7 +165,6 @@ describe('createSessionHost — capture policy', () => {
     selection_change: false,
     focus_change: false,
     terminal: false,
-    inline_content: false,
     heartbeat_interval_ms: 30_000,
   };
 

@@ -403,7 +403,6 @@ const V2_POLICY = {
     selection_change: true,
     focus_change: true,
     terminal: true,
-    inline_content: true,
     heartbeat_interval_ms: 30000,
   },
 };
@@ -793,7 +792,6 @@ describe('2.0 signed payload', () => {
         selection_change: false,
         focus_change: false,
         terminal: false,
-        inline_content: false,
         heartbeat_interval_ms: 120000,
       },
       toJSON: () => V2_POLICY,
@@ -1109,7 +1107,6 @@ describe('verifyManifestChain', () => {
           selection_change: false,
           focus_change: false,
           terminal: false,
-          inline_content: false,
           heartbeat_interval_ms: 120000,
         },
       },
