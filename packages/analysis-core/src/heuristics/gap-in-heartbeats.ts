@@ -51,6 +51,7 @@ import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
+import { bundleHeartbeatIntervalMs } from '../manifest/bundle-manifest.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -76,12 +77,45 @@ function wallToMs(wall: string): number {
  */
 const WAKE_BATCH_EPSILON_MS = 1_000;
 
+/**
+ * How many expected heartbeat intervals may elapse before a gap is suspicious.
+ *
+ * `heartbeat_interval_ms` is a per-course knob in Manifest 2.0 (clamped to
+ * [5s, 120s]), so a threshold expressed as a fixed number of minutes silently
+ * changes meaning between courses: the 5-minute default is ten missed beats at
+ * the 30s cadence a 1.x recorder used, but only two and a half at a 120s
+ * cadence — which would make a course that turned the cadence down get flagged
+ * for gaps a 30s course would never see.
+ *
+ * 10 is exactly `DEFAULT gapThresholdMs / DEFAULT heartbeat_interval_ms`
+ * (300_000 / 30_000), so a 1.x bundle — and any 2.0 bundle recorded at the
+ * default cadence — gets a byte-for-byte unchanged threshold.
+ */
+const GAP_INTERVAL_MULTIPLIER = 10;
+
+/**
+ * The gap threshold actually applied: whichever of the configured floor and the
+ * interval-derived value is LARGER.
+ *
+ * Taking the max rather than replacing the configured value means a course that
+ * *shortens* the cadence (down to the 5s clamp) does not get a 50s threshold
+ * and a flood of flags; the configured floor still governs. Only lengthening
+ * the cadence moves the threshold, and it moves it in the direction that avoids
+ * false positives.
+ */
+export function effectiveGapThresholdMs(configuredMs: number, heartbeatIntervalMs: number): number {
+  return Math.max(configuredMs, heartbeatIntervalMs * GAP_INTERVAL_MULTIPLIER);
+}
+
 // ---------------------------------------------------------------------------
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[] {
-  const { gapThresholdMs } = config.gapInHeartbeats;
+function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
+  const gapThresholdMs = effectiveGapThresholdMs(
+    config.gapInHeartbeats.gapThresholdMs,
+    bundleHeartbeatIntervalMs(bundle),
+  );
   const flags: Flag[] = [];
 
   for (const [sessionId, sessionEvents] of index.bySessionId) {
@@ -158,6 +192,12 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
           heartbeatAWall: hA.wall,
           heartbeatBWall: hB.wall,
           gapMs,
+          /**
+           * The threshold actually applied, and the recorded heartbeat cadence
+           * it was derived from. Surfaced so staff reading a flag from a course
+           * that retuned the cadence can see which number was used.
+           */
+          thresholdMs: gapThresholdMs,
         },
       });
     }

@@ -71,6 +71,23 @@ export type CrossSubmissionFeatures = {
   /** Total event count (used to skip submissions with too few events to n-gram). */
   eventCount: number;
   representativeSeqKeys: string[];
+  /**
+   * Gated capture signals the course disabled for this submission (program spec
+   * §4), e.g. `['terminal', 'selection_change']`. Empty or absent means nothing
+   * was disabled — which is the truth for every 1.x bundle.
+   *
+   * `editing_pattern_clone` fingerprints the event-KIND stream, so a course that
+   * switches a gated kind off shrinks the kind alphabet and inflates Jaccard
+   * similarity between two unrelated students. The heuristic consults this and
+   * returns not-applicable rather than flagging on a policy-distorted
+   * fingerprint.
+   *
+   * Optional because this shape is produced in two places (the browser from a
+   * Bundle, the server by streaming) and round-trips through plain JSON; absent
+   * is read as "nothing disabled", which keeps every existing construction site
+   * — and every 1.x submission — behaving exactly as before.
+   */
+  disabledCaptureSignals?: readonly string[];
 };
 
 /**

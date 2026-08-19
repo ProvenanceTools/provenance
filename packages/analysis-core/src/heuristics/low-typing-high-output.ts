@@ -46,6 +46,22 @@
  *     confidence proportional to deltaLength / minCharsForConfidence.
  *   - deltaLength <= 0                     → no flag.
  *   - tainted reconstruction               → skip.
+ *
+ * ## Capture-policy audit (program spec §4)
+ *
+ * This heuristic reads `doc.open`, which a course can switch off via
+ * `policy.capture.doc_open_close`, and it is nonetheless NOT policy-gated —
+ * deliberately, and the reason is worth recording so the next audit does not
+ * "fix" it.
+ *
+ * `doc.open.content` is both the heuristic's `startLength` anchor AND the seed
+ * `reconstructFile` starts from. Removing it therefore removes the skeleton
+ * from BOTH sides of `finalLength - startLength`, so the ratio is unchanged:
+ * a 600-char skeleton the recorder never saw is absent from the final
+ * reconstruction too. There is no inflation to guard against, and gating would
+ * only delete real detections. (A gate here would also be strictly harmful in
+ * the other direction: with `doc.open` gone, taint can never be re-anchored,
+ * so affected files are skipped by the `reconstructionTainted` check anyway.)
  */
 
 import type { EventIndex } from '../index/event-index.js';
