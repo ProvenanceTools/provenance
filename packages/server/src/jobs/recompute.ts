@@ -41,7 +41,7 @@ import { getDb } from '../db/client.js';
 import { getLogger } from '../logging.js';
 import { recompute_jobs, submissions } from '../db/schema.js';
 import { JOB_KINDS } from './pg-boss.js';
-import { DEFAULT_SERVER_CONFIG } from '../services/heuristics/config.js';
+import { DEFAULT_SERVER_CONFIG, normalizeStoredConfig } from '../services/heuristics/config.js';
 import {
   recomputeSubmission,
   getNonSupersededSubmissionIds,
@@ -292,8 +292,15 @@ export async function registerRecomputeHandlers(boss: PgBoss): Promise<void> {
         `);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: postgres.js raw result
         const hcRowsArr = hcRows as any as Array<{ config: unknown }>;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- jsonb cast
-        const config = (hcRowsArr[0]?.config as any) ?? DEFAULT_SERVER_CONFIG;
+        // This is a raw read by target_config_id, so it bypasses
+        // getActiveConfig's normalization — a recompute can target a historical
+        // (is_active=false) row, which is exactly the kind of row most likely to
+        // predate a flag id. Normalize here too so the worker sees a complete
+        // per_flag map regardless of which row it was pointed at.
+        const config = normalizeStoredConfig(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- jsonb cast
+          (hcRowsArr[0]?.config as any) ?? DEFAULT_SERVER_CONFIG,
+        );
 
         // Run the per-submission recompute. Reads the stored bundle blob.
         const storage = getStorageClient();
