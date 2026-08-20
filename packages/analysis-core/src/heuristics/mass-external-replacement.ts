@@ -37,6 +37,16 @@
  *  - `external` / `unclassified` — flagged exactly as before.
  *
  * A SOLO scope produces no verdicts, so behaviour there is unchanged.
+ *
+ * ## D16 does not reach this heuristic
+ *
+ * D16 stops the recorder's `explanation: 'git'` tag suppressing a
+ * `git_unrecorded_in`. This heuristic has never read `explanation` at all — a
+ * tagged mass replacement always produced a flag here — so there is nothing to
+ * override and no behaviour change. That is deliberate, not an oversight: the
+ * tag is timing-derived and this heuristic's evidence is content, so consulting
+ * it would be a regression rather than consistency. `mass_external_replacement.
+ * test.ts` pins it.
  */
 
 import { diffLines } from 'diff';
