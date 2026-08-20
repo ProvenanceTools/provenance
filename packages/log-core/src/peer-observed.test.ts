@@ -258,7 +258,8 @@ describe('validatePeerObservedPayload accepts', () => {
     // Absent reads as null here: `obj['session_id']` is undefined, which is
     // neither a string nor null... so this must be REJECTED, not silently
     // coerced. Pinned so the coercion is never introduced as a convenience.
-    const { session_id: _s, ...withoutSessionId } = PARSED;
+    const withoutSessionId: Record<string, unknown> = { ...PARSED };
+    delete withoutSessionId['session_id'];
     expect(errorOf(withoutSessionId)).toEqual({ kind: 'bad_field', field: 'session_id' });
   });
 });
@@ -355,6 +356,18 @@ describe('parsed-ness is all-or-nothing', () => {
       kind: 'partially_parsed',
       present: ['session_id', 'seq_high'],
       absent: ['last_hash'],
+    });
+  });
+
+  it('rejects state unparseable carrying a seq_high of ZERO', () => {
+    // Separate from the case below, and it is not a duplicate: 0 is the one
+    // chain value a truthiness test reads as absent. An implementation that asks
+    // "which fields are set?" with `Boolean(v)` accepts this contradictory
+    // payload silently, while every other spelling of the same bug is caught by
+    // the seq_high-of-0 acceptance test above. Both directions are needed.
+    expect(errorOf({ ...UNPARSEABLE, seq_high: 0 })).toEqual({
+      kind: 'unparseable_with_chain_values',
+      present: ['seq_high'],
     });
   });
 

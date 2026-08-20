@@ -97,7 +97,11 @@ async function scopeWitnessing(opts: {
   witnessWho: CollabWho;
   witnessedEvents?: EventSpec[];
   /** Rewrite the witness payload once the real facts are known. */
-  distort?: (facts: { sessionId: string; seqHigh: number; lastHash: string }) => PeerObservedPayload;
+  distort?: (facts: {
+    sessionId: string;
+    seqHigh: number;
+    lastHash: string;
+  }) => PeerObservedPayload;
   /** Drop the witnessed session from the second pass entirely. */
   omitWitnessed?: boolean;
   /** Re-stamp contributors against a root key that signs nothing here. */
@@ -515,7 +519,9 @@ describe('a malformed witness is reported, never interpreted', () => {
       {
         who: ALICE,
         events: [
-          peerObserved(witnessOf(facts, { seq_high: null, last_hash: null }) as PeerObservedPayload),
+          peerObserved(
+            witnessOf(facts, { seq_high: null, last_hash: null }) as PeerObservedPayload,
+          ),
         ],
       },
     ]);

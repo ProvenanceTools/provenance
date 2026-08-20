@@ -127,12 +127,7 @@ export type WitnessAuthority = 'attributed' | 'unattributed' | 'unverifiable';
 export type WitnessEvidenceGrade = 'established' | 'inferred' | 'unknown';
 
 /** The reconciliation of one witness against the logs present. */
-export type WitnessVerdict =
-  | 'corroborated'
-  | 'absent'
-  | 'short'
-  | 'tip_mismatch'
-  | 'indeterminate';
+export type WitnessVerdict = 'corroborated' | 'absent' | 'short' | 'tip_mismatch' | 'indeterminate';
 
 /** One `peer.observed` event, located in the chain that carries it. */
 export type PeerWitnessRecord = {
@@ -150,8 +145,7 @@ export type PeerWitnessRecord = {
 /** A witness that was read but must not be reconciled, and why. */
 export type WitnessExclusion = {
   witness: PeerWitnessRecord;
-  reason:
-    /** The witness names its own session. A chain cannot corroborate itself. */
+  reason: /** The witness names its own session. A chain cannot corroborate itself. */
     | 'self_witness'
     /** The witnessed session is a PROVEN same-contributor session. Not peer evidence. */
     | 'same_contributor';
@@ -357,13 +351,11 @@ function describe(
         `one witnessed. Two chains cannot both be this session's history at that position.`
       );
     case 'indeterminate':
-      return (
-        payload.seq_high === null
-          ? `The observation read no chain out of ${payload.file}, so it commits to nothing that ` +
+      return payload.seq_high === null
+        ? `The observation read no chain out of ${payload.file}, so it commits to nothing that ` +
             `can be checked against this bundle.`
-          : `The witnessed session could not be resolved to a single comparable log in this ` +
-            `bundle, so the comparison was not made.`
-      );
+        : `The witnessed session could not be resolved to a single comparable log in this ` +
+            `bundle, so the comparison was not made.`;
   }
 }
 
@@ -478,7 +470,9 @@ export function reconcileWitnesses(bundle: Bundle): BundleWitnessReconciliation 
       // duplicated-log case. Unanimity is an answer whichever file the witness
       // actually saw; genuine disagreement is `indeterminate`, which reads as
       // "we cannot check", never as a fallback to the harsher reading.
-      const results = matches.map((m) => reconcileAgainst(m, payload.seq_high!, payload.last_hash!));
+      const results = matches.map((m) =>
+        reconcileAgainst(m, payload.seq_high!, payload.last_hash!),
+      );
       const first = results[0]!;
       const unanimous = results.every((r) => r.verdict === first.verdict);
 
