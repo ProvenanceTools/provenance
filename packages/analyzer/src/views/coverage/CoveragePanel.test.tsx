@@ -34,8 +34,19 @@ async function keys(): Promise<IdentityTestKeys> {
   return cachedKeys;
 }
 
+/**
+ * `'anonymous'` — no identity block at all, so `unattributed`.
+ * `{ studentRef }` — a fully signed 2.1 chain, so `attributed`.
+ * `'forged'` — an identity block IS present, but its institution cert is signed
+ *   by the student key rather than the root, so it is `unverifiable` on a
+ *   deployment whose root key IS configured. That combination is what separates
+ *   "a claim we could not stand behind" from "no claim at all", and it is the
+ *   only fixture that can prove the panel keeps them apart.
+ */
+type Who = { studentRef: string } | 'anonymous' | 'forged';
+
 async function buildScope(
-  specs: Array<{ who: { studentRef: string } | 'anonymous'; startMin: number; endMin: number }>,
+  specs: Array<{ who: Who; startMin: number; endMin: number }>,
   opts: { rootKey?: string } = {},
 ): Promise<{ bundle: Bundle; index: EventIndex }> {
   const k = await keys();
@@ -61,7 +72,9 @@ async function buildScope(
               identity: await buildInstitutionIdentity({
                 keys: k,
                 sessionPubkeyHex: sk.pubkeyHex,
-                studentRef: spec.who.studentRef,
+                ...(spec.who === 'forged'
+                  ? { certSignedBy: k.student.privkey }
+                  : { studentRef: spec.who.studentRef }),
               }),
             }),
       },
@@ -161,6 +174,41 @@ describe('a deployment with no root key', () => {
     // And the counts panel — which would read as "1 unverifiable" — is not the
     // thing shown on this path.
     expect(screen.queryByTestId('coverage-identity-counts')).toBeNull();
+  });
+
+  /**
+   * The distinction this pins is `unverifiable` != `unattributed`. Summing them
+   * into one "not attributed" number hides a forged identity claim behind a
+   * student who simply never enrolled — and it reads to a grader as one
+   * population when it is two, with opposite meanings. Without this test the
+   * collapse is invisible: verified by mutation, the summed line passed every
+   * other assertion in this file.
+   */
+  it('never sums unverifiable and unattributed into one number', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, startMin: 0, endMin: 60 },
+      { who: 'forged', startMin: 120, endMin: 180 },
+      { who: 'anonymous', startMin: 240, endMin: 300 },
+    ]);
+    // Guard the premise: one of each, and the root key really is configured, so
+    // this is the counts branch and not the "could not check" branch.
+    expect(bundle.contributors?.rootKeyConfigured).toBe(true);
+    expect(bundle.contributors?.counts).toEqual({
+      attributed: 1,
+      unverifiable: 1,
+      unattributed: 1,
+    });
+
+    renderOpen(bundle, index);
+    const counts = screen.getByTestId('coverage-identity-counts').textContent ?? '';
+
+    // Each state is reported with its OWN count and its OWN description.
+    expect(counts).toMatch(/1 session attributed to a verified contributor/i);
+    expect(counts).toMatch(/1 carrying an identity claim that is not being honoured/i);
+    expect(counts).toMatch(/1 with no identity block at all/i);
+    // And never as a single summed "2".
+    expect(counts).not.toMatch(/2 not attributed/i);
+    expect(counts).not.toMatch(/\b2\b/);
   });
 
   it('shows counts instead when the root key IS configured', async () => {
