@@ -347,7 +347,7 @@ manifest shape and every read path in `analyzer` and `server`.
   journal for unique+ordered `idx` and monotonic `when`, then **apply the chain against a live
   database** — a filename renumber that leaves ordering broken passes every unit test.
   Current chain: `0026` ingest scope submission types · `0027` student_credentials ·
-  `0028` ingest_jobs.skipped.
+  `0028` ingest_jobs.skipped · `0029` submission_contributors.
 - **Conformance vectors are a tri-repo contract.** A change that perturbs an existing vector's bytes
   is a breaking change to provjet and provnvim, not a refactor. `golden-bundle.{json,zip}` is
   genuinely non-deterministic; leave it at committed bytes.
@@ -412,12 +412,16 @@ Build, typecheck, lint clean. Branch ~145 commits, ~+50k lines vs `main`.
 1. **provjet and provnvim** need the rolling-seal write side and the 2.1 identity port. The monorepo
    shipping 2.1 while sibling recorders emit 2.0 is exactly the version skew the "readers before
    writers" rule exists to prevent.
-2. **One consolidated `/architecture` diagram pass.** Nine nodes are owed and no `.dot`/`.svg` has
+2. **One consolidated `/architecture` diagram pass.** Ten nodes are owed and no `.dot`/`.svg` has
    been touched all session (deliberately — concurrent agents would collide):
-   `contrib`, `dag`, `order`, `recon`, `v8` on `analysis.dot`; `students` on `er.dot`; a contributor
-   -stamp node on `readpath.dot`; a `recorder.dot` `explain` reshape; and `/enroll` + `/compose/manifest`
+   `contrib`, `dag`, `order`, `recon`, `v8` on `analysis.dot`; `students` **and
+   `submission_contributors`** on `er.dot`; a contributor-stamp node on `readpath.dot`; a
+   `recorder.dot` `explain` reshape; and `/enroll` + `/compose/manifest`
    route nodes on `master.dot` / `ecosystem.dot`. Node _detail_ cannot be authored before the node
    exists — `nodes.coverage.test.ts` fails on metadata for a node no SVG contains.
+   Existing nodes whose detail the D9 cut-over made WRONG were corrected in place (er.dot
+   `roster_entries` / `submissions` / `ingest_files`; ingest.dot dedup, version allocation and the
+   Gradescope stage), because that needs no new node.
 
 ### Definition of done
 
@@ -439,7 +443,9 @@ completion contract, not a wish list.
 - ~~Branched replay UI (Tier 5.3), including surfacing a suppressed concurrent overlap as a
   **visible fact**.~~ **DONE 2026-08-20.** See "The coverage stage" below — and read the
   correction there before repeating the briefing that was given for it.
-- `submission_contributors` cut-over (D9), per-contributor heuristic scoping, `Flag.contributor_id`.
+- ~~`submission_contributors` cut-over (D9), `Flag.contributor_id`.~~ **DONE 2026-08-21**, see
+  below. **Per-contributor heuristic scoping is still owed** — heuristics still run ONCE over the
+  whole scope; what landed is per-contributor ATTRIBUTION and SCORING of the resulting flags.
 - Peer witnessing (`peer.observed`) — **reader half DONE 2026-08-20** (see below). The
   **writer half is deliberately not built**: the directory watcher in the three recorders, and
   the `session.start` witnessing-availability capability report §5.6 item 3 calls for.
@@ -678,6 +684,158 @@ branch, which renders a different paragraph entirely, so the counts line was nev
 with a test that needed a fixture the repo did not have — an identity block that IS present and
 does NOT verify on a deployment whose root key IS configured, built via `buildInstitutionIdentity`'s
 `certSignedBy` so the anchor is not root-signed.
+
+### Landed 2026-08-21 — the `submission_contributors` cut-over (D9 + D14)
+
+**Migration `0029`.** One group bundle is now ONE `submissions` row with N contributors, replacing
+the fan-out in which the same bytes were ingested once per co-submitter into N rows with N
+duplicated blobs.
+
+**Version uniqueness — the part that could have gone silently wrong.** `submissions_version_key`
+was `UNIQUE (semester_id, assignment_id, student_id, version_index)` and `create-submission.ts`
+locks the same three columns `FOR UPDATE`. Making `student_id` nullable breaks BOTH, without an
+error anywhere: Postgres treats NULLs as **distinct**, so the constraint stops constraining group
+rows; and `WHERE student_id = NULL` is never true, so the lock selects **zero** rows — `maxVersion`
+stays 0, every resubmission is allocated version 1 for ever, `supersededIds` is always empty, and
+the supersede chain never forms.
+
+The fix is a new `version_owner_key`, and it is **`GENERATED ALWAYS` by Postgres**, not written by
+application code:
+
+```
+student_id IS NOT NULL  ->  "student:" || student_id
+student_id IS NULL      ->  "group:"   || group_key
+both NULL               ->  NULL, which the NOT NULL rejects
+```
+
+Generated rather than application-supplied, and this is the whole argument: a derived column cannot
+disagree with its row. Postgres refuses any attempt to write it (`cannot insert a non-DEFAULT
+value`), so there is no code path — present or future, production or test — that can put a wrong
+lineage on a row. It is not a convention, and not a `CHECK` that the wrong value could still
+satisfy. Three consequences worth keeping:
+
+- for every row predating 0029 the derived value is `"student:" || student_id`, so the new
+  constraint partitions the existing table **point-for-point** as the old one did. "Existing
+  submissions are unaffected" is a property of the schema, not a claim about test coverage;
+- **no INSERT site in the codebase had to change** — Drizzle omits generated columns — which is
+  itself part of that proof. The first attempt used an application-written column and broke ~20
+  test files; that churn was the signal to look for the better design;
+- a submission with no lineage at all is **unrepresentable** rather than merely unexpected.
+
+Verified against real Postgres 16 before adoption (unique-on-generated is accepted; solo duplicates
+still collide; two different groups at version 1 coexist; the same group twice does not; both-null
+fails NOT NULL; an explicit write is refused), and again by the migration test.
+
+**A real defect the migration test caught, which would have failed every deploy.** Migration 0006
+declared that constraint **inline and unnamed** inside `CREATE TABLE`, so Postgres auto-generated
+and truncated its name. `submissions_version_key` — the name the Drizzle schema has always
+declared — **was never the name the database used**. `DROP CONSTRAINT submissions_version_key`
+therefore errors on every real database, empty or populated. 0029 now finds it by its **column
+set** and `RAISE`s if it is absent, because silently dropping nothing would leave the old
+student-keyed constraint in place and reject exactly the group submissions the migration exists to
+allow. (Post-0029 the constraint really is called that, so the schema's claim becomes true for the
+first time.) **Generalisable:** a name that appears only in the ORM and never in the migration SQL
+is not a name — it is a guess, and nothing was checking it.
+
+**The join table.** One row per PERSON, reconciling the roster side (the submitter) with the bundle
+side (`establishBundleContributors`, grouped on the verified `student_ref`) onto ONE row via a
+partial unique index on `(submission_id, roster_entry_id)`. A co-submitter who also recorded
+arrives from both sources, and two rows for one human would not merely duplicate a name — it would
+**split their score across two apparent people**.
+
+**What deliberately gets no row.** `unattributed` sessions (no identity block — the ordinary,
+blameless state for almost every bundle today) and `unverifiable` ones. `analysis-core` gives each a
+SINGLETON key precisely because two of them are neither provably one person nor provably two, so a
+row per session would turn an ordinary five-session solo bundle into five apparent contributors —
+and would break the sole-contributor scoring rule below. `unverifiable` is worse: the block NAMES
+someone, and promoting it is exactly how a forged identity block would launder work onto the student
+it names.
+
+**D14 scoring.** `flags.contributor_key` (`''` = scope-level, the default). A flag is charged to a
+contributor only when all its supporting evidence sits in ONE session AND that session is
+`attributed` — §6 Rule 2. This deliberately **under**-attributes: a multi-session flag earned by one
+partner stays scope-level. Under-attribution costs a partner nothing (the finding is still visible
+at full severity in the scope roll-up); over-attribution puts a name on a finding the evidence does
+not support. When the two are not equally cheap, fail toward the harmless one.
+
+The **sole-contributor rule** is what keeps solo unchanged: with exactly one contributor they are
+charged EVERYTHING, scope-level flags included, so their total equals the scope score exactly. With
+one contributor there is no innocent partner to protect. Without it, every solo student's rollup
+score would have silently dropped the day this shipped.
+
+**Deviation from spec §7, flagged:** the spec says `flags.contributor_id`; this is
+`flags.contributor_key`, a text key rather than a uuid FK. `flags` and `submission_contributors` are
+both rewritten wholesale on a recompute, and an FK between two wholesale-rewritten tables forces a
+delete ORDER whose violation is silent under `ON DELETE SET NULL` — attribution would just
+disappear. The key is also stable across recomputes where a generated uuid is not, and
+`flags.session_id` is already a bare logical id in the same table.
+
+**Read paths.** All nine sites moved. The roster join went INNER → **LEFT** on the cohort list
+(main + count), facets (×3), the summary, the cross-flag participants and the dry-run movers; the
+`studentId` filter became an `EXISTS` on contributors (so a partner finds their own group work, and
+nothing fans out to inflate `COUNT(*)`); the students rollup groups on contributors and sums the
+**contributor's** score, not the submission's; assignment stats count distinct `roster_entry_id` in
+their own CTE, so joining contributors cannot weight `COUNT(*)`, `AVG` and the percentiles by group
+size.
+
+Two of those INNER joins were live hazards rather than theoretical ones. The **summary** returned
+`null` on an empty join and the route turned it into a **404**, so a submission with no single
+owning student took down the entire detail shell; `null` now means only "no such submission". The
+**cross-flag participants** join silently DROPPED a participant, so a two-party cross flag could
+render as one-party — the caller does `?? []` and an empty list reads as "no participants" rather
+than "we lost them".
+
+The cohort list's student sort also needed `COALESCE(display_name, '')`: a keyset predicate
+`display_name > $cursor` is NULL — never true — for a null-named row, which would make it
+unreachable on every page after the first. Provably identity for existing data (the column is NOT
+NULL and the join was INNER, so no pre-0029 row can produce a NULL). **Known gap, not closed:** the
+protected-mode sorts order by `protected_index`, which was ALREADY nullable, and the same argument
+applies; coalescing it would move existing NULL-index rows in the ordering, which is a behaviour
+change to shipped data this task had no mandate for.
+
+**The old fan-out, and `dedup.ts`.** `dedupFile` lost its `studentId` parameter and is blob-scoped
+on every path again, as it originally was. The second co-submitter is ATTACHED to the existing
+submission (`attachCoSubmitter`) instead of creating a row. Identical bytes really are the same
+artifact — per-session uuids, keys and timestamps make coincidence impossible — so the narrow key
+was never distinguishing two artifacts, only two SUBMITTERS of one, which the join table now
+represents directly. The attach uses an **untargeted** `ON CONFLICT DO NOTHING`: the person can
+collide on `contributor_key` OR on the partial person index (when the bundle side already named
+them under an `attributed:` key), and a targeted conflict **raises** on that second path. That was
+found by mutation — a targeted conflict passed every test until a regression was written for it.
+
+**Existing fanned-out submissions are NOT merged.** Rows persist for audit, and merging would
+rewrite history that `flags`, `cross_flag_participants` and `ingest_files` all point at. They stay
+as N one-contributor submissions and read exactly as they do today; only NEW ingests take the new
+shape.
+
+**Ordering: the contributor stage runs AFTER heuristics**, inside the same transaction, on all three
+write paths (ingest, recompute, manual attach) through one `finalizeContributors`.
+`establishBundleContributors` MUTATES the bundle and several heuristics read that stamp, and **the
+ingest path has never stamped it** — so stamping earlier would change which flags ingest produces
+for any bundle carrying identity. That is a product behaviour change this task had no mandate for,
+so flag CONTENT is provably untouched.
+
+**Noticed, not changed:** ingest-time heuristics run on an UNSTAMPED bundle while recompute-time
+ones (via `loadSubmissionIndex`) run on a stamped one, so the two can produce different flags for
+the same bundle. Pre-existing, not introduced or widened here, and worth a decision of its own.
+
+**Contract change**, both ends in one diff: new `SubmissionContributorSchema`; `contributors[]`
+added to `SubmissionRowSchema` and `SubmissionSummarySchema` (additive); `student` WIDENED to
+nullable on those two plus `TopMoverSchema` and `CrossFlagParticipantSchema`. The widening is
+justified rather than convenient — a group submission has no one student, and naming one anyway
+attributes the whole submission, a partner's flags included, to a single named person. Solo
+rendering is unchanged by construction, since a solo submission has exactly one contributor who is
+the same person as `student`.
+
+**Mutation testing, seven mutations, each with its catching test:** unique key left on the nullable
+`student_id` (the group-submission version tests + the migration test); every contributor charged
+every flag (5 tests, including Bob charged 12 instead of 1); sole-contributor rule removed (3
+tests); summary join back to INNER (the 404 test — `expected null not to be null`); cohort list join
+back to INNER (2 tests); rollup summing the submission score per partner (`expected 12 to be 8`);
+`unverifiable` allowed to name the student it claims to be (2 tests). One mutation was NOT caught —
+the targeted `ON CONFLICT` above — and a regression test was added for it.
+
+---
 
 ### Known gaps, deliberately accepted
 
