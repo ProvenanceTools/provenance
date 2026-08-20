@@ -267,11 +267,17 @@ sessions across a partner's commit because that manufactures the accusation the 
 
 Suites:
 **log-core 541 · analysis-core 988 · recorder 583 · analyzer 1223 · tools 174 ·
-server 1420/1422 (2 confirmed flakes) · provjet 589 · provnvim 1007.**
+server 1488/1490 (2 testcontainers flakes) · provjet 589 · provnvim 1007.**
 The first five re-measured 2026-08-20 after the read-side orphan guard (bug 11);
 analysis-core 973 → 988 and analyzer 1221 → 1223 are the guard's own tests plus
 the id-space regressions.
 provjet and provnvim are carried forward and not re-measured since.
+Server was re-measured too: the carried-forward `1420/1422` was stale (the real
+total had grown to 1490). Both failures in the full run were
+`Timed out after 10000ms while waiting for container ports to be bound to the
+host` — `cohort.test.ts` (a known flake) and
+`load-index.contributors.test.ts` (a new one) — and both files pass in
+isolation, 27/27 and 8/8. Infrastructure, not logic.
 Build, typecheck, lint clean. Branch ~145 commits, ~+50k lines vs `main`.
 
 ### Gating merge to `main`
