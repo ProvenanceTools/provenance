@@ -67,12 +67,24 @@ export function HomeView() {
             Choose a semester to review its submissions.
           </p>
         </div>
-        <Button asChild variant="outline" size="sm">
-          <Link to="/local/load" data-testid="local-analysis-link">
-            Local analysis
-            <span aria-hidden="true">→</span>
-          </Link>
-        </Button>
+        {/* Both links are reachable only from this branch, which renders only
+            when the principal has at least one membership — i.e. staff. The
+            composer handles the course signing key, so it must not appear in
+            the AppShell top bar, which /home also shows to students. */}
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link to="/compose/manifest" data-testid="manifest-composer-link">
+              Manifest composer
+              <span aria-hidden="true">→</span>
+            </Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/local/load" data-testid="local-analysis-link">
+              Local analysis
+              <span aria-hidden="true">→</span>
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <ul className="space-y-2.5" data-testid="semester-list">
