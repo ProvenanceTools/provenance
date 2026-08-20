@@ -8,6 +8,8 @@
  *   /enroll            → RequireAuth + EnrollView (STUDENT-facing, no AppShell)
  *   /home              → RequireAuth + AppShell + HomeView
  *   /s/:courseSlug/:semesterSlug/* → cohort + drill-in views (Phases 21–24)
+ *   /compose/manifest  → RequireAuth + RequireStaff + AppShell + ManifestComposerView
+ *                        (staff-only: it handles the course SIGNING key)
  *
  * Standalone /local subtree (v2 "drop a zip" UX, §15 amended 2026-07-10 —
  * now staff-gated behind RequireAuth + RequireStaff):
@@ -114,6 +116,11 @@ const AdminUserDetailView = lazy(() =>
 );
 const AdminAuditView = lazy(() =>
   import('./views/admin/AdminAuditView.js').then((m) => ({ default: m.AdminAuditView })),
+);
+const ManifestComposerView = lazy(() =>
+  import('./views/compose/ManifestComposerView.js').then((m) => ({
+    default: m.ManifestComposerView,
+  })),
 );
 const ArchitectureView = lazy(() => import('./views/architecture/ArchitectureView.js'));
 const EnrollView = lazy(() =>
@@ -312,6 +319,23 @@ export function App() {
               <AppShell>
                 <TokensView />
               </AppShell>
+            </RequireAuth>
+          }
+        />
+
+        {/* ── /compose/manifest — staff manifest composer ─────────────────── */}
+        {/* RequireStaff, not just RequireAuth: this page handles the course     */}
+        {/* SIGNING key. Every student has a valid session, so RequireAuth alone */}
+        {/* would put a page about the course private key in front of the class. */}
+        <Route
+          path="/compose/manifest"
+          element={
+            <RequireAuth>
+              <RequireStaff>
+                <AppShell>
+                  <ManifestComposerView />
+                </AppShell>
+              </RequireStaff>
             </RequireAuth>
           }
         />

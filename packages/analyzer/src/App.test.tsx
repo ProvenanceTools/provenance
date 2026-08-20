@@ -89,6 +89,34 @@ describe('App routing', () => {
     expect(screen.queryByTestId('enroll-form')).not.toBeInTheDocument();
   });
 
+  it('renders /compose/manifest for an authenticated staff member', async () => {
+    renderApp('/compose/manifest');
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-form')).toBeInTheDocument();
+    });
+  });
+
+  it('keeps a student out of /compose/manifest', async () => {
+    // The page handles the course SIGNING key. A student session is a valid
+    // session, so RequireAuth alone would let them in; RequireStaff is what
+    // does not. Bounced to /home, which for a student is the invite dead end.
+    mswServer.use(meNoSemestersHandler());
+    renderApp('/compose/manifest');
+    await waitFor(() => {
+      expect(screen.getByTestId('no-semesters-message')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('composer-form')).not.toBeInTheDocument();
+  });
+
+  it('sends an anonymous visitor at /compose/manifest to the login page', async () => {
+    mswServer.use(meUnauthorizedHandler());
+    renderApp('/compose/manifest');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /sign in with google/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('composer-form')).not.toBeInTheDocument();
+  });
+
   it('renders /local/load for an authenticated staff member', async () => {
     // Default /me handler returns a user WITH a membership → RequireStaff passes.
     renderApp('/local/load');
