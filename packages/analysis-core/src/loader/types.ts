@@ -189,8 +189,7 @@ export function asLogicalSessionId(raw: string): LogicalSessionId {
  * silent exclusion never reads as nothing having been wrong.
  */
 export type DroppedArtifact = {
-  kind:
-    /** A `.slog.meta` whose `.slog` is absent — quarantined away, or deleted. */
+  kind: /** A `.slog.meta` whose `.slog` is absent — quarantined away, or deleted. */
     | 'orphaned_meta'
     /** A `.slog` with no `.slog.meta` beside it. */
     | 'orphaned_slog'

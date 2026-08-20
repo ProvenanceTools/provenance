@@ -247,6 +247,7 @@ export function makeMinimalIndex(): EventIndex {
 export function makeMinimalBundle(): Bundle {
   return {
     id: 'test-bundle-id',
+    droppedArtifacts: [],
     manifest: {
       format_version: '1.0' as const,
       assignment_id: 'hw1',

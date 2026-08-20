@@ -386,9 +386,7 @@ export async function unzipBundle(
     droppedArtifacts.push({
       kind,
       filename:
-        kind === 'orphaned_meta'
-          ? `session-${logFileId}.slog.meta`
-          : `session-${logFileId}.slog`,
+        kind === 'orphaned_meta' ? `session-${logFileId}.slog.meta` : `session-${logFileId}.slog`,
       logFileId,
       // The sidecar names the recording even when the log is gone. Carried so
       // `parse-bundle.ts` can drop this session's rolling seal WITH it, instead

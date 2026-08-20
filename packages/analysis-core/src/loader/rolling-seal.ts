@@ -210,10 +210,24 @@ export function reconcileRollingSealsWithSessions(
       defects.push({
         sessionId,
         kind: 'no_session_log',
+        // Names the FACT, not a filename that cannot exist.
+        //
+        // This used to read "…but no `session-<sessionId>.slog` is present".
+        // `sessionId` here is the LOGICAL session id — it came from a
+        // `manifest-<session_id>.json` filename — but `.slog` files are named
+        // after a per-file uuid the writer mints separately, so NO FILE IS EVER
+        // NAMED THAT. This string reaches staff through check 1's `detail` and
+        // is persisted to `check_1_detail`, so it is read at exactly the moment
+        // someone goes looking through the archive; the filename we printed
+        // would return nothing and leave our own report unverifiable by
+        // inspection. Say which id space this is, since a reader cannot be
+        // expected to know there are two.
         detail:
-          `manifest-${sessionId}.json seals session ${sessionId}, but no ` +
-          `session-${sessionId}.slog is present — its signature cannot be checked ` +
-          `against any session key.`,
+          `manifest-${sessionId}.json seals session ${sessionId}, but no .slog in ` +
+          `this bundle records that session — its signature cannot be checked ` +
+          `against any session key. (Session ${sessionId} is a LOGICAL session id, ` +
+          `from session.start; log files are named after a separate per-file uuid, ` +
+          `so no file is named after this id.)`,
       });
     }
   }

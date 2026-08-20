@@ -63,6 +63,7 @@ function makeBundle(): Bundle {
 
   return {
     id: 'bundle-id-1',
+    droppedArtifacts: [],
     manifest: {
       format_version: '1.0',
       assignment_id: 'hw1',

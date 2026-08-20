@@ -2631,12 +2631,25 @@ describe('the same append under a NON-final seal is not a finding', () => {
 //                           (session-registry.ts step 6c, right after
 //                            session.start is emitted)
 //
-// Packed as-is, each one is fatal to the ENTIRE bundle — not to the session
-// that is malformed. An innocent student's whole submission is rejected:
+// Packed as-is, each one USED TO BE fatal to the ENTIRE bundle — not to the
+// session that is malformed — so an innocent student's whole submission was
+// rejected:
 //
 //   the 0-byte `.slog`   -> loadBundle: first_event_not_session_start ("none")
 //   the stranded `.meta` -> loadBundle: orphaned_meta
 //   the stranded seal    -> no_session_log, failing check 1 for the bundle
+//
+// As of the read-side orphan guard the loader no longer dies on any of the
+// three: it drops them and reports them on `Bundle.droppedArtifacts`. That
+// guard exists for the GIT path, which has no seal step to filter anything.
+//
+// It does not make this seal-side guard redundant, and these tests still hold.
+// Two independent reasons:
+//   1. A seal that packs junk produces a DEGRADED submission where a clean one
+//      was available. The loader degrading is a last resort for a path with no
+//      producer to fix it; here there is one.
+//   2. The student is only told what was left out by the seal warnings. Drop it
+//      at read time instead and the first person to learn is a grader.
 //
 // The tests below assert the loader's own invariant rather than a filename
 // list: every rolling seal in the zip names a session whose log is in the zip
