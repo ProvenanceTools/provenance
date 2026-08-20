@@ -38,6 +38,7 @@ import type * as MonacoType from 'monaco-editor';
 import { useBundle } from '../../context/BundleContext.js';
 import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
 import type { Flag } from '@provenance/analysis-core/heuristics/types.js';
+import type { Bundle } from '@provenance/analysis-core/loader/types.js';
 import { useReplayEngine } from './useReplayEngine.js';
 import { FileTabs } from './FileTabs.js';
 import { SessionSelect } from './SessionSelect.js';
@@ -149,10 +150,11 @@ export function ReplayView() {
     return index.bySessionId.has(sessionId);
   }, [index, sessionId]);
 
-  const sourceFilename = useMemo(() => {
-    const selected = bundles.find((b) => b.id === selectedBundleId) ?? bundles[0];
-    return selected?.sourceFilename ?? '';
-  }, [bundles, selectedBundleId]);
+  const selectedBundle = useMemo(
+    () => bundles.find((b) => b.id === selectedBundleId) ?? bundles[0] ?? null,
+    [bundles, selectedBundleId],
+  );
+  const sourceFilename = selectedBundle?.sourceFilename ?? '';
 
   if (!sessionId || index === null || !sessionExists) {
     if (sessionId && index !== null && !sessionExists) {
@@ -170,6 +172,7 @@ export function ReplayView() {
       flags={flags}
       sourceFilename={sourceFilename}
       showHeader={true}
+      bundle={selectedBundle}
     />
   );
 }
@@ -186,6 +189,16 @@ export type ReplayInnerProps = {
   sourceFilename: string;
   /** Render the back-button header above FileTabs. Default true (used by /local). */
   showHeader?: boolean;
+  /**
+   * The bundle behind `index`, when the caller has one. Lets replay refuse to
+   * render a file whose content at the playhead has no single truth, instead of
+   * picking a branch (Tier 2.2, spec §6 Rule 4).
+   *
+   * The server-backed Replay tab has no parsed Bundle to hand — it builds its
+   * index from API rows — so it omits this and takes the solo scope, i.e. the
+   * behaviour that predates Tier 2.2. Closing that gap is server-side work.
+   */
+  bundle?: Bundle | null | undefined;
 };
 
 export function ReplayInner({
@@ -194,6 +207,7 @@ export function ReplayInner({
   flags,
   sourceFilename,
   showHeader = true,
+  bundle = null,
 }: ReplayInnerProps) {
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -202,8 +216,8 @@ export function ReplayInner({
   // opts out; any other value (or none) leaves it on.
   const [skipIdle, setSkipIdle] = useState<boolean>(() => searchParams.get('skipIdle') !== '0');
 
-  const engine = useReplayEngine(index, { skipIdle });
-  const { state, fileStates, files, seams, play, pause, step, seek } = engine;
+  const engine = useReplayEngine(index, { skipIdle, bundle });
+  const { state, fileStates, files, seams, ambiguousFiles, play, pause, step, seek } = engine;
 
   // Active file tab — null means "use first file".
   const [activeFile, setActiveFile] = useState<string | null>(null);
@@ -216,6 +230,10 @@ export function ReplayInner({
 
   // FileReplayState for the active file (used by GutterDecorations + LineHoverProvider).
   const activeFileState = resolvedFile !== null ? (fileStates.get(resolvedFile) ?? null) : null;
+
+  // Set when the active file has no single content at the playhead (Tier 2.2).
+  // Always undefined for a single-contributor bundle.
+  const ambiguity = resolvedFile !== null ? ambiguousFiles.get(resolvedFile) : undefined;
 
   // Total event count for the bundle (passed to TransportBar).
   const eventCount = index?.ordered.length ?? 0;
@@ -492,7 +510,36 @@ export function ReplayInner({
       <div className="flex flex-1 min-h-0">
         {/* Monaco editor — 70% width */}
         <div className="relative flex-1 min-w-0" style={{ flex: '0 0 70%' }}>
-          {resolvedFile !== null ? (
+          {resolvedFile !== null && ambiguity !== undefined ? (
+            /*
+             * Spec §6 Rule 4: replay never linearizes concurrency. It shows the
+             * branches side by side or refuses with an explanation — it does not
+             * pick one and it does not interleave. Side-by-side is Tier 5.3;
+             * this is the refusal, and it is the half that prevents a file that
+             * never existed being shown in a meeting as what the student wrote.
+             */
+            <div
+              className="flex h-full w-full items-center justify-center p-8"
+              data-testid="replay-ambiguous"
+            >
+              <div className="max-w-xl text-center text-sm text-gray-400">
+                <p className="mb-2 font-medium text-gray-200">
+                  {ambiguity === 'concurrent'
+                    ? 'No single version of this file existed at this point'
+                    : 'This file’s history cannot be ordered at this point'}
+                </p>
+                <p>
+                  {ambiguity === 'concurrent'
+                    ? 'Two contributors edited ' +
+                      resolvedFile +
+                      ' on branches the recorded evidence does not order — hash chains, session links and the observed commit DAG all leave them unordered, and the two machines’ clocks are not evidence. Showing one of them here would show a file that never existed on anyone’s machine. A merge commit followed by any disk observation of this file resolves it.'
+                    : 'The happens-before relation does not cover some of ' +
+                      resolvedFile +
+                      '’s events, so no statement can be made about their order. This is the absence of a record, not a claim that the edits raced.'}
+                </p>
+              </div>
+            </div>
+          ) : resolvedFile !== null ? (
             <>
               <MonacoMount
                 content={content}

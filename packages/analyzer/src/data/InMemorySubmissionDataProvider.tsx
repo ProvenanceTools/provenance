@@ -29,6 +29,13 @@ import { useQuery } from '@tanstack/react-query';
 import { useBundle } from '../context/BundleContext.js';
 import { computeStats } from '@provenance/analysis-core/index/stats.js';
 import { reconstructFile } from '@provenance/analysis-core/index/reconstruct-file.js';
+import {
+  buildReconstructionScope,
+  determinateValue,
+  describeAmbiguity,
+  reconstructFileSegmented,
+  reconstructFileSegmentedWithProvenance,
+} from '@provenance/analysis-core/index/reconstruct-segments.js';
 import { reconstructFileWithProvenance } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
 import { SubmissionDataContext } from './SubmissionDataProvider.js';
 import { submittedFileVerdicts } from '@provenance/analysis-core/validation/verify-submitted-code.js';
@@ -200,6 +207,9 @@ function createInMemoryProvider(
   flags: Flag[],
 ): SubmissionDataProvider {
   // Pre-compute translations once
+  // Built once per provider: for a solo bundle this is a contributor scan and
+  // no graph at all, so the local route pays nothing it did not pay before.
+  const reconstructionScope = buildReconstructionScope(bundle, index);
   const flagRows = flagsToFlagRows(flags);
   const allEventRows = indexedEventsToEventRows(index.ordered);
   const validationResults = validationReportToResults(validationReport);
@@ -289,16 +299,34 @@ function createInMemoryProvider(
       return useQuery({
         queryKey: ['inmem', bundle.id, 'file-content', path, atSeq],
         queryFn: () => {
-          // reconstructFile takes (index, filePath, upToGlobalIdx?) where
           // upToGlobalIdx is exclusive. Use atSeq + 1 to include that event.
           const upTo = atSeq !== undefined ? atSeq + 1 : undefined;
-          const result = reconstructFile(index, path, upTo);
+          const segmented = reconstructFileSegmented(reconstructionScope, path, upTo);
+          const result = determinateValue(segmented);
 
           // Determine actual seq: last file event up to (inclusive) atSeq
           const fileEvents = index.byFile.get(path) ?? [];
           const slice =
             atSeq !== undefined ? fileEvents.filter((e) => e.globalIdx <= atSeq) : fileEvents;
           const actualSeq = slice.length > 0 ? slice[slice.length - 1]!.globalIdx : 0;
+
+          // Tier 2.2: with two contributors' edits unordered here there is no
+          // single content, and showing one branch as "the file" is the exact
+          // fabrication this removes. Return nothing plus the reason, the same
+          // shape the tainted path already uses — a viewer that renders content
+          // it was not given cannot be fixed by a nicer error string.
+          if (result === null) {
+            return Promise.resolve({
+              content: '',
+              at_seq: actualSeq,
+              computed_at_ms: 0,
+              warning:
+                segmented.kind === 'concurrent'
+                  ? 'FILE_RECONSTRUCTION_CONCURRENT'
+                  : 'FILE_RECONSTRUCTION_UNKNOWN',
+              warning_detail: describeAmbiguity(segmented) ?? '',
+            });
+          }
 
           return Promise.resolve({
             content: result.content,
@@ -315,8 +343,16 @@ function createInMemoryProvider(
       return useQuery({
         queryKey: ['inmem', bundle.id, 'file-provenance', path, atSeq],
         queryFn: () => {
-          // Use reconstructFileWithProvenance which takes (index, filePath, upToGlobalIdx)
-          const state = reconstructFileWithProvenance(index, path, atSeq);
+          // Tier 2.2: no single content means no single per-character
+          // attribution either. Colouring one branch's characters as though they
+          // were the file's would attribute text to a contributor on the
+          // strength of a coin flip.
+          const state = determinateValue(
+            reconstructFileSegmentedWithProvenance(reconstructionScope, path, atSeq),
+          );
+          if (state === null) {
+            return Promise.resolve({ length: 0, provenance: [], at_seq: 0, computed_at_ms: 0 });
+          }
           const provArray = state.provenance;
           const fileEvents = index.byFile.get(path) ?? [];
           const slice =
