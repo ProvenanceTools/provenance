@@ -270,6 +270,46 @@ describe('the other shapes a git-submitted .provenance/ can present', () => {
     expect(result.value.droppedArtifacts.map((d) => d.kind)).toEqual(['staging_leftover']);
   });
 
+  it('never drops a seal a SURVIVING session still claims', async () => {
+    // The guard on the guard. A stranded `.slog.meta` names its recording by
+    // LOGICAL id — but if a sidecar was copied or renamed, a dropped one can
+    // name the same recording a session that IS here claims. Dropping "the
+    // dropped session's seal" would then strip a healthy session's cover, and
+    // that session comes out `unsealed_session`: a finding manufactured against
+    // work we actually hold, by the code meant to stop findings being
+    // manufactured.
+    const built = await buildTestBundle({
+      sessions: [{ eventCount: 5, appendDocSave: true }],
+      rollingSeal: {},
+    });
+    const liveLogicalId = built.sessionIds[0]!;
+
+    // A stranded sidecar claiming the LIVE session's logical id.
+    const buffer = await withExtraEntries(built.zipBuffer, {
+      'session-77777777-0000-4000-8000-cccccccccccc.slog.meta': JSON.stringify({
+        format_version: '1.0',
+        session_id: liveLogicalId,
+        session_pubkey: 'ab'.repeat(32),
+        encrypted_session_privkey: '',
+        checkpoints: [],
+      }),
+    });
+
+    const result = await loadBundle(buffer, 'student-repo.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // The stray sidecar is still dropped and reported.
+    expect(result.value.droppedArtifacts.map((d) => d.kind)).toEqual(['orphaned_meta']);
+    // But the live session KEEPS its seal ...
+    expect(result.value.rollingSeal!.seals.map((s) => s.sessionId)).toContain(liveLogicalId);
+    // ... so no unsealed_session is invented for it, and check 1 still passes.
+    expect(result.value.rollingSeal!.defects.map((d) => d.kind)).not.toContain('unsealed_session');
+
+    const report = await runValidation(result.value);
+    expect(report.checks.find((c) => c.id === 'manifest_sig')!.status).toBe('pass');
+  });
+
   it('still refuses a genuinely unrecognized file — the contents stay a closed set', async () => {
     const { blob } = await buildTestBundle({
       tamper: { addStrayFile: { name: 'notes.txt', content: 'hello' } },

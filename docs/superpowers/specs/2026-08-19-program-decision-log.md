@@ -266,10 +266,10 @@ sessions across a partner's commit because that manufactures the accusation the 
 ## 6. State and what is owed
 
 Suites:
-**log-core 541 · analysis-core 987 · recorder 583 · analyzer 1221 · tools 174 ·
+**log-core 541 · analysis-core 988 · recorder 583 · analyzer 1221 · tools 174 ·
 server 1420/1422 (2 confirmed flakes) · provjet 589 · provnvim 1007.**
 The first five re-measured 2026-08-20 after the read-side orphan guard (bug 11);
-analysis-core 973 → 987 is the guard's own tests plus the id-space regressions.
+analysis-core 973 → 988 is the guard's own tests plus the id-space regressions.
 provjet and provnvim are carried forward and not re-measured since.
 Build, typecheck, lint clean. Branch ~145 commits, ~+50k lines vs `main`.
 

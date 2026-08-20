@@ -33,7 +33,7 @@ import {
   isFinalRollingSeal,
 } from '@provenance/log-core';
 import type { BundleManifest, Result } from '@provenance/log-core';
-import { unzipBundle } from './unzip.js';
+import { unzipBundle, logicalSessionIdFromMeta } from './unzip.js';
 import { parseSession } from './parse-session.js';
 import {
   validateRollingSeals,
@@ -129,10 +129,32 @@ export async function loadBundle(
   // simply not analysed, and the fact is reported.
   // ---------------------------------------------------------------------------
   const droppedArtifacts: DroppedArtifact[] = [...unzipDropped];
+
+  // Logical ids the SURVIVING sessions claim, read straight from their sidecars.
+  //
+  // A guard on the guard. If a stranded sidecar happens to name the same logical
+  // session as a session that IS here — a `.slog.meta` copied or renamed, so two
+  // sidecars claim one recording — then dropping "the seal of the dropped
+  // session" would drop a HEALTHY session's seal, and that session would come
+  // out `unsealed_session`: a finding manufactured against work we actually
+  // hold, by the very code meant to stop findings being manufactured. So a seal
+  // is only ever dropped when NO surviving session claims it.
+  //
+  // Read here rather than after step 3 because the seals have to be filtered
+  // before `validateRollingSeals` runs. A sidecar we cannot parse contributes
+  // nothing, which fails safe: the seal is kept and the existing defect path
+  // reports it.
+  const survivingLogicalIds = new Set<string>();
+  for (const files of sessionFiles) {
+    const id = logicalSessionIdFromMeta(files.metaJson);
+    if (id !== null) survivingLogicalIds.add(id);
+  }
+
   const droppedLogicalIds = new Set<string>(
     unzipDropped
       .map((d) => d.logicalSessionId)
-      .filter((id): id is NonNullable<typeof id> => id !== undefined),
+      .filter((id): id is NonNullable<typeof id> => id !== undefined)
+      .filter((id) => !survivingLogicalIds.has(id)),
   );
   const rawRollingSeals =
     droppedLogicalIds.size === 0

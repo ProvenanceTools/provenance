@@ -135,7 +135,7 @@ const STAGING_LEFTOVER_RE = /\.tmp$/;
  * Returns `null` on anything unparseable. A sidecar we cannot read is still
  * dropped and still reported; we simply cannot name its session.
  */
-function logicalSessionIdFromMeta(metaJson: string): LogicalSessionId | null {
+export function logicalSessionIdFromMeta(metaJson: string): LogicalSessionId | null {
   try {
     const parsed: unknown = JSON.parse(metaJson);
     if (typeof parsed !== 'object' || parsed === null) return null;
