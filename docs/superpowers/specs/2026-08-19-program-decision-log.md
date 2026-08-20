@@ -28,7 +28,7 @@ overtaken by evidence (each such case is called out below with the reason).
 | D9  | **S4 cuts over to the `submission_contributors` join table** as the live path.                                                                                                                                                                                 | User's decision, taken with the blast radius (12+ read paths, 6 Zod schemas, 7 analyzer call sites) on the table.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | D10 | **Ingest modes: `bundle_zip` / `repo_whole` / `repo_scoped`**, per-assignment default with per-request override, API-driven for provgate. A batch declares its type; a mismatch fails.                                                                         | User's decision. The homogeneity guarantee converts per-file guessing into a per-batch assertion.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | D11 | **Manifest composer signs in the browser**; the course private key never leaves staff's machine.                                                                                                                                                               | The course key is deliberately offline — that is why a server-held _enrollment_ subkey exists. A server that could sign manifests could weaken any course's capture policy.                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| D12 | **Repository discriminator = root-commit sha** (not yet emitted; format change pending).                                                                                                                                                                       | Both partners on one repo derive the same value offline, which is what makes cross-contributor DAG correlation possible. A submodule has a different root commit, so it discriminates correctly.                                                                                                                                                                                                                                                                                                                                                                                             |
+| D12 | **Repository discriminator = root-commit sha.** Reader half landed 2026-08-20; the writer half is deliberately outstanding.                                                                                                                                    | Both partners on one repo derive the same value offline, which is what makes cross-contributor DAG correlation possible. A submodule has a different root commit, so it discriminates correctly.                                                                                                                                                                                                                                                                                                                                                                                             |
 | D13 | **Unenrolled contributors show as `unattributed`**, not blocked and not flagged.                                                                                                                                                                               | An administrative gap must never present to a grader as an integrity signal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | D14 | **Group scoring is per-contributor _and_ per-scope.**                                                                                                                                                                                                          | Only shape where a grader can act on one partner without implicating the other.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | D15 | **IRB/CPHS approval is the user's problem.** S6 is not an engineering blocker.                                                                                                                                                                                 | Stated by the user.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -384,7 +384,7 @@ sessions across a partner's commit because that manufactures the accusation the 
 ## 6. State and what is owed
 
 Suites:
-**log-core 541 · analysis-core 1020 · recorder 583 · analyzer 1287 · tools 174 ·
+**log-core 619 · analysis-core 1073 · recorder 583 · analyzer 1287 · tools 174 ·
 server 1488/1490 (2 testcontainers flakes) · provjet 589 · provnvim 1007.**
 The analyzer figure carried here as `1223` was stale — branched replay took it
 to 1298 before the coverage stage landed. analysis-core 1001 → 1020 and analyzer
@@ -443,7 +443,9 @@ completion contract, not a wish list.
 - Peer witnessing (`peer.observed`) — **reader half DONE 2026-08-20** (see below). The
   **writer half is deliberately not built**: the directory watcher in the three recorders, and
   the `session.start` witnessing-availability capability report §5.6 item 3 calls for.
-- The repository discriminator (D12) as a signed-format change, with vectors.
+- The repository discriminator (D12) — **reader half DONE 2026-08-20** (see below). The
+  **writer half is deliberately not built**: deriving and emitting `root_commit_sha` in the three
+  recorders, to the writer contract recorded below.
 - ~~provjet has no automated cross-implementation gate.~~ **DONE 2026-08-20.**
   `provjet/scripts/e2e/run_e2e.sh` + `verify-bundle-with-analyzer.mjs` now drive real
   JetBrains-produced archives (classic **and** rolling) through the real monorepo
@@ -599,6 +601,151 @@ Written down here so the ports are mechanical rather than re-derived three times
 Conformance: `peer-observed.json`, thirteen cases, each publishing the narrowing verdict alongside
 the canonical bytes and chain hash so a port asserts **accept and reject**, not only the happy path.
 
+### Landed 2026-08-20 — the repository discriminator, reader half (D12)
+
+Readers before writers, exactly as Manifest 2.0, the rolling seal and peer witnessing did. **No
+recorder emits `root_commit_sha`, and none should until the writer contract below is taken.**
+
+**The payload field.** `GitEventPayload.root_commit_sha?: string` — the repository's root-commit
+sha, lowercase hex, 40 characters for a sha-1 repository or 64 for sha-256. The narrowing is
+`log-core/git-event.ts`'s `readRepositoryDiscriminator`, in log-core rather than in the reader for
+the same reason `peer-observed.ts` is: four consumers need identical rules — this monorepo's
+analyzer and server through `analysis-core`, plus the two sibling recorder repos, which need them
+to EMIT conformant payloads.
+
+It returns **three** answers, not two, and the third is what makes the second safe:
+
+| answer      | means                            | consequence                                                         |
+| ----------- | -------------------------------- | ------------------------------------------------------------------- |
+| `absent`    | no field (or an explicit `null`) | folded into `ASSUMED_SINGLE_REPOSITORY` — exactly today's behaviour |
+| `recorded`  | a usable root-commit sha         | its own repository key, `repository:<sha>`                          |
+| `malformed` | present and not a commit sha     | folded in with the unlabelled ones, and **counted**                 |
+
+`absent` and `malformed` reach the same repository and are still different variants on purpose: one
+is a recorder with nothing to say, the other a recorder that said something wrong, and only the
+second is worth counting. **Neither is ever a finding.**
+
+**Why the value's SHAPE is checked when `readSha` deliberately checks nothing.** The jobs differ. A
+`sha` is only compared for equality against other recorded shas, and normalizing there could merge
+two genuinely distinct commits. This value is a NAMESPACE KEY and a privacy boundary: S14(b) forbids
+the repository path and the remote URL precisely because a path is arguably an identifier and a
+remote URL embeds the org and often the student's own username. The shape check is the one place a
+nonconforming writer's path or URL can be stopped before it reaches a staff-facing UI. Rejecting
+costs only correlation — the observation still lands, unlabelled.
+
+**Compatibility, both directions.** An older reader meeting the new field is unaffected: `git.event`
+payload readers ignore keys they do not know, the chain is computed over the envelope without
+interpreting `data`, and every field on this payload is optional permanently (1.x support is
+permanent, program spec §9). A newer reader meeting a bundle without the field is unaffected, which
+is **every bundle in existence** — the absent case is byte-identical to the pre-D12 world, and the
+vector proves it: `root_commit_sha_absent_shallow_clone` hashes to exactly the same value as the
+pre-existing `root_commit` case. Omission is the writer rule; `null` is accepted by readers so a
+nonconforming log still parses, but the two canonicalize differently and therefore chain to
+different hashes, exactly as `parents: []` and an absent `parents` do.
+
+**What replaced the `KNOWN LIMITATION` test.** It was replaced, not deleted, and not weakened. The
+merge it pinned is still the honest answer for a scope where nothing names a repository, so that
+assertion survives verbatim under the name `was the KNOWN LIMITATION: two UNLABELLED repositories
+still merge, and say so` — which is the state of every bundle today. What is new is
+`two repositories in one scope`, driving the SAME fixture with discriminators: two separate sha
+spaces, one sha yielding two distinct nodes, `compareCommits` answering **`unknown`** where it used
+to answer a fabricated `before`, no cross-repository ancestry, and ordering still working WITHIN a
+repository.
+
+**Degradation, and why none of it can accuse anybody.**
+
+- **A shallow clone** has no reachable root commit — the boundary commit it reports has no parents
+  and is not a root — so the writer OMITS the field and the scope is simply unlabelled. No defect,
+  no count, no finding. `recordedRoot` still means root-or-truncated-lineage (S15) and nothing here
+  changes that.
+- **Several root commits in one repository** (an orphan branch, a squashed import merged in) is
+  ordinary. Which one the writer names is pinned below; the reader never relates the discriminator
+  to the commit graph, so it needs no rule at all.
+- **Two partners deriving DIFFERENT roots for one repository** — reachable when one partner's
+  history reaches a root the other's does not — costs exactly what having no discriminator costs:
+  the shared commit becomes two nodes and the two groups do not correlate. It is a **loss** of
+  evidence, never a manufactured one.
+- **A mixed scope** (one partner on a newer recorder, or on a shallow clone) is reported as
+  `'mixed'` and the two groups are NOT correlated. Rounding it to `'discriminated'` would imply the
+  unlabelled observations had been placed; rounding it to `'assumed_single'` would deny that a
+  repository was named. Assuming the unlabelled ones belong to the named repository is precisely the
+  merge the field exists to prevent.
+
+**Nothing downstream needed redesigning**, which is what the original `(repository, sha)` keying
+bought. `order/`'s `≺` already skips cross-repository edges
+(`origin.repository !== target.repository`), and `classify-external-changes.ts` already skips
+cross-repository observations, so a split degrades to `unordered` / `no_observations` —
+corroboration only — rather than to a flag. `coverage/`, `order/`, `identity/` and `witness/` were
+not touched.
+
+**Vector drift**, verified by regenerating before and after into a scratch directory:
+`git-event.json` gains three notes and nine cases and **removes nothing** — the diff has zero `<`
+lines, so every existing case is byte-identical, which is what keeps this from being a breaking
+change to provjet and provnvim. A second exporter helper carries the new `discriminator` verdict
+field so no existing case OBJECT changes either. `golden-bundle.{json,zip}` differ for the known
+pre-existing reason and were confirmed to differ across two runs with no change at all. Every other
+vector is byte-identical. Nothing was written into the sibling repos.
+
+**Mutation testing**, seven mutations, every one caught:
+
+| mutation                                                             | caught by                                                                                                    |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| absent becomes a DISTINCT repository (every legacy bundle fragments) | 58 tests in 6 files, incl. `a bundle that records no discriminator > produces one sentinel repository`       |
+| absent adopts the first PRESENT value (unrelated repos merge)        | `a scope where only some observations name a repository > does not correlate…`                               |
+| every repository merged into the first labelled one                  | `two repositories in one scope > reports a cross-repository comparison as unknown…`                          |
+| the reader ignores the field (the old stub)                          | 9 tests, incl. `two repositories in one scope > keeps them in separate sha spaces`                           |
+| absence becomes a problem (a shallow clone is a defect)              | `a shallow clone… > degrades to the unlabelled repository with no defect and no finding`                     |
+| absent and empty collapsed                                           | `rejects the empty string…` + `a discriminator that is present and unusable > counts what it could not read` |
+| the shape check dropped (a path becomes a repository key)            | 7 log-core tests + `never lets the unusable value appear as a repository key`                                |
+
+**Owed, flagged not fixed** — both sit in directories this change was scoped out of:
+
+1. `coverage/coverage-facts.ts` computes `repositoryAssumedSingle` as `!discriminatorRecorded`,
+   which under-reports a `'mixed'` scope: part of that graph IS folded into the sentinel. The
+   correct predicate is `repositories.includes(ASSUMED_SINGLE_REPOSITORY)`.
+2. `analyzer`'s `CoveragePanel` renders "The signed log format does not yet carry a repository
+   discriminator". The format now does; no recorder emits it. The sentence stays true in practice
+   until the writer half lands, and should be reworded with it.
+
+Neither is reachable today, because nothing emits the field.
+
+### The writer contract for `root_commit_sha` — what the three recorders must emit
+
+Written down here so the ports are mechanical rather than re-derived three times. The reader is
+correct whatever the writer picks — the value is opaque and compared only for equality — so this
+contract exists to make three recorders derive the SAME value, which is the only thing that makes
+correlation work at all.
+
+1. **Derive once per repository, at git-wiring setup**, not per event. It cannot change for the life
+   of a repository, and it must not cost anything on the event path.
+2. **The value is the root of HEAD's first-parent lineage** — `rev-list --max-parents=0
+--first-parent HEAD`. First-parent, because that lineage stays on the mainline when an imported
+   history is merged in, which is what keeps two partners agreeing.
+3. **If that yields more than one root, take the lexicographically smallest.** Deterministic, so two
+   partners with the same history agree. Several roots is ORDINARY — an orphan branch, a squashed
+   import — and is never a finding.
+4. **OMIT the field when the repository is shallow** (`rev-parse --is-shallow-repository` is
+   `true`). A shallow clone's boundary commit has no parents and is NOT a root: emitting it would
+   publish a value a full clone of the same repository disagrees with.
+5. **OMIT the field on any failure** — the command errors, times out, or returns nothing. Absent is
+   a legal, permanent, blameless answer, and guessing is worse than silence.
+6. **OMIT, never `null`.** Omission and `null` canonicalize differently and therefore chain to
+   different hashes. Readers accept `null` as absence so a nonconforming log still parses; a writer
+   that emits it is nonconforming.
+7. **Lowercase hex, verbatim, 40 or 64 characters.** No truncation, no abbreviation, no case
+   folding. Every reader rejects anything else, and a rejected value is a repository the partners
+   silently fail to correlate on.
+8. **Never the repository path and never a remote URL**, in this field or any other. That is
+   S14(b)'s constraint and it is the reason the reader shape-checks at all.
+9. **One value per repository OBSERVED.** A session that sees a submodule as well as its outer
+   repository labels each event with its own repository's root. Labelling a submodule event with the
+   outer repository's root re-creates the exact merge this field exists to prevent.
+10. **Emit it on every `git.event` that carries a `sha`**, not only on commits. An unlabelled
+    observation does not correlate even when its neighbours in the same session do.
+
+Conformance: `git-event.json`, nine new cases, each publishing the narrowing verdict alongside the
+canonical bytes and chain hash so a port asserts **accept and reject**, not only the happy path.
+
 ### Landed 2026-08-20 — the coverage stage, and a briefing premise that was wrong
 
 **The correction, first, because the next person will be told the same thing.** The agent that
@@ -686,9 +833,13 @@ does NOT verify on a deployment whose root key IS configured, built via `buildIn
   enrollment or peer witnessing.
 - **`prev_session_id` is still set only on the dangling path**, so §7 mechanism 1 cannot detect
   removal of a cleanly-ended session. Changing it alters solo semantics — a product call.
-- **Multi-repo scopes are unsound** until D12 lands. `observed-dag.test.ts` contains a test that
-  _deliberately asserts the unsound answer_, named `KNOWN LIMITATION`. Keep it live rather than
-  skipping it: it will fail loudly when the discriminator lands and force an update.
+- ~~**Multi-repo scopes are unsound** until D12 lands.~~ **Closed for a LABELLED scope, 2026-08-20**
+  — and still open for every bundle in existence, because no recorder emits the discriminator yet.
+  A scope where nothing names a repository still merges, which is the honest answer when the
+  evidence carries no repository at all; what closes it for real is the writer half. The
+  `KNOWN LIMITATION` test was replaced rather than deleted, exactly as intended: it now pins the
+  merge as the answer for an UNLABELLED scope, and a new `two repositories in one scope` block
+  asserts the sound one.
 - **`markFormatter()` has no production caller**, so `explanation: 'formatter'` is unreachable
   despite PRD §4.5 promising it. D16 is therefore scoped to the `'git'` tag only — `'formatter'`
   is a narrower claim the decision does not reach, and no shipped bundle can carry it anyway.
