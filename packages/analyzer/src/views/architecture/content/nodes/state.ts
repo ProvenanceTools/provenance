@@ -75,8 +75,8 @@ export const nodes: Record<string, ArchNode> = {
       'A session with no session.end is bounded at its last recorded event, never left open-ended.',
     links: [
       {
-        label: 'multiple-sessions-overlap.ts',
-        href: `${GH}/packages/analysis-core/src/heuristics/multiple-sessions-overlap.ts`,
+        label: 'coverage/session-overlap.ts',
+        href: `${GH}/packages/analysis-core/src/coverage/session-overlap.ts`,
       },
       {
         label: 'session-registry.ts',

@@ -34,6 +34,7 @@ import { SessionsCard } from './SessionsCard.js';
 import { collectActiveExtensions } from '../../extensions/collect-active-extensions.js';
 import { ActiveExtensionsCard } from '../../extensions/ActiveExtensionsCard.js';
 import { AssignmentManifestCard } from '../../components/AssignmentManifestCard.js';
+import { CoveragePanel } from '../coverage/CoveragePanel.js';
 import { StatusRegion } from '../../components/a11y/StatusRegion.js';
 import { ErrorRegion } from '../../components/a11y/ErrorRegion.js';
 
@@ -262,6 +263,21 @@ export function Overview() {
           </div>
         </dl>
       </section>
+
+      {/*
+        Coverage — §6 Rule 3, per scope and always visible, above the verdict
+        surfaces because it is the context a grader needs in order to READ them.
+
+        `bundle={null}` is deliberate and is the honest answer, not a stub: this
+        route reads server API rows and never parses a bundle, so the coverage
+        facts genuinely were not fetched. The panel says exactly that. Passing a
+        synthesised empty bundle instead would render zeroes — "no commits
+        observed, no contributors, no root key" — which is a stronger and FALSE
+        claim than "not available". If these facts are ever wanted here for real,
+        the fix is for the server to serve them (see the decision log), not for
+        this call site to invent them.
+      */}
+      <CoveragePanel bundle={null} index={null} />
 
       {/* Manifest 2.0 metadata — renders nothing for a 1.x bundle with no
           disabled capture signals. */}

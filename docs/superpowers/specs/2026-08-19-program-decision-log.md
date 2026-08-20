@@ -384,8 +384,15 @@ sessions across a partner's commit because that manufactures the accusation the 
 ## 6. State and what is owed
 
 Suites:
-**log-core 541 · analysis-core 1001 · recorder 583 · analyzer 1223 · tools 174 ·
+**log-core 541 · analysis-core 1020 · recorder 583 · analyzer 1287 · tools 174 ·
 server 1488/1490 (2 testcontainers flakes) · provjet 589 · provnvim 1007.**
+The analyzer figure carried here as `1223` was stale — branched replay took it
+to 1298 before the coverage stage landed. analysis-core 1001 → 1020 and analyzer
+1298 → 1287 are the SAME move, not a loss: the 16 fact-level tests relocated to
+`analysis-core` with the code they now cover, and 7 were added (the partition
+property, determinism, the always-visible and not-available states, and the
+`unverifiable` ≠ `unattributed` counts test mutation testing turned up).
+Server not re-run: no server code was touched.
 The first five re-measured 2026-08-20 after the read-side orphan guard (bug 11);
 analysis-core 973 → 988 and analyzer 1221 → 1223 are the guard's own tests plus
 the id-space regressions. analysis-core 988 → 1001 is bugs 12 and 13: the
@@ -429,9 +436,9 @@ completion contract, not a wish list.
 
 ### Remaining work
 
-- Branched replay UI (Tier 5.3), including surfacing a suppressed concurrent overlap as a **visible
-  fact** — today a proven-different overlap yields _no flag and no fact_, which is weaker than the
-  spec intends.
+- ~~Branched replay UI (Tier 5.3), including surfacing a suppressed concurrent overlap as a
+  **visible fact**.~~ **DONE 2026-08-20.** See "The coverage stage" below — and read the
+  correction there before repeating the briefing that was given for it.
 - `submission_contributors` cut-over (D9), per-contributor heuristic scoping, `Flag.contributor_id`.
 - Peer witnessing (`peer.observed`) — **reader half DONE 2026-08-20** (see below). The
   **writer half is deliberately not built**: the directory watcher in the three recorders, and
@@ -591,6 +598,86 @@ Written down here so the ports are mechanical rather than re-derived three times
 
 Conformance: `peer-observed.json`, thirteen cases, each publishing the narrowing verdict alongside
 the canonical bytes and chain hash so a port asserts **accept and reject**, not only the happy path.
+
+### Landed 2026-08-20 — the coverage stage, and a briefing premise that was wrong
+
+**The correction, first, because the next person will be told the same thing.** The agent that
+built the branched-replay UI was briefed that `multiple_sessions_overlap` "already populated
+`detail` fields for suppressed pairs", so the fact only needed reading out. **That was wrong, and
+the agent said so rather than building on it.** The suppression was
+`if (comparison === 'different') continue;` at `multiple-sessions-overlap.ts:221` — taken _before_
+`pairId`, before `emittedPairs`, and before the `detail` object existed. Those fields appear only on
+**fired** flags, where `contributorComparison` can never be `'different'`. `run()` returns
+`Flag[]` and nothing else; there was no side channel. A suppressed concurrent overlap therefore
+produced **no flag and no fact** — exactly the gap the coverage panel exists to close, and the
+reason the panel could not simply consume the heuristic.
+
+Lacking the primitive, that agent **recomputed the overlap in the analyzer** and defended the
+duplicate with a partition test driving one bundle through both implementations. The test was good.
+The duplicate was still wrong — two implementations that agree today drift later, which this repo
+has already paid for as "26 vs 25 flags" and "21 vs 25 tables".
+
+**The stage now exists where §5.4 step 5 puts it**, in `analysis-core`:
+
+- `coverage/session-overlap.ts` — the ONE enumeration of overlapping session pairs and the ONE
+  `'different'` decision, returning a partition `{ judged, collaboration }`.
+- `coverage/coverage-facts.ts` — the stage proper: concurrent recording, identity counts +
+  `rootKeyConfigured`, commit-graph coverage, DAG defects, the single-repository caveat,
+  unattested rolling-seal tails, `droppedArtifacts`.
+
+`multiple_sessions_overlap` consumes `judged`; the coverage stage consumes `collaboration`. Its
+BEHAVIOUR is unchanged — same pairs, same severity, same ids, description and `detail` — and all 28
+of its existing tests pass untouched.
+
+**Drift is now prevented by the type system, not by a test that compares two copies afterwards.**
+`JudgedOverlap.comparison` is typed `'same' | 'unknown'`, so a suppressed pair is not merely
+filtered out of the heuristic — it is **unrepresentable** there. `CollaborationOverlap` carries
+`attributed` contributors, so an `unverifiable` or `unattributed` session is unrepresentable in the
+coverage stage, which is the `unverifiable` ≠ `unattributed` rule enforced by the compiler rather
+than by care. Verified by mutation: re-adding a local `if (comparison === 'different') continue;`
+to the heuristic is **TS2367, a build failure**, not a silent divergence. The partition property
+itself (disjoint, exhaustive over the overlapping pairs) is asserted directly, which is a smaller
+and stronger claim than "two copies still match".
+
+**The panel moved to the submission level.** It shipped inside the Replay tab, collapsed by
+default, which failed §6 Rule 3 twice — a tab is not "always visible" and a collapsed panel is not
+visible at all — and mis-scoped the facts: dropped artifacts, unattested seal tails, "no root key
+configured" and "these two contributors recorded concurrently" describe the **submission**, not the
+replay. It is now `analyzer/src/views/coverage/CoveragePanel.tsx`, mounted above the verdict
+surfaces on both overview surfaces (server-backed `views/submission/Overview.tsx` and `/local`
+`views/overview/OverviewView.tsx`). Rule 3 says a panel _per scope_, so there is one — those two
+are one view with two implementations, not two places to look. No route was added, removed or
+re-scoped, so this is not an `/architecture` route trigger.
+
+"Always visible" means answering in all three states, because silence and "nothing to report" are
+different claims: **no bundle** → "not available", **never zeroes** (the server route has API rows
+and no parsed bundle, and a zeroed panel asserts "no commits observed, no contributors, no root
+key" — stronger and false); **nothing to note** → says so, in the neutral palette; **facts** → the
+sections.
+
+**What the server would need for parity, NOT built.** `packages/shared` still has zero occurrences
+of "contributor" while `load-index.ts:181` stamps them on every server read path — so the facts
+exist server-side and cannot cross the wire. Closing it is additive and small, and it is the reason
+the server-backed panel says "not available" rather than showing real facts:
+
+1. A `coverage` object on `SubmissionSummarySchema` (`api-schemas.ts:906`), which already carries a
+   `sessions[]` array derived from the same `loadSubmissionIndex` call — so the data is in hand at
+   the exact call site and costs no extra parse.
+2. Serialize `coverageFacts(bundle, index)` in the summary route. It is already pure and
+   isomorphic; nothing new is computed.
+3. `CoveragePanel` then takes facts directly rather than a `Bundle`, and the `bundle === null`
+   branch narrows to "the server did not send them" instead of "this view cannot compute them".
+
+The `ReadonlyMap` in `BundleContributors` does not serialize, so the wire shape must be the
+`CoverageFacts` aggregate (plain arrays and numbers), never `BundleContributors` itself.
+
+**Mutation testing earned its keep again**, and found an unpinned distinction nobody was looking
+for: collapsing `unverifiable` and `unattributed` into one summed "not attributed" count in the
+panel passed **every** existing assertion. The only test touching that copy drove the no-root-key
+branch, which renders a different paragraph entirely, so the counts line was never pinned. Fixed
+with a test that needed a fixture the repo did not have — an identity block that IS present and
+does NOT verify on a deployment whose root key IS configured, built via `buildInstitutionIdentity`'s
+`certSignedBy` so the anchor is not root-signed.
 
 ### Known gaps, deliberately accepted
 

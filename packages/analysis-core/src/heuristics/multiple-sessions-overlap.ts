@@ -30,6 +30,25 @@
  * as "different people" and reintroduces the accusation through the back door,
  * because every unattributed session carries a per-session singleton key.
  *
+ * ## Where the suppression actually lives
+ *
+ * Not in this file. `coverage/session-overlap.ts` owns the ONE enumeration of
+ * overlapping session pairs and the ONE `'different'` decision, and returns a
+ * partition: `judged` (what this heuristic flags) and `collaboration` (what the
+ * §5.4 step 5 coverage stage states as an exculpatory fact).
+ *
+ * That move is the whole point. The suppression used to be a bare `continue`
+ * here, taken before `pairId`, before `emittedPairs`, and before the `detail`
+ * object existed — and `run()` returns only `Flag[]`, with no side channel. So a
+ * suppressed overlap produced **no flag and no fact**, which is weaker than §6
+ * Rule 3 intends. Reading the fact back out now requires no second copy of the
+ * range rules, the strict-`<` overlap test, or the three-valued comparison.
+ * `JudgedOverlap.comparison` cannot be `'different'`, so this file cannot
+ * re-admit a suppressed pair even by accident.
+ *
+ * The BEHAVIOUR of this heuristic is unchanged by that move: the same pairs
+ * flag, at the same severity, with the same ids, description and `detail`.
+ *
  * The verdict is read through `contributorOf`, which answers `unattributed` for
  * a bundle no caller has stamped via `establishBundleContributors`. That is the
  * fail-toward-more-findings direction: an unstamped bundle behaves exactly as
@@ -89,32 +108,11 @@
 
 import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
-import {
-  contributorOf,
-  compareContributors,
-  describeSessionContributor,
-} from '../identity/resolve-contributors.js';
+import { describeSessionContributor } from '../identity/resolve-contributors.js';
 import type { SessionContributor } from '../identity/types.js';
+import { partitionSessionOverlaps, type SessionRange } from '../coverage/session-overlap.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-type SessionRange = {
-  sessionId: string;
-  startWall: number; // Date.parse result
-  /**
-   * Date.parse of `session.end`'s wall, or — when the session has no
-   * `session.end` (crash) — of its last recorded event's wall. Never
-   * +Infinity: see the module comment.
-   */
-  endWall: number;
-  startSeq: number; // seq of session.start event
-  /** True when the session has no `session.end` event (crashed / killed). */
-  openEnded: boolean;
-};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -125,13 +123,6 @@ function flagId(sessionIdA: string, sessionIdB: string): string {
   const [first, second] =
     sessionIdA < sessionIdB ? [sessionIdA, sessionIdB] : [sessionIdB, sessionIdA];
   return `multiple_sessions_overlap-${first}-${second}`;
-}
-
-function rangesOverlap(a: SessionRange, b: SessionRange): boolean {
-  // Standard interval overlap: a.start < b.end AND b.start < a.end.
-  // Strict `<` means zero-length ranges (a session whose only event is
-  // session.start) never overlap anything.
-  return a.startWall < b.endWall && b.startWall < a.endWall;
 }
 
 /**
@@ -166,104 +157,69 @@ function contributorClause(
 // ---------------------------------------------------------------------------
 
 function run(index: EventIndex, bundle: Bundle, _config: HeuristicConfig): Flag[] {
-  // Build a session range per session using index.bySessionId.
-  const ranges: SessionRange[] = [];
-
-  for (const [sessionId, sessionEvents] of index.bySessionId) {
-    const startEvent = sessionEvents.find((e) => e.kind === 'session.start');
-    const endEvent = sessionEvents.find((e) => e.kind === 'session.end');
-
-    if (startEvent === undefined) continue;
-
-    const startWall = Date.parse(startEvent.wall);
-    if (Number.isNaN(startWall)) continue;
-
-    // A crashed session (no session.end) is bounded at its last recorded event
-    // — the last moment it demonstrably existed. bySessionId is chronological.
-    const openEnded = endEvent === undefined;
-    const boundingEvent = endEvent ?? sessionEvents[sessionEvents.length - 1];
-    const parsedEnd = boundingEvent !== undefined ? Date.parse(boundingEvent.wall) : NaN;
-
-    // An unparseable or backwards end (clock skew — monotonic_wall_regression
-    // covers that separately) collapses the range to zero length rather than
-    // extending it.
-    const endWall = Number.isNaN(parsedEnd) ? startWall : Math.max(parsedEnd, startWall);
-
-    ranges.push({
-      sessionId,
-      startWall,
-      endWall,
-      startSeq: startEvent.seq,
-      openEnded,
-    });
-  }
-
-  if (ranges.length < 2) return [];
+  // Tier 3.2: two PROVEN-different contributors recording at once is the
+  // expected shape of pair work, not evidence of forgery. That suppression is
+  // NOT made here — `coverage/session-overlap.ts` owns the single enumeration
+  // of overlapping pairs and the single suppression decision, and hands back a
+  // partition. This heuristic judges the `judged` half; the coverage stage
+  // states the `collaboration` half as a fact, which is how a suppressed
+  // overlap stopped being invisible.
+  //
+  // `JudgedOverlap.comparison` is typed `'same' | 'unknown'`, so a suppressed
+  // pair is not merely filtered out here — it is unrepresentable. The two
+  // consumers cannot drift apart about which pairs were suppressed because
+  // neither of them computes it.
+  const { judged } = partitionSessionOverlaps(bundle, index);
 
   const flags: Flag[] = [];
   const emittedPairs = new Set<string>();
 
-  for (let i = 0; i < ranges.length; i++) {
-    for (let j = i + 1; j < ranges.length; j++) {
-      const a = ranges[i]!;
-      const b = ranges[j]!;
+  for (const pair of judged) {
+    const { a, b, contributorA: ca, contributorB: cb, comparison } = pair;
 
-      if (!rangesOverlap(a, b)) continue;
+    const pairId = flagId(a.sessionId, b.sessionId);
+    if (emittedPairs.has(pairId)) continue;
+    emittedPairs.add(pairId);
 
-      // Tier 3.2: two PROVEN-different contributors recording at once is the
-      // expected shape of pair work, not evidence of forgery. Only a proven
-      // 'different' suppresses; 'same' is the original signal and 'unknown'
-      // keeps the pre-3.2 behaviour, because "two people" is precisely what an
-      // unattributed session leaves unproven.
-      const ca = contributorOf(bundle, a.sessionId);
-      const cb = contributorOf(bundle, b.sessionId);
-      const comparison = compareContributors(ca, cb);
-      if (comparison === 'different') continue;
+    // Supporting seqs: the session.start events of both sessions.
+    const supportingSeqs = [`${a.sessionId}:${a.startSeq}`, `${b.sessionId}:${b.startSeq}`];
 
-      const pairId = flagId(a.sessionId, b.sessionId);
-      if (emittedPairs.has(pairId)) continue;
-      emittedPairs.add(pairId);
+    // Label a crash-bounded end so a reader knows the bound came from the last
+    // recorded event rather than a real session.end.
+    const endLabel = (r: SessionRange): string =>
+      r.openEnded
+        ? `${new Date(r.endWall).toISOString()} (last event; no session.end)`
+        : new Date(r.endWall).toISOString();
 
-      // Supporting seqs: the session.start events of both sessions.
-      const supportingSeqs = [`${a.sessionId}:${a.startSeq}`, `${b.sessionId}:${b.startSeq}`];
+    const aEndLabel = endLabel(a);
+    const bEndLabel = endLabel(b);
 
-      // Label a crash-bounded end so a reader knows the bound came from the last
-      // recorded event rather than a real session.end.
-      const endLabel = (r: SessionRange): string =>
-        r.openEnded
-          ? `${new Date(r.endWall).toISOString()} (last event; no session.end)`
-          : new Date(r.endWall).toISOString();
-
-      const aEndLabel = endLabel(a);
-      const bEndLabel = endLabel(b);
-
-      flags.push({
-        id: pairId,
-        heuristic: 'multiple_sessions_overlap',
-        title: `Sessions overlap: ${a.sessionId.slice(0, 8)}… and ${b.sessionId.slice(0, 8)}…`,
-        severity: 'high',
-        confidence: 0.95,
-        supportingSeqs,
-        description:
-          `Sessions "${a.sessionId}" and "${b.sessionId}" have overlapping wall-time ranges. ` +
-          `Session A: [${new Date(a.startWall).toISOString()}, ${aEndLabel}]. ` +
-          `Session B: [${new Date(b.startWall).toISOString()}, ${bEndLabel}]. ` +
-          contributorClause(comparison, ca, cb),
-        detail: {
-          sessionA: a.sessionId,
-          sessionB: b.sessionId,
-          sessionAStartWall: new Date(a.startWall).toISOString(),
-          sessionAEndWall: aEndLabel,
-          sessionBStartWall: new Date(b.startWall).toISOString(),
-          sessionBEndWall: bEndLabel,
-          sessionAOpenEnded: a.openEnded,
-          sessionBOpenEnded: b.openEnded,
-          contributorComparison: comparison,
-          sessionAContributor: describeSessionContributor(ca),
-          sessionBContributor: describeSessionContributor(cb),
-        },
-      });
-    }
+    flags.push({
+      id: pairId,
+      heuristic: 'multiple_sessions_overlap',
+      title: `Sessions overlap: ${a.sessionId.slice(0, 8)}… and ${b.sessionId.slice(0, 8)}…`,
+      severity: 'high',
+      confidence: 0.95,
+      supportingSeqs,
+      description:
+        `Sessions "${a.sessionId}" and "${b.sessionId}" have overlapping wall-time ranges. ` +
+        `Session A: [${new Date(a.startWall).toISOString()}, ${aEndLabel}]. ` +
+        `Session B: [${new Date(b.startWall).toISOString()}, ${bEndLabel}]. ` +
+        contributorClause(comparison, ca, cb),
+      detail: {
+        sessionA: a.sessionId,
+        sessionB: b.sessionId,
+        sessionAStartWall: new Date(a.startWall).toISOString(),
+        sessionAEndWall: aEndLabel,
+        sessionBStartWall: new Date(b.startWall).toISOString(),
+        sessionBEndWall: bEndLabel,
+        sessionAOpenEnded: a.openEnded,
+        sessionBOpenEnded: b.openEnded,
+        contributorComparison: comparison,
+        sessionAContributor: describeSessionContributor(ca),
+        sessionBContributor: describeSessionContributor(cb),
+      },
+    });
   }
 
   return flags;

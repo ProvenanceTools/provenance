@@ -44,7 +44,6 @@ import { FileTabs } from './FileTabs.js';
 import { SessionSelect } from './SessionSelect.js';
 import { ContributorSelect } from './ContributorSelect.js';
 import { BranchedFileView } from './BranchedFileView.js';
-import { CoveragePanel } from './CoveragePanel.js';
 import { MonacoMount, languageFromPath } from './MonacoMount.js';
 import { TransportBar } from './TransportBar.js';
 import { SpeedControl } from './SpeedControl.js';
@@ -619,8 +618,15 @@ export function ReplayInner({
         </div>
       </div>
 
-      {/* Coverage panel — facts about the record, never findings (spec §6 Rule 3). */}
-      <CoveragePanel bundle={bundle} index={index} />
+      {/*
+        The coverage panel used to sit here, collapsed by default. It moved to
+        the submission level (`views/coverage/CoveragePanel.tsx`, mounted on both
+        overview surfaces): §6 Rule 3 wants the coverage statement per SCOPE and
+        always visible, and a collapsed panel behind a tab is neither. The facts
+        it states — dropped artifacts, unattested seal tails, no root key, two
+        contributors recording concurrently — describe the submission, not the
+        replay.
+      */}
 
       {/* Jump controls strip */}
       <div className="shrink-0">
