@@ -185,11 +185,28 @@ type PrefixPartial = {
 };
 
 /**
- * One digest's verdict. `evaluated: false` means there was no usable commitment
- * to compare against — not a pass and emphatically not a failure.
+ * A digest that could not be checked because the loader could not establish
+ * which bytes its seal commits to.
+ *
+ * Distinct from "no usable commitment": the commitment is there and is
+ * well-formed, but several `.slog` files claim the session it names and they do
+ * not agree, so no comparison this module could make would mean anything. It is
+ * reported rather than left silent — a check that quietly stops checking is how
+ * a missing verdict becomes indistinguishable from a passing one.
+ */
+type Indeterminate = {
+  sessionId: string;
+  file: '.slog' | '.slog.meta';
+  reason: string;
+};
+
+/**
+ * One digest's verdict. `evaluated: false` means there was nothing this module
+ * could soundly compare — not a pass and emphatically not a failure. It carries
+ * an {@link Indeterminate} when the reason is worth telling staff.
  */
 type Verdict =
-  | { evaluated: false }
+  | { evaluated: false; indeterminate: Indeterminate | null }
   | { evaluated: true; mismatch: Mismatch | null; partial: PrefixPartial | null };
 
 /**
@@ -205,7 +222,7 @@ function compare(
   actual: string,
 ): Verdict {
   if (typeof committed !== 'string' || !SHA256_RE.test(committed)) {
-    return { evaluated: false };
+    return { evaluated: false, indeterminate: null };
   }
   if (committed === actual) return { evaluated: true, mismatch: null, partial: null };
   return {
@@ -266,6 +283,17 @@ function fromCoverage(
       };
     case 'unavailable':
       return compare(sessionId, file, committed, actual);
+    case 'indeterminate':
+      // NOT a fallback to whole-file equality. `unavailable` means "I could not
+      // run the prefix search over THIS file", and the file is still known, so
+      // the stricter whole-file comparison is a sound thing to fall back on.
+      // `indeterminate` means the loader could not establish WHICH file the seal
+      // was written over — several `.slog`s claim the session and they disagree
+      // — so there is no "this file" to compare, and comparing anyway is how a
+      // duplicated log became a maximum-severity tamper finding against a
+      // student who copied their own `.provenance/`. "We cannot check" is not
+      // "the bytes do not match"; it is said out loud instead.
+      return { evaluated: false, indeterminate: { sessionId, file, reason: coverage.reason } };
   }
 }
 
@@ -287,6 +315,7 @@ function fromCoverage(
 export function verifyLogBytes(bundle: Bundle): ValidationCheck {
   const mismatches: Mismatch[] = [];
   const partials: PrefixPartial[] = [];
+  const indeterminates: Indeterminate[] = [];
   let evaluated = 0;
 
   // Non-empty only on a bundle whose manifest IS the rolling union — see
@@ -323,6 +352,8 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
         evaluated++;
         if (slog.mismatch !== null) mismatches.push(slog.mismatch);
         if (slog.partial !== null) partials.push(slog.partial);
+      } else if (slog.indeterminate !== null) {
+        indeterminates.push(slog.indeterminate);
       }
 
       const meta =
@@ -340,9 +371,27 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
         evaluated++;
         if (meta.mismatch !== null) mismatches.push(meta.mismatch);
         if (meta.partial !== null) partials.push(meta.partial);
+      } else if (meta.indeterminate !== null) {
+        indeterminates.push(meta.indeterminate);
       }
     }
   }
+
+  // Digests that were present and well-formed but that nothing could soundly be
+  // compared against, because the loader could not establish WHICH log the seal
+  // was written over. Stated on every verdict below, because a check that
+  // quietly stops checking reads exactly like a check that checked and passed,
+  // and staff are entitled to the difference. Never a finding on its own — the
+  // defect that explains it is check 1's. See {@link Indeterminate}.
+  const unchecked =
+    indeterminates.length === 0
+      ? ''
+      : ` ${indeterminates.length} further log-file digest(s) could NOT be checked at all: ` +
+        `${indeterminates
+          .map((i) => `session ${i.sessionId} ${i.file} — ${i.reason}`)
+          .join('; ')}. That is "not checked" — it is neither a pass nor a mismatch, and no ` +
+        `conclusion about those bytes may be drawn from it. Check 1 (manifest_sig) reports the ` +
+        `seal defect that explains why.`;
 
   if (mismatches.length > 0) {
     const per = mismatches
@@ -383,7 +432,7 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
       id: ID,
       label: LABEL,
       status: 'fail',
-      detail: `Session log bytes do not match the signed manifest: ${per}. ${why}`,
+      detail: `Session log bytes do not match the signed manifest: ${per}. ${why}${unchecked}`,
       // Seq 0 is the session.start of the affected session — the stable anchor
       // for a finding about the file as a whole rather than any one entry.
       supportingSeqs: mismatches.map((m) => ({ sessionId: m.sessionId, seq: 0 })),
@@ -396,9 +445,11 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
       label: LABEL,
       status: 'skipped',
       detail:
-        'No session carried a usable manifest commitment to its log bytes (no matching ' +
-        'manifest entry, or the recorded digests are absent or malformed), so there is ' +
-        'nothing for this check to compare against.',
+        (indeterminates.length === 0
+          ? 'No session carried a usable manifest commitment to its log bytes (no matching ' +
+            'manifest entry, or the recorded digests are absent or malformed), so there is ' +
+            'nothing for this check to compare against.'
+          : 'No session log could be compared against the signed manifest.') + unchecked,
     };
   }
 
@@ -426,7 +477,8 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
               ? ''
               : ` The other ${nonFinalSeals} were signed while their session was still ` +
                 `running, and happen to match the archived bytes exactly, so nothing was ` +
-                `written after them either.`)),
+                `written after them either.`)) +
+        unchecked,
     };
   }
 
@@ -472,6 +524,7 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
       `final seal covering its whole log, and no such seal is present for these. That is ` +
       `expected for work archived mid-session and is not by itself evidence of anything — but ` +
       `it does mean the bytes after each sealed point carry no bundle-level signature, so an ` +
-      `append there could not be detected.`,
+      `append there could not be detected.` +
+      unchecked,
   };
 }

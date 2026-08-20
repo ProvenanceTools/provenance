@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { canonicalize, sha256Hex } from '@provenance/log-core';
-import { computeSlogCoverage, computeMetaCoverage } from './rolling-coverage.js';
+import {
+  computeSlogCoverage,
+  computeMetaCoverage,
+  resolveAmbiguousCoverage,
+} from './rolling-coverage.js';
 
 const LINES = ['{"seq":0,"kind":"session.start"}\n', '{"seq":1}\n', '{"seq":2}\n'];
 const SLOG = LINES.join('');
@@ -148,5 +152,57 @@ describe('computeMetaCoverage', () => {
   it('is unavailable when the manifest carries no usable digest', () => {
     const meta = metaWith(1);
     expect(computeMetaCoverage(meta, sha256Hex(meta), null).kind).toBe('unavailable');
+  });
+});
+
+describe('resolveAmbiguousCoverage', () => {
+  const REASON = 'two logs claim this session';
+
+  it('returns a single claimant unchanged — the ordinary, non-ambiguous path', () => {
+    expect(resolveAmbiguousCoverage([{ kind: 'exact' }], REASON)).toEqual({ kind: 'exact' });
+  });
+
+  it('keeps the verdict when every claimant agrees', () => {
+    // A byte-identical backup copy of `.provenance/`. Agreement is an answer:
+    // whichever file the seal was written over, this is what it says.
+    const partial = { kind: 'partial', sealed: 10, total: 20, unit: 'bytes' } as const;
+    expect(resolveAmbiguousCoverage([partial, partial], REASON)).toEqual(partial);
+  });
+
+  it('keeps a no_match every claimant shares — ambiguity is not a licence', () => {
+    // THE DANGEROUS DIRECTION. If ambiguity always suppressed the verdict, a
+    // student could append to their `.slog`, copy it under a second filename,
+    // and buy silence. "No file in this bundle claiming this session reproduces
+    // the sealed digest" is established regardless of which one the seal meant.
+    expect(resolveAmbiguousCoverage([{ kind: 'no_match' }, { kind: 'no_match' }], REASON)).toEqual({
+      kind: 'no_match',
+    });
+  });
+
+  it('answers indeterminate when the claimants disagree', () => {
+    // One copy satisfies the seal and one contradicts it, and nothing in the
+    // archive says which one the seal was written over. "We cannot check" is a
+    // different fact from "the bytes do not match", and saying the second here
+    // is how a duplicated log became a maximum-severity tamper finding.
+    expect(resolveAmbiguousCoverage([{ kind: 'exact' }, { kind: 'no_match' }], REASON)).toEqual({
+      kind: 'indeterminate',
+      reason: REASON,
+    });
+  });
+
+  it('answers indeterminate when the claimants seal different amounts', () => {
+    expect(
+      resolveAmbiguousCoverage(
+        [
+          { kind: 'partial', sealed: 10, total: 20, unit: 'bytes' },
+          { kind: 'partial', sealed: 10, total: 30, unit: 'bytes' },
+        ],
+        REASON,
+      ),
+    ).toEqual({ kind: 'indeterminate', reason: REASON });
+  });
+
+  it('answers indeterminate rather than guessing when there is no claimant at all', () => {
+    expect(resolveAmbiguousCoverage([], REASON)).toEqual({ kind: 'indeterminate', reason: REASON });
   });
 });

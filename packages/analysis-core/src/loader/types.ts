@@ -216,9 +216,12 @@ export type DroppedArtifact = {
    * which survives even when the log itself does not.
    *
    * This is what lets a dropped session's rolling seal be dropped with it
-   * instead of surfacing as a `no_session_log` defect. That defect fails check 1
-   * and its text offers "the log was deleted or the seal was planted" — an
-   * accusation, produced by a crash. See `parse-bundle.ts`.
+   * instead of surfacing as a `no_session_log` defect, which fails check 1 — a
+   * finding produced by a crash. (The defect's text no longer asserts deletion
+   * or planting, since the evidence cannot distinguish either from a partial
+   * push; it is still a finding, and still the wrong one here, because this is
+   * the one path where the loader DOES know why the log is absent.) See
+   * `parse-bundle.ts`.
    */
   logicalSessionId?: LogicalSessionId;
   /** Staff-facing prose: what was left out, and why that is not a finding. */
@@ -351,6 +354,17 @@ export type RollingSealDefect = {
     | 'session_id_mismatch'
     /** A seal names a session with no `.slog` in the bundle. */
     | 'no_session_log'
+    /**
+     * Several `.slog` files claim the session this seal names, so which log the
+     * seal commits to cannot be established.
+     *
+     * Reported so the ambiguity is visible; it is NOT an integrity finding on
+     * its own. The seal's coverage becomes `indeterminate` rather than falling
+     * through to whole-file equality, which is what used to turn a duplicated
+     * log into a maximum-severity tamper accusation. See
+     * `loader/rolling-coverage.ts` / `resolveAmbiguousCoverage`.
+     */
+    | 'ambiguous_session_log'
     /** A session's `.slog` is covered by no seal at all. */
     | 'unsealed_session'
     /**
