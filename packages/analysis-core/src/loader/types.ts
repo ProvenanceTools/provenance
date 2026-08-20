@@ -139,6 +139,93 @@ export function asLogicalSessionId(raw: string): LogicalSessionId {
   return raw as LogicalSessionId;
 }
 
+// ---------------------------------------------------------------------------
+// The read-side orphan guard (see `unzip.ts` step 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * One artifact the loader left out of the analysis because it is not analysable.
+ *
+ * ## Why this exists — the git path never runs `seal`
+ *
+ * All three recorders guard the ZIP path: `sealBundle` drops an artifact the
+ * analyzer could not open and reports it in the seal warnings. A GIT-NATIVE
+ * submission has no seal step at all — the student pushes, the grader clones,
+ * and whatever is in `.provenance/` on disk IS the submission. So that guard
+ * protects the git path not at all, and the leftovers it exists to catch are
+ * exactly the ones a git submission carries: `chain-recovery.ts` quarantines a
+ * damaged `.slog` to `.corrupt-<ISO>` and leaves the `.slog.meta` behind, and a
+ * session torn down before its first flush leaves a zero-byte `.slog`.
+ *
+ * Presented to the loader, each of those used to be fatal to THE WHOLE BUNDLE,
+ * before a single check ran. One leftover file cost a student every session they
+ * had recorded, for something they did not do and could not have prevented.
+ *
+ * So the loader now applies the same rule the seal path applies, on the read
+ * side: **an artifact that cannot be analysed is dropped from the analysis and
+ * reported.** Drop from the ANALYSIS only — this module reads, it never writes,
+ * so nothing on disk is touched. That matters twice over on the git path: the
+ * `.provenance/` directory is the submission itself, and in a shared repo those
+ * bytes may be a partner's only evidence.
+ *
+ * ## Why the loader, and not ingest or the recorder
+ *
+ * The loader is the one place every path converges — server ingest, the
+ * analyzer's in-browser `/local` route, and the `tools/` conformance gates all
+ * reach a bundle through `loadBundle`. Normalising in server ingest would fix
+ * one of those three. The recorder cannot fix it at all: on the git path there
+ * is no seal step to hook, and cleaning `.provenance/` on disk would mean
+ * deleting or renaming files that in a shared repo belong to a partner.
+ *
+ * This is the same argument `loader/rolling-seal.ts` already makes for
+ * preferring defects to hard errors, applied one layer down.
+ *
+ * ## This is NOT an integrity finding
+ *
+ * A dropped artifact says a recording is INCOMPLETE, not that anything was
+ * tampered with — exactly the distinction the recorders' seal warnings draw.
+ * Nothing here produces a `Flag`, fails a validation check, or moves
+ * `ValidationReport.overall`. It is a fact about the archive, reported so that a
+ * silent exclusion never reads as nothing having been wrong.
+ */
+export type DroppedArtifact = {
+  kind:
+    /** A `.slog.meta` whose `.slog` is absent — quarantined away, or deleted. */
+    | 'orphaned_meta'
+    /** A `.slog` with no `.slog.meta` beside it. */
+    | 'orphaned_slog'
+    /** A `.slog` of zero bytes — a session that started and never flushed. */
+    | 'empty_slog'
+    /** A `.slog` quarantined to `.corrupt-<ISO>` by the recorder's chain recovery. */
+    | 'quarantined_log'
+    /** A `.tmp` leftover from an interrupted atomic write. */
+    | 'staging_leftover'
+    /** A rolling seal for a session this bundle does not carry. */
+    | 'orphaned_rolling_seal';
+  /** The entry name exactly as it appeared in the archive. */
+  filename: string;
+  /**
+   * The `.slog` FILENAME uuid, when the artifact is named after one.
+   *
+   * Absent on artifacts that are not per-session log files. NEVER a logical
+   * session id — see {@link LogFileId} and {@link logicalSessionId} below.
+   */
+  logFileId?: LogFileId;
+  /**
+   * The LOGICAL session id of the recording this artifact belonged to, when it
+   * could be recovered — read out of the `.slog.meta` sidecar's `session_id`,
+   * which survives even when the log itself does not.
+   *
+   * This is what lets a dropped session's rolling seal be dropped with it
+   * instead of surfacing as a `no_session_log` defect. That defect fails check 1
+   * and its text offers "the log was deleted or the seal was planted" — an
+   * accusation, produced by a crash. See `parse-bundle.ts`.
+   */
+  logicalSessionId?: LogicalSessionId;
+  /** Staff-facing prose: what was left out, and why that is not a finding. */
+  detail: string;
+};
+
 export type SessionFiles = {
   /**
    * The uuid in this session's `.slog` FILENAME — NOT its logical session id.
@@ -202,6 +289,12 @@ export type BundleFiles = {
   sessions: SessionFiles[];
   /** Raw bytes of each submitted file present in the zip, keyed by manifest path. */
   submissionFiles: Map<string, Uint8Array>;
+  /**
+   * Artifacts the unzipper recognized but could not hand on for analysis, each
+   * dropped rather than made fatal. Sorted by filename; usually empty.
+   * See {@link DroppedArtifact}.
+   */
+  droppedArtifacts: readonly DroppedArtifact[];
 };
 
 // ---------------------------------------------------------------------------
@@ -407,6 +500,19 @@ export type Bundle = {
   rollingSeal?: BundleRollingSeal;
   /** Sessions sorted oldest → newest by firstEvent.wall. */
   sessions: ParsedSession[];
+  /**
+   * Everything the loader left out of this bundle's analysis, and why.
+   *
+   * Always present, usually empty. Non-empty means the submission is DEGRADED,
+   * not that anything is wrong with it: the sessions that are here were analysed
+   * in full, and each entry names one artifact that could not be. Nothing here
+   * produces a `Flag` or fails a check — see {@link DroppedArtifact}.
+   *
+   * Consumers must surface it. A dropped artifact that nobody reports is a
+   * silent exclusion, which is the one outcome worse than the fatal error this
+   * replaced.
+   */
+  droppedArtifacts: readonly DroppedArtifact[];
   /** Original filename of the ZIP that was loaded. */
   sourceFilename: string;
   /** ISO timestamp of when loadBundle() was called; used for export headers. */

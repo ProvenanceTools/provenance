@@ -154,6 +154,7 @@ function makeBundle(opts: {
 
   return {
     id: 'test-bundle',
+    droppedArtifacts: [],
     manifest,
     manifestSigHex: 'sig'.padEnd(128, '0'),
     sessions: [session],
@@ -399,6 +400,7 @@ describe('Check 8 — two contributors with concurrent recorded states', () => {
 
     return {
       id: 'bundle-1',
+      droppedArtifacts: [],
       manifest: { format_version: '1.1' } as BundleManifest,
       manifestSigHex: null,
       sessions,
@@ -566,6 +568,7 @@ describe('Check 8 — the concurrency gate is per path', () => {
     // which is what makes this a two-contributor scope at all.
     const bundle: Bundle = {
       id: 'bundle-1',
+      droppedArtifacts: [],
       manifest: { format_version: '1.1' } as BundleManifest,
       manifestSigHex: null,
       sessions: [
