@@ -219,10 +219,13 @@ completion contract, not a wish list.
 - Tier 3.1 external-change reclassification by content match; the explanation tagger is currently an
   explicit **bridge**, not the final design.
 - The repository discriminator (D12) as a signed-format change, with vectors.
-- `student_credentials` history so the server can answer "was this key ever issued to this student?"
-  — currently it overwrites, so after a second machine enrols the first machine's key reads as
-  never issued. _(In flight.)_
-- Versatile ingest modes (D10). _(In flight.)_
+- **provjet has no AUTOMATED cross-implementation gate.** Verified 2026-08-20: provnvim's
+  `scripts/e2e/run_e2e.sh` produces a bundle via headless Neovim and hands it to the real monorepo
+  `analysis-core`; the monorepo has `tools/recorder-seal-conformance.test.ts` for VS Code. provjet
+  produces e2e bundles under `recorder/build/` but its `EndToEndRecoveryValidationTest` only
+  _mentions_ the Node-side `loadBundle + runValidation` in a comment — it is run separately, by
+  hand. That is the same asymmetry that left the VS Code recorder's written output unvalidated
+  until this session, and it is the test class that has caught the most. **Automate it.**
 
 ### Known gaps, deliberately accepted
 
