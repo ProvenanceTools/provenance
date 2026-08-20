@@ -41,7 +41,7 @@ import {
 } from './peer-observed.js';
 import type { PeerObservedShapeError } from './peer-observed.js';
 import type { PeerObservedPayload } from './events.js';
-import type { HashedEnvelope } from './envelope.js';
+import type { Envelope, HashedEnvelope } from './envelope.js';
 
 const WALL = '2026-01-01T00:00:00.000Z';
 const SHA_A = 'a'.repeat(64);
@@ -99,7 +99,13 @@ describe('compatibility with readers and writers that do not know the kind', () 
   it('an older reader parses, chains and validates a peer.observed entry', () => {
     // The whole degrade-sanely story: ndjson.ts does not reject unknown kinds
     // and the chain is computed over the envelope without interpreting `data`.
-    const envelope = { seq: 0, t: 0, wall: WALL, kind: 'peer.observed', data: PARSED };
+    const envelope: Envelope<'peer.observed'> = {
+      seq: 0,
+      t: 0,
+      wall: WALL,
+      kind: 'peer.observed',
+      data: PARSED,
+    };
     const entry = chainEntry(GENESIS_PREV_HASH, envelope) as HashedEnvelope;
     const line = serializeEntry(entry);
 
@@ -116,7 +122,13 @@ describe('compatibility with readers and writers that do not know the kind', () 
   it('a peer.observed entry chains identically to any other kind', () => {
     // Nothing about this payload gets special hashing treatment. If it did, the
     // three recorder ports would have to know about it to chain correctly.
-    const envelope = { seq: 3, t: 900, wall: WALL, kind: 'peer.observed', data: PARSED };
+    const envelope: Envelope<'peer.observed'> = {
+      seq: 3,
+      t: 900,
+      wall: WALL,
+      kind: 'peer.observed',
+      data: PARSED,
+    };
     const expected = canonicalize({ ...envelope });
     const entry = chainEntry(GENESIS_PREV_HASH, envelope);
     expect(entry.hash).toBe(chainEntry(GENESIS_PREV_HASH, { ...envelope }).hash);
@@ -126,23 +138,21 @@ describe('compatibility with readers and writers that do not know the kind', () 
   it('a log with no peer.observed at all is completely unaffected', () => {
     // Every bundle in existence today. The kind exists in the type space and in
     // nothing else, because no recorder emits it.
-    const entries = [
-      chainEntry(GENESIS_PREV_HASH, {
-        seq: 0,
-        t: 0,
-        wall: WALL,
-        kind: 'session.start',
-        data: {},
-      }),
-    ];
-    const chained = chainEntry(entries[0]!.hash, {
+    const start = chainEntry(GENESIS_PREV_HASH, {
+      seq: 0,
+      t: 0,
+      wall: WALL,
+      kind: 'doc.close',
+      data: { path: 'hw1.py' },
+    });
+    const next = chainEntry(start.hash, {
       seq: 1,
       t: 10,
       wall: WALL,
-      kind: 'doc.change',
-      data: {},
+      kind: 'doc.close',
+      data: { path: 'hw2.py' },
     });
-    expect(validateChain([entries[0]!, chained] as HashedEnvelope[])).toEqual({ ok: true });
+    expect(validateChain([start, next] as HashedEnvelope[])).toEqual({ ok: true });
   });
 });
 
