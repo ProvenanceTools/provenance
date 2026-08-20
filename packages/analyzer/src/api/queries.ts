@@ -49,7 +49,7 @@ import {
   SemesterListResponseSchema,
   AuditListResponseSchema,
   GradescopeIngestResponseSchema,
-  EnrollmentResponseSchema,
+  StudentCredentialResponseSchema,
 } from '@provenance/shared/api-schemas';
 import type {
   Membership,
@@ -1095,41 +1095,49 @@ export function useRevokeToken() {
 }
 
 // ---------------------------------------------------------------------------
-// Student enrollment (program spec §5a — S2)
+// Student credentials (identity format_version 2.1 — institution-scoped)
 // ---------------------------------------------------------------------------
 
 /**
- * Mutation: POST /semesters/:semesterId/enrollment — mint this student's
- * enrollment token.
+ * Mutation: POST /identity/credential — issue this student's credential.
  *
- * The one call in this file made by a student rather than by course staff. Two
- * deliberate omissions:
+ * The one call in this file made by a student rather than by course staff.
  *
- *  - **No `onSuccess` invalidation.** Nothing in the query cache describes an
- *    enrollment; a student can read no endpoint that would change. The minted
- *    token lives in component state and is shown once, exactly like the API
- *    token secret in `useCreateToken`.
- *  - **No retry, and no wrapper query.** Minting is not idempotent from the
- *    server's point of view (it writes a `student_enrollments` row and
- *    supersedes any previous key), so a silent retry would churn rows behind a
+ * ## No semester, and no course, in the path
+ *
+ * This replaced `POST /semesters/:semesterId/enrollment`, which minted a
+ * per-COURSE 2.0 token and has been removed from the server. A 2.1 credential
+ * names no course, no semester, and no assignment, so there is no path
+ * parameter to scope it by — a student obtains ONE credential, once, and it
+ * serves every course forever. Course membership is answered later from the
+ * roster, by the server, against data it owns.
+ *
+ * Two deliberate omissions, unchanged from the 2.0 hook:
+ *
+ *  - **No `onSuccess` invalidation.** Nothing in the query cache describes a
+ *    credential; a student can read no endpoint that would change. It lives in
+ *    component state and is shown once, exactly like the API token secret in
+ *    `useCreateToken`.
+ *  - **No retry, and no wrapper query.** Issuing writes bookkeeping columns and
+ *    signs a fresh credential, so a silent retry would churn writes behind a
  *    student who pressed the button once. `useMutation` does not retry by
  *    default; this comment is here so nobody adds one.
  *
- * The response is validated against `EnrollmentResponseSchema` before it
+ * The response is validated against `StudentCredentialResponseSchema` before it
  * reaches the view, so a truncated or altered body fails here rather than being
- * handed to a student as a token to paste.
+ * handed to a student as something to paste.
  */
-export function useMintEnrollment(semesterId: string) {
+export function useMintCredential() {
   return useMutation({
     mutationFn: (studentPubkey: string) =>
       apiFetch(
-        `/semesters/${semesterId}/enrollment`,
+        '/identity/credential',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ student_pubkey: studentPubkey }),
         },
-        EnrollmentResponseSchema,
+        StudentCredentialResponseSchema,
       ),
   });
 }

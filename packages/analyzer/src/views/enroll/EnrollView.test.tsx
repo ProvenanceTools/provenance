@@ -1,18 +1,23 @@
 /**
- * EnrollView tests.
+ * EnrollView tests, at identity `format_version` 2.1.
  *
  * The happy path is one test. The rest are the ways this goes wrong for a real
  * student, because that is where the page earns its keep:
- *  - every server refusal (not on the roster, duplicate roster rows, no
- *    enrollment key configured, API-token principal, dead link, rate limit)
+ *  - every server refusal (no institution key, API-token principal, view-as,
+ *    rate limit)
  *  - no server at all (wifi dropped)
  *  - a session that expired between loading the page and pressing the button
  *  - a key that is short, long, uppercased, wrapped, or buried in prose
- *  - a token pasted back mangled
+ *  - a credential pasted back mangled
  *
  * One property is asserted more than once on purpose: NOTHING private is ever
  * put on the wire. The request body is captured and checked to carry the public
  * key and nothing else.
+ *
+ * The roster and semester suites are GONE, not weakened: the route they
+ * exercised (`POST /semesters/:id/enrollment`) no longer exists, and a 2.1
+ * credential names no course or semester, so there is no roster precondition
+ * to fail and no semester id to be wrong. That deadlock is what 2.1 removes.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -20,8 +25,8 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
-import { ENROLLMENT_FORMAT_VERSION } from '@provenance/log-core';
-import { EnrollmentResponseSchema } from '@provenance/shared/api-schemas';
+import { INSTITUTION_IDENTITY_FORMAT_VERSION } from '@provenance/log-core';
+import { StudentCredentialResponseSchema } from '@provenance/shared/api-schemas';
 import { mswServer } from '../../test-setup.js';
 import { meNoSemestersHandler } from '../../test/msw-handlers.js';
 import { ApiError, UnauthorizedError } from '../../api/client.js';
@@ -32,37 +37,38 @@ import { buildRecorderPasteText } from './enrollment-token.js';
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const SEMESTER_ID = '00000000-0000-0000-0000-000000000010';
 const PUBKEY = 'a'.repeat(64);
+const STUDENT_REF = '3f0b7c22-9a1e-4a55-8b3d-2c6e1f4a8d90';
 
 const RESPONSE = {
-  enrollment: {
-    format_version: ENROLLMENT_FORMAT_VERSION,
-    student_ref: '3f0b7c22-9a1e-4a55-8b3d-2c6e1f4a8d90',
-    course_id: 'berkeley-cs61b-fa26',
+  credential: {
+    format_version: INSTITUTION_IDENTITY_FORMAT_VERSION,
+    institution_id: 'berkeley',
+    student_ref: STUDENT_REF,
     student_pubkey: PUBKEY,
     issued_at: '2026-08-19T17:00:00.000Z',
     expires_at: '2026-12-20',
-    enrollment_sig: 'c'.repeat(128),
+    institution_sig: 'c'.repeat(128),
   },
-  enrollment_cert: {
-    format_version: ENROLLMENT_FORMAT_VERSION,
-    course_id: 'berkeley-cs61b-fa26',
-    enrollment_pubkey: 'b'.repeat(64),
+  institution_cert: {
+    format_version: INSTITUTION_IDENTITY_FORMAT_VERSION,
+    institution_id: 'berkeley',
+    institution_pubkey: 'b'.repeat(64),
     valid_from: '2026-08-01',
     valid_until: '2026-12-31',
-    course_sig: 'd'.repeat(128),
+    root_sig: 'd'.repeat(128),
   },
-  course_id: 'berkeley-cs61b-fa26',
-  student_ref: '3f0b7c22-9a1e-4a55-8b3d-2c6e1f4a8d90',
+  institution_id: 'berkeley',
+  student_ref: STUDENT_REF,
   reissued: false,
 };
 
 // The fixture is the contract: if it stops matching the schema the server
 // promises, these tests are lying about what the page will receive.
-EnrollmentResponseSchema.parse(RESPONSE);
+StudentCredentialResponseSchema.parse(RESPONSE);
 
-const ENROLL_PATH = `/api/v1/semesters/${SEMESTER_ID}/enrollment`;
+// No semester, no course: the 2.1 route takes no path parameter at all.
+const ENROLL_PATH = '/api/v1/identity/credential';
 
 /** Mint handler that records the body it was given. */
 function mintHandler(body: Record<string, unknown> = RESPONSE, status = 200) {
@@ -78,7 +84,7 @@ function errorHandler(code: string, status: number, message = 'nope') {
   return http.post(ENROLL_PATH, () => HttpResponse.json({ error: { code, message } }, { status }));
 }
 
-function renderEnroll(search = `?semester=${SEMESTER_ID}`) {
+function renderEnroll(search = '') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -119,8 +125,8 @@ describe('EnrollView — minting', () => {
     expect(shown).toBe(buildRecorderPasteText(RESPONSE));
     expect(shown).not.toMatch(/[\n\r]/);
     expect(JSON.parse(shown)).toEqual({
-      enrollment: RESPONSE.enrollment,
-      enrollment_cert: RESPONSE.enrollment_cert,
+      enrollment: RESPONSE.credential,
+      enrollment_cert: RESPONSE.institution_cert,
     });
 
     // Only the PUBLIC key went out. Nothing else, ever.
@@ -135,7 +141,7 @@ describe('EnrollView — minting', () => {
 
     await waitFor(() =>
       expect(screen.getByTestId('enroll-expected-message')).toHaveTextContent(
-        'Provenance: enrolled in berkeley-cs61b-fa26',
+        'Provenance: enrolled at berkeley',
       ),
     );
   });
@@ -172,7 +178,7 @@ describe('EnrollView — minting', () => {
     submitKey();
 
     await waitFor(() => expect(screen.getByTestId('enroll-token-panel')).toBeInTheDocument());
-    expect(screen.getByText(/already enrolled, so the token was re-issued/i)).toBeInTheDocument();
+    expect(screen.getByText(/already had a credential, so a fresh one was issued/i)).toBeInTheDocument();
   });
 });
 
@@ -230,43 +236,47 @@ describe('EnrollView — key validation', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Step 2 — the semester
+// No semester, anywhere
+//
+// REPLACES the old 'EnrollView — semester' suite. Those three tests exercised
+// `POST /semesters/:id/enrollment`, a route the server no longer has. A 2.1
+// credential names no course and no semester, so the input, the link param and
+// the "blocked until a valid uuid" rule all describe behaviour that is gone.
+// What replaces them is the assertion that none of it is there any more.
 // ---------------------------------------------------------------------------
 
-describe('EnrollView — semester', () => {
-  it('uses the semester from the course link without asking', async () => {
+describe('EnrollView — no semester', () => {
+  it('asks for nothing but the key', async () => {
     mswServer.use(meNoSemestersHandler());
     renderEnroll();
     await waitFor(() => expect(screen.getByTestId('enroll-form')).toBeInTheDocument());
 
-    expect(screen.getByTestId('enroll-semester-from-link')).toBeInTheDocument();
     expect(screen.queryByTestId('enroll-semester-input')).not.toBeInTheDocument();
-  });
-
-  it('asks for the id when the link has no semester, and blocks submit until valid', async () => {
-    mswServer.use(meNoSemestersHandler());
-    renderEnroll('');
-    await waitFor(() => expect(screen.getByTestId('enroll-form')).toBeInTheDocument());
-
-    expect((screen.getByTestId('enroll-submit') as HTMLButtonElement).disabled).toBe(true);
-
-    fireEvent.change(screen.getByTestId('enroll-semester-input'), { target: { value: 'cs61b' } });
-    expect(screen.getByTestId('enroll-semester-error')).toBeInTheDocument();
-    expect((screen.getByTestId('enroll-submit') as HTMLButtonElement).disabled).toBe(true);
-
-    fireEvent.change(screen.getByTestId('enroll-semester-input'), {
-      target: { value: SEMESTER_ID },
-    });
-    expect(screen.queryByTestId('enroll-semester-error')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('enroll-semester-from-link')).not.toBeInTheDocument();
+    // Submit is live immediately — there is no second precondition to satisfy.
     expect((screen.getByTestId('enroll-submit') as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('treats a malformed semester in the link as no semester at all', async () => {
+  it('ignores a leftover ?semester= link rather than acting on it', async () => {
+    // Course staff published these links for the 2.0 flow; they will keep
+    // circulating. The param is now inert, and must not scope anything.
     mswServer.use(meNoSemestersHandler());
-    renderEnroll('?semester=not-a-uuid');
-    await waitFor(() => expect(screen.getByTestId('enroll-form')).toBeInTheDocument());
+    const { handler, seen } = mintHandler();
+    mswServer.use(handler);
 
-    expect(screen.getByTestId('enroll-semester-input')).toBeInTheDocument();
+    renderEnroll('?semester=00000000-0000-0000-0000-000000000010');
+    await waitFor(() => expect(screen.getByTestId('enroll-form')).toBeInTheDocument());
+    submitKey();
+
+    await waitFor(() => expect(screen.getByTestId('enroll-token-panel')).toBeInTheDocument());
+    expect(seen.body).toEqual({ student_pubkey: PUBKEY });
+  });
+
+  it('tells the student the credential is not per-course', async () => {
+    mswServer.use(meNoSemestersHandler());
+    renderEnroll();
+    await waitFor(() => expect(screen.getByTestId('enroll-form')).toBeInTheDocument());
+    expect(screen.getByText(/not tied to a course or a semester/i)).toBeInTheDocument();
   });
 });
 
@@ -276,11 +286,9 @@ describe('EnrollView — semester', () => {
 
 describe('EnrollView — server refusals', () => {
   const cases: ReadonlyArray<readonly [string, number, RegExp]> = [
-    ['ENROLLMENT_NOT_ON_ROSTER', 403, /not on the roster/i],
-    ['ENROLLMENT_ROSTER_AMBIGUOUS', 409, /lists this email twice/i],
-    ['ENROLLMENT_UNAVAILABLE', 503, /not ready to issue tokens/i],
-    ['ENROLLMENT_SESSION_REQUIRED', 403, /interactive login/i],
-    ['NOT_FOUND', 404, /does not point at a real semester/i],
+    ['CREDENTIAL_UNAVAILABLE', 503, /not ready to issue credentials/i],
+    ['CREDENTIAL_SESSION_REQUIRED', 403, /interactive login/i],
+    ['VIEW_AS_READ_ONLY', 403, /viewing as another user/i],
     ['VALIDATION', 400, /rejected that key/i],
     ['RATE_LIMITED', 429, /too many attempts/i],
   ];
@@ -337,7 +345,7 @@ describe('EnrollView — server refusals', () => {
     // A proxy that truncates the body must not hand a student a broken token.
     mswServer.use(
       meNoSemestersHandler(),
-      mintHandler({ ...RESPONSE, enrollment: { format_version: '2.0' } }).handler,
+      mintHandler({ ...RESPONSE, credential: { format_version: '2.1' } }).handler,
     );
 
     renderEnroll();
@@ -387,14 +395,25 @@ describe('EnrollView — paste check', () => {
     expect(screen.getByTestId('enroll-verify-error')).toBeInTheDocument();
   });
 
-  it('flags a valid token that belongs to a different course', async () => {
+  it('flags a valid credential that belongs to a different institution', async () => {
     await mintThen();
     const other = JSON.stringify({
-      enrollment: { ...RESPONSE.enrollment, course_id: 'berkeley-cs61c-fa26' },
-      enrollment_cert: { ...RESPONSE.enrollment_cert, course_id: 'berkeley-cs61c-fa26' },
+      enrollment: { ...RESPONSE.credential, institution_id: 'stanford' },
+      enrollment_cert: { ...RESPONSE.institution_cert, institution_id: 'stanford' },
     });
     fireEvent.change(screen.getByTestId('enroll-verify-input'), { target: { value: other } });
-    expect(screen.getByTestId('enroll-verify-other')).toHaveTextContent('berkeley-cs61c-fa26');
+    expect(screen.getByTestId('enroll-verify-other')).toHaveTextContent('stanford');
+  });
+
+  it('names the old-recorder failure so it is not mistaken for a bad paste', async () => {
+    // The sequencing hazard, surfaced on the page: a student running a 2.0-only
+    // build sees `unsupported_format_version` in VS Code, and must be able to
+    // tell that from a mangled selection.
+    await mintThen();
+    expect(screen.getByTestId('enroll-version-note')).toHaveTextContent(
+      /unsupported_format_version/,
+    );
+    expect(screen.getByTestId('enroll-version-note')).toHaveTextContent(/too old/i);
   });
 
   it('publishes the character count so a short paste is visible', async () => {
@@ -417,7 +436,7 @@ describe('EnrollView — paste check', () => {
 // ---------------------------------------------------------------------------
 
 describe('EnrollView — account', () => {
-  it('shows which account the token will be issued to', async () => {
+  it('shows which account the credential will be issued to', async () => {
     mswServer.use(meNoSemestersHandler());
     renderEnroll();
     await waitFor(() => expect(screen.getByTestId('enroll-signed-in-as')).toBeInTheDocument());
@@ -435,7 +454,7 @@ describe('describeMintError', () => {
     expect(failure.detail).toContain('Internal explosion');
   });
 
-  it('treats a 401 as an expired session, not a roster problem', () => {
+  it('treats a 401 as an expired session, not an issuance problem', () => {
     expect(describeMintError(new UnauthorizedError()).title).toMatch(/session expired/i);
   });
 
