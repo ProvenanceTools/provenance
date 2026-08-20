@@ -40,7 +40,12 @@ import {
   reconcileRollingSealsWithSessions,
   synthesizeRollingUnionManifest,
 } from './rolling-seal.js';
-import { computeSlogCoverage, computeMetaCoverage, wholeFileCoverage } from './rolling-coverage.js';
+import {
+  computeSlogCoverage,
+  computeMetaCoverage,
+  wholeFileCoverage,
+  resolveAmbiguousCoverage,
+} from './rolling-coverage.js';
 import type { RollingSealCoverage } from './rolling-coverage.js';
 import { asLogicalSessionId } from './types.js';
 import type {
@@ -112,8 +117,10 @@ export async function loadBundle(
   // This completes the read-side orphan guard. Without it, degrading gracefully
   // would MANUFACTURE A FINDING out of the very crash it exists to absorb: a
   // seal whose `.slog` is not in the bundle becomes a `no_session_log` defect,
-  // which fails check 1 (`manifest_sig`) for the WHOLE bundle at high severity
-  // and whose text offers "either the log was deleted or the seal was planted".
+  // which fails check 1 (`manifest_sig`) for the WHOLE bundle at high severity.
+  // (That defect no longer asserts deletion or planting — see `rolling-seal.ts`
+  // — but it is still a finding, and manufacturing one out of a crash is still
+  // the wrong answer when the loader knows exactly which session went missing.)
   // A student whose editor crashed would go from "your submission will not open"
   // to "your submission looks tampered with" — strictly worse.
   //
@@ -249,7 +256,7 @@ export async function loadBundle(
   // value in production and is now a distinct branded type so it cannot be used
   // here by accident. See `types.ts` / {@link LogFileId}.
   const parsedSessions = [];
-  const filesByLogicalSessionId = new Map<LogicalSessionId, SessionFiles | 'ambiguous'>();
+  const filesByLogicalSessionId = new Map<LogicalSessionId, SessionFiles[]>();
   for (let i = 0; i < sessionResults.length; i++) {
     const result = sessionResults[i]!;
     if (!result.ok) {
@@ -258,16 +265,26 @@ export async function loadBundle(
     parsedSessions.push(result.value);
 
     // Two `.slog` files can carry the same logical session id only if a log was
-    // duplicated under a second filename. Then no single file is "the" file that
-    // session's seal covers, and silently taking the last one would compute
-    // coverage over bytes the seal never saw. Refuse rather than guess: the seal
-    // falls through to whole-file equality, exactly as a classic bundle does.
+    // duplicated under a second filename — a hand copy of `.provenance/`, a
+    // backup, an odd merge. Then no single file is "the" file that session's
+    // seal covers, and silently taking the last one would compute coverage over
+    // bytes the seal never saw.
+    //
+    // EVERY claimant is kept, rather than one of them or a `'ambiguous'`
+    // sentinel, because the honest answer is decided by what they AGREE on —
+    // see `resolveAmbiguousCoverage`. The sentinel version of this line dropped
+    // the seal from coverage entirely, and an absent coverage entry is read as a
+    // classic whole-file commitment, which accused honest students at high
+    // severity. Keeping the list is what lets the seal be answered instead of
+    // abandoned.
     const logicalId = asLogicalSessionId(result.value.sessionId);
     const files = sessionFiles[i]!;
-    filesByLogicalSessionId.set(
-      logicalId,
-      filesByLogicalSessionId.has(logicalId) ? 'ambiguous' : files,
-    );
+    const claimants = filesByLogicalSessionId.get(logicalId);
+    if (claimants === undefined) {
+      filesByLogicalSessionId.set(logicalId, [files]);
+    } else {
+      claimants.push(files);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -336,10 +353,10 @@ export async function loadBundle(
         // every git submission, left coverage empty, and sent
         // `log_bytes_match` down the whole-file path that then accused honest
         // students at high severity. See `types.ts` / {@link LogFileId}.
-        const files = filesByLogicalSessionId.get(seal.sessionId);
-        // undefined → no_session_log, reported as a defect.
-        // 'ambiguous' → duplicated log, see the pairing loop above.
-        if (files === undefined || files === 'ambiguous') continue;
+        const claimants = filesByLogicalSessionId.get(seal.sessionId);
+        // No `.slog` records this session at all → `no_session_log`, already
+        // reported as a defect by reconcileRollingSealsWithSessions above.
+        if (claimants === undefined || claimants.length === 0) continue;
         const entry = seal.manifest.sessions[0];
         // A FINAL seal (written by dispose() over a finished, flushed log, and
         // signed) commits to the whole file, so it skips the prefix search
@@ -348,15 +365,62 @@ export async function loadBundle(
         // between catching a post-session append and accusing a student whose
         // editor is still open. See loader/rolling-coverage.ts.
         const final = isFinalRollingSeal(seal.manifest);
-        coverage.push({
-          sessionId: seal.sessionId,
-          final,
+        const per = claimants.map((files) => ({
           slog: final
             ? wholeFileCoverage(files.slogSha256, entry.slog_sha256)
             : computeSlogCoverage(files.slogText, files.slogSha256, entry.slog_sha256),
           meta: final
             ? wholeFileCoverage(files.metaSha256, entry.meta_sha256)
             : computeMetaCoverage(files.metaJson, files.metaSha256, entry.meta_sha256),
+        }));
+
+        // The ordinary case: exactly one `.slog` records this session, and its
+        // coverage is the seal's coverage. `resolveAmbiguousCoverage` returns a
+        // single candidate unchanged, so this path is byte-for-byte what it was.
+        //
+        // The duplicated case (several `.slog`s carrying one logical session id)
+        // used to `continue` here, recording NOTHING — and an absent coverage
+        // entry is not inert: `verify-log-bytes.ts` reads absence as a classic
+        // whole-file commitment and fails a non-final rolling seal at high
+        // severity, confidence 1.0. Same outcome as bug 10, reached by the other
+        // branch of the same `if`. Now the seal is answered on what the
+        // claimants AGREE on, and the ambiguity itself is reported as a defect
+        // rather than swallowed.
+        if (claimants.length > 1) {
+          const filenames = claimants.map((f) => `session-${f.logFileId}.slog`).sort();
+          defects.push({
+            sessionId: seal.sessionId,
+            kind: 'ambiguous_session_log',
+            // States the fact and stops. Duplicating a log is not something the
+            // recorder does, but a hand copy of `.provenance/`, a backup taken
+            // before a push, or an odd merge all produce it, and nothing in the
+            // archive distinguishes those from a deliberate copy. So this names
+            // what is in the bundle and what follows from it, and asserts
+            // nothing about how it got there.
+            detail:
+              `${claimants.length} log files in this bundle record session ` +
+              `${seal.sessionId} (${filenames.join(', ')}), so manifest-${seal.sessionId}.json ` +
+              `cannot be matched to the one log it was written over. The seal's coverage of ` +
+              `those bytes is therefore checked only where every one of them agrees. This is a ` +
+              `duplicated log — a fact about the archive, not evidence of tampering on its own.`,
+          });
+        }
+
+        const ambiguityReason =
+          `${claimants.length} log files in this bundle record session ${seal.sessionId} and ` +
+          `they do not agree about this seal, so which log it commits to cannot be established`;
+
+        coverage.push({
+          sessionId: seal.sessionId,
+          final,
+          slog: resolveAmbiguousCoverage(
+            per.map((p) => p.slog),
+            ambiguityReason,
+          ),
+          meta: resolveAmbiguousCoverage(
+            per.map((p) => p.meta),
+            ambiguityReason,
+          ),
         });
       }
     }

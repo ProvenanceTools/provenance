@@ -357,12 +357,18 @@ describe('loadBundle — rolling-seal coverage lives in the LOGICAL id space', (
     expect(result.value.rollingSeal!.defects).toEqual([]);
   });
 
-  it('refuses to guess when two .slog files carry the SAME logical session id', async () => {
-    // Only reachable by duplicating a log under a second filename. No single
-    // file is then "the" file that session's seal covers, so computing coverage
-    // from either would be measuring bytes the seal may never have seen.
-    // Refusing leaves whole-file equality in place — the same reading a classic
-    // bundle gets — rather than silently taking last-write-wins.
+  it('reports a DEFECT, and answers `indeterminate`, when two .slog files carry the SAME logical session id', async () => {
+    // Only reachable by duplicating a log under a second filename — a hand copy
+    // of `.provenance/`, a backup, an odd merge. No single file is then "the"
+    // file that session's seal covers.
+    //
+    // This used to record NOTHING: no coverage entry, no defect. Both halves
+    // were wrong. Silent, because the loader detected a real ambiguity and told
+    // nobody. And accusatory, because an ABSENT coverage entry is not inert —
+    // `verify-log-bytes.ts` reads absence as "classic seal" and applies
+    // WHOLE-FILE equality to a digest that only committed to a prefix, failing
+    // `log_bytes_match` at high severity, confidence 1.0. That is bug 10's
+    // outcome reached through the second branch of the same `if`.
     const built = await buildTestBundle({
       sessions: [
         {
@@ -383,7 +389,127 @@ describe('loadBundle — rolling-seal coverage lives in the LOGICAL id space', (
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    // No coverage entry is invented for the ambiguous id.
-    expect(result.value.rollingSeal!.coverage).toEqual([]);
+    // A coverage entry EXISTS for the ambiguous id, and it says outright that
+    // the question could not be answered. Absence would mean "whole file".
+    const coverage = result.value.rollingSeal!.coverage!;
+    expect(coverage).toHaveLength(1);
+    expect(coverage[0]!.sessionId).toBe('aaaaaaaa-0000-4000-8000-000000000000');
+    expect(coverage[0]!.slog.kind).toBe('indeterminate');
+    expect(coverage[0]!.meta.kind).toBe('indeterminate');
+
+    // And the ambiguity is visible rather than swallowed.
+    const dup = result.value
+      .rollingSeal!.defects.filter((d) => d.kind === 'ambiguous_session_log')
+      .at(0);
+    expect(dup).toBeDefined();
+    expect(dup!.sessionId).toBe('aaaaaaaa-0000-4000-8000-000000000000');
+    // Names the actual files, so a staff member can go and look at them.
+    expect(dup!.detail).toContain('session-11111111-0000-4000-8000-000000000000.slog');
+    expect(dup!.detail).toContain('session-22222222-0000-4000-8000-000000000000.slog');
+    // And says what it is NOT: a duplicated log is a fact about the archive.
+    expect(dup!.detail).toContain('not evidence of tampering');
+  });
+
+  it('keeps full coverage semantics when the duplicate is byte-identical', async () => {
+    // The most likely innocent shape: a student copies `.provenance/` as a
+    // backup, so two files hold the SAME log. The claimants then agree, and
+    // agreement is an answer — refusing to answer here would throw away a
+    // verdict the evidence fully supports, and would hand a real mismatch the
+    // same silence (see verify-log-bytes.test.ts).
+    const built = await buildTestBundle({
+      sessions: [
+        {
+          sessionId: 'aaaaaaaa-0000-4000-8000-000000000000',
+          fileUuid: '11111111-0000-4000-8000-000000000000',
+          eventCount: 4,
+        },
+      ],
+      rollingSeal: {},
+    });
+
+    const zip = await JSZip.loadAsync(built.zipBuffer);
+    const base = 'session-11111111-0000-4000-8000-000000000000';
+    const copy = 'session-33333333-0000-4000-8000-000000000000';
+    zip.file(`${copy}.slog`, await zip.file(`${base}.slog`)!.async('uint8array'));
+    zip.file(`${copy}.slog.meta`, await zip.file(`${base}.slog.meta`)!.async('uint8array'));
+    const dupZip = await zip.generateAsync({ type: 'arraybuffer' });
+
+    const result = await loadBundle(dupZip, 'git-clone.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const coverage = result.value.rollingSeal!.coverage!;
+    expect(coverage).toHaveLength(1);
+    // Unanimous, so the answer stands unchanged.
+    expect(coverage[0]!.slog).toEqual({ kind: 'exact' });
+    expect(coverage[0]!.meta).toEqual({ kind: 'exact' });
+    // The duplicate is still reported — agreeing about the seal does not make
+    // a second copy of a log stop existing.
+    expect(result.value.rollingSeal!.defects.some((d) => d.kind === 'ambiguous_session_log')).toBe(
+      true,
+    );
+  });
+
+  it('leaves a BOTH-SHAPES bundle untouched when a log is duplicated', async () => {
+    // A bundle carrying `manifest.json` AS WELL AS rolling seals reads the
+    // CLASSIC manifest, which is taken once over a finished log and genuinely is
+    // a whole-file commitment — so no coverage is computed for it, whole-file
+    // equality is the right reading, and the ambiguity has no bearing on what is
+    // attested. Deliberately scoped that way: the ambiguity handling exists to
+    // stop an absent coverage entry being misread, and there is no coverage
+    // entry to misread here.
+    const built = await buildTestBundle({
+      sessions: [
+        {
+          sessionId: 'aaaaaaaa-0000-4000-8000-000000000000',
+          fileUuid: '11111111-0000-4000-8000-000000000000',
+          eventCount: 4,
+        },
+        {
+          sessionId: 'aaaaaaaa-0000-4000-8000-000000000000',
+          fileUuid: '22222222-0000-4000-8000-000000000000',
+          eventCount: 4,
+        },
+      ],
+      rollingSeal: { alsoClassic: true },
+    });
+
+    const result = await loadBundle(built.zipBuffer, 'both-shapes.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // The classic manifest wins, so there is no coverage at all...
+    expect(result.value.manifestSigHex).not.toBeNull();
+    expect(result.value.rollingSeal!.coverage).toBeUndefined();
+    // ...and no ambiguity defect is invented for a path it cannot affect.
+    expect(result.value.rollingSeal!.defects.some((d) => d.kind === 'ambiguous_session_log')).toBe(
+      false,
+    );
+  });
+
+  it('leaves a CLASSIC bundle untouched when a log is duplicated', async () => {
+    // No rolling manifests at all, so none of this code is even reached:
+    // `parseRollingManifestFilename` never matches `manifest.json`.
+    const built = await buildTestBundle({
+      sessions: [
+        {
+          sessionId: 'aaaaaaaa-0000-4000-8000-000000000000',
+          fileUuid: '11111111-0000-4000-8000-000000000000',
+          eventCount: 4,
+        },
+        {
+          sessionId: 'aaaaaaaa-0000-4000-8000-000000000000',
+          fileUuid: '22222222-0000-4000-8000-000000000000',
+          eventCount: 4,
+        },
+      ],
+    });
+
+    const result = await loadBundle(built.zipBuffer, 'classic.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.rollingSeal).toBeUndefined();
+    expect(result.value.manifest.format_version).toBe('1.0');
   });
 });

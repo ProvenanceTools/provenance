@@ -96,12 +96,18 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
  *                    committed value. The sealed region was contradicted.
  *  - `unavailable` — the comparison could not be made at all. Never a finding;
  *                    the caller falls back to whole-file equality.
+ *  - `indeterminate` — the loader could not establish WHICH bytes this seal
+ *                    commits to, so no comparison it could make would mean
+ *                    anything. Never a finding, and — unlike `unavailable` —
+ *                    never a fallback to whole-file equality either. See
+ *                    {@link resolveAmbiguousCoverage}.
  */
 export type SealCoverage =
   | { kind: 'exact' }
   | { kind: 'partial'; sealed: number; total: number; unit: 'bytes' | 'checkpoints' }
   | { kind: 'no_match' }
-  | { kind: 'unavailable'; reason: string };
+  | { kind: 'unavailable'; reason: string }
+  | { kind: 'indeterminate'; reason: string };
 
 /** One session's rolling-seal coverage over both of its log files. */
 export type RollingSealCoverage = {
@@ -235,4 +241,83 @@ export function computeMetaCoverage(
   }
 
   return { kind: 'no_match' };
+}
+
+// ---------------------------------------------------------------------------
+// Ambiguity: two `.slog` files claiming the same logical session
+// ---------------------------------------------------------------------------
+
+/** Structural equality over a {@link SealCoverage}. */
+function sameCoverage(a: SealCoverage, b: SealCoverage): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'partial' && b.kind === 'partial') {
+    return a.sealed === b.sealed && a.total === b.total && a.unit === b.unit;
+  }
+  if (a.kind === 'unavailable' && b.kind === 'unavailable') return a.reason === b.reason;
+  if (a.kind === 'indeterminate' && b.kind === 'indeterminate') return a.reason === b.reason;
+  return true;
+}
+
+/**
+ * Resolve one seal's coverage when SEVERAL `.slog` files claim its session.
+ *
+ * ## Why this exists
+ *
+ * A rolling seal is named after a LOGICAL session id, and it commits to the
+ * bytes of that session's log. Two `.slog` files can carry the same logical id
+ * only if a log was duplicated under a second filename — a hand copy of
+ * `.provenance/`, a backup taken before a push, an odd merge. The recorder never
+ * produces it. When it happens, no single file is "the" file the seal covers.
+ *
+ * The loader used to answer that by recording NOTHING: the seal produced no
+ * coverage entry, and an ABSENT coverage entry is not inert —
+ * `verify-log-bytes.ts` reads absence as "this is a classic seal" and applies
+ * WHOLE-FILE equality to a digest that, on a non-final seal, only ever committed
+ * to a prefix. So the archived log mismatched, and `log_bytes_match` failed at
+ * high severity, confidence 1.0. That is the identical outcome bug 10 produced
+ * by a different route (a lookup keyed on the wrong id space), reached through
+ * the second branch of the same `if`. Fixing one branch of a conditional does
+ * not fix the conditional.
+ *
+ * ## What is honest here
+ *
+ * "We cannot check" is a different fact from "the bytes do not match", and this
+ * codebase already draws that line — `isIdentityCheckFailure` separates "no root
+ * key configured" from "the chain failed", and `classify-external-changes.ts`
+ * answers `unclassified` rather than the accusatory `external` when its test
+ * cannot be run soundly. Same discipline here.
+ *
+ * But "we cannot check" is a claim too, and it must not be over-used, because
+ * OVER-correcting is the dangerous direction: if ambiguity always suppressed the
+ * verdict, duplicating a tampered log would become a way to switch off
+ * `log_bytes_match` — a student could append to their `.slog`, copy it under a
+ * second filename, and buy silence. So the rule is unanimity, not surrender:
+ *
+ *  - Every candidate agrees → that verdict IS the answer, whichever file the
+ *    seal meant, and it is used unchanged. Byte-identical duplicates (the most
+ *    likely innocent shape) therefore keep full prefix semantics, and — the part
+ *    that matters — a seal that NO candidate reproduces is still `no_match`,
+ *    because "no file in this bundle claiming this session reproduces the sealed
+ *    digest" is established regardless of which one the seal was written over.
+ *  - The candidates disagree → `indeterminate`. The seal is satisfied by some
+ *    file that is present and contradicted by another, and nothing in the
+ *    archive says which one it named.
+ *
+ * `indeterminate` is reported, never silent: the loader also records an
+ * `ambiguous_session_log` defect (see `parse-bundle.ts`), and
+ * `verify-log-bytes.ts` names the unchecked digests in its own verdict text.
+ *
+ * @param candidates One coverage verdict per `.slog` claiming this session, in
+ *   the order the files appeared. Never empty; a single candidate returns itself.
+ * @param reason Staff-facing prose for the `indeterminate` case: what could not
+ *   be established, and why.
+ */
+export function resolveAmbiguousCoverage(
+  candidates: readonly SealCoverage[],
+  reason: string,
+): SealCoverage {
+  const first = candidates[0];
+  if (first === undefined) return { kind: 'indeterminate', reason };
+  if (candidates.every((c) => sameCoverage(first, c))) return first;
+  return { kind: 'indeterminate', reason };
 }

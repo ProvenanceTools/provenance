@@ -201,10 +201,21 @@ export function reconcileRollingSealsWithSessions(
   const sealed = new Set(sealSessionIds);
   const present = new Set(parsedSessionIds);
 
-  // A seal for a session whose .slog is not in the bundle. The seal names a
-  // recording that is not here — either the log was deleted or the seal was
-  // planted. Either way its signature can never be checked, because the public
-  // key lives in that session's session.start event.
+  // A seal for a session whose .slog is not in the bundle.
+  //
+  // This used to be described as "either the log was deleted or the seal was
+  // planted". Both of those are inferences about how the archive came to look
+  // this way, and on the GIT path the evidence does not support either: a
+  // partner who committed `.provenance/manifest-<id>.json` before their `.slog`
+  // landed — or whose `.slog` is caught by a `.gitignore` — produces the
+  // identical archive. Nothing in the bundle separates a partial push from a
+  // deletion, so the text below states the gap and stops.
+  //
+  // It is still reported, and still fails check 1. A signed claim that cannot be
+  // checked IS a hole in the record: the public key that would verify it lives
+  // in that session's own session.start event, which is the file that is
+  // missing. Hiding it would be failing toward fewer findings. What changes is
+  // that the finding no longer asserts what it cannot establish.
   for (const sessionId of [...sealed].sort()) {
     if (!present.has(sessionId)) {
       defects.push({
@@ -224,10 +235,21 @@ export function reconcileRollingSealsWithSessions(
         // expected to know there are two.
         detail:
           `manifest-${sessionId}.json seals session ${sessionId}, but no .slog in ` +
-          `this bundle records that session — its signature cannot be checked ` +
-          `against any session key. (Session ${sessionId} is a LOGICAL session id, ` +
-          `from session.start; log files are named after a separate per-file uuid, ` +
-          `so no file is named after this id.)`,
+          `this bundle records that session. What is established is the gap: the seal ` +
+          `is here, the log it names is not, and its signature therefore cannot be ` +
+          `checked against any session key — the key that would verify it lives in ` +
+          `that session's own session.start event, inside the missing log. HOW the ` +
+          `two came apart is NOT established. On a git-submitted assignment a partner ` +
+          `who committed .provenance/manifest-${sessionId}.json before their .slog ` +
+          `landed, or whose .slog is excluded by a .gitignore, produces this exact ` +
+          `archive; so does a log that was removed, and so does a seal that never had ` +
+          `a recording behind it. Nothing in this bundle tells those apart, so treat ` +
+          `it as an incomplete record and not, on its own, as evidence of any of them. ` +
+          `What would settle it: the missing .slog arriving in a later push, or a peer ` +
+          `witness record proving the session existed (peer.observed — designed, not ` +
+          `yet built). (Session ${sessionId} is a LOGICAL session id, from ` +
+          `session.start; log files are named after a separate per-file uuid, so no ` +
+          `file is named after this id.)`,
       });
     }
   }

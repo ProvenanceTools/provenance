@@ -472,6 +472,145 @@ describe('verifyLogBytes — rolling-sealed bundles', () => {
 });
 
 // ---------------------------------------------------------------------------
+// A DUPLICATED LOG — the second route to the false accusation
+// ---------------------------------------------------------------------------
+
+/**
+ * Two `.slog` files carrying the same LOGICAL session id are only reachable by
+ * duplicating a log under a second filename: a hand copy of `.provenance/`, a
+ * backup taken before a push, an odd merge.
+ *
+ * The loader used to record no coverage entry for that seal at all — and an
+ * ABSENT coverage entry is not inert. `verifyLogBytes` reads absence as "this is
+ * a classic seal" and applies whole-file equality to a digest that, on a
+ * non-final rolling seal, only ever committed to a prefix. So the archived log
+ * mismatched and this check failed at HIGH severity, confidence 1.0 against a
+ * student who copied their own directory.
+ *
+ * That is the identical outcome bug 10 produced, reached through the other
+ * branch of the same `if` — which is the lesson: fixing one branch of a
+ * conditional does not fix the conditional.
+ *
+ * The tests below pin both directions. Ambiguity must not accuse; and — the
+ * dangerous direction — ambiguity must not become a way to switch the check off.
+ */
+describe('verifyLogBytes — a duplicated log is not tampering, and is not a licence either', () => {
+  /** Copy a session's `.slog` + `.slog.meta` under a second filename uuid. */
+  async function duplicateLog(
+    zipBuffer: ArrayBuffer,
+    fromLogFileId: string,
+    toLogFileId: string,
+    /** Optionally rewrite the copy's bytes — used to make the copies disagree. */
+    mutate?: (text: string) => string,
+  ): Promise<ArrayBuffer> {
+    return rewriteZip(zipBuffer, async (zip) => {
+      const slog = await zip.file(slogName(fromLogFileId))!.async('string');
+      const meta = await zip.file(`${slogName(fromLogFileId)}.meta`)!.async('uint8array');
+      zip.file(slogName(toLogFileId), mutate === undefined ? slog : mutate(slog));
+      zip.file(`${slogName(toLogFileId)}.meta`, meta);
+    });
+  }
+
+  /** Append a well-formed copy of the last entry — the characterized hole. */
+  function appendLastEntry(text: string): string {
+    const lines = text.trim().split('\n');
+    return `${text}${lines[lines.length - 1]!}\n`;
+  }
+
+  it('does NOT accuse when a NON-FINAL seal cannot be matched to one of two logs', async () => {
+    // THE REGRESSION. Before the fix this bundle came out `fail`, high severity,
+    // confidence 1.0, with text asserting the log was modified after sealing.
+    const { zipBuffer, sessionIds, logFileIds } = await buildTestBundle({
+      sessions: [{ eventCount: 4 }],
+      rollingSeal: { final: false },
+    });
+    const sid = sessionIds[0]!;
+
+    // The copy has an extra entry, so the two claimants disagree about the seal
+    // and neither can be shown to be the one it was written over.
+    const dup = await duplicateLog(
+      zipBuffer,
+      logFileIds[0]!,
+      '99999999-0000-4000-8000-000000000000',
+      appendLastEntry,
+    );
+
+    const bundle = await load(dup);
+
+    // The verdict FIRST, deliberately: this is the assertion the bug moved, and
+    // a test that trips on the coverage shape before reaching it would prove
+    // only that the shape changed, not that the accusation is gone.
+    const check = verifyLogBytes(bundle);
+    expect(check.status).not.toBe('fail');
+    // And it is not silent about having stopped checking: "not checked" must be
+    // legible as something other than "checked and passed".
+    expect(check.detail).toContain('could NOT be checked');
+    expect(check.detail).toContain(sid);
+
+    const coverage = bundle.rollingSeal!.coverage!;
+    expect(coverage).toHaveLength(1);
+    expect(coverage[0]!.slog.kind).toBe('indeterminate');
+  });
+
+  it('STILL fails when every copy contradicts the seal — ambiguity is not a licence', async () => {
+    // THE OVER-CORRECTION GUARD, and the dangerous direction. If ambiguity
+    // always suppressed the verdict, appending to a `.slog` and then copying it
+    // under a second filename would buy silence. It does not: "no file in this
+    // bundle claiming this session reproduces the sealed digest" is established
+    // no matter which file the seal was written over, so it is still reported.
+    const { zipBuffer, sessionIds, logFileIds } = await buildTestBundle({
+      sessions: [{ eventCount: 4 }],
+      rollingSeal: { final: true },
+    });
+    const sid = sessionIds[0]!;
+    const fid = logFileIds[0]!;
+
+    // Append to the original, THEN duplicate it — both copies are tampered.
+    const appended = await rewriteZip(zipBuffer, async (zip) => {
+      const text = await zip.file(slogName(fid))!.async('string');
+      zip.file(slogName(fid), appendLastEntry(text));
+    });
+    const dup = await duplicateLog(appended, fid, '99999999-0000-4000-8000-000000000000');
+
+    const bundle = await load(dup);
+
+    // The verdict FIRST — over-correcting here is the dangerous direction, so
+    // the assertion that must trip is the one about the finding, not the one
+    // about the coverage shape that produced it.
+    const check = verifyLogBytes(bundle);
+    expect(check.status).toBe('fail');
+    expect(check.detail).toContain(sid);
+
+    // The ambiguity IS present and IS reported...
+    expect(bundle.rollingSeal!.defects.some((d) => d.kind === 'ambiguous_session_log')).toBe(true);
+    // ...and the claimants agree, so the seal still gets an answer.
+    expect(bundle.rollingSeal!.coverage![0]!.slog).toEqual({ kind: 'no_match' });
+  });
+
+  it('passes, with full prefix semantics, when the duplicate is byte-identical', async () => {
+    // The plain backup copy. The claimants agree exactly, so nothing is lost:
+    // the seal is answered as if there were one file, and the check passes.
+    const { zipBuffer, logFileIds } = await buildTestBundle({
+      sessions: [{ eventCount: 4 }],
+      rollingSeal: { final: false },
+    });
+
+    const dup = await duplicateLog(
+      zipBuffer,
+      logFileIds[0]!,
+      '99999999-0000-4000-8000-000000000000',
+    );
+
+    const bundle = await load(dup);
+    expect(bundle.rollingSeal!.coverage![0]!.slog).toEqual({ kind: 'exact' });
+
+    const check = verifyLogBytes(bundle);
+    expect(check.status).toBe('pass');
+    expect(check.detail).not.toContain('could NOT be checked');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // STORED (source-stripped) bundles
 // ---------------------------------------------------------------------------
 
