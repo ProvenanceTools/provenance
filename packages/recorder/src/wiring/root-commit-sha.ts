@@ -63,10 +63,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import {
-  readRepositoryDiscriminator,
-  REPOSITORY_DISCRIMINATOR_FIELD,
-} from '@provenance/log-core';
+import { readRepositoryDiscriminator, REPOSITORY_DISCRIMINATOR_FIELD } from '@provenance/log-core';
 
 /**
  * Runs a `git` subcommand in `cwd` and resolves its stdout.

@@ -71,16 +71,10 @@ describe('deriveRootCommitSha — the writer contract', () => {
   it('takes the LEXICOGRAPHICALLY SMALLEST when a repository has several roots', async () => {
     // Ordinary: an orphan branch, a squashed import. Never a finding. The rule
     // exists only so two partners with the same history agree.
-    const sha = await deriveRootCommitSha(
-      '/ws/proj',
-      stubRunner({ revList: `${B}\n${A}\n` }),
-    );
+    const sha = await deriveRootCommitSha('/ws/proj', stubRunner({ revList: `${B}\n${A}\n` }));
     expect(sha).toBe(A);
 
-    const reversed = await deriveRootCommitSha(
-      '/ws/proj',
-      stubRunner({ revList: `${A}\n${B}\n` }),
-    );
+    const reversed = await deriveRootCommitSha('/ws/proj', stubRunner({ revList: `${A}\n${B}\n` }));
     // MUTATION GUARD: `roots[0]` without the sort makes these two disagree.
     expect(reversed).toBe(A);
   });
@@ -141,7 +135,9 @@ describe('the shape check runs on the WRITE side too', () => {
       'git@github.com:cs61b-students/proj2.git',
       'https://github.com/some-org/proj2',
     ]) {
-      expect(await deriveRootCommitSha('/ws/p', stubRunner({ revList: `${bad}\n` }))).toBeUndefined();
+      expect(
+        await deriveRootCommitSha('/ws/p', stubRunner({ revList: `${bad}\n` })),
+      ).toBeUndefined();
     }
   });
 
@@ -149,7 +145,9 @@ describe('the shape check runs on the WRITE side too', () => {
     expect(
       await deriveRootCommitSha('/ws/p', stubRunner({ revList: `${'A'.repeat(40)}\n` })),
     ).toBeUndefined();
-    expect(await deriveRootCommitSha('/ws/p', stubRunner({ revList: '9abcdef\n' }))).toBeUndefined();
+    expect(
+      await deriveRootCommitSha('/ws/p', stubRunner({ revList: '9abcdef\n' })),
+    ).toBeUndefined();
   });
 
   it('anything it DOES return is accepted by log-core’s reader', async () => {
@@ -220,7 +218,16 @@ describe('against a REAL git repository', () => {
     const importedRoot = await commit(dir, 'imported-one', 'vendored.txt');
 
     await git(dir, 'checkout', '-q', 'main');
-    await git(dir, 'merge', '-q', '--no-gpg-sign', '--allow-unrelated-histories', '-m', 'merge', 'imported');
+    await git(
+      dir,
+      'merge',
+      '-q',
+      '--no-gpg-sign',
+      '--allow-unrelated-histories',
+      '-m',
+      'merge',
+      'imported',
+    );
 
     const derived = await deriveRootCommitSha(dir);
     expect(derived).toBe(mainRoot);

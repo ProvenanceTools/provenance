@@ -448,7 +448,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
    * construction. It is created at step 16b and is guaranteed to exist long
    * before the first checkpoint, which is 100 entries away.
    */
-  let peerWatcher: PeerWatcher | undefined;
+  let peerWatcher: PeerWatcher | undefined = undefined;
 
   const sessionHost = createSessionHost({
     sessionId: recorderContext.session_id,

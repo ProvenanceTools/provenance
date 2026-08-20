@@ -515,7 +515,10 @@ describe('a foreign file is never touched (decision-log bug 2)', () => {
     const h = harness({
       readFile: async (p) => {
         if (path.basename(p) === PEER_SLOG) throw new Error('boom');
-        return { ok: true, bytes: new TextEncoder().encode(foreignLog({ sessionId: 'z', extraEntries: 1 })) };
+        return {
+          ok: true,
+          bytes: new TextEncoder().encode(foreignLog({ sessionId: 'z', extraEntries: 1 })),
+        };
       },
     });
     const other = 'session-33333333-3333-4333-8333-333333333333.slog';
@@ -554,7 +557,7 @@ describe('the chain advance stays atomic with every other emitter', () => {
       readFile: async (p) => {
         reads++;
         await Promise.resolve();
-        host.emit('session.heartbeat', { open_files: reads });
+        host.emit('session.heartbeat', { focused: true, active_file: null, idle_since_ms: reads });
         await Promise.resolve();
         return {
           ok: true,
@@ -566,7 +569,7 @@ describe('the chain advance stays atomic with every other emitter', () => {
       createWatcher: () => watcher,
     });
 
-    host.emit('session.start', { open_files: 0 } as never);
+    host.emit('session.start', { session_id: 'own' } as never);
     for (let i = 2; i <= 6; i++) {
       watcher.fireCreate(abs(`session-${String(i).repeat(8)}-2222-4222-8222-222222222222.slog`));
     }

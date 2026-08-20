@@ -3499,7 +3499,11 @@ describe('peer witnessing + repository discriminator → the real readers', () =
     expect(outer).toBeDefined();
     // And it is NOT reachable under the submodule's key.
     expect(
-      getCommitNode(dag, scenario.headSha, repositoryKeyForRootCommit(scenario.submoduleRootCommitSha)),
+      getCommitNode(
+        dag,
+        scenario.headSha,
+        repositoryKeyForRootCommit(scenario.submoduleRootCommitSha),
+      ),
     ).toBeUndefined();
   });
 
@@ -3549,7 +3553,12 @@ describe('peer witnessing + repository discriminator → the real readers', () =
     // reproduce; a digest comparison would have called the honest case above a
     // tamper and this one a tamper equally.
     const text = scenario.partnerBytesBefore.toString('utf8');
-    const kept = text.split('\n').filter((l) => l.length > 0).slice(0, 2).join('\n') + '\n';
+    const kept =
+      text
+        .split('\n')
+        .filter((l) => l.length > 0)
+        .slice(0, 2)
+        .join('\n') + '\n';
     expect(kept.length).toBeLessThan(text.length);
     return mutateZip(scenario.bundlePath, (zip) => {
       zip.file(path.basename(scenario.partner.slogPath), kept);
