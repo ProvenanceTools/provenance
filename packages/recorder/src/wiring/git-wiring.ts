@@ -23,6 +23,8 @@
  *     operation: 'state_change'
  *     commit_sha: the current HEAD commit sha (retained for 1.x readers)
  *     sha / parents / branch: program spec S5, see below
+ *     root_commit_sha: the repository discriminator (decision D12), derived once
+ *       per repository at setup by root-commit-sha.ts and omitted when unknown
  * - We call explanationTagger?.markGit() on each emit to suppress fs.external_change
  *   false positives (PRD §4.5 / explanation-tags.ts).
  * - All field accesses are defensive — any failure logs a warning and continues.
@@ -69,6 +71,7 @@
 import type * as vscode from 'vscode';
 import type { GitEventPayload } from '@provenance/log-core';
 import type { ExplanationTagger } from '../events/explanation-tags.js';
+import { deriveRootCommitSha } from './root-commit-sha.js';
 
 // ---------------------------------------------------------------------------
 // Minimal typing for the vscode.git extension API
@@ -138,6 +141,20 @@ export type GitWiringDeps = {
    * Defaults to "always owned" when omitted.
    */
   isRepoOwnedByThisRoot?: (repoRootFsPath: string) => boolean;
+  /**
+   * Derive the repository discriminator (`root_commit_sha`, decision D12) for a
+   * repository root, or `undefined` to OMIT the field.
+   *
+   * Defaults to the real `deriveRootCommitSha`, which shells out to two
+   * read-only git plumbing commands. The default is the PRODUCTION one on
+   * purpose: a dep that must be remembered is a dep that eventually is not, and
+   * a forgotten discriminator is not a loud failure — it is a silently
+   * unlabelled repository, which is exactly the shape decision-log bug 3 took
+   * when the whole commit-graph feature went dark for the standard layout.
+   *
+   * Overridden in tests, which must not spawn git.
+   */
+  deriveRepositoryDiscriminator?: (repoRootFsPath: string) => Promise<string | undefined>;
 };
 
 // ---------------------------------------------------------------------------
@@ -152,6 +169,8 @@ function inertWiring(): GitWiring {
 export function startGitWiring(deps: GitWiringDeps): GitWiring {
   const { emit, getGitExtension, explanationTagger } = deps;
   const isRepoOwnedByThisRoot = deps.isRepoOwnedByThisRoot ?? (() => true);
+  const deriveDiscriminator =
+    deps.deriveRepositoryDiscriminator ?? ((root: string) => deriveRootCommitSha(root));
 
   const gitExtension = getGitExtension();
   if (gitExtension === undefined) {
@@ -188,7 +207,44 @@ export function startGitWiring(deps: GitWiringDeps): GitWiring {
   // Track the last-seen HEAD commit per repository to emit only on actual changes.
   const lastCommit = new Map<GitRepository, string | undefined>();
 
+  /**
+   * The repository discriminator, per REPOSITORY, derived ONCE at setup
+   * (decision D12 writer rule 1) and memoized as the in-flight promise.
+   *
+   * Keyed by the repository object, and derived with that repository's OWN root
+   * as `cwd`, which is writer rule 9: a session that sees a submodule as well as
+   * its outer repository labels each event with its own repository's root. The
+   * vscode.git API surfaces a submodule as a separate `Repository`, so it
+   * reaches `watchRepo` separately and gets its own entry here. Labelling a
+   * submodule event with the outer repository's root would re-create the exact
+   * sha-space merge this field exists to prevent.
+   */
+  const discriminatorByRepo = new Map<GitRepository, Promise<string | undefined>>();
+
   function watchRepo(repo: GitRepository): void {
+    // The discriminator is derived here — at wiring setup, once per repository —
+    // and never on the event path. Only for repositories this session owns:
+    // running git in a repository whose events are dropped is work it should
+    // never do. Ownership of a repository root cannot change during a session.
+    if (!discriminatorByRepo.has(repo)) {
+      let owned = false;
+      try {
+        owned = isRepoOwnedByThisRoot(repo.rootUri.fsPath);
+      } catch (e) {
+        console.warn('[provenance] git wiring: ownership check failed for discriminator:', e);
+      }
+      discriminatorByRepo.set(
+        repo,
+        owned
+          ? // deriveRootCommitSha never rejects, but a caller-supplied override
+            // might; an unhandled rejection must not reach the extension host.
+            Promise.resolve()
+              .then(() => deriveDiscriminator(repo.rootUri.fsPath))
+              .catch(() => undefined)
+          : Promise.resolve(undefined),
+      );
+    }
+
     // Record the initial commit to avoid a spurious emit on first change.
     let current: string | undefined;
     try {
@@ -253,16 +309,34 @@ export function startGitWiring(deps: GitWiringDeps): GitWiring {
             }
           }
 
+          // The discriminator was derived at setup; this awaits a settled
+          // promise, so it costs a microtask and never a git invocation. It is
+          // read here rather than captured above because a state change can
+          // arrive before the setup derivation has resolved, and omitting the
+          // label in that window would leave the session's first observations
+          // silently uncorrelatable.
+          const rootCommitSha = await discriminatorByRepo.get(repo);
+
           if (disposed) return;
 
           // Emitted even for non-commit operations (branch switch, index change)
           // so the analyzer sees the activity. `commit_sha` duplicates `sha` on
           // purpose: 1.x readers only know the former.
+          //
+          // `root_commit_sha` rides along on every event that carries a `sha`
+          // (D12 writer rule 10) — not only on commits, because an unlabelled
+          // observation does not correlate even when its neighbours in the same
+          // session do. It is OMITTED, never `null` (rule 6): an absent key and
+          // a `null` value canonicalize differently and chain to different
+          // hashes, exactly as `parents: []` and an absent `parents` do.
           emit({
             operation: 'state_change',
             ...(commit_sha !== undefined ? { commit_sha, sha: commit_sha } : {}),
             ...(parents !== undefined ? { parents } : {}),
             ...(branch !== undefined ? { branch } : {}),
+            ...(commit_sha !== undefined && rootCommitSha !== undefined
+              ? { root_commit_sha: rootCommitSha }
+              : {}),
           });
         });
       });
@@ -306,6 +380,7 @@ export function startGitWiring(deps: GitWiringDeps): GitWiring {
       }
       disposables.length = 0;
       lastCommit.clear();
+      discriminatorByRepo.clear();
     },
     settled: () => queue,
   };

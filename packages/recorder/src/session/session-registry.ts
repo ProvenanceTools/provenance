@@ -45,6 +45,8 @@ import { startTerminalWiring } from '../wiring/terminal-wiring.js';
 import { startExtensionSnapshot } from '../wiring/extension-snapshot.js';
 import { startExtensionActivation } from '../wiring/extension-activation.js';
 import { startGitWiring } from '../wiring/git-wiring.js';
+import { startPeerWatcher } from '../wiring/peer-watcher.js';
+import type { PeerWatcher, ProvenanceDirWatcher } from '../wiring/peer-watcher.js';
 import { recoverPreviousSession } from '../startup/chain-recovery.js';
 import { computeExtensionHash } from '../commands/extension-hash.js';
 import { DiskFullHandler } from '../failure/disk-full-handler.js';
@@ -439,6 +441,15 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   let entryCountSinceLastCheckpoint = 0;
   let pendingCheckpoint: Promise<void> = Promise.resolve();
 
+  /**
+   * PEER WITNESSING (program spec §7 mechanism 2). Forward reference: the
+   * watcher needs `sessionHost.emit`, which does not exist until the host below
+   * is constructed, while the checkpoint hook that DRAINS it lives inside that
+   * construction. It is created at step 16b and is guaranteed to exist long
+   * before the first checkpoint, which is 100 entries away.
+   */
+  let peerWatcher: PeerWatcher | undefined;
+
   const sessionHost = createSessionHost({
     sessionId: recorderContext.session_id,
     clock,
@@ -465,6 +476,12 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
           .catch((e: unknown) => {
             console.error('[provenance] checkpoint sign/write error:', e);
           })
+          // Peer witnessing drains on the checkpoint cadence (writer contract
+          // rule 3) — BEFORE the rolling seal, so the observations it emits are
+          // in the `.slog` that the seal about to be written commits to. The
+          // watcher's callbacks did no I/O; all of it happens here, off the
+          // event path. drain() never rejects.
+          .then(() => peerWatcher?.drain())
           // The rolling seal runs AFTER the checkpoint has landed in the .meta,
           // so `meta_sha256` covers it, and after the .catch above so a failed
           // checkpoint still gets the best seal available. rewriteRollingSeal
@@ -676,6 +693,51 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   });
   ownDisposables.push(gitW);
 
+  // Step 16b: Peer witnessing (program spec §7 mechanism 2, collaboration spec
+  // §5.5). ONE FileSystemWatcher on `.provenance/` — not one per file, because a
+  // partner's `.slog` filename is a uuid minted on their machine and is not
+  // knowable in advance, and because only a directory watcher sees a file
+  // APPEAR, which is the case this exists for.
+  //
+  // Distinct from the `files_under_review` watchers in fs-watcher.ts: those
+  // watch the student's own source under the assignment root, this watches
+  // provenance artifacts. Nothing here ever writes, renames or deletes: the
+  // watcher is constructed with a read function and no write capability at all.
+  const peerW = startPeerWatcher({
+    provenanceDir,
+    // This session's own `.slog` and `.slog.meta`, by basename. A chain cannot
+    // corroborate itself, and the reader excluding a self-witness is not a
+    // licence for the writer to produce one.
+    isOwnFile: (basename) =>
+      basename === path.basename(slogPath) || basename === path.basename(metaPath),
+    emit: (data) => sessionHost.emit('peer.observed', data),
+    readFile: async (absPath) => {
+      try {
+        const bytes = await fsPromises.readFile(absPath);
+        return { ok: true, bytes };
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        return {
+          ok: false,
+          reason: code === 'ENOENT' || code === 'ENOTDIR' ? 'gone' : 'unreadable',
+        };
+      }
+    },
+    createWatcher: (): ProvenanceDirWatcher => {
+      const w = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(provenanceDir, '*.slog'),
+      );
+      return {
+        onDidCreate: (h) => w.onDidCreate((uri) => h(uri.fsPath)),
+        onDidChange: (h) => w.onDidChange((uri) => h(uri.fsPath)),
+        onDidDelete: (h) => w.onDidDelete((uri) => h(uri.fsPath)),
+        dispose: () => w.dispose(),
+      };
+    },
+  });
+  peerWatcher = peerW;
+  ownDisposables.push(peerW);
+
   /**
    * Tear down exactly this session: emit session.end, flush the writer, drain the
    * pending checkpoint, dispose the metaWriter, then dispose ownDisposables in LIFO
@@ -686,6 +748,16 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
    * VS Code disposes those first, matching the historical ordering.
    */
   async function dispose(): Promise<void> {
+    // Final peer-witness drain, BEFORE session.end so the observations land
+    // inside the session they belong to. Checkpoints fire every 100 entries, so
+    // a partner's log that arrived after the last one would otherwise never be
+    // witnessed by this session at all — and a `git pull` immediately before
+    // closing the editor is an ordinary thing to do. drain() never rejects.
+    try {
+      await peerWatcher?.drain();
+    } catch {
+      // Ignore — witnessing is best effort and never blocks shutdown.
+    }
     // Emit session.end event.
     try {
       sessionHost.emit('session.end', { reason: 'deactivate' });
