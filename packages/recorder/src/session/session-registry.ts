@@ -27,6 +27,7 @@ import {
 import type { HashedEnvelope, Clock, Manifest, SessionIdentity } from '@provenance/log-core';
 import { buildRecorderContext } from './recorder-context.js';
 import { buildSessionIdentity } from '../identity/session-identity.js';
+import { ROOT_PUBLIC_KEY_HEX } from '../activation/course-keys.js';
 import type { SecretStore } from '../identity/secret-store.js';
 import { createSessionHost } from './session-host.js';
 import { SessionWriter } from '../io/session-writer.js';
@@ -207,6 +208,10 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
       // wall-clock now, so an archived bundle still reads correctly years later.
       sessionStartedAt: clock.wall(),
       secrets: deps.secrets,
+      // The 2.1 trust anchor. The stored `institution_cert` is root-verified
+      // against this before it is used as an anchor — unlike 2.0, whose anchor
+      // is the manifest's already-verified `course_cert`.
+      rootPubkeyHex: ROOT_PUBLIC_KEY_HEX,
     });
     if (outcome.kind === 'emitted') {
       identity = outcome.identity;

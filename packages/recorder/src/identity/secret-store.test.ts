@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   MASTER_SECRET_KEY,
+  CREDENTIAL_KEY,
   enrollmentKeyForCourse,
   loadOrCreateMasterSecret,
   loadMasterSecret,
@@ -17,6 +18,10 @@ import {
   loadEnrollment,
   saveEnrollment,
   clearEnrollment,
+  saveIdentityArtifact,
+  saveStudentCredentialArtifact,
+  loadStudentCredentialArtifact,
+  clearStudentCredentialArtifact,
 } from './secret-store.js';
 import type { SecretStore } from './secret-store.js';
 import { STUDENT_MASTER_SECRET_BYTES } from '@provenance/log-core';
@@ -290,5 +295,212 @@ describe('enrollment storage', () => {
     await saveEnrollment(store, JSON.stringify(VALID_ENROLLMENT));
     await clearEnrollment(store, 'berkeley-cs61b');
     expect(await loadEnrollment(store, 'berkeley-cs61b')).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Credential storage — identity 2.1
+// ---------------------------------------------------------------------------
+
+/**
+ * A shape-valid 2.1 paste. Signatures are placeholders on purpose: this layer
+ * checks shape and version only, exactly as the 2.0 fixture above does, because
+ * the real chain walk happens at session start against a proper trust anchor.
+ *
+ * Note the wire slots — `enrollment` and `enrollment_cert` — are the SAME two
+ * names as the 2.0 fixture. That is the contract: these two fields are
+ * two-thirds of `SessionIdentity` in both families, and the version lives in
+ * the signed payload rather than in the key names.
+ */
+const VALID_CREDENTIAL = {
+  enrollment: {
+    format_version: '2.1',
+    institution_id: 'berkeley',
+    student_ref: '99999999-8888-7777-6666-555555555555',
+    student_pubkey: 'a'.repeat(64),
+    issued_at: '2026-08-25T00:00:00Z',
+    expires_at: '2027-01-15',
+    institution_sig: 'b'.repeat(128),
+  },
+  enrollment_cert: {
+    format_version: '2.1',
+    institution_id: 'berkeley',
+    institution_pubkey: 'c'.repeat(64),
+    valid_from: '2026-08-20',
+    valid_until: '2027-01-15',
+    root_sig: 'd'.repeat(128),
+  },
+};
+
+describe('student credential storage (2.1)', () => {
+  it('persists a pasted credential under the single global key', async () => {
+    const store = makeStore();
+    const saved = await saveStudentCredentialArtifact(store, JSON.stringify(VALID_CREDENTIAL));
+
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) return;
+    expect(saved.value.institution_id).toBe('berkeley');
+    expect(saved.value.student_pubkey).toBe('a'.repeat(64));
+    // Singular, with no course component: a 2.1 credential names no course.
+    expect([...store.map.keys()]).toEqual([CREDENTIAL_KEY]);
+  });
+
+  it('round-trips both artifacts through load', async () => {
+    const store = makeStore();
+    await saveStudentCredentialArtifact(store, JSON.stringify(VALID_CREDENTIAL));
+
+    const loaded = await loadStudentCredentialArtifact(store);
+    expect(loaded?.enrollment).toEqual(VALID_CREDENTIAL.enrollment);
+    expect(loaded?.enrollment_cert).toEqual(VALID_CREDENTIAL.enrollment_cert);
+  });
+
+  it('returns undefined when nothing is stored', async () => {
+    expect(await loadStudentCredentialArtifact(makeStore())).toBeUndefined();
+  });
+
+  it('gates on format_version BEFORE shape', async () => {
+    // A future 3.0 artifact must read as a version problem, never be parsed
+    // under 2.1 rules — mirroring verifyIdentityChain step 0.
+    const future = structuredClone(VALID_CREDENTIAL);
+    future.enrollment_cert.format_version = '3.0';
+    future.enrollment.format_version = '3.0';
+
+    const store = makeStore();
+    const saved = await saveStudentCredentialArtifact(store, JSON.stringify(future));
+
+    expect(saved.ok).toBe(false);
+    if (saved.ok) return;
+    expect(saved.error.kind).toBe('unsupported_format_version');
+    expect(store.map.size).toBe(0);
+  });
+
+  it('refuses a credential and cert naming different institutions', async () => {
+    const mixed = structuredClone(VALID_CREDENTIAL);
+    mixed.enrollment_cert.institution_id = 'stanford';
+
+    const store = makeStore();
+    const saved = await saveStudentCredentialArtifact(store, JSON.stringify(mixed));
+
+    expect(saved.ok).toBe(false);
+    if (saved.ok) return;
+    expect(saved.error.kind).toBe('institution_id_mismatch');
+    expect(store.map.size).toBe(0);
+  });
+
+  it('refuses a credential missing a required field', async () => {
+    const broken = structuredClone(VALID_CREDENTIAL) as Record<string, Record<string, unknown>>;
+    delete broken['enrollment']!['student_ref'];
+
+    const store = makeStore();
+    const saved = await saveStudentCredentialArtifact(store, JSON.stringify(broken));
+
+    expect(saved.ok).toBe(false);
+    if (saved.ok) return;
+    expect(saved.error.kind).toBe('invalid_credential_shape');
+  });
+
+  it('refuses a truncated signature', async () => {
+    const broken = structuredClone(VALID_CREDENTIAL);
+    broken.enrollment.institution_sig = 'b'.repeat(127);
+
+    const saved = await saveStudentCredentialArtifact(makeStore(), JSON.stringify(broken));
+    expect(saved.ok).toBe(false);
+  });
+
+  it('clear forgets the credential and nothing else', async () => {
+    const store = makeStore({ [MASTER_SECRET_KEY]: 'b'.repeat(64) });
+    await saveStudentCredentialArtifact(store, JSON.stringify(VALID_CREDENTIAL));
+    await clearStudentCredentialArtifact(store);
+
+    expect(await loadStudentCredentialArtifact(store)).toBeUndefined();
+    expect(store.map.get(MASTER_SECRET_KEY)).toBe('b'.repeat(64));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The version-routing importer
+// ---------------------------------------------------------------------------
+
+describe('saveIdentityArtifact — routing on the SIGNED version', () => {
+  it('routes a 2.1 paste to credential storage', async () => {
+    const store = makeStore();
+    const saved = await saveIdentityArtifact(store, JSON.stringify(VALID_CREDENTIAL));
+
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) return;
+    expect(saved.value.identity_version).toBe('2.1');
+    expect(store.map.has(CREDENTIAL_KEY)).toBe(true);
+  });
+
+  it('routes a 2.0 paste to per-course enrollment storage', async () => {
+    const store = makeStore();
+    const saved = await saveIdentityArtifact(store, JSON.stringify(VALID_ENROLLMENT));
+
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) return;
+    expect(saved.value.identity_version).toBe('2.0');
+    expect(store.map.has(CREDENTIAL_KEY)).toBe(false);
+    expect(await loadEnrollment(store, 'berkeley-cs61b')).toBeDefined();
+  });
+
+  it('keeps both families side by side when a student holds both', async () => {
+    const store = makeStore();
+    await saveIdentityArtifact(store, JSON.stringify(VALID_ENROLLMENT));
+    await saveIdentityArtifact(store, JSON.stringify(VALID_CREDENTIAL));
+
+    expect(await loadEnrollment(store, 'berkeley-cs61b')).toBeDefined();
+    expect(await loadStudentCredentialArtifact(store)).toBeDefined();
+  });
+
+  it('refuses an unknown version without touching either store', async () => {
+    const future = structuredClone(VALID_CREDENTIAL);
+    future.enrollment_cert.format_version = '4.0';
+
+    const store = makeStore();
+    const saved = await saveIdentityArtifact(store, JSON.stringify(future));
+
+    expect(saved.ok).toBe(false);
+    if (saved.ok) return;
+    expect(saved.error.kind).toBe('unsupported_identity_version');
+    expect(store.map.size).toBe(0);
+  });
+
+  it('routes on the CERT slot, not on which fields are present', async () => {
+    // Both families use the same two wire slots, so presence says nothing. A
+    // blob whose cert declares 2.0 must be read under 2.0 rules even though its
+    // credential half carries 2.1 fields — and 2.0 shape validation rejects it.
+    const mixed = {
+      enrollment: VALID_CREDENTIAL.enrollment,
+      enrollment_cert: VALID_ENROLLMENT.enrollment_cert,
+    };
+    const saved = await saveIdentityArtifact(makeStore(), JSON.stringify(mixed));
+
+    expect(saved.ok).toBe(false);
+    if (saved.ok) return;
+    expect(saved.error.kind).toBe('legacy_2_0');
+  });
+
+  /**
+   * THE SEQUENCING GUARANTEE.
+   *
+   * `saveEnrollment` IS the importer an older, 2.0-only recorder build ships.
+   * Feeding it a 2.1 paste is therefore an exact simulation of a student who
+   * enrols on 2.1 while running a stale extension. It must refuse loudly and
+   * store nothing — never half-accept, never silently ignore.
+   *
+   * The refusal is a VERSION error rather than a shape error purely because the
+   * version gate runs before any shape work. That ordering is what makes the
+   * failure legible on a build that predates 2.1 entirely.
+   */
+  it('an OLD 2.0-only recorder refuses a 2.1 paste as a VERSION problem', async () => {
+    const store = makeStore();
+    const saved = await saveEnrollment(store, JSON.stringify(VALID_CREDENTIAL));
+
+    expect(saved.ok).toBe(false);
+    if (saved.ok) return;
+    expect(saved.error.kind).toBe('unsupported_format_version');
+    if (saved.error.kind !== 'unsupported_format_version') return;
+    expect(saved.error.format_version).toBe('2.1');
+    expect(store.map.size).toBe(0);
   });
 });

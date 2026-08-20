@@ -21,13 +21,18 @@ import {
   signCourseCert,
   signEnrollmentCert,
   signEnrollmentToken,
+  signInstitutionCert,
+  signStudentCredential,
   verifyIdentityChain,
+  verifyInstitutionCert,
   deriveCourseKeypair,
+  deriveStudentKeypair,
   ENROLLMENT_FORMAT_VERSION,
+  INSTITUTION_IDENTITY_FORMAT_VERSION,
 } from '@provenance/log-core';
-import type { CourseCert, Manifest } from '@provenance/log-core';
+import type { CourseCert, InstitutionCert, Manifest } from '@provenance/log-core';
 import { buildSessionIdentity } from './session-identity.js';
-import { MASTER_SECRET_KEY, saveEnrollment } from './secret-store.js';
+import { MASTER_SECRET_KEY, saveEnrollment, saveIdentityArtifact } from './secret-store.js';
 import type { SecretStore } from './secret-store.js';
 
 // ---------------------------------------------------------------------------
@@ -382,5 +387,286 @@ describe('buildSessionIdentity — omits rather than blocking', () => {
     });
     // A Linux box with no keyring must still record.
     expect(outcome.kind).toBe('skipped');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Identity 2.1 — INSTITUTION-scoped
+// ---------------------------------------------------------------------------
+
+const INSTITUTION_PRIV = seed(0x26);
+const OTHER_INSTITUTION_PRIV = seed(0x27);
+const INSTITUTION_ID = 'berkeley';
+const GLOBAL_STUDENT_REF = '99999999-8888-7777-6666-555555555555';
+
+const ROOT_PUBKEY_HEX_PROMISE = pub(ROOT_PRIV);
+
+/** A root-signed institution cert. */
+async function makeInstitutionCert(
+  overrides: Partial<Omit<InstitutionCert, 'root_sig'>> = {},
+  signer: Uint8Array = ROOT_PRIV,
+): Promise<InstitutionCert> {
+  const base = {
+    format_version: INSTITUTION_IDENTITY_FORMAT_VERSION,
+    institution_id: INSTITUTION_ID,
+    institution_pubkey: await pub(INSTITUTION_PRIV),
+    valid_from: '2026-08-20',
+    valid_until: '2027-01-15',
+    ...overrides,
+  };
+  return { ...base, root_sig: await signInstitutionCert(base, signer) };
+}
+
+/**
+ * Mint the 2.1 `{ enrollment, enrollment_cert }` blob a student pastes in.
+ *
+ * Note the wire slots are the SAME two names as 2.0 — see `StoredCredential`.
+ */
+async function mintCredential(
+  opts: {
+    masterSecret?: Uint8Array;
+    cert?: InstitutionCert;
+    credentialInstitutionId?: string;
+    studentPubkeyOverride?: string;
+    issuedAt?: string;
+    expiresAt?: string;
+    signer?: Uint8Array;
+  } = {},
+): Promise<string> {
+  const enrollment_cert = opts.cert ?? (await makeInstitutionCert());
+  const derived = await deriveStudentKeypair(opts.masterSecret ?? MASTER_SECRET);
+
+  const base = {
+    format_version: INSTITUTION_IDENTITY_FORMAT_VERSION,
+    institution_id: opts.credentialInstitutionId ?? INSTITUTION_ID,
+    student_ref: GLOBAL_STUDENT_REF,
+    student_pubkey: opts.studentPubkeyOverride ?? derived.publicKeyHex,
+    issued_at: opts.issuedAt ?? '2026-08-25T00:00:00Z',
+    expires_at: opts.expiresAt ?? '2027-01-15',
+  };
+  const enrollment = {
+    ...base,
+    institution_sig: await signStudentCredential(base, opts.signer ?? INSTITUTION_PRIV),
+  };
+  return JSON.stringify({ enrollment, enrollment_cert });
+}
+
+/** A store holding MASTER_SECRET plus a freshly imported 2.1 credential. */
+async function credentialedStore(
+  mintOpts: Parameters<typeof mintCredential>[0] = {},
+  masterSecret: Uint8Array = MASTER_SECRET,
+): Promise<SecretStore> {
+  const store = makeStore({ [MASTER_SECRET_KEY]: bytesToHex(masterSecret) });
+  const saved = await saveIdentityArtifact(store, await mintCredential(mintOpts));
+  expect(saved.ok).toBe(true);
+  return store;
+}
+
+describe('buildSessionIdentity — identity 2.1', () => {
+  it('emits a block the REAL chain walk verifies', async () => {
+    const rootPubkeyHex = await ROOT_PUBKEY_HEX_PROMISE;
+    const store = await credentialedStore();
+
+    const outcome = await buildSessionIdentity({
+      manifest: await makeManifest(),
+      sessionPubkeyHex: SESSION_PUBKEY,
+      sessionStartedAt: SESSION_STARTED_AT,
+      secrets: store,
+      rootPubkeyHex,
+    });
+
+    expect(outcome.kind).toBe('emitted');
+    if (outcome.kind !== 'emitted') return;
+    expect(outcome.verified.identity_version).toBe('2.1');
+    expect(outcome.verified.student_ref).toBe(GLOBAL_STUDENT_REF);
+
+    // Re-walk independently, exactly as the analyzer will, against an anchor we
+    // root-verify ourselves. This is the property that matters: what the
+    // recorder wrote is what a reader can check years later.
+    const cert = outcome.identity.enrollment_cert as InstitutionCert;
+    expect((await verifyInstitutionCert(cert, rootPubkeyHex)).ok).toBe(true);
+
+    const walked = await verifyIdentityChain({
+      identity: outcome.identity,
+      session_pubkey: SESSION_PUBKEY,
+      institution_cert: cert,
+      session_started_at: SESSION_STARTED_AT,
+    });
+    expect(walked.ok).toBe(true);
+  });
+
+  it('works with a 1.x manifest — a 2.1 identity does not need a course_cert', async () => {
+    // The deadlock fix, asserted directly: at 2.0 this could not produce an
+    // identity at all, because the anchor lived in the manifest.
+    const legacyManifest = {
+      format_version: '1.1',
+      assignment_id: 'proj2',
+      semester: 'fa26',
+      issued_at: '2026-09-08T00:00:00Z',
+      files_under_review: ['proj2.java'],
+      sig: 'e'.repeat(128),
+    } as unknown as Manifest;
+
+    const outcome = await buildSessionIdentity({
+      manifest: legacyManifest,
+      sessionPubkeyHex: SESSION_PUBKEY,
+      sessionStartedAt: SESSION_STARTED_AT,
+      secrets: await credentialedStore(),
+      rootPubkeyHex: await ROOT_PUBKEY_HEX_PROMISE,
+    });
+
+    expect(outcome.kind).toBe('emitted');
+  });
+
+  it('refuses an institution cert the ROOT key did not sign', async () => {
+    // Every signature below is individually genuine — the cert is simply signed
+    // by the wrong root. An unverifiable anchor must never reach the chain walk.
+    const forgedCert = await makeInstitutionCert({}, seed(0x99));
+    const store = await credentialedStore({ cert: forgedCert });
+
+    const outcome = await buildSessionIdentity({
+      manifest: await makeManifest(),
+      sessionPubkeyHex: SESSION_PUBKEY,
+      sessionStartedAt: SESSION_STARTED_AT,
+      secrets: store,
+      rootPubkeyHex: await ROOT_PUBKEY_HEX_PROMISE,
+    });
+
+    expect(outcome.kind).toBe('skipped');
+    if (outcome.kind !== 'skipped') return;
+    expect(outcome.reason.kind).toBe('institution_cert_not_root_signed');
+  });
+
+  it('refuses a credential whose institution SIGNATURE does not verify', async () => {
+    const store = await credentialedStore({ signer: OTHER_INSTITUTION_PRIV });
+
+    const outcome = await buildSessionIdentity({
+      manifest: await makeManifest(),
+      sessionPubkeyHex: SESSION_PUBKEY,
+      sessionStartedAt: SESSION_STARTED_AT,
+      secrets: store,
+      rootPubkeyHex: await ROOT_PUBKEY_HEX_PROMISE,
+    });
+
+    expect(outcome.kind).toBe('skipped');
+    if (outcome.kind !== 'skipped') return;
+    expect(outcome.reason.kind).toBe('chain_did_not_verify');
+  });
+
+  it('refuses a credential naming a key this master secret does not derive', async () => {
+    const store = await credentialedStore({ masterSecret: OTHER_MASTER_SECRET }, MASTER_SECRET);
+
+    const outcome = await buildSessionIdentity({
+      manifest: await makeManifest(),
+      sessionPubkeyHex: SESSION_PUBKEY,
+      sessionStartedAt: SESSION_STARTED_AT,
+      secrets: store,
+      rootPubkeyHex: await ROOT_PUBKEY_HEX_PROMISE,
+    });
+
+    expect(outcome.kind).toBe('skipped');
+    if (outcome.kind !== 'skipped') return;
+    expect(outcome.reason.kind).toBe('credential_key_mismatch');
+  });
+
+  it('skips, without blocking, when the build carries no root public key', async () => {
+    const outcome = await buildSessionIdentity({
+      manifest: await makeManifest(),
+      sessionPubkeyHex: SESSION_PUBKEY,
+      sessionStartedAt: SESSION_STARTED_AT,
+      secrets: await credentialedStore(),
+      // rootPubkeyHex deliberately absent
+    });
+
+    expect(outcome.kind).toBe('skipped');
+    if (outcome.kind !== 'skipped') return;
+    expect(outcome.reason.kind).toBe('no_root_public_key');
+  });
+
+  it('reports an out-of-window credential rather than withholding the block', async () => {
+    // Expiry is reported, never enforced (program spec §4).
+    const outcome = await buildSessionIdentity({
+      manifest: await makeManifest(),
+      sessionPubkeyHex: SESSION_PUBKEY,
+      sessionStartedAt: SESSION_STARTED_AT,
+      secrets: await credentialedStore({
+        issuedAt: '2026-08-25T00:00:00Z',
+        expiresAt: '2026-09-01',
+      }),
+      rootPubkeyHex: await ROOT_PUBKEY_HEX_PROMISE,
+    });
+
+    expect(outcome.kind).toBe('emitted');
+    if (outcome.kind !== 'emitted') return;
+    expect(outcome.verified.token_window.in_window).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Holding BOTH a 2.0 token and a 2.1 credential
+// ---------------------------------------------------------------------------
+
+describe('buildSessionIdentity — a recorder holding both families', () => {
+  /** A store with a working 2.0 enrollment AND a 2.1 credential. */
+  async function bothStore(
+    credentialOpts: Parameters<typeof mintCredential>[0] = {},
+  ): Promise<SecretStore> {
+    const store = makeStore({ [MASTER_SECRET_KEY]: bytesToHex(MASTER_SECRET) });
+    expect((await saveEnrollment(store, await mintEnrollment())).ok).toBe(true);
+    expect((await saveIdentityArtifact(store, await mintCredential(credentialOpts))).ok).toBe(true);
+    return store;
+  }
+
+  it('prefers 2.1 when both are present', async () => {
+    const outcome = await buildSessionIdentity({
+      manifest: await makeManifest(),
+      sessionPubkeyHex: SESSION_PUBKEY,
+      sessionStartedAt: SESSION_STARTED_AT,
+      secrets: await bothStore(),
+      rootPubkeyHex: await ROOT_PUBKEY_HEX_PROMISE,
+    });
+
+    expect(outcome.kind).toBe('emitted');
+    if (outcome.kind !== 'emitted') return;
+    expect(outcome.verified.identity_version).toBe('2.1');
+    // The GLOBAL ref, not the per-course one the 2.0 token carries.
+    expect(outcome.verified.student_ref).toBe(GLOBAL_STUDENT_REF);
+  });
+
+  it('does NOT fall back to a working 2.0 token when the 2.1 credential is broken', async () => {
+    // This is the deliberate choice, and the reason is attribution: the two
+    // families carry DIFFERENT student_refs, so falling back would file the
+    // session under a different contributor than the student believes, and
+    // bury the 2.1 problem. Recording still continues — just without identity.
+    const store = await bothStore({ cert: await makeInstitutionCert({}, seed(0x99)) });
+
+    const outcome = await buildSessionIdentity({
+      manifest: await makeManifest(),
+      sessionPubkeyHex: SESSION_PUBKEY,
+      sessionStartedAt: SESSION_STARTED_AT,
+      secrets: store,
+      rootPubkeyHex: await ROOT_PUBKEY_HEX_PROMISE,
+    });
+
+    expect(outcome.kind).toBe('skipped');
+    if (outcome.kind !== 'skipped') return;
+    expect(outcome.reason.kind).toBe('institution_cert_not_root_signed');
+  });
+
+  it('still uses 2.0 when only a 2.0 token is stored — archived material keeps working', async () => {
+    const store = makeStore({ [MASTER_SECRET_KEY]: bytesToHex(MASTER_SECRET) });
+    expect((await saveEnrollment(store, await mintEnrollment())).ok).toBe(true);
+
+    const outcome = await buildSessionIdentity({
+      manifest: await makeManifest(),
+      sessionPubkeyHex: SESSION_PUBKEY,
+      sessionStartedAt: SESSION_STARTED_AT,
+      secrets: store,
+      rootPubkeyHex: await ROOT_PUBKEY_HEX_PROMISE,
+    });
+
+    expect(outcome.kind).toBe('emitted');
+    if (outcome.kind !== 'emitted') return;
+    expect(outcome.verified.identity_version).toBe('2.0');
   });
 });

@@ -6,13 +6,16 @@
  * Recorder PRD NG2: the recorder makes **no network calls during a session**, and
  * identity gets no exception. So the flow is deliberately manual:
  *
- *   1. "Provenance: Show My Enrollment Key" copies the student's per-course
- *      PUBLIC key. They give it to the course's enrollment endpoint (a browser,
- *      a form — anything that is not this extension).
- *   2. The server authenticates them, maps them to an opaque `roster_entries.id`,
- *      and mints `{ enrollment, enrollment_cert }`.
+ *   1. "Provenance: Show My Enrollment Key" copies the student's GLOBAL PUBLIC
+ *      key. They paste it into their institution's `/enroll` page (a browser —
+ *      anything that is not this extension).
+ *   2. The server authenticates them with Google, maps them to an opaque global
+ *      `student_ref`, and signs `{ enrollment, enrollment_cert }`.
  *   3. "Provenance: Import Enrollment Token" takes that JSON as a paste and
- *      persists it per course.
+ *      persists it.
+ *
+ * At 2.0 steps 1 and 3 were per-COURSE and step 1 refused unless a course was
+ * already recording. Neither is true any more — see `showEnrollmentKey`.
  *
  * Nothing here opens a socket, and there is no code path that could. That is the
  * property, not an implementation detail — a recorder that phones home is a
@@ -27,15 +30,16 @@
  * them. See `identity/secret-store.ts` for the full new-machine story.
  */
 
-import { deriveCourseKeypair } from '@provenance/log-core';
+import { deriveCourseKeypair, deriveStudentKeypair } from '@provenance/log-core';
 import {
   exportMasterSecret,
   importMasterSecret,
-  loadOrCreateMasterSecret,
-  saveEnrollment,
   loadEnrollment,
+  loadOrCreateMasterSecret,
+  saveIdentityArtifact,
+  MASTER_SECRET_EXPORT_PREFIX,
 } from '../identity/secret-store.js';
-import type { SecretStore } from '../identity/secret-store.js';
+import type { IdentityImportError, SecretStore } from '../identity/secret-store.js';
 
 // ---------------------------------------------------------------------------
 // Seams
@@ -48,10 +52,6 @@ import type { SecretStore } from '../identity/secret-store.js';
  */
 export type EnrollmentCommandDeps = {
   secrets: SecretStore;
-  /** `course_id` of every currently recording assignment root. */
-  activeCourseIds: () => string[];
-  /** Disambiguate when more than one course is active. `undefined` = dismissed. */
-  pickCourse: (items: string[]) => Promise<string | undefined>;
   /** A single-line paste prompt. `undefined` = cancelled. */
   promptInput: (opts: { prompt: string; placeHolder: string }) => Promise<string | undefined>;
   showInfo: (message: string) => void;
@@ -65,38 +65,29 @@ export type EnrollmentCommandDeps = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Resolve which course a command applies to: the only active one, or the
- * student's pick. `undefined` means "stop, without an error" — either nothing is
- * recording (already reported) or the student dismissed the picker.
- */
-async function resolveCourse(deps: EnrollmentCommandDeps): Promise<string | undefined> {
-  const courses = Array.from(new Set(deps.activeCourseIds())).sort();
-  if (courses.length === 0) {
-    deps.showError(
-      'Provenance: no course is currently recording. Open an assignment with a Manifest 2.0 ' +
-        '`.provenance-manifest` first — the enrollment key is derived per course.',
-    );
-    return undefined;
-  }
-  if (courses.length === 1) return courses[0];
-  return deps.pickCourse(courses);
-}
-
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
 /**
- * Show + copy the student's per-course PUBLIC key, so they can obtain a token.
+ * Show + copy the student's GLOBAL PUBLIC key, so they can obtain a credential.
  *
- * Creates the master secret if this is the student's first course — the public
- * key cannot exist without it. Only the public half ever leaves this function.
+ * Creates the master secret on first use — the public key cannot exist without
+ * it. Only the public half ever leaves this function.
+ *
+ * ## No course is required, and that is the whole point
+ *
+ * At 2.0 this derived a PER-COURSE key and so refused unless an assignment with
+ * a Manifest 2.0 `.provenance-manifest` was already open and recording. That
+ * requirement was one half of the deadlock identity 2.1 removes: a student needs
+ * an identity BEFORE they do any work, and at 2.0 they could not even see their
+ * key until a course was underway (the other half being the server's roster
+ * precondition — see `log-core/institution.ts`).
+ *
+ * A 2.1 key is global and derived from the master secret alone, so this command
+ * now works on a fresh install with nothing open.
  */
 export async function showEnrollmentKey(deps: EnrollmentCommandDeps): Promise<void> {
-  const courseId = await resolveCourse(deps);
-  if (courseId === undefined) return;
-
   const master = await loadOrCreateMasterSecret(deps.secrets);
   if (!master.ok) {
     deps.showError(
@@ -106,59 +97,101 @@ export async function showEnrollmentKey(deps: EnrollmentCommandDeps): Promise<vo
     return;
   }
 
-  const keypair = await deriveCourseKeypair(master.value, courseId);
+  const keypair = await deriveStudentKeypair(master.value);
   await deps.copyToClipboard(keypair.publicKeyHex);
   await deps.showDocument(
-    `Provenance enrollment key for ${courseId}\n\n${keypair.publicKeyHex}\n\n` +
-      'This is a PUBLIC key. Give it to your course to get an enrollment token, then run\n' +
-      '"Provenance: Import Enrollment Token" and paste the token back in.\n',
+    `Provenance enrollment key\n\n${keypair.publicKeyHex}\n\n` +
+      'This is a PUBLIC key, and it is the same in every course. Paste it into your\n' +
+      "institution's enrollment page to get a credential, then run\n" +
+      '"Provenance: Import Enrollment Token" and paste the credential back in.\n\n' +
+      'It is NOT your identity secret. The secret shown by "Provenance: Export Student\n' +
+      'Identity Secret" is also 64 characters and must never be typed into a website.\n',
   );
-  deps.showInfo(`Provenance: enrollment key for ${courseId} copied to the clipboard.`);
+  deps.showInfo('Provenance: enrollment key copied to the clipboard.');
+}
+
+/** Render an import failure in terms a student can act on. */
+function describeImportError(error: IdentityImportError): string {
+  switch (error.kind) {
+    case 'invalid_json':
+      return (
+        'that paste is not valid JSON. Use the Copy button on the enrollment page and paste ' +
+        'the whole line without editing it.'
+      );
+    case 'unsupported_identity_version':
+      return (
+        `that paste declares identity version "${error.format_version || '(none)'}", which this ` +
+        'recorder does not understand. Update the Provenance extension, then paste it again.'
+      );
+    case 'current_2_1':
+      return (
+        `that credential was not accepted (${error.error.kind}). Copy the whole JSON object ` +
+        'from the enrollment page, including the enrollment_cert.'
+      );
+    case 'legacy_2_0':
+      return (
+        `that enrollment token was not accepted (${error.error.kind}). Copy the whole JSON ` +
+        'object your course gave you, including the enrollment_cert.'
+      );
+  }
 }
 
 /**
- * Import a pasted `{ enrollment, enrollment_cert }` token and persist it.
+ * Import a pasted `{ enrollment, enrollment_cert }` artifact and persist it.
  *
- * Shape and version are checked here; SIGNATURES are not, because the trust
- * anchor for those is the manifest's root-verified `course_cert` and the real
- * walk happens at session start (`identity/session-identity.ts`). What this does
- * check, as a courtesy while the student is still here to act on it, is that the
- * token's `student_pubkey` is one this machine can actually derive.
+ * Accepts BOTH families, routed on the signed `format_version` — a current 2.1
+ * institution credential, or a legacy 2.0 course token a student already holds.
+ * The student does not have to know which they were given.
+ *
+ * Shape and version are checked here; SIGNATURES are not, because the real walk
+ * happens at session start against the proper trust anchor
+ * (`identity/session-identity.ts`). What this does check, as a courtesy while
+ * the student is still here to act on it, is that the artifact's
+ * `student_pubkey` is one this machine can actually derive.
  */
 export async function importEnrollmentToken(deps: EnrollmentCommandDeps): Promise<void> {
   const pasted = await deps.promptInput({
-    prompt: 'Paste the enrollment token JSON issued by your course',
+    prompt: 'Paste the credential JSON issued by your institution',
     placeHolder: '{"enrollment":{...},"enrollment_cert":{...}}',
   });
   if (pasted === undefined || pasted.trim().length === 0) return;
 
-  const saved = await saveEnrollment(deps.secrets, pasted);
+  const saved = await saveIdentityArtifact(deps.secrets, pasted);
   if (!saved.ok) {
-    deps.showError(
-      `Provenance: that enrollment token was not accepted (${saved.error.kind}). ` +
-        'Copy the whole JSON object your course gave you, including the enrollment_cert.',
-    );
+    deps.showError(`Provenance: ${describeImportError(saved.error)}`);
     return;
   }
 
-  deps.showInfo(`Provenance: enrolled in ${saved.value.course_id}.`);
+  // Courtesy check — non-blocking, and deliberately AFTER the artifact is
+  // stored. The artifact itself is fine; it is this machine's key that does not
+  // match, and the fix is one the student can do right now. Runs for both
+  // families, against whichever derivation that family uses.
+  let expectedPubkey: string;
+  if (saved.value.identity_version === '2.0') {
+    deps.showInfo(`Provenance: enrolled in ${saved.value.course_id}.`);
+    const stored = await loadEnrollment(deps.secrets, saved.value.course_id);
+    if (stored === undefined) return;
+    expectedPubkey = stored.enrollment.student_pubkey;
+  } else {
+    deps.showInfo(`Provenance: enrolled at ${saved.value.institution_id}.`);
+    expectedPubkey = saved.value.student_pubkey;
+  }
 
-  // Courtesy check — non-blocking, and deliberately AFTER the token is stored.
-  // The token itself is fine; it is this machine's key that does not match, and
-  // the fix (import the identity secret) is one the student can do right now.
   const master = await loadOrCreateMasterSecret(deps.secrets);
-  const stored = await loadEnrollment(deps.secrets, saved.value.course_id);
-  if (master.ok && stored !== undefined) {
-    const derived = await deriveCourseKeypair(master.value, saved.value.course_id);
-    if (derived.publicKeyHex !== stored.enrollment.student_pubkey) {
-      deps.showError(
-        'Provenance: this token was issued to a different student identity secret than the one ' +
-          'on this machine. Run "Provenance: Import Student Identity Secret" with the secret ' +
-          'from your other machine, or ask your course to re-issue a token for the key shown by ' +
-          '"Provenance: Show My Enrollment Key". Recording continues either way, without an ' +
-          'identity claim.',
-      );
-    }
+  if (!master.ok) return;
+
+  const derived =
+    saved.value.identity_version === '2.0'
+      ? await deriveCourseKeypair(master.value, saved.value.course_id)
+      : await deriveStudentKeypair(master.value);
+
+  if (derived.publicKeyHex !== expectedPubkey) {
+    deps.showError(
+      'Provenance: this was issued to a different student identity secret than the one on ' +
+        'this machine. Run "Provenance: Import Student Identity Secret" with the secret from ' +
+        'your other machine, or enrol again with the key shown by "Provenance: Show My ' +
+        'Enrollment Key". Recording continues either way, without an identity claim.',
+    );
   }
 }
 
@@ -182,12 +215,22 @@ export async function exportIdentitySecret(deps: EnrollmentCommandDeps): Promise
     return;
   }
 
-  await deps.copyToClipboard(exported.value);
+  // Marked, not bare. A master secret and a public key are both 64 lowercase
+  // hex characters, so an unmarked export is indistinguishable from the key the
+  // enrollment page asks for — and pasting it there hands over the student's
+  // whole identity, silently. The marker lets that page refuse it BY NAME.
+  // `importMasterSecret` strips the marker, and still accepts an unmarked
+  // secret exported by an older build.
+  const marked = `${MASTER_SECRET_EXPORT_PREFIX}${exported.value}`;
+  await deps.copyToClipboard(marked);
   await deps.showDocument(
-    `Provenance student identity secret\n\n${exported.value}\n\n` +
+    `Provenance student identity secret\n\n${marked}\n\n` +
       'KEEP THIS PRIVATE. Anyone holding it can sign work as you, in every course.\n' +
       'Store it in a password manager. There is no backup on any server, so if you lose it\n' +
-      'you will need a new enrollment token for each course.\n\n' +
+      'you will need a new credential.\n\n' +
+      'NEVER paste this into a website, including the enrollment page. That page asks for\n' +
+      'your enrollment KEY, which is a different value — use "Provenance: Show My\n' +
+      'Enrollment Key" for it.\n\n' +
       'On a new machine: run "Provenance: Import Student Identity Secret" and paste this in.\n',
   );
   deps.showInfo('Provenance: identity secret copied to the clipboard. Store it somewhere private.');
@@ -210,7 +253,7 @@ export async function importIdentitySecret(deps: EnrollmentCommandDeps): Promise
     return;
   }
   deps.showInfo(
-    'Provenance: identity secret imported. Your per-course keys are re-derived from it, so ' +
-      'existing enrollment tokens keep working.',
+    'Provenance: identity secret imported. Your keys are re-derived from it, so an existing ' +
+      'credential keeps working.',
   );
 }
