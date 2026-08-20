@@ -11,7 +11,12 @@
 import { describe, it, expect } from 'vitest';
 import * as ed from '@noble/ed25519';
 import { bytesToHex } from '@noble/hashes/utils.js';
-import { deriveCourseKeypair, signEnrollmentCert, signEnrollmentToken } from '@provenance/log-core';
+import {
+  deriveCourseKeypair,
+  deriveStudentKeypair,
+  signEnrollmentCert,
+  signEnrollmentToken,
+} from '@provenance/log-core';
 import {
   showEnrollmentKey,
   importEnrollmentToken,
@@ -19,7 +24,11 @@ import {
   importIdentitySecret,
 } from './enrollment.js';
 import type { EnrollmentCommandDeps } from './enrollment.js';
-import { MASTER_SECRET_KEY, loadEnrollment } from '../identity/secret-store.js';
+import {
+  MASTER_SECRET_KEY,
+  MASTER_SECRET_EXPORT_PREFIX,
+  loadEnrollment,
+} from '../identity/secret-store.js';
 import type { SecretStore } from '../identity/secret-store.js';
 
 const COURSE_ID = 'berkeley-cs61b';
@@ -60,8 +69,6 @@ function makeDeps(
   return {
     recorded,
     secrets,
-    activeCourseIds: () => [COURSE_ID],
-    pickCourse: (items) => Promise.resolve(items[0]),
     promptInput: () => Promise.resolve(undefined),
     showInfo: (m) => recorded.info.push(m),
     showError: (m) => recorded.errors.push(m),
@@ -109,17 +116,16 @@ async function mintBlob(courseId = COURSE_ID): Promise<string> {
 // ---------------------------------------------------------------------------
 
 describe('showEnrollmentKey', () => {
-  it('shows the per-course PUBLIC key, creating a master secret on first use', async () => {
+  it('shows the global PUBLIC key, creating a master secret on first use', async () => {
     const store = makeStore();
     const deps = makeDeps(store);
     await showEnrollmentKey(deps);
 
-    const expected = await deriveCourseKeypair(
+    const expected = await deriveStudentKeypair(
       // Whatever secret got generated — re-read it to derive the expectation.
       Uint8Array.from(
         (store.map.get(MASTER_SECRET_KEY) as string).match(/../g)!.map((h) => parseInt(h, 16)),
       ),
-      COURSE_ID,
     );
     expect(deps.recorded.copied[0]).toBe(expected.publicKeyHex);
     expect(expected.publicKeyHex).toMatch(/^[0-9a-f]{64}$/);
@@ -139,32 +145,51 @@ describe('showEnrollmentKey', () => {
     expect(everythingSurfaced).not.toContain(bytesToHex(MASTER_SECRET));
   });
 
-  it('derives a DIFFERENT public key per course — identities are unlinkable', async () => {
+  // REPLACES 'derives a DIFFERENT public key per course — identities are
+  // unlinkable'. That assertion pinned the 2.0 per-course derivation, and 2.1
+  // deliberately reverses it: `STUDENT_KEY_HKDF_INFO` has no course component,
+  // so a student has ONE key forever across every course. Cross-course
+  // unlinkability was traded away knowingly (log-core/institution.ts) — a
+  // per-course key needs a per-course credential, which needs a roster match,
+  // which only exists after the student's first submission. The old assertion
+  // is not weakened here, it is inverted, because the contract inverted.
+  it('derives the SAME public key every time — one global key per student', async () => {
     const store = makeStore({ [MASTER_SECRET_KEY]: bytesToHex(MASTER_SECRET) });
 
-    const b = makeDeps(store, { activeCourseIds: () => ['berkeley-cs61b'] });
-    await showEnrollmentKey(b);
-    const c = makeDeps(store, { activeCourseIds: () => ['berkeley-cs61c'] });
-    await showEnrollmentKey(c);
+    const first = makeDeps(store);
+    await showEnrollmentKey(first);
+    const second = makeDeps(store);
+    await showEnrollmentKey(second);
 
-    expect(b.recorded.copied[0]).not.toBe(c.recorded.copied[0]);
+    expect(first.recorded.copied[0]).toMatch(/^[0-9a-f]{64}$/);
+    expect(first.recorded.copied[0]).toBe(second.recorded.copied[0]);
   });
 
-  it('reports rather than throws when no course is active', async () => {
-    const deps = makeDeps(makeStore(), { activeCourseIds: () => [] });
+  // REPLACES 'reports rather than throws when no course is active'. Requiring an
+  // active course was one half of the 2.0 deadlock: a student could not see
+  // their key until a course was already recording, but their first session
+  // needs an identity before any work happens. A 2.1 key needs only the master
+  // secret, so this must now SUCCEED where it previously errored.
+  it('works with no course active at all — the 2.0 deadlock is gone', async () => {
+    const deps = makeDeps(makeStore());
     await showEnrollmentKey(deps);
-    expect(deps.recorded.errors.length).toBe(1);
-    expect(deps.recorded.copied.length).toBe(0);
+
+    expect(deps.recorded.errors).toEqual([]);
+    expect(deps.recorded.copied[0]).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('does nothing when the student dismisses the course picker', async () => {
-    const deps = makeDeps(makeStore(), {
-      activeCourseIds: () => ['a', 'b'],
-      pickCourse: () => Promise.resolve(undefined),
-    });
+  // 'does nothing when the student dismisses the course picker' is DELETED
+  // rather than updated: there is no course picker any more, so the behaviour it
+  // described no longer exists to assert anything about.
+
+  it('warns in the shown document that this is not the identity secret', async () => {
+    const deps = makeDeps(makeStore());
     await showEnrollmentKey(deps);
-    expect(deps.recorded.copied.length).toBe(0);
-    expect(deps.recorded.errors.length).toBe(0);
+
+    // The master-secret/public-key confusion is 64-hex-vs-64-hex and cannot be
+    // detected mechanically at this end; naming it here is half the defence,
+    // the other half being the marker the analyzer refuses.
+    expect(deps.recorded.shown.join('\n')).toContain('NOT your identity secret');
   });
 });
 
@@ -223,15 +248,35 @@ describe('importEnrollmentToken', () => {
 // ---------------------------------------------------------------------------
 
 describe('identity secret export/import', () => {
-  it('export surfaces the secret only after creating one if needed', async () => {
+  // UPDATED: the exported value is now MARKED rather than bare 64-hex. The old
+  // assertion (`/^[0-9a-f]{64}$/`) pinned the exact shape that makes a master
+  // secret indistinguishable from a public key in the enrollment page's key
+  // field. The marker is the mechanical half of that defence, so the assertion
+  // now pins the marker AND that the raw secret is still recoverable from it.
+  it('export surfaces the secret behind a marker that names it as a secret', async () => {
     const store = makeStore();
     const deps = makeDeps(store);
     await exportIdentitySecret(deps);
-    expect(deps.recorded.copied[0]).toMatch(/^[0-9a-f]{64}$/);
-    expect(deps.recorded.copied[0]).toBe(store.map.get(MASTER_SECRET_KEY));
+
+    const copied = deps.recorded.copied[0] as string;
+    expect(copied).toBe(`${MASTER_SECRET_EXPORT_PREFIX}${store.map.get(MASTER_SECRET_KEY)}`);
+    // Deliberately NOT a bare 64-hex run: that is precisely the shape the
+    // enrollment page cannot distinguish from an enrollment key.
+    expect(copied).not.toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('import adopts a pasted secret so per-course keys re-derive identically', async () => {
+  it('import still accepts a BARE secret exported by an older build', async () => {
+    const store = makeStore();
+    const deps = makeDeps(store, {
+      promptInput: () => Promise.resolve(bytesToHex(MASTER_SECRET)),
+    });
+    await importIdentitySecret(deps);
+
+    expect(deps.recorded.errors).toEqual([]);
+    expect(store.map.get(MASTER_SECRET_KEY)).toBe(bytesToHex(MASTER_SECRET));
+  });
+
+  it('import adopts a pasted secret so keys re-derive identically', async () => {
     const oldMachine = makeStore({ [MASTER_SECRET_KEY]: bytesToHex(MASTER_SECRET) });
     const exportDeps = makeDeps(oldMachine);
     await exportIdentitySecret(exportDeps);
@@ -242,8 +287,9 @@ describe('identity secret export/import', () => {
     await importIdentitySecret(importDeps);
 
     expect(importDeps.recorded.errors.length).toBe(0);
-    // The whole point: the same course now derives the same public key.
-    const before = await deriveCourseKeypair(MASTER_SECRET, COURSE_ID);
+    // The whole point: the new machine now derives the same public key, so an
+    // existing credential keeps working.
+    const before = await deriveStudentKeypair(MASTER_SECRET);
     const showDeps = makeDeps(newMachine);
     await showEnrollmentKey(showDeps);
     expect(showDeps.recorded.copied[0]).toBe(before.publicKeyHex);

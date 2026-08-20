@@ -585,7 +585,7 @@ Document the time taken and any issues found. Update this runbook if needed.
 | `SMTP_FROM`                        | No         | `provenance@example.edu`                            | From address for invitation emails                                             |
 | `LOG_LEVEL`                        | No         | `info`                                              | Pino log level: `trace`, `debug`, `info`, `warn`, `error`                      |
 | `PROVENANCE_ROOT_PUBLIC_KEY_HEX`   | No         | —                                                   | Hex ed25519 ROOT public key for the Manifest 2.0 trust chain. See below.       |
-| `PROVENANCE_ENROLLMENT_KEYS`       | No         | `{}`                                                | Per-semester enrollment signing keys. **Secret.** See below.                   |
+| `PROVENANCE_INSTITUTION_KEY`       | No         | `{}`                                                | The institution credential signing key (identity 2.1). **Secret.** See below.  |
 
 ### The Manifest 2.0 root public key
 
@@ -610,59 +610,73 @@ The analyzer front end takes the same key at build time as
 verify a chain in the browser. It is a public key — baking it into the client
 bundle is intended.
 
-### The enrollment signing keys
+### The institution signing key
 
-`PROVENANCE_ENROLLMENT_KEYS` holds the **only private key this server has**. It
-is a JSON object keyed by semester id:
+`PROVENANCE_INSTITUTION_KEY` holds the **only private key this server has**. It
+is a single JSON object — there is one institution key per deployment, not one
+per semester:
 
 ```json
 {
-  "<semester uuid>": {
-    "private_key_hex": "<64 hex — the enrollment PRIVATE key>",
-    "cert": {
-      "format_version": "2.0",
-      "course_id": "berkeley-cs61b",
-      "enrollment_pubkey": "<64 hex>",
-      "valid_from": "2026-08-20",
-      "valid_until": "2027-01-15",
-      "course_sig": "<128 hex>"
-    }
+  "private_key_hex": "<64 hex — the institution PRIVATE key>",
+  "cert": {
+    "format_version": "2.1",
+    "institution_id": "berkeley",
+    "institution_pubkey": "<64 hex>",
+    "valid_from": "2026-08-20",
+    "valid_until": "2027-01-15",
+    "root_sig": "<128 hex>"
   }
 }
 ```
 
-The `cert` is the `enrollment_cert` minted offline with the course key by
-`tools/mint-enrollment-cert.ts`. Generate the enrollment keypair on the server,
-carry only its **public** half to the offline machine that holds the course key,
-mint the certificate there, and bring the certificate back. The course key never
-touches this host.
+The `cert` is the `institution_cert` signed offline by the **root** key.
+Generate the institution keypair on the server, carry only its **public** half
+to the offline machine that holds the root key, sign the certificate there, and
+bring the certificate back. The root key never touches this host.
+
+The `institution_id` is read off the certificate rather than configured
+separately: it is inside the root-signed payload, so it cannot be set to
+something the root key did not authorize.
 
 **Treat this variable the way you treat the OAuth client secret, or more
-carefully.** Whoever holds an enrollment private key can mint a token binding
-any public key to any student on that course's roster — that is, forge
+carefully.** Whoever holds the institution private key can mint a credential
+binding any public key to any `student_ref` at that institution — that is, forge
 attribution — for as long as the certificate's window runs. They cannot sign an
-assignment manifest (that needs the offline course key) and cannot touch another
-course (`course_id` is inside the signed certificate and every verifier
-cross-checks all three links of the chain), but inside that blast radius the
-compromise is total.
+assignment manifest (that needs the offline course key) and cannot reach another
+institution (`institution_id` is inside the signed certificate and every
+verifier cross-checks the credential, the travelling certificate, and the
+root-verified anchor), but inside that blast radius the compromise is total.
 
 It is deliberately **not** stored in Postgres. Database dumps travel — nightly
 backups, the restore drill in §7, a copy on an operator's laptop — and the one
 secret whose theft forges student identity should not ride along in them. What
-the database holds is public only: `student_refs` (the opaque uuid ↔ roster
-mapping) and `student_enrollments` (which student public keys have been bound).
+the database holds is public only: the `students` rows carrying each opaque
+`student_ref` and the public key currently bound to it.
 
-**If it leaks:** mint a fresh `enrollment_cert` for a newly generated keypair
-with `tools/mint-enrollment-cert.ts`, replace this variable, and restart. Tokens
-minted under the old key stay valid until they expire — they must, because
+**If it leaks:** sign a fresh `institution_cert` for a newly generated keypair
+with the offline root key, replace this variable, and restart. Credentials
+issued under the old key stay valid until they expire — they must, because
 bundles already recorded under them have to keep verifying — so shorten the new
 certificate's window if the exposure window matters. There is no offline
 revocation: a recorder cannot learn about it without a network call, which
 recorder PRD NG2 forbids. Short certificate windows are the mitigation.
 
-Leaving it unset is a supported state: a semester with no entry simply returns
-`503 ENROLLMENT_UNAVAILABLE` from `POST /semesters/{id}/enrollment`, which is
-correct for every semester predating the S2 identity chain.
+Leaving it unset is a supported state: `POST /api/v1/identity/credential` then
+returns `503 CREDENTIAL_UNAVAILABLE` with `reason: "no_institution_key"`, and
+students simply record without an identity claim until the key is configured.
+The same 503 is returned with `reason: "cert_out_of_window"` when the
+certificate has lapsed — watch for it near the end of a certificate's window,
+because it presents to students as "we cannot issue credentials right now"
+rather than as a server error.
+
+> **Retired:** `PROVENANCE_ENROLLMENT_KEYS` and the per-semester enrollment
+> signing keys it held are gone, along with the `POST /semesters/{id}/enrollment`
+> route (identity 2.0) and its `503 ENROLLMENT_UNAVAILABLE`. Remove the variable
+> from your environment; it is no longer read. Identity 2.0 **verification** is
+> unaffected and permanent — archived bundles carrying 2.0 tokens keep verifying
+> forever, because that chain is walked from inside the bundle and never
+> consults this server, which is exactly why no key is needed for it.
 
 ---
 

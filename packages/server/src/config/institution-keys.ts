@@ -1,8 +1,11 @@
 /**
  * The server's INSTITUTION key material — identity `format_version` 2.1.
  *
- * The structural twin of `enrollment-keys.ts`, which stays live forever for the
- * 2.0 course-scoped chain. The 2.1 chain is one delegation shorter:
+ * The only private key this server holds. It replaced the per-semester
+ * `enrollment-keys.ts`, which was deleted along with the 2.0 minting route it
+ * served — 2.0 VERIFICATION is untouched and permanent, but it is walked from
+ * inside a bundle and never consults this server, so no key is needed for it.
+ * The 2.1 chain is one delegation shorter than 2.0's:
  *
  *   root key (offline) ──▶ institution_cert
  *                                 │ authorizes
@@ -20,8 +23,8 @@
  *
  * ## One key, not a map
  *
- * `enrollment-keys.ts` is keyed by semester because an enrollment cert names a
- * `course_id` and every course rotates independently. A `student_credential`
+ * The retired `enrollment-keys.ts` was keyed by semester because an enrollment
+ * cert names a `course_id` and every course rotates independently. A `student_credential`
  * names no course, no semester, and no assignment, so there is exactly one
  * institution key per deployment and this module returns a single value. The
  * `institution_id` is read off the certificate rather than configured
@@ -146,8 +149,8 @@ export function parseInstitutionKey(raw: string): InstitutionKeyResult {
     };
   }
 
-  // Version gate before shape, mirroring verifyIdentityChain step 0 and
-  // enrollment-keys.ts: a future 3.0 certificate must be refused outright, not
+  // Version gate before shape, mirroring verifyIdentityChain step 0: a future
+  // 3.0 certificate must be refused outright, not
   // read under 2.1 rules. Routing on the SIGNED version rather than on which
   // fields happen to be present is the rule institution.ts spells out — a
   // present-field heuristic is attacker-controlled and ambiguous.
@@ -226,4 +229,27 @@ export function _resetInstitutionKeyForTest(): void {
   _cache = undefined;
   _cachedRaw = undefined;
   _cacheLoaded = false;
+}
+
+// ---------------------------------------------------------------------------
+// Hex helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Decode 64 lowercase hex characters into 32 bytes.
+ *
+ * Local rather than imported from `@noble/hashes` because the server does not
+ * depend on the noble packages directly and this is four lines.
+ *
+ * Moved here from `config/enrollment-keys.ts` when that module was deleted. That
+ * module's per-semester enrollment key material existed only to serve the
+ * retired 2.0 minting route, but this helper is still needed to turn the
+ * institution private key into signing bytes — nothing about it was
+ * 2.0-specific.
+ */
+export function hex64ToBytes(hex: string): Uint8Array {
+  if (!HEX_64_RE.test(hex)) throw new TypeError('hex64ToBytes: expected 64 lowercase hex chars');
+  const out = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
 }

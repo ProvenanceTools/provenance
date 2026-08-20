@@ -51,8 +51,8 @@ const jsonStringArray = z.string().transform((v, ctx) => {
  * A JSON object literal, kept as its raw string.
  *
  * Unlike {@link jsonStringArray} the failure message never quotes the value:
- * the only consumer is `PROVENANCE_ENROLLMENT_KEYS`, which carries private
- * keys, and a config error is printed to stderr on a failed boot.
+ * the only consumer is `PROVENANCE_INSTITUTION_KEY`, which carries a private
+ * key, and a config error is printed to stderr on a failed boot.
  */
 const jsonObjectStr = z
   .string()
@@ -201,38 +201,6 @@ const rawEnvSchema = z.object({
     .regex(/^([0-9a-f]{64})?$/, 'must be 64 lowercase hex chars, or empty')
     .default(''),
   /**
-   * Per-semester ENROLLMENT key material (program spec §5a). A JSON object:
-   *
-   *   { "<semester uuid>": { "private_key_hex": "<64 hex>", "cert": { … } } }
-   *
-   * where `cert` is the `enrollment_cert` minted offline by
-   * `tools/mint-enrollment-cert.ts` with the course key.
-   *
-   * **This is the highest-value secret the server holds.** The enrollment
-   * private key can mint a token binding ANY public key to ANY student on that
-   * course's roster — i.e. forge attribution — for as long as the certificate's
-   * window runs. It cannot sign a manifest and cannot reach another course, and
-   * recovery is a fresh `enrollment_cert` for a new key, but within that blast
-   * radius it is total.
-   *
-   * It therefore lives in the environment, alongside every other secret this
-   * server holds (`AUTH_COOKIE_SIGNING_SECRET`, `BLOB_URL_SIGNING_SECRET`, the
-   * OAuth client secret), and deliberately NOT in Postgres: database dumps
-   * travel (nightly backups, the restore drill in `docs/admin-guide.md` §7),
-   * and the one secret whose theft forges student identity should not be in
-   * them.
-   *
-   * Only the shape is checked here, and the failure message deliberately does
-   * NOT echo the value — unlike the other JSON env vars, whose parse errors
-   * quote what they were given. Everything else (certificate shape, that the
-   * private key actually matches `cert.enrollment_pubkey`) is validated in
-   * `config/enrollment-keys.ts`, which never logs either half.
-   *
-   * Unset means "this deployment mints no enrollment tokens", which is a
-   * legitimate state: every semester predating S2 is in it.
-   */
-  PROVENANCE_ENROLLMENT_KEYS: jsonObjectStr,
-  /**
    * The server's INSTITUTION key material — identity `format_version` 2.1.
    *
    * A single JSON object (there is one institution key, not one per semester):
@@ -241,11 +209,12 @@ const rawEnvSchema = z.object({
    *
    * where `cert` is the `institution_cert` signed offline by the ROOT key.
    *
-   * **This supersedes `PROVENANCE_ENROLLMENT_KEYS` as the highest-value secret
-   * the server holds.** The institution private key can mint a credential
+   * **This is the highest-value secret the server holds**, and since the
+   * retirement of the per-semester `PROVENANCE_ENROLLMENT_KEYS` it is the only
+   * private key here at all. The institution private key can mint a credential
    * binding ANY public key to ANY `student_ref` at that institution — i.e.
    * forge attribution — for as long as the certificate's window runs, and
-   * unlike the enrollment key its blast radius is the whole institution rather
+   * unlike the retired enrollment key its blast radius is the whole institution rather
    * than one course. It still cannot sign a manifest (that needs the offline
    * course key) and cannot reach another institution (`institution_id` is
    * inside both signed payloads and every verifier cross-checks them).

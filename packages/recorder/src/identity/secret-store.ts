@@ -39,16 +39,41 @@
  * is exactly ONE persistence mechanism to reason about: a wiped or unavailable
  * keyring then loses both together, which reads unambiguously as "not enrolled"
  * rather than as a half-state where a token exists but its key does not.
+ *
+ * ## Two identity families live here, and both stay
+ *
+ * - **2.1, INSTITUTION-scoped (current).** ONE {@link StoredCredential} at
+ *   {@link CREDENTIAL_KEY}, with no course component — a 2.1 credential names no
+ *   course and serves every course forever.
+ * - **2.0, COURSE-scoped (legacy).** One {@link StoredEnrollment} per course,
+ *   under {@link ENROLLMENT_KEY_PREFIX}. Minting is retired server-side, but a
+ *   token a student already holds must keep working, and archived bundles that
+ *   carry one must keep verifying — that is the entire justification for this
+ *   system.
+ *
+ * {@link saveIdentityArtifact} is the single entry point and routes on the
+ * SIGNED `format_version`, so a student never has to know which kind they hold.
+ *
+ * **A recorder holding BOTH prefers 2.1**, decided in `session-identity.ts` —
+ * see the precedence note there.
  */
 
 import {
   parseEnrollmentCert,
   parseEnrollmentToken,
+  parseInstitutionCert,
+  parseStudentCredential,
   generateStudentMasterSecret,
   ENROLLMENT_FORMAT_VERSION,
+  INSTITUTION_IDENTITY_FORMAT_VERSION,
   STUDENT_MASTER_SECRET_BYTES,
 } from '@provenance/log-core';
-import type { EnrollmentCert, EnrollmentToken } from '@provenance/log-core';
+import type {
+  EnrollmentCert,
+  EnrollmentToken,
+  InstitutionCert,
+  StudentCredential,
+} from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
 // Seam
@@ -75,8 +100,44 @@ export type SecretStore = {
  */
 export const MASTER_SECRET_KEY = 'provenance.studentMasterSecret';
 
-/** Prefix for the per-course enrollment blobs. */
+/** Prefix for the per-course enrollment blobs. LEGACY 2.0 — see {@link saveEnrollment}. */
 export const ENROLLMENT_KEY_PREFIX = 'provenance.enrollment.';
+
+/**
+ * The SecretStorage key holding the student's 2.1 INSTITUTION-scoped credential.
+ *
+ * SINGULAR, with no course component, because a 2.1 credential names no course:
+ * a student obtains one credential, once, and it serves every course forever
+ * (`log-core/institution.ts`). That is the whole point of the 2.0 → 2.1 change,
+ * and the storage key is where it becomes visible — there is nothing to key by.
+ */
+export const CREDENTIAL_KEY = 'provenance.studentCredential';
+
+/**
+ * Marker prefixed to the master secret when it is exported for the student to
+ * carry to another machine.
+ *
+ * ## Why the exported secret is no longer a bare hex string
+ *
+ * A student master secret and a student PUBLIC key are both 64 lowercase hex
+ * characters, and the enrollment page cannot tell them apart by inspection. A
+ * student who runs "Export Student Identity Secret" and pastes the result into
+ * that page's key field has handed their signing identity to a web server —
+ * silently, because every check on both ends passes.
+ *
+ * Prefixing the exported value makes it SELF-IDENTIFYING, which converts that
+ * silent catastrophe into a named refusal: the analyzer looks for this exact
+ * marker and hard-refuses the paste (`enrollment-token.ts`). The warning text
+ * next to the field stays, but it is no longer the only defence.
+ *
+ * {@link importMasterSecret} accepts the value with or without the marker, so a
+ * secret exported by an older build still imports and nothing is stranded.
+ *
+ * The analyzer restates this literal rather than importing it — it cannot depend
+ * on recorder source — and `tools/enrollment-paste-conformance.test.ts` asserts
+ * the two spellings are identical, so they cannot drift.
+ */
+export const MASTER_SECRET_EXPORT_PREFIX = 'provenance-secret-v1:';
 
 /**
  * The SecretStorage key for one course's enrollment.
@@ -120,6 +181,61 @@ export type StoredEnrollment = {
   enrollment_cert: EnrollmentCert;
 };
 
+/**
+ * The 2.1 `{ enrollment, enrollment_cert }` pair. SAME TWO WIRE SLOTS as
+ * {@link StoredEnrollment}, carrying the institution-scoped artifacts.
+ *
+ * The slot names are `enrollment` / `enrollment_cert` in both versions and that
+ * is deliberate, not laziness: these two fields are literally two-thirds of
+ * `SessionIdentity`, so `buildSessionIdentity` drops the stored pair straight in
+ * and adds only `session_pubkey_sig`. There is no rename step between the paste
+ * and the signed log entry, and therefore no rename step to get wrong.
+ */
+export type StoredCredential = {
+  enrollment: StudentCredential;
+  enrollment_cert: InstitutionCert;
+};
+
+/** Why a pasted 2.1 credential would be refused. Parallel to {@link EnrollmentImportError}. */
+export type CredentialImportError =
+  | { kind: 'invalid_json'; message: string }
+  | {
+      kind: 'unsupported_format_version';
+      artifact: 'cert' | 'credential';
+      format_version: string;
+    }
+  | { kind: 'invalid_credential_shape'; reason?: string }
+  | { kind: 'invalid_cert_shape'; reason?: string }
+  | {
+      kind: 'institution_id_mismatch';
+      credential_institution_id: string;
+      cert_institution_id: string;
+    }
+  | { kind: 'secret_store_unavailable'; reason: string };
+
+/**
+ * The version-routed result of importing whatever a student pasted.
+ *
+ * `identity_version` is read from the SIGNED `format_version` in the cert slot,
+ * never from which fields happen to be present — see {@link saveIdentityArtifact}.
+ */
+export type IdentityImportOk =
+  | { identity_version: '2.0'; course_id: string }
+  | {
+      identity_version: '2.1';
+      institution_id: string;
+      student_ref: string;
+      /** So the caller can check this machine derives it, without re-reading the store. */
+      student_pubkey: string;
+    };
+
+/** Either family's import failure, plus the router's own version refusal. */
+export type IdentityImportError =
+  | { kind: 'invalid_json'; message: string }
+  | { kind: 'unsupported_identity_version'; format_version: string }
+  | { kind: 'legacy_2_0'; error: EnrollmentImportError }
+  | { kind: 'current_2_1'; error: CredentialImportError };
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -147,9 +263,15 @@ function fromHex(hex: string): Uint8Array {
 /**
  * Normalize a pasted secret: students copy it out of a dialog, so a stray
  * newline or an uppercase rendering must not read as corruption.
+ *
+ * The {@link MASTER_SECRET_EXPORT_PREFIX} marker is stripped if present, so a
+ * secret exported by this build and one exported by an older build both import.
  */
 function normalizeHex(raw: string): string {
-  return raw.trim().replace(/\s+/g, '').toLowerCase();
+  const collapsed = raw.trim().replace(/\s+/g, '').toLowerCase();
+  return collapsed.startsWith(MASTER_SECRET_EXPORT_PREFIX)
+    ? collapsed.slice(MASTER_SECRET_EXPORT_PREFIX.length)
+    : collapsed;
 }
 
 // ---------------------------------------------------------------------------
@@ -364,4 +486,222 @@ export async function clearEnrollment(secrets: SecretStore, courseId: string): P
   } catch {
     // Best effort — there is nothing useful to do if the keyring is unavailable.
   }
+}
+
+// ---------------------------------------------------------------------------
+// Student credentials — identity 2.1, INSTITUTION-scoped
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate a pasted 2.1 `{ enrollment, enrollment_cert }` blob and persist it.
+ *
+ * Step for step the twin of {@link saveEnrollment}, in the same order and for
+ * the same reasons, with the 2.1 artifacts and the 2.1 cross-field check:
+ *
+ *  1. JSON, and a JSON *object*.
+ *  2. Version gate on BOTH slots, cert first — before any shape work, so a
+ *     future 3.0 artifact is refused as a version problem and never read under
+ *     2.1 rules. This mirrors `verifyIdentityChain` step 0.
+ *  3. Shape, cert first, via log-core's own parsers.
+ *  4. `institution_id` agreement between the credential and the cert travelling
+ *     with it — the 2.1 analogue of the 2.0 `course_id` comparison.
+ *
+ * SIGNATURES ARE NOT CHECKED HERE, exactly as at 2.0. The 2.1 trust anchor is
+ * the recorder's embedded ROOT public key, and the real walk happens at session
+ * start in `session-identity.ts`. Validating here only rejects an obvious paste
+ * error while the student is standing there to fix it.
+ *
+ * Note what step 4 does NOT do: it cannot detect the cross-institution forgery
+ * `verifyIdentityChain` guards against, because that check needs the
+ * root-verified anchor and this function has no anchor. It catches a student who
+ * mixed two pastes, nothing more.
+ */
+export async function saveStudentCredentialArtifact(
+  secrets: SecretStore,
+  rawJson: string,
+): Promise<
+  StoreResult<
+    { institution_id: string; student_ref: string; student_pubkey: string },
+    CredentialImportError
+  >
+> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch (e) {
+    return fail({ kind: 'invalid_json', message: describe(e) });
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return fail({ kind: 'invalid_json', message: 'expected a JSON object' });
+  }
+  const obj = parsed as Record<string, unknown>;
+
+  for (const [field, artifact] of [
+    ['enrollment_cert', 'cert'],
+    ['enrollment', 'credential'],
+  ] as const) {
+    const declared = (obj[field] as Record<string, unknown> | undefined)?.['format_version'];
+    if (declared !== INSTITUTION_IDENTITY_FORMAT_VERSION) {
+      return fail({
+        kind: 'unsupported_format_version',
+        artifact,
+        format_version: typeof declared === 'string' ? declared : '',
+      });
+    }
+  }
+
+  const cert = parseInstitutionCert(obj['enrollment_cert']);
+  if (!cert.ok) {
+    return fail({
+      kind: 'invalid_cert_shape',
+      ...(cert.error.kind === 'invalid_shape' && cert.error.reason !== undefined
+        ? { reason: cert.error.reason }
+        : {}),
+    });
+  }
+  const credential = parseStudentCredential(obj['enrollment']);
+  if (!credential.ok) {
+    return fail({
+      kind: 'invalid_credential_shape',
+      ...(credential.error.kind === 'invalid_shape' && credential.error.reason !== undefined
+        ? { reason: credential.error.reason }
+        : {}),
+    });
+  }
+
+  if (credential.value.institution_id !== cert.value.institution_id) {
+    return fail({
+      kind: 'institution_id_mismatch',
+      credential_institution_id: credential.value.institution_id,
+      cert_institution_id: cert.value.institution_id,
+    });
+  }
+
+  const stored: StoredCredential = {
+    enrollment: credential.value,
+    enrollment_cert: cert.value,
+  };
+  try {
+    await secrets.store(CREDENTIAL_KEY, JSON.stringify(stored));
+  } catch (e) {
+    return fail({ kind: 'secret_store_unavailable', reason: describe(e) });
+  }
+  return ok({
+    institution_id: credential.value.institution_id,
+    student_ref: credential.value.student_ref,
+    student_pubkey: credential.value.student_pubkey,
+  });
+}
+
+/**
+ * Read the stored 2.1 credential.
+ *
+ * Returns `undefined` for every failure, for the same reason as
+ * {@link loadEnrollment}: this is on the session-start path, where the only
+ * correct response to "cannot produce an identity" is to record without one.
+ */
+export async function loadStudentCredentialArtifact(
+  secrets: SecretStore,
+): Promise<StoredCredential | undefined> {
+  let raw: string | undefined;
+  try {
+    raw = await secrets.get(CREDENTIAL_KEY);
+  } catch {
+    return undefined;
+  }
+  if (raw === undefined || raw.length === 0) return undefined;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+  const obj = parsed as Record<string, unknown>;
+
+  const cert = parseInstitutionCert(obj['enrollment_cert']);
+  const credential = parseStudentCredential(obj['enrollment']);
+  if (!cert.ok || !credential.ok) return undefined;
+
+  return { enrollment: credential.value, enrollment_cert: cert.value };
+}
+
+/** Forget the 2.1 credential. Never touches the master secret. */
+export async function clearStudentCredentialArtifact(secrets: SecretStore): Promise<void> {
+  try {
+    await secrets.delete(CREDENTIAL_KEY);
+  } catch {
+    // Best effort — nothing useful to do if the keyring is unavailable.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The one importer — routes on the SIGNED version
+// ---------------------------------------------------------------------------
+
+/**
+ * Import whatever identity artifact a student pasted, 2.0 or 2.1.
+ *
+ * ## Routing on the signed version, never on which fields exist
+ *
+ * Both versions use the same two wire slots, so "which keys are present" says
+ * nothing about which version this is. The discriminator is the
+ * `format_version` INSIDE `enrollment_cert` — signed in both families, at the
+ * same wire key in both — which is exactly what `verifyIdentityChain` step 0
+ * reads, and for exactly the reason spelled out there: `bundle-manifest.ts` once
+ * routed on the mere presence of a field and made a whole code path
+ * unreachable. Presence is attacker-controlled and ambiguous; a signed version
+ * is neither.
+ *
+ * Reading the declared version off an unvalidated object is safe precisely
+ * because nothing has been trusted yet — the routed-to function re-reads and
+ * re-validates it before anything is stored.
+ *
+ * ## Both versions remain importable, forever
+ *
+ * A student who still holds a 2.0 token can still import it, and a recorder that
+ * already stored one keeps using it. 2.0 MINTING is retired; 2.0 handling is
+ * not, and archived material is the entire justification for the system.
+ */
+export async function saveIdentityArtifact(
+  secrets: SecretStore,
+  rawJson: string,
+): Promise<StoreResult<IdentityImportOk, IdentityImportError>> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch (e) {
+    return fail({ kind: 'invalid_json', message: describe(e) });
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return fail({ kind: 'invalid_json', message: 'expected a JSON object' });
+  }
+
+  const declared = (
+    (parsed as Record<string, unknown>)['enrollment_cert'] as Record<string, unknown> | undefined
+  )?.['format_version'];
+  const version = typeof declared === 'string' ? declared : '';
+
+  if (version === INSTITUTION_IDENTITY_FORMAT_VERSION) {
+    const saved = await saveStudentCredentialArtifact(secrets, rawJson);
+    return saved.ok
+      ? ok({
+          identity_version: '2.1' as const,
+          institution_id: saved.value.institution_id,
+          student_ref: saved.value.student_ref,
+          student_pubkey: saved.value.student_pubkey,
+        })
+      : fail({ kind: 'current_2_1', error: saved.error });
+  }
+
+  if (version === ENROLLMENT_FORMAT_VERSION) {
+    const saved = await saveEnrollment(secrets, rawJson);
+    return saved.ok
+      ? ok({ identity_version: '2.0' as const, course_id: saved.value.course_id })
+      : fail({ kind: 'legacy_2_0', error: saved.error });
+  }
+
+  return fail({ kind: 'unsupported_identity_version', format_version: version });
 }

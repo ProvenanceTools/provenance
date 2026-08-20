@@ -485,16 +485,8 @@ function registerSealCommand(context: vscode.ExtensionContext, extensionDistPath
 function registerEnrollmentCommands(context: vscode.ExtensionContext): void {
   const deps: EnrollmentCommandDeps = {
     secrets: context.secrets,
-    // Read live from the registry: sessions come and go with workspace folders.
-    activeCourseIds: () =>
-      registry
-        .all()
-        .map((s) => s.manifest.course_id)
-        .filter((id): id is string => typeof id === 'string' && id.length > 0),
-    pickCourse: (items) =>
-      Promise.resolve(
-        vscode.window.showQuickPick(items, { placeHolder: 'Which course?' }),
-      ) as Promise<string | undefined>,
+    // No course picker: identity 2.1 is institution-scoped, so none of these
+    // commands is per-course any more and there is nothing to disambiguate.
     promptInput: (opts) =>
       Promise.resolve(
         vscode.window.showInputBox({
