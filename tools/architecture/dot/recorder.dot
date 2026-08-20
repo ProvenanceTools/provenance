@@ -37,8 +37,8 @@ digraph recorder {
                fillcolor="#241a0c" color="#F97316"]
     cmp       [label="on-disk hash ==\nexpected hash?" shape=diamond fillcolor="#1c1712"
                color="#F97316" fontsize=9 height=0.85 width=1.7]
-    explain   [label="explained by a\nformatter or git event?" shape=diamond fillcolor="#1c1712"
-               color="#F97316" fontsize=9 height=0.85 width=1.8]
+    explain   [label="does the live mark explain\nthis PATH?\none mark · 2 s window · a Set of up to\n64 distinct paths, not a single slot —\nso one git pull explains every file it\nrewrote, not just the first.\nBRIDGE until content-based\nreclassification lands." shape=diamond
+               fillcolor="#1c1712" color="#F97316" fontsize=8.5 height=2.1 width=3.4]
   }
 
   /* ── pure transforms ── */
