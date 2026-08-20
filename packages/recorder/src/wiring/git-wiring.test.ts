@@ -677,3 +677,230 @@ describe('startGitWiring — commit graph (program spec S5)', () => {
     expect(getCommitCalls).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The repository discriminator (decision D12) — the writer half
+// ---------------------------------------------------------------------------
+
+function multiRepoExtension(repos: unknown[]): vscode.Extension<unknown> {
+  return {
+    exports: {
+      getAPI: () => ({ repositories: repos, onDidOpenRepository: () => ({ dispose() {} }) }),
+    },
+  } as unknown as vscode.Extension<unknown>;
+}
+
+describe('startGitWiring — the repository discriminator (D12)', () => {
+  const ROOT = '1'.repeat(40);
+  const OTHER_ROOT = '2'.repeat(40);
+
+  it('labels every git.event that carries a sha', async () => {
+    const emitted: Array<Record<string, unknown>> = [];
+    const g = makeGraphRepo({ commit: 'a'.repeat(40), branch: 'main' });
+    const wiring = startGitWiring({
+      emit: (d) => emitted.push(d as Record<string, unknown>),
+      getGitExtension: () => graphExtension(g.repo),
+      deriveRepositoryDiscriminator: () => Promise.resolve(ROOT),
+    });
+
+    // Rule 10: on EVERY event with a sha, not only on commits. An unlabelled
+    // observation does not correlate even when its neighbours do.
+    g.setHead('b'.repeat(40), 'main');
+    g.fire();
+    g.setHead('c'.repeat(40), 'feature');
+    g.fire();
+    await wiring.settled();
+
+    expect(emitted).toHaveLength(2);
+    for (const e of emitted) expect(e['root_commit_sha']).toBe(ROOT);
+    wiring.dispose();
+  });
+
+  it('derives ONCE per repository, never per event', async () => {
+    const derive = vi.fn(() => Promise.resolve(ROOT));
+    const g = makeGraphRepo({ commit: 'a'.repeat(40), branch: 'main' });
+    const wiring = startGitWiring({
+      emit: () => undefined,
+      getGitExtension: () => graphExtension(g.repo),
+      deriveRepositoryDiscriminator: derive,
+    });
+
+    for (let i = 0; i < 10; i++) {
+      g.setHead(String(i).repeat(40), 'main');
+      g.fire();
+    }
+    await wiring.settled();
+
+    // MUTATION GUARD: deriving inside the state-change handler makes this 10 —
+    // ten `rev-list` invocations on the event path per session.
+    expect(derive).toHaveBeenCalledTimes(1);
+    wiring.dispose();
+  });
+
+  it('gives a SUBMODULE its own value, never the outer repository’s', async () => {
+    // Rule 9. Labelling a submodule event with the outer root re-creates the
+    // exact sha-space merge this field exists to prevent.
+    const emitted: Array<Record<string, unknown>> = [];
+    const outer = makeGraphRepo({ commit: 'a'.repeat(40), rootFsPath: '/ws/proj' });
+    const inner = makeGraphRepo({ commit: 'd'.repeat(40), rootFsPath: '/ws/proj/vendor/lib' });
+    const wiring = startGitWiring({
+      emit: (d) => emitted.push(d as Record<string, unknown>),
+      getGitExtension: () => multiRepoExtension([outer.repo, inner.repo]),
+      deriveRepositoryDiscriminator: (root) =>
+        Promise.resolve(root === '/ws/proj' ? ROOT : OTHER_ROOT),
+    });
+
+    outer.setHead('b'.repeat(40), 'main');
+    outer.fire();
+    inner.setHead('e'.repeat(40), 'main');
+    inner.fire();
+    await wiring.settled();
+
+    expect(emitted).toHaveLength(2);
+    expect(emitted[0]!['root_commit_sha']).toBe(ROOT);
+    expect(emitted[1]!['root_commit_sha']).toBe(OTHER_ROOT);
+    // MUTATION GUARD: a single module-level derivation, or one keyed on the
+    // session's assignment root rather than on the repository, collapses these
+    // two to the same value.
+    expect(emitted[0]!['root_commit_sha']).not.toBe(emitted[1]!['root_commit_sha']);
+    wiring.dispose();
+  });
+
+  it('OMITS the key entirely when the discriminator is unknown — never null', async () => {
+    const emitted: Array<Record<string, unknown>> = [];
+    const g = makeGraphRepo({ commit: 'a'.repeat(40), branch: 'main' });
+    const wiring = startGitWiring({
+      emit: (d) => emitted.push(d as Record<string, unknown>),
+      getGitExtension: () => graphExtension(g.repo),
+      deriveRepositoryDiscriminator: () => Promise.resolve(undefined),
+    });
+
+    g.setHead('b'.repeat(40), 'main');
+    g.fire();
+    await wiring.settled();
+
+    // Absent and null canonicalize differently and therefore chain to different
+    // hashes, exactly as `parents: []` and an absent `parents` do. A shallow
+    // clone must produce bytes identical to a pre-D12 recorder's.
+    // MUTATION GUARD: emitting `root_commit_sha: null` fails the `in` check.
+    expect('root_commit_sha' in emitted[0]!).toBe(false);
+    expect(emitted[0]!['root_commit_sha']).toBeUndefined();
+    wiring.dispose();
+  });
+
+  it('omits the label on an event that carries no sha', async () => {
+    const emitted: Array<Record<string, unknown>> = [];
+    const g = makeGraphRepo({ commit: 'a'.repeat(40), branch: 'main' });
+    const wiring = startGitWiring({
+      emit: (d) => emitted.push(d as Record<string, unknown>),
+      getGitExtension: () => graphExtension(g.repo),
+      deriveRepositoryDiscriminator: () => Promise.resolve(ROOT),
+    });
+
+    g.setHead(undefined, 'main');
+    g.fire();
+    await wiring.settled();
+
+    expect('sha' in emitted[0]!).toBe(false);
+    expect('root_commit_sha' in emitted[0]!).toBe(false);
+    wiring.dispose();
+  });
+
+  it('does not derive for a repository this session does not own', async () => {
+    const derive = vi.fn(() => Promise.resolve(ROOT));
+    const g = makeGraphRepo({ commit: 'a'.repeat(40), rootFsPath: '/ws/other' });
+    const wiring = startGitWiring({
+      emit: () => undefined,
+      getGitExtension: () => graphExtension(g.repo),
+      isRepoOwnedByThisRoot: (p) => p === '/ws/mine',
+      deriveRepositoryDiscriminator: derive,
+    });
+
+    g.setHead('b'.repeat(40), 'main');
+    g.fire();
+    await wiring.settled();
+
+    // Running git in a repository whose events are dropped is work it should
+    // never do.
+    expect(derive).not.toHaveBeenCalled();
+    wiring.dispose();
+  });
+
+  it('degrades silently when the derivation rejects — recording is never at risk', async () => {
+    const emitted: Array<Record<string, unknown>> = [];
+    const g = makeGraphRepo({ commit: 'a'.repeat(40), branch: 'main' });
+    const wiring = startGitWiring({
+      emit: (d) => emitted.push(d as Record<string, unknown>),
+      getGitExtension: () => graphExtension(g.repo),
+      deriveRepositoryDiscriminator: () => Promise.reject(new Error('derivation exploded')),
+    });
+
+    g.setHead('b'.repeat(40), 'main');
+    g.fire();
+    await wiring.settled();
+
+    expect(emitted).toHaveLength(1);
+    expect('root_commit_sha' in emitted[0]!).toBe(false);
+    expect(emitted[0]!['sha']).toBe('b'.repeat(40));
+    wiring.dispose();
+  });
+
+  it('labels an event that arrives BEFORE the setup derivation resolves', async () => {
+    // A state change can beat the derivation; omitting the label in that window
+    // would leave a session's first observations silently uncorrelatable.
+    let release: ((v: string) => void) | undefined;
+    const emitted: Array<Record<string, unknown>> = [];
+    const g = makeGraphRepo({ commit: 'a'.repeat(40), branch: 'main' });
+    const wiring = startGitWiring({
+      emit: (d) => emitted.push(d as Record<string, unknown>),
+      getGitExtension: () => graphExtension(g.repo),
+      deriveRepositoryDiscriminator: () =>
+        new Promise<string>((resolve) => {
+          release = resolve;
+        }),
+    });
+
+    g.setHead('b'.repeat(40), 'main');
+    g.fire();
+    // Let the setup derivation actually start (it is deferred one microtask so
+    // a throwing override cannot escape as an unhandled rejection), then let it
+    // finish only AFTER the state change is already queued.
+    await Promise.resolve();
+    release!(ROOT);
+    await wiring.settled();
+
+    expect(emitted[0]!['root_commit_sha']).toBe(ROOT);
+    wiring.dispose();
+  });
+
+  it('never reads author identity, with or without the discriminator', async () => {
+    const emitted: Array<Record<string, unknown>> = [];
+    const g = makeGraphRepo({
+      commit: 'a'.repeat(40),
+      branch: 'main',
+      parents: { ['b'.repeat(40)]: ['a'.repeat(40)] },
+    });
+    const wiring = startGitWiring({
+      emit: (d) => emitted.push(d as Record<string, unknown>),
+      getGitExtension: () => graphExtension(g.repo),
+      deriveRepositoryDiscriminator: () => Promise.resolve(ROOT),
+    });
+
+    g.setHead('b'.repeat(40), 'main');
+    g.fire();
+    await wiring.settled();
+
+    // The fixture's commit object carries authorName / authorEmail / authorDate
+    // / message. The discriminator is a REPOSITORY identifier and must not have
+    // widened the payload's key set.
+    expect(Object.keys(emitted[0]!).sort()).toEqual([
+      'branch',
+      'commit_sha',
+      'operation',
+      'parents',
+      'root_commit_sha',
+      'sha',
+    ]);
+    wiring.dispose();
+  });
+});
