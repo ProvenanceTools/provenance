@@ -347,7 +347,25 @@ export const ingestPaths = {
                   { $ref: '#/components/schemas/IngestJobSummary' },
                   {
                     type: 'object',
+                    required: ['skipped'],
                     properties: {
+                      skipped: {
+                        oneOf: [
+                          {
+                            type: 'array',
+                            items: { $ref: '#/components/schemas/IngestSkippedEntry' },
+                          },
+                          { type: 'null' },
+                        ],
+                        description:
+                          'Scopes that did not become submissions, for a job created by EITHER ' +
+                          'upload route — this is the mechanism-independent place to read them. ' +
+                          '`summary` above cannot carry them: it counts ingest_files rows, and a ' +
+                          'skipped scope has none. `null` means NOT KNOWN (staging has not ' +
+                          'finished resolving scopes, it aborted part-way, or the job predates ' +
+                          'the field); `[]` means resolution completed and skipped nothing. ' +
+                          'Treat null as "poll again", never as a clean result.',
+                      },
                       files: {
                         type: 'array',
                         items: { $ref: '#/components/schemas/IngestFileSummary' },
@@ -577,7 +595,9 @@ export const ingestPaths = {
       description:
         'Finalize the multipart upload, assemble the export, and run it through the ingest pipeline. Returns the same body as the single-shot Gradescope upload. ' +
         "`ingest_scope` is the PER-REQUEST override — it replaces every assignment's persisted default for this batch, and rides the background staging job, so it applies even though this call returns 202 before staging runs. " +
-        'NOTE: this path returns placeholder counts and an EMPTY `skipped` array; skips (including `submission_type_mismatch`) are not currently reported back on the chunked-upload path. Use the single-shot POST /ingest:gradescope when you need to see them.',
+        'NOTE: this call returns 202 before any staging has run, so the counts in the body are placeholder zeros and `skipped` is **null** — meaning NOT YET KNOWN, not "nothing was skipped". ' +
+        'Poll `GET /ingest/jobs/{jobId}`: once the background staging job finishes resolving scopes, that response\'s `skipped` array carries the same entries (including `submission_type_mismatch`) that the single-shot POST /ingest:gradescope inlines for the same export. ' +
+        'It stays null while the job is still staging, and also if staging aborted before resolution completed; `[]` there means resolution ran and skipped nothing.',
       security: [{ BearerAuth: [] }, { SessionCookie: [] }],
       parameters: [
         {

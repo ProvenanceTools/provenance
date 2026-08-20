@@ -31,6 +31,7 @@ import {
   markStagingStarted,
   markStagingComplete,
   maybeEnqueueFinalize,
+  recordIngestJobSkipped,
 } from './job-control.js';
 import { stageBlob } from './stage-blob.js';
 import { createBoundedRunner } from './bounded-runner.js';
@@ -43,6 +44,7 @@ import { zipBundleEntries, type BundleEntry } from './gradescope/build-bundle-zi
 import { createRebuildPool, type RebuildPool } from './gradescope/rebuild-pool.js';
 import { getBoss, JOB_KINDS } from '../../jobs/pg-boss.js';
 import type { StorageClient } from '../storage/client.js';
+import type { GradescopeSkippedEntry } from '@provenance/shared/api-schemas';
 
 export interface IngestLocalPathDeps {
   db: DrizzleDb;
@@ -116,6 +118,31 @@ export interface IngestLocalPathSkipped {
    */
   scopePath: string;
   reason: StreamedSkipReason | 'bundle_too_large';
+}
+
+/**
+ * The ONE place `IngestLocalPathSkipped` becomes the wire/storage shape.
+ *
+ * Both upload routes have to report skips identically — provgate must not have
+ * to know whether an export arrived single-shot or chunked — and both of them
+ * ultimately get their list from this module. So the mapping lives here, once,
+ * and is used by all three consumers: the `POST /ingest:gradescope` response,
+ * the `ingest_jobs.skipped` write below, and (through that column) the
+ * `GET /ingest/jobs/:jobId` response. Two hand-rolled mappings would be two
+ * shapes waiting to drift.
+ *
+ * `scope_path` is emitted unconditionally, including the `''` that means "the
+ * folder root". Omitting it on the flat path would make the two routes'
+ * payloads differ in key presence for the very case they most often share.
+ */
+export function toSkippedWire(
+  skipped: readonly IngestLocalPathSkipped[],
+): GradescopeSkippedEntry[] {
+  return skipped.map((s) => ({
+    folder_key: s.folderKey,
+    scope_path: s.scopePath,
+    reason: s.reason,
+  }));
 }
 
 export type IngestLocalPathResult =
@@ -339,6 +366,30 @@ export async function ingestLocalPath(
     // permitted, then trigger one check in case every enqueued file already
     // drained before we got here (no worker would otherwise re-trigger it).
     if (jobId !== null) {
+      // Persist the scope-resolution skip list BEFORE opening the finalize gate.
+      //
+      // This is the whole fix for the chunked-upload path. That route returns
+      // 202 long before this code runs, so its HTTP response cannot carry the
+      // list; and `finalizeIngestJob` builds `summary` purely by counting
+      // `ingest_files` rows, which a skipped scope does not have. Without this
+      // write the reasons — `no_seal`, `scope_excluded`, `ambiguous_scope`,
+      // `submission_type_mismatch` — were computed and then dropped, so a
+      // submission rejected by the batch homogeneity check simply vanished.
+      //
+      // Ordering is load-bearing twice over. It must come AFTER the loop,
+      // because only then is the list complete (a partial list published as
+      // complete is the same lie in a different costume — an aborted run leaves
+      // the column `null`/unknown instead). And it must come BEFORE
+      // `markStagingComplete`, because that is the gate `maybeEnqueueFinalize`
+      // waits on: once it opens, a worker may settle the job at any instant,
+      // and a client that polls a terminal job must never still see `null`.
+      //
+      // Both upload routes reach this line — the single-shot route inlines the
+      // same list in its own response, the chunked route has only this — which
+      // is what makes `GET /ingest/jobs/:jobId` report identically for either.
+      // Writing `[]` here is a real statement ("resolution ran, nothing was
+      // skipped"), not a no-op to be optimized away.
+      await recordIngestJobSkipped(db, jobId, toSkippedWire(skipped));
       await markStagingComplete(db, jobId);
       await maybeEnqueueFinalize(boss, db, jobId);
     }

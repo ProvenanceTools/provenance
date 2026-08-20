@@ -176,6 +176,13 @@
       "when": 1788307200000,
       "tag": "0026_ingest_scope_submission_types",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1788652800000,
+      "tag": "0028_ingest_jobs_skipped",
+      "breakpoints": true
     }
   ]
 }

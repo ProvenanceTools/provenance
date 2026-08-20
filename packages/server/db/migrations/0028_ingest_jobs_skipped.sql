@@ -1,0 +1,88 @@
+-- Migration 0028: durable scope-resolution SKIP reasons on ingest_jobs.
+--
+-- ---------------------------------------------------------------------------
+-- The hole this closes
+-- ---------------------------------------------------------------------------
+--
+-- `resolveRepoScopes` (services/ingest/gradescope/repo-scopes.ts) decides which
+-- discovered scopes become submissions, and reports the rest as `UnusableScope`
+-- with a reason: `no_seal`, `scope_excluded`, `ambiguous_scope` or
+-- `submission_type_mismatch`. Discovery adds `no_manifest` / `no_submitters`,
+-- and the stager adds `bundle_too_large`.
+--
+-- The SINGLE-SHOT route (POST /ingest:gradescope) serializes that list straight
+-- into its own HTTP response, because ingest runs inside the request.
+--
+-- The CHUNKED route (POST /ingest/uploads/:id/complete) cannot: it returns 202
+-- before any staging happens, and the real work runs later in an
+-- `ingest_stage_upload` pg-boss job. The list was computed in that worker and
+-- then discarded — nothing persisted it, and `finalizeIngestJob` builds
+-- `ingest_jobs.summary` purely by counting `ingest_files` row statuses. A scope
+-- that never became a submission has no `ingest_files` row by definition, so it
+-- was invisible in every count. A submission rejected for
+-- `submission_type_mismatch` simply never appeared, with no way to find out why.
+--
+-- That matters most for the batch-type homogeneity check, whose entire purpose
+-- is that a mismatched submission fails LEGIBLY. A failure nobody can see is a
+-- disappearance, not a failure.
+--
+-- ---------------------------------------------------------------------------
+-- Why a column, and why on ingest_jobs
+-- ---------------------------------------------------------------------------
+--
+-- Rejected: extending `ingest_jobs.summary`. `finalizeIngestJob` REWRITES that
+-- value wholesale (and so does `failIngestJob`, and so does the cancelled-job
+-- summary refresh), so anything stored there would have to survive by
+-- read-modify-write across a worker boundary — racy, and one forgotten merge
+-- away from silently losing the data again.
+--
+-- Rejected: per-file `ingest_files` rows. A skipped scope has no blob and no
+-- bytes, so `blob_sha256` / `size_bytes` (both NOT NULL) have nothing to hold.
+-- Worse, `finalizeIngestJob` derives the job's terminal status by counting
+-- `ingest_files` statuses, so inventing rows there would change what
+-- 'succeeded' and 'partial' mean for every existing caller.
+--
+-- Chosen: one jsonb column on `ingest_jobs`, holding the list in its WIRE shape
+-- (`folder_key` / `scope_path` / `reason`) so the read path is a pass-through
+-- and the two upload routes cannot drift into different shapes.
+--
+-- It is written ONCE per job, by REPLACEMENT (`SET skipped = $1`) rather than
+-- append, from the complete list the stager already has in hand. Replacement is
+-- what makes the pipeline's idempotency requirement hold for free: a re-run
+-- recomputes the identical list and overwrites it, so a retry cannot duplicate
+-- reasons the way an append-only child table could.
+--
+-- It survives finalize/cancel/fail because none of those statements NAME this
+-- column: they set `status`, `completed_at` and `summary` only, and an UPDATE
+-- leaves unnamed columns untouched. `services/ingest/job-control.ts` carries
+-- that invariant as a comment on each of the three, and the tests pin it.
+--
+-- ---------------------------------------------------------------------------
+-- NULLABLE, WITH NO DEFAULT — this is the load-bearing part
+-- ---------------------------------------------------------------------------
+--
+-- A `DEFAULT '[]'` would make "nothing was skipped" and "nobody has computed
+-- this yet" the same value, which is the exact lie the chunked route's
+-- hardcoded `skipped: []` was already telling. So:
+--
+--   NULL  — UNKNOWN. Scope resolution has not (yet) completed for this job:
+--           staging is still running, or it aborted part-way (too_many_files,
+--           an invalid export, a mid-stream staging error), or the job predates
+--           this migration. A partial list is never written as if it were
+--           complete.
+--   '[]'  — KNOWN AND EMPTY. Resolution ran to completion and skipped nothing.
+--   [...] — the reasons.
+--
+-- Existing rows therefore backfill to NULL, which is the honest answer for
+-- them: those jobs ran before anything recorded skips, so what they skipped is
+-- genuinely unknown and must not be reported as "nothing".
+--
+-- No data is deleted and no row is rewritten. Skip reasons are audit material
+-- and, like every other row in this schema, are never removed — the retention
+-- sweep deletes blobs only.
+
+ALTER TABLE ingest_jobs
+  ADD COLUMN skipped jsonb;
+
+COMMENT ON COLUMN ingest_jobs.skipped IS
+  'Scope-resolution skip reasons in wire shape [{folder_key, scope_path, reason}]. NULL means UNKNOWN (resolution did not complete); ''[]'' means known-and-empty. Written once by replacement; never touched by finalize/cancel/fail.';

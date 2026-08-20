@@ -52,7 +52,7 @@ import { createStorageClient, storageConfigFromEnv } from '../../../services/sto
 import { getBoss, JOB_KINDS } from '../../../jobs/pg-boss.js';
 import { recordPhase } from '../../../jobs/ingest-profile.js';
 import { streamUploadToTempFile } from '../../../services/ingest/stream-upload.js';
-import { ingestLocalPath } from '../../../services/ingest/local-path.js';
+import { ingestLocalPath, toSkippedWire } from '../../../services/ingest/local-path.js';
 import {
   createResumableUpload,
   putResumablePart,
@@ -62,12 +62,14 @@ import {
 } from '../../../services/ingest/resumable-upload.js';
 import type { IngestStageUploadPayload } from '../../../services/ingest/stage-upload-job.js';
 import { parseIngestScopeConfig } from '../../../services/ingest/gradescope/repo-scopes.js';
-import { ZodError } from 'zod';
+import { z, ZodError } from 'zod';
 import {
   CreateUploadRequestSchema,
   FinalizeUploadRequestSchema,
+  GradescopeSkippedEntrySchema,
   IngestScopeOverrideQuerySchema,
   ingestScopeFromQuery,
+  type GradescopeSkippedEntry,
 } from '@provenance/shared/api-schemas';
 import { projectStudent, maskFilename, protectedLabel } from '../../../services/protect.js';
 
@@ -247,6 +249,29 @@ function normalizeJobSummary(raw: unknown): {
     superseded: num('superseded'),
     discarded: num('discarded'),
   };
+}
+
+/**
+ * Narrow the `ingest_jobs.skipped` jsonb column for the wire (migration 0028).
+ *
+ * The column is stored in wire shape already, so this is a validation boundary
+ * rather than a mapping: Zod at the storage edge, per the repo convention.
+ *
+ * Three inputs, two outputs, and the collapsing is the point:
+ *   - `null` (never written, or written by a run that aborted before resolution
+ *     finished) → `null`. UNKNOWN.
+ *   - a malformed value → `null`. Also unknown; a row we cannot read is not
+ *     evidence that nothing was skipped.
+ *   - a valid array, INCLUDING `[]` → itself. `[]` is a positive statement that
+ *     resolution completed and skipped nothing.
+ *
+ * Never returns `[]` for a value it could not understand. That substitution —
+ * unknown rendered as empty — is the bug this whole path exists to close.
+ */
+function readJobSkipped(raw: unknown): GradescopeSkippedEntry[] | null {
+  if (raw === null || raw === undefined) return null;
+  const parsed = z.array(GradescopeSkippedEntrySchema).safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
 function formatFileSummary(row: RawFileRow, protectedMode: boolean): Record<string, unknown> {
@@ -664,11 +689,11 @@ export function createIngestRouter(): Hono {
           );
         }
 
-        const skippedSummary = result.skipped.map((s) => ({
-          folder_key: s.folderKey,
-          scope_path: s.scopePath,
-          reason: s.reason,
-        }));
+        // Same mapper the stager uses to persist `ingest_jobs.skipped`, so the
+        // array this route inlines and the one `GET /ingest/jobs/:jobId` serves
+        // for the very same export are the same array, not two that happen to
+        // agree today.
+        const skippedSummary = toSkippedWire(result.skipped);
 
         // No bundles to process (roster-only, or all folders skipped): the roster
         // is upserted but there is no ingest job. Return 200, not 202.
@@ -876,6 +901,7 @@ export function createIngestRouter(): Hono {
         started_at: job.started_at?.toISOString() ?? null,
         completed_at: job.completed_at?.toISOString() ?? null,
         summary,
+        skipped: readJobSkipped(job.skipped),
         files: fileRows.map((row) => formatFileSummary(row, jobDetailProtectedMode)),
       });
     },
@@ -1194,16 +1220,32 @@ export function createIngestRouter(): Hono {
 
       c.set('auditDetail', { job_id: jobId });
 
-      // The roster/counts/skipped are reported via GET /ingest/jobs/:jobId as the
-      // background job runs; the immediate response carries placeholders so the
-      // wire shape (and the analyzer's GradescopeIngestResponse parse) is stable.
+      // Nothing has been ingested yet — staging runs in the background job
+      // enqueued above — so this response reports NOTHING, not zero-and-empty.
+      //
+      // The counts are placeholder zeros because they are numbers and have no
+      // null to spend; `job_id` is the signal that they are placeholders.
+      // `skipped` does have a null, and uses it. It used to be a hardcoded `[]`
+      // under a comment claiming skips were "reported via GET
+      // /ingest/jobs/:jobId" — which was false for `skipped` specifically:
+      // `finalizeIngestJob` builds the job summary by counting `ingest_files`
+      // rows, and a skipped scope has no row. The reasons were computed in the
+      // worker and thrown away, so a submission the batch-homogeneity check
+      // rejected just never appeared.
+      //
+      // That is now true rather than aspirational: the stager persists the list
+      // to `ingest_jobs.skipped` (migration 0028) before it opens the finalize
+      // gate, and `GET /ingest/jobs/:jobId` serves it — the same entries the
+      // single-shot route inlines, for the same export. Until that write lands
+      // the honest answer is "unknown", and `[]` cannot say that: it reads as
+      // "nothing was skipped", which is exactly the disappearance this closes.
       return c.json(
         {
           job_id: jobId,
           roster: { added: 0, updated: 0 },
           bundles_processed: 0,
           submissions_queued: 0,
-          skipped: [],
+          skipped: null,
         },
         202,
       );

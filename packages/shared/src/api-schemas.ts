@@ -388,60 +388,15 @@ export const IngestFileSummarySchema = z.object({
 });
 export type IngestFileSummary = z.infer<typeof IngestFileSummarySchema>;
 
-export const IngestJobSummarySchema = z.object({
-  total: z.number().int(),
-  matched: z.number().int(),
-  unmatched: z.number().int(),
-  duplicate: z.number().int(),
-  failed: z.number().int(),
-  superseded: z.number().int(),
-  discarded: z.number().int(),
-});
-export type IngestJobSummary = z.infer<typeof IngestJobSummarySchema>;
-
-export const IngestJobStatusSchema = z.enum([
-  'queued',
-  'running',
-  'succeeded',
-  'partial',
-  'failed',
-  'cancelled',
-]);
-export type IngestJobStatus = z.infer<typeof IngestJobStatusSchema>;
-
-export const IngestJobSchema = z.object({
-  id: z.string().uuid(),
-  semester_id: z.string().uuid(),
-  status: IngestJobStatusSchema,
-  created_at: z.string().nullable(),
-  started_at: z.string().nullable(),
-  completed_at: z.string().nullable(),
-  summary: IngestJobSummarySchema,
-  files: z.array(IngestFileSummarySchema),
-});
-export type IngestJob = z.infer<typeof IngestJobSchema>;
-
-export const IngestJobListItemSchema = z.object({
-  id: z.string().uuid(),
-  semester_id: z.string().uuid(),
-  status: IngestJobStatusSchema,
-  summary: IngestJobSummarySchema.nullable(),
-  created_at: z.string().nullable(),
-  started_at: z.string().nullable(),
-  completed_at: z.string().nullable(),
-});
-export type IngestJobListItem = z.infer<typeof IngestJobListItemSchema>;
-
 // ---------------------------------------------------------------------------
-// Gradescope export ingest (POST /semesters/:id/ingest:gradescope)
+// Ingest skip reasons
 // ---------------------------------------------------------------------------
-
-/** Roster rows added vs updated by the export's roster upsert. */
-export const RosterUpsertSummarySchema = z.object({
-  added: z.number().int(),
-  updated: z.number().int(),
-});
-export type RosterUpsertSummary = z.infer<typeof RosterUpsertSummarySchema>;
+//
+// Declared here rather than in the Gradescope-upload section below because it
+// is shared by both: the single-shot upload response inlines these entries, and
+// `IngestJobSchema` (the poll endpoint) serves the same entries back for a job
+// created by EITHER upload route. One schema is the mechanism by which the two
+// paths are indistinguishable to a consumer.
 
 /**
  * A submission folder — or one assignment scope within it — that could not be
@@ -493,17 +448,102 @@ export const GradescopeSkippedEntrySchema = z.object({
 });
 export type GradescopeSkippedEntry = z.infer<typeof GradescopeSkippedEntrySchema>;
 
+export const IngestJobSummarySchema = z.object({
+  total: z.number().int(),
+  matched: z.number().int(),
+  unmatched: z.number().int(),
+  duplicate: z.number().int(),
+  failed: z.number().int(),
+  superseded: z.number().int(),
+  discarded: z.number().int(),
+});
+export type IngestJobSummary = z.infer<typeof IngestJobSummarySchema>;
+
+export const IngestJobStatusSchema = z.enum([
+  'queued',
+  'running',
+  'succeeded',
+  'partial',
+  'failed',
+  'cancelled',
+]);
+export type IngestJobStatus = z.infer<typeof IngestJobStatusSchema>;
+
+export const IngestJobSchema = z.object({
+  id: z.string().uuid(),
+  semester_id: z.string().uuid(),
+  status: IngestJobStatusSchema,
+  created_at: z.string().nullable(),
+  started_at: z.string().nullable(),
+  completed_at: z.string().nullable(),
+  summary: IngestJobSummarySchema,
+  /**
+   * Scope-resolution skips for this job — the canonical, upload-mechanism-
+   * independent place to read them.
+   *
+   * `summary` above cannot carry these: it is a count of `ingest_files` rows,
+   * and a skipped scope has no row (that is what being skipped means). The
+   * single-shot `POST /ingest:gradescope` also inlines the identical array in
+   * its own response; the chunked upload route returns 202 before ingest runs
+   * and has no way to, so for that path this field is the only channel. Both
+   * produce the same entries for the same export.
+   *
+   * `null` means UNKNOWN, never "nothing was skipped": staging has not finished
+   * resolving scopes yet, or it aborted part-way, or the job predates the
+   * column. `[]` is a positive statement that resolution completed and skipped
+   * nothing. A consumer that wants "did anything get dropped?" must treat
+   * `null` as "ask again later", not as a clean result.
+   */
+  skipped: z.array(GradescopeSkippedEntrySchema).nullable(),
+  files: z.array(IngestFileSummarySchema),
+});
+export type IngestJob = z.infer<typeof IngestJobSchema>;
+
+export const IngestJobListItemSchema = z.object({
+  id: z.string().uuid(),
+  semester_id: z.string().uuid(),
+  status: IngestJobStatusSchema,
+  summary: IngestJobSummarySchema.nullable(),
+  created_at: z.string().nullable(),
+  started_at: z.string().nullable(),
+  completed_at: z.string().nullable(),
+});
+export type IngestJobListItem = z.infer<typeof IngestJobListItemSchema>;
+
+// ---------------------------------------------------------------------------
+// Gradescope export ingest (POST /semesters/:id/ingest:gradescope)
+// ---------------------------------------------------------------------------
+
+/** Roster rows added vs updated by the export's roster upsert. */
+export const RosterUpsertSummarySchema = z.object({
+  added: z.number().int(),
+  updated: z.number().int(),
+});
+export type RosterUpsertSummary = z.infer<typeof RosterUpsertSummarySchema>;
+
 /**
  * Response from POST /ingest:gradescope. `job_id` is null when the export has
  * no processable bundles (roster was still upserted). Otherwise it is the
  * enqueued ingest job, with one staged submission per submitter.
+ *
+ * Shared with `POST /ingest/uploads/:uploadId/complete`, which returns the same
+ * shape — and that is why `skipped` is nullable. The single-shot route ingests
+ * inside the request and always knows the answer; the chunked route returns 202
+ * before any staging has run, so at that instant it does not, and it says
+ * `null` rather than `[]`. An empty array here means resolution completed and
+ * skipped nothing; `null` means "not known yet — poll
+ * `GET /ingest/jobs/:jobId`", which serves the identical entries for a job from
+ * either route. The counts alongside it (`roster`, `bundles_processed`,
+ * `submissions_queued`) are placeholder zeros on the chunked route for the same
+ * reason; they are numbers with no null to spend, so `job_id` is what
+ * distinguishes a poll-me response from a finished one.
  */
 export const GradescopeIngestResponseSchema = z.object({
   job_id: z.string().uuid().nullable(),
   roster: RosterUpsertSummarySchema,
   bundles_processed: z.number().int(),
   submissions_queued: z.number().int(),
-  skipped: z.array(GradescopeSkippedEntrySchema),
+  skipped: z.array(GradescopeSkippedEntrySchema).nullable(),
 });
 export type GradescopeIngestResponse = z.infer<typeof GradescopeIngestResponseSchema>;
 
