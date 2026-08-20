@@ -17,8 +17,10 @@ import { sha256Hex } from '@provenance/log-core';
 import {
   classifyExternalChanges,
   externalChangeClassificationFor,
+  overridesRecorderGitTag,
   GIT_ADJACENCY_WINDOW_MS,
   type ExternalChangeClassification,
+  type ExternalChangeVerdict,
 } from './classify-external-changes.js';
 import { buildIndex } from './build-index.js';
 import { loadBundle } from '../loader/parse-bundle.js';
@@ -405,7 +407,15 @@ describe('git_unrecorded_in — a pull delivering content nobody recorded', () =
     expect(v.gitAdjacency).not.toBeNull();
     expect(v.gitAdjacency!.sha).toBe(C1);
     expect(v.gitAdjacency!.headMoved).toBe(true);
-    expect(v.detail).toContain('no recorder observed');
+    // D16 reworded this sentence. The old text ("Code entered this submission
+    // from a commit no recorder observed") stated only the accusatory reading.
+    // Since D16 makes this class reachable for an honest pair whose partner was
+    // never enrolled, the sentence must state what is known, what is not, and
+    // both readings of it.
+    expect(v.detail).toContain('no session in this submission recorded producing these bytes');
+    expect(v.detail).toContain('who wrote it is NOT established');
+    expect(v.detail).toContain('a collaborator who never enrolled');
+    expect(v.detail).toContain('code brought in from outside the submission');
 
     // The suppressing set is git_merge_in and nothing else.
     expect(c.gitMergeIn.size).toBe(0);
@@ -736,5 +746,33 @@ describe('properties', () => {
     const v = only(classifyExternalChanges(bundle, index));
     expect(v.recorderExplanation).toBe('git');
     expect(v.classification).toBe('git_unrecorded_in');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D16 — which classes beat the recorder's timing tag
+// ---------------------------------------------------------------------------
+
+describe('overridesRecorderGitTag — D16', () => {
+  const verdict = (classification: ExternalChangeVerdict['classification']) =>
+    ({ classification }) as ExternalChangeVerdict;
+
+  it('a git_unrecorded_in overrides the git tag, and nothing else does', () => {
+    expect(overridesRecorderGitTag(verdict('git_unrecorded_in'), 'git')).toBe(true);
+    // `external` and `unclassified` are weaker than the tag's positive claim.
+    // "Cannot classify" in particular must stay distinct from a finding.
+    expect(overridesRecorderGitTag(verdict('external'), 'git')).toBe(false);
+    expect(overridesRecorderGitTag(verdict('unclassified'), 'git')).toBe(false);
+    // git_merge_in never reaches a tag test -- it is skipped by content.
+    expect(overridesRecorderGitTag(verdict('git_merge_in'), 'git')).toBe(false);
+  });
+
+  it("is scoped to the git tag: 'formatter' is a different, narrower claim", () => {
+    expect(overridesRecorderGitTag(verdict('git_unrecorded_in'), 'formatter')).toBe(false);
+  });
+
+  it('no verdict means no override — which is what makes a solo scope inert', () => {
+    expect(overridesRecorderGitTag(null, 'git')).toBe(false);
+    expect(overridesRecorderGitTag(undefined, 'git')).toBe(false);
   });
 });
