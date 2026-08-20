@@ -105,6 +105,17 @@ export type SealCoverage =
 
 /** One session's rolling-seal coverage over both of its log files. */
 export type RollingSealCoverage = {
+  /**
+   * The LOGICAL session id (`session.start.data.session_id`) this coverage
+   * describes — never the `.slog` filename uuid.
+   *
+   * `verify-log-bytes.ts` keys its `coverageBySession` map on this and looks it
+   * up with `bundle.sessions[].sessionId`, which is the same space. Setting it
+   * from the filename uuid instead would leave every lookup missing, and a
+   * MISSING coverage entry is read as "classic seal" — whole-file equality over
+   * a prefix commitment, which accuses honest students. See
+   * `loader/types.ts` / `LogicalSessionId`.
+   */
   sessionId: string;
   /**
    * The seal declared itself FINAL (`log-core`'s `isFinalRollingSeal`), so its

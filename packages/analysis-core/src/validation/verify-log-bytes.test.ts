@@ -55,8 +55,17 @@ async function rewriteZip(
   return out;
 }
 
-function slogName(sessionId: string): string {
-  return `session-${sessionId}.slog`;
+/**
+ * The `.slog` entry name in the ZIP.
+ *
+ * Takes the FILENAME uuid (`BuiltBundle.logFileIds`), never the logical session
+ * id (`BuiltBundle.sessionIds`). Those are two independently minted uuids in
+ * production, and this suite must reach into the zip with the one the file is
+ * actually named after — otherwise every mutation below silently no-ops and the
+ * test passes without exercising anything. See `build-test-bundle.ts`.
+ */
+function slogName(logFileId: string): string {
+  return `session-${logFileId}.slog`;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,8 +109,11 @@ describe('verifyLogBytes — catches post-seal modification', () => {
   it('catches a well-formed APPENDED entry (the characterized hole)', async () => {
     // The append attack: the appended entry is correctly chained, so checks
     // 3-6 are all satisfied. Only the file's digest changes.
-    const { zipBuffer, sessionIds } = await buildTestBundle({ sessions: [{ eventCount: 5 }] });
+    const { zipBuffer, sessionIds, logFileIds } = await buildTestBundle({
+      sessions: [{ eventCount: 5 }],
+    });
     const sid = sessionIds[0]!;
+    const fid = logFileIds[0]!;
 
     const tampered = await rewriteZip(zipBuffer, async (zip) => {
       // Append a well-formed envelope: a verbatim copy of the last entry, so
@@ -109,9 +121,9 @@ describe('verifyLogBytes — catches post-seal modification', () => {
       // bytes — and therefore its digest — have moved. A genuinely re-chained
       // append is exercised end-to-end against real recorder output in
       // tools/recorder-seal-conformance.test.ts.
-      const text = await zip.file(slogName(sid))!.async('string');
+      const text = await zip.file(slogName(fid))!.async('string');
       const lines = text.trim().split('\n');
-      zip.file(slogName(sid), `${text}${lines[lines.length - 1]!}\n`);
+      zip.file(slogName(fid), `${text}${lines[lines.length - 1]!}\n`);
     });
 
     const check = verifyLogBytes(await load(tampered));
@@ -122,38 +134,52 @@ describe('verifyLogBytes — catches post-seal modification', () => {
   });
 
   it('catches a single flipped byte in a .slog', async () => {
-    const { zipBuffer, sessionIds } = await buildTestBundle({ sessions: [{ eventCount: 5 }] });
+    const { zipBuffer, sessionIds, logFileIds } = await buildTestBundle({
+      sessions: [{ eventCount: 5 }],
+    });
     const sid = sessionIds[0]!;
+    const fid = logFileIds[0]!;
 
     const tampered = await rewriteZip(zipBuffer, async (zip) => {
-      const bytes = await zip.file(slogName(sid))!.async('uint8array');
+      const bytes = await zip.file(slogName(fid))!.async('uint8array');
       const i = Math.floor(bytes.length / 2);
       bytes[i] = bytes[i]! ^ 0x01;
-      zip.file(slogName(sid), bytes);
+      zip.file(slogName(fid), bytes);
     });
 
-    expect(verifyLogBytes(await load(tampered)).status).toBe('fail');
+    const check = verifyLogBytes(await load(tampered));
+    expect(check.status).toBe('fail');
+    // Located by the FILENAME uuid, reported under the LOGICAL id.
+    expect(check.detail).toContain(sid);
   });
 
   it('catches a TRUNCATED .slog', async () => {
-    const { zipBuffer, sessionIds } = await buildTestBundle({ sessions: [{ eventCount: 6 }] });
+    const { zipBuffer, sessionIds, logFileIds } = await buildTestBundle({
+      sessions: [{ eventCount: 6 }],
+    });
     const sid = sessionIds[0]!;
+    const fid = logFileIds[0]!;
 
     const tampered = await rewriteZip(zipBuffer, async (zip) => {
-      const lines = (await zip.file(slogName(sid))!.async('string')).trim().split('\n');
+      const lines = (await zip.file(slogName(fid))!.async('string')).trim().split('\n');
       // Drop the last two entries. The remaining chain still self-verifies.
-      zip.file(slogName(sid), `${lines.slice(0, -2).join('\n')}\n`);
+      zip.file(slogName(fid), `${lines.slice(0, -2).join('\n')}\n`);
     });
 
-    expect(verifyLogBytes(await load(tampered)).status).toBe('fail');
+    const check = verifyLogBytes(await load(tampered));
+    expect(check.status).toBe('fail');
+    expect(check.detail).toContain(sid);
   });
 
   it('catches a tampered .slog.meta and names that file', async () => {
-    const { zipBuffer, sessionIds } = await buildTestBundle({ sessions: [{ eventCount: 4 }] });
+    const { zipBuffer, sessionIds, logFileIds } = await buildTestBundle({
+      sessions: [{ eventCount: 4 }],
+    });
     const sid = sessionIds[0]!;
+    const fid = logFileIds[0]!;
 
     const tampered = await rewriteZip(zipBuffer, async (zip) => {
-      const name = `${slogName(sid)}.meta`;
+      const name = `${slogName(fid)}.meta`;
       const meta = JSON.parse(await zip.file(name)!.async('string')) as Record<string, unknown>;
       // Shape stays valid so the loader still parses it — only bytes change.
       meta['session_pubkey'] = 'f'.repeat(64);
@@ -163,17 +189,18 @@ describe('verifyLogBytes — catches post-seal modification', () => {
     const check = verifyLogBytes(await load(tampered));
     expect(check.status).toBe('fail');
     expect(check.detail).toContain('.slog.meta');
+    expect(check.detail).toContain(sid);
   });
 
   it('reports every mismatching session, not just the first', async () => {
-    const { zipBuffer, sessionIds } = await buildTestBundle({
+    const { zipBuffer, sessionIds, logFileIds } = await buildTestBundle({
       sessions: [{ eventCount: 3 }, { eventCount: 3 }],
     });
 
     const tampered = await rewriteZip(zipBuffer, async (zip) => {
-      for (const sid of sessionIds) {
-        const text = await zip.file(slogName(sid))!.async('string');
-        zip.file(slogName(sid), `${text}\n`);
+      for (const fid of logFileIds) {
+        const text = await zip.file(slogName(fid))!.async('string');
+        zip.file(slogName(fid), `${text}\n`);
       }
     });
 
@@ -184,15 +211,16 @@ describe('verifyLogBytes — catches post-seal modification', () => {
   });
 
   it('quotes both the committed and the actual digest, so staff can audit it', async () => {
-    const { zipBuffer, sessionIds, manifest } = await buildTestBundle({
+    const { zipBuffer, sessionIds, logFileIds, manifest } = await buildTestBundle({
       sessions: [{ eventCount: 3 }],
     });
     const sid = sessionIds[0]!;
+    const fid = logFileIds[0]!;
     const committed = manifest.sessions.find((s) => s.session_id === sid)!.slog_sha256;
 
     const tampered = await rewriteZip(zipBuffer, async (zip) => {
-      const text = await zip.file(slogName(sid))!.async('string');
-      zip.file(slogName(sid), `${text}\n`);
+      const text = await zip.file(slogName(fid))!.async('string');
+      zip.file(slogName(fid), `${text}\n`);
     });
 
     const check = verifyLogBytes(await load(tampered));
@@ -289,16 +317,17 @@ describe('verifyLogBytes — rolling-sealed bundles', () => {
   });
 
   it('catches an appended entry in a rolling-sealed bundle', async () => {
-    const { zipBuffer, sessionIds } = await buildTestBundle({
+    const { zipBuffer, sessionIds, logFileIds } = await buildTestBundle({
       sessions: [{ eventCount: 4 }, { eventCount: 4 }],
       rollingSeal: {},
     });
     const sid = sessionIds[1]!;
+    const fid = logFileIds[1]!;
 
     const tampered = await rewriteZip(zipBuffer, async (zip) => {
-      const text = await zip.file(slogName(sid))!.async('string');
+      const text = await zip.file(slogName(fid))!.async('string');
       const lines = text.trim().split('\n');
-      zip.file(slogName(sid), `${text}${lines[lines.length - 1]!}\n`);
+      zip.file(slogName(fid), `${text}${lines[lines.length - 1]!}\n`);
     });
 
     const bundle = await load(tampered);
@@ -323,16 +352,17 @@ describe('verifyLogBytes — rolling-sealed bundles', () => {
     // Proves the previous test fails for the right reason. A prefix search
     // would still find the sealed prefix intact and report growth; the final
     // marker is what makes this a mismatch at all.
-    const { zipBuffer, sessionIds } = await buildTestBundle({
+    const { zipBuffer, sessionIds, logFileIds } = await buildTestBundle({
       sessions: [{ eventCount: 4 }],
       rollingSeal: { final: true },
     });
     const sid = sessionIds[0]!;
+    const fid = logFileIds[0]!;
 
     const tampered = await rewriteZip(zipBuffer, async (zip) => {
-      const text = await zip.file(slogName(sid))!.async('string');
+      const text = await zip.file(slogName(fid))!.async('string');
       const lines = text.trim().split('\n');
-      zip.file(slogName(sid), `${text}${lines[lines.length - 1]!}\n`);
+      zip.file(slogName(fid), `${text}${lines[lines.length - 1]!}\n`);
     });
 
     const bundle = await load(tampered);
@@ -344,26 +374,33 @@ describe('verifyLogBytes — rolling-sealed bundles', () => {
     expect(check.status).toBe('fail');
     expect(check.detail).toContain('FINAL');
     expect(check.detail).toContain('after the session ended');
+    expect(check.detail).toContain(sid);
   });
 
   it('does NOT accuse the same append when the seal is not final', async () => {
     // The honest mid-session archive: identical bytes, identical append, but
     // the seal never claimed the log was finished. Accusing here is the exact
     // false-positive this whole design exists to avoid.
-    const { zipBuffer, sessionIds } = await buildTestBundle({
+    const { zipBuffer, sessionIds, logFileIds } = await buildTestBundle({
       sessions: [{ eventCount: 4 }],
       rollingSeal: { final: false },
     });
     const sid = sessionIds[0]!;
+    const fid = logFileIds[0]!;
 
     const grown = await rewriteZip(zipBuffer, async (zip) => {
-      const text = await zip.file(slogName(sid))!.async('string');
+      const text = await zip.file(slogName(fid))!.async('string');
       const lines = text.trim().split('\n');
-      zip.file(slogName(sid), `${text}${lines[lines.length - 1]!}\n`);
+      zip.file(slogName(fid), `${text}${lines[lines.length - 1]!}\n`);
     });
 
     const bundle = await load(grown);
     expect(bundle.rollingSeal?.coverage?.[0]?.final).toBe(false);
+    // Coverage is keyed by the LOGICAL session id, never the `.slog` filename
+    // uuid. Keying it wrongly leaves coverage EMPTY, which silently downgrades
+    // this bundle to whole-file equality and accuses this student.
+    expect(bundle.rollingSeal?.coverage?.[0]?.sessionId).toBe(sid);
+    expect(bundle.rollingSeal?.coverage?.[0]?.sessionId).not.toBe(fid);
 
     const check = verifyLogBytes(bundle);
     expect(check.status).toBe('pass');
@@ -377,16 +414,17 @@ describe('verifyLogBytes — rolling-sealed bundles', () => {
     // statements by the same key, and the shape is byte-for-byte identical to
     // an honest mid-session archive — so it stays a PASS. What it must not do
     // is read as "sealed in full", and this is the sentence that stops it.
-    const { zipBuffer, sessionIds } = await buildTestBundle({
+    const { zipBuffer, sessionIds, logFileIds } = await buildTestBundle({
       sessions: [{ eventCount: 4 }],
       rollingSeal: { final: false },
     });
     const sid = sessionIds[0]!;
+    const fid = logFileIds[0]!;
 
     const grown = await rewriteZip(zipBuffer, async (zip) => {
-      const text = await zip.file(slogName(sid))!.async('string');
+      const text = await zip.file(slogName(fid))!.async('string');
       const lines = text.trim().split('\n');
-      zip.file(slogName(sid), `${text}${lines[lines.length - 1]!}\n`);
+      zip.file(slogName(fid), `${text}${lines[lines.length - 1]!}\n`);
     });
 
     const check = verifyLogBytes(await load(grown));
@@ -413,20 +451,23 @@ describe('verifyLogBytes — rolling-sealed bundles', () => {
     // Making finality the trigger for strictness must not cost the prefix
     // enforcement that already existed. Editing the sealed region reproduces no
     // state the file ever passed through, final or not.
-    const { zipBuffer, sessionIds } = await buildTestBundle({
+    const { zipBuffer, sessionIds, logFileIds } = await buildTestBundle({
       sessions: [{ eventCount: 5 }],
       rollingSeal: { final: false },
     });
     const sid = sessionIds[0]!;
+    const fid = logFileIds[0]!;
 
     const tampered = await rewriteZip(zipBuffer, async (zip) => {
-      const bytes = await zip.file(slogName(sid))!.async('uint8array');
+      const bytes = await zip.file(slogName(fid))!.async('uint8array');
       const i = Math.floor(bytes.length / 2);
       bytes[i] = bytes[i]! ^ 0x01;
-      zip.file(slogName(sid), bytes);
+      zip.file(slogName(fid), bytes);
     });
 
-    expect(verifyLogBytes(await load(tampered)).status).toBe('fail');
+    const check = verifyLogBytes(await load(tampered));
+    expect(check.status).toBe('fail');
+    expect(check.detail).toContain(sid);
   });
 });
 
@@ -512,19 +553,22 @@ describe('verifyLogBytes — re-runnable against a stored, source-stripped bundl
 
   it('STILL CATCHES a tampered log in a stripped bundle', async () => {
     // The detection must not merely survive stripping — it must keep working.
-    const { zipBuffer, sessionIds } = await buildTestBundle({
+    const { zipBuffer, sessionIds, logFileIds } = await buildTestBundle({
       sessions: [{ eventCount: 5 }],
       submissionFiles: [{ path: 'a.py', status: 'present', content: 'a = 1\n' }],
     });
     const sid = sessionIds[0]!;
+    const fid = logFileIds[0]!;
 
     const strippedThenTampered = await rewriteZip(await strip(zipBuffer), async (zip) => {
-      const text = await zip.file(slogName(sid))!.async('string');
+      const text = await zip.file(slogName(fid))!.async('string');
       const lines = text.trim().split('\n');
-      zip.file(slogName(sid), `${text}${lines[lines.length - 1]!}\n`);
+      zip.file(slogName(fid), `${text}${lines[lines.length - 1]!}\n`);
     });
 
-    expect(verifyLogBytes(await load(strippedThenTampered)).status).toBe('fail');
+    const check = verifyLogBytes(await load(strippedThenTampered));
+    expect(check.status).toBe('fail');
+    expect(check.detail).toContain(sid);
   });
 
   it('still passes a stripped ROLLING-sealed bundle', async () => {

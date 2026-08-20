@@ -42,11 +42,14 @@ import {
 } from './rolling-seal.js';
 import { computeSlogCoverage, computeMetaCoverage, wholeFileCoverage } from './rolling-coverage.js';
 import type { RollingSealCoverage } from './rolling-coverage.js';
+import { asLogicalSessionId } from './types.js';
 import type {
   Bundle,
   BundleRollingSeal,
   LoaderError,
+  LogicalSessionId,
   RollingSealDefect,
+  SessionFiles,
   SessionParseError,
 } from './types.js';
 
@@ -162,12 +165,37 @@ export async function loadBundle(
   );
 
   // Collect results — fail fast on the first error.
+  //
+  // The pairing between a parsed session and the FILES it was parsed from is
+  // established HERE, by index, because `Promise.all` preserves input order and
+  // this is the last point at which that correspondence exists — step 4 sorts
+  // `parsedSessions` by wall clock and destroys it.
+  //
+  // Keying by the parsed session's LOGICAL id (`session.start.data.session_id`)
+  // is the whole point: that is the id space rolling seals, manifest entries and
+  // every downstream consumer live in. The `.slog` FILENAME uuid is a different
+  // value in production and is now a distinct branded type so it cannot be used
+  // here by accident. See `types.ts` / {@link LogFileId}.
   const parsedSessions = [];
-  for (const result of sessionResults) {
+  const filesByLogicalSessionId = new Map<LogicalSessionId, SessionFiles | 'ambiguous'>();
+  for (let i = 0; i < sessionResults.length; i++) {
+    const result = sessionResults[i]!;
     if (!result.ok) {
       return result;
     }
     parsedSessions.push(result.value);
+
+    // Two `.slog` files can carry the same logical session id only if a log was
+    // duplicated under a second filename. Then no single file is "the" file that
+    // session's seal covers, and silently taking the last one would compute
+    // coverage over bytes the seal never saw. Refuse rather than guess: the seal
+    // falls through to whole-file equality, exactly as a classic bundle does.
+    const logicalId = asLogicalSessionId(result.value.sessionId);
+    const files = sessionFiles[i]!;
+    filesByLogicalSessionId.set(
+      logicalId,
+      filesByLogicalSessionId.has(logicalId) ? 'ambiguous' : files,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -204,7 +232,8 @@ export async function loadBundle(
 
     const synthesized = synthesizeRollingUnionManifest(
       rollingValidation.seals,
-      parsedSessions.map((s) => s.sessionId),
+      // LOGICAL ids, read out of each `.slog`'s session.start by parse-session.
+      parsedSessions.map((s) => asLogicalSessionId(s.sessionId)),
     );
     if (synthesized !== null) {
       unionManifest = synthesized.manifest;
@@ -225,11 +254,20 @@ export async function loadBundle(
     // catching a post-seal append at full strength. See rolling-coverage.ts.
     let coverage: RollingSealCoverage[] | undefined;
     if (classicManifest === null) {
-      const filesBySession = new Map(sessionFiles.map((f) => [f.sessionId, f]));
       coverage = [];
       for (const seal of rollingValidation.seals) {
-        const files = filesBySession.get(seal.sessionId);
-        if (files === undefined) continue; // no_session_log — reported as a defect
+        // `seal.sessionId` is a LOGICAL session id — a rolling seal is named
+        // `manifest-<session.start.data.session_id>.json` — so it is resolved
+        // against the map built from the PARSED sessions above, never against
+        // the `.slog` filename uuids. Those are two different values in every
+        // production bundle; keying this lookup on the filename uuid missed on
+        // every git submission, left coverage empty, and sent
+        // `log_bytes_match` down the whole-file path that then accused honest
+        // students at high severity. See `types.ts` / {@link LogFileId}.
+        const files = filesByLogicalSessionId.get(seal.sessionId);
+        // undefined → no_session_log, reported as a defect.
+        // 'ambiguous' → duplicated log, see the pairing loop above.
+        if (files === undefined || files === 'ambiguous') continue;
         const entry = seal.manifest.sessions[0];
         // A FINAL seal (written by dispose() over a finished, flushed log, and
         // signed) commits to the whole file, so it skips the prefix search

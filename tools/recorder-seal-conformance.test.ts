@@ -128,12 +128,56 @@ function uuid(n: number): string {
   return `00000000-0000-4000-8000-${h}`;
 }
 
+/**
+ * The uuid in a `.slog` FILENAME — deliberately a DIFFERENT value from the
+ * logical `session.start.data.session_id` that {@link uuid} produces.
+ *
+ * ## THE TWO-UUID RULE, and why it is the default here
+ *
+ * Production mints these independently. `session-registry.ts` names the file
+ * `session-${randomUUID()}.slog`; the rolling seal is named after
+ * `recorderContext.session_id`. They are never equal in a real bundle.
+ *
+ * Every fixture in this repo used to spell both with the same value, and that
+ * is not a cosmetic shortcut — it makes an entire class of bug INEXPRESSIBLE.
+ * `parse-bundle.ts` keyed its rolling-seal → log-files map by the FILENAME uuid
+ * and looked it up by the seal's LOGICAL id. With equal ids the lookup hits and
+ * everything works; with production's two ids it misses on every session, prefix
+ * coverage comes out empty for the whole bundle, and `log_bytes_match` falls
+ * back to whole-file equality — accusing every honest git submission whose last
+ * seal was non-final, at high severity and confidence 1.0. The gate below was
+ * green throughout.
+ *
+ * So the default DIFFERS. A scenario that needs the two ids equal has to pass
+ * `fileUuid` explicitly, which makes it a visible claim in the diff.
+ */
+function logFileUuid(n: number): string {
+  const h = n.toString(16).padStart(12, '0');
+  return `f11e0000-0000-4000-8000-${h}`;
+}
+
+/** The `.slog` filename uuid a session gets when a scenario does not pin one. */
+function defaultFileUuidFor(sessionId: string): string {
+  // Derived from the logical id so it stays deterministic and greppable, and
+  // asserted unequal so the derivation can never silently collapse to identity.
+  const derived = sessionId.replace(/^[0-9a-f]{8}/, 'f11e0000');
+  if (derived === sessionId) {
+    throw new Error(`defaultFileUuidFor produced the logical id itself: ${sessionId}`);
+  }
+  return derived;
+}
+
 // ---------------------------------------------------------------------------
 // The write direction: drive the recorder's real session pipeline.
 // ---------------------------------------------------------------------------
 
 type RecordedSession = {
+  /** LOGICAL id: `session.start.data.session_id`. Names the rolling seal. */
   sessionId: string;
+  /** The uuid in the `.slog` FILENAME. Different from `sessionId`. */
+  fileUuid: string;
+  /** Absolute path of the `.slog` this session wrote. */
+  slogPath: string;
   keypair: SessionKeypair;
   /** Final content per workspace-relative path, as the recording left it. */
   finalContent: Map<string, string>;
@@ -152,10 +196,16 @@ async function recordSession(opts: {
   provenanceDir: string;
   sessionId: string;
   prevSessionId: string | null;
+  /**
+   * The uuid in the `.slog` FILENAME. Defaults to a value DIFFERENT from
+   * `sessionId`, as production does — see {@link logFileUuid}.
+   */
+  fileUuid?: string;
   /** workspace-relative path -> { initial, append } */
   files: Array<{ path: string; initial: string; append: string }>;
 }): Promise<RecordedSession> {
   const { provenanceDir, sessionId, prevSessionId, files } = opts;
+  const fileUuid = opts.fileUuid ?? defaultFileUuidFor(sessionId);
 
   // Real per-session keypair (PRD §4.6). This is the key whose PRIVATE half
   // signs the bundle manifest and whose PUBLIC half is recorded inside
@@ -166,7 +216,7 @@ async function recordSession(opts: {
   const keypair = await generateSessionKeypair();
   const encryptedPrivkey = await encryptSessionPrivkey(keypair.privateKey, MANIFEST_SIG, sessionId);
 
-  const slogPath = path.join(provenanceDir, `session-${sessionId}.slog`);
+  const slogPath = path.join(provenanceDir, `session-${fileUuid}.slog`);
 
   const clock = new FixedClock(0, new Date('2026-05-19T14:00:00.000Z'));
   const writer = await SessionWriter.open({ slogPath, clock });
@@ -247,7 +297,7 @@ async function recordSession(opts: {
   await writer.dispose();
   await meta.dispose();
 
-  return { sessionId, keypair, finalContent };
+  return { sessionId, fileUuid, slogPath, keypair, finalContent };
 }
 
 /** Materialize the recording's final content on disk, so seal reads real bytes. */
@@ -630,7 +680,7 @@ describe('mutation tests: a corrupted recorder bundle must be caught', () => {
       ],
     });
     bundlePath = scenario.bundlePath;
-    slogName = `session-${scenario.sessions[0]!.sessionId}.slog`;
+    slogName = `session-${scenario.sessions[0]!.fileUuid}.slog`;
 
     // Sanity: the un-mutated bundle is green, so every red below is caused by
     // the mutation and not by a broken fixture.
@@ -1011,7 +1061,9 @@ async function buildRollingSealedBundle(opts: {
       provenanceDir,
       sessionId,
       prevSessionId: prev,
-      slogPath: path.join(provenanceDir, `session-${sessionId}.slog`),
+      // The path the recording actually wrote — named by its FILENAME uuid,
+      // which is not the logical session id. See logFileUuid().
+      slogPath: recorded.slogPath,
       assignmentRoot: root,
       assignmentId: ASSIGNMENT_ID,
       semester: SEMESTER,
@@ -1180,7 +1232,7 @@ describe('rolling seal → analysis-core load + validate (git-submitted shape)',
         provenanceDir,
         sessionId,
         prevSessionId: null,
-        slogPath: path.join(provenanceDir, `session-${sessionId}.slog`),
+        slogPath: recorded.slogPath,
         assignmentRoot: root,
         assignmentId: ASSIGNMENT_ID,
         semester: SEMESTER,
@@ -1397,7 +1449,10 @@ describe('rolling seal → analysis-core load + validate (git-submitted shape)',
 // ===========================================================================
 
 type LiveSession = {
+  /** LOGICAL id: `session.start.data.session_id`. Names the rolling seal. */
   sessionId: string;
+  /** The uuid in the `.slog` FILENAME. Different from `sessionId` by default. */
+  fileUuid: string;
   keypair: SessionKeypair;
   slogPath: string;
   /** Final content per workspace-relative path, as the recording has left it. */
@@ -1427,14 +1482,15 @@ async function openLiveSession(opts: {
   sessionId: string;
   prevSessionId: string | null;
   /**
-   * The uuid in the `.slog` FILENAME, when it must differ from the LOGICAL
-   * `session.start.data.session_id`.
+   * The uuid in the `.slog` FILENAME.
    *
-   * Defaults to `sessionId`, which is what every scenario above wants. In
-   * PRODUCTION the two are always different: `session-registry.ts` names the
-   * file `session-${randomUUID()}.slog` while the rolling seal is named after
-   * `recorderContext.session_id`. Any test that reasons about which id a seal
-   * is matched on has to make them differ, or it passes vacuously.
+   * Defaults to a value that DIFFERS from the LOGICAL
+   * `session.start.data.session_id`, because that is what PRODUCTION does:
+   * `session-registry.ts` names the file `session-${randomUUID()}.slog` while
+   * the rolling seal is named after `recorderContext.session_id`. Any test that
+   * reasons about which id a seal is matched on passes VACUOUSLY when the two
+   * are equal — which is exactly how the coverage-keying bug survived this gate.
+   * See {@link logFileUuid}.
    */
   fileUuid?: string;
   /**
@@ -1444,10 +1500,11 @@ async function openLiveSession(opts: {
   neverFlush?: boolean;
 }): Promise<LiveSession> {
   const { provenanceDir, sessionId, prevSessionId } = opts;
+  const fileUuid = opts.fileUuid ?? defaultFileUuidFor(sessionId);
 
   const keypair = await generateSessionKeypair();
   const encryptedPrivkey = await encryptSessionPrivkey(keypair.privateKey, MANIFEST_SIG, sessionId);
-  const slogPath = path.join(provenanceDir, `session-${opts.fileUuid ?? sessionId}.slog`);
+  const slogPath = path.join(provenanceDir, `session-${fileUuid}.slog`);
 
   const clock = new FixedClock(0, new Date('2026-05-19T14:00:00.000Z'));
   const writer = await SessionWriter.open({
@@ -1484,6 +1541,7 @@ async function openLiveSession(opts: {
 
   return {
     sessionId,
+    fileUuid,
     keypair,
     slogPath,
     finalContent,
@@ -1768,6 +1826,225 @@ describe('HONEST STUDENT: a rolling seal whose .slog kept growing after it', () 
 // exactly that append (see the both-shapes test at the end).
 // ===========================================================================
 
+// ===========================================================================
+// THE TWO-UUID SPLIT — the keying the whole prefix design hangs on.
+//
+// A bundle carries two independent uuids per session, and PRODUCTION ALWAYS
+// MAKES THEM DIFFERENT:
+//
+//   `.slog` FILENAME uuid   `session-${randomUUID()}.slog`   (session-registry.ts)
+//   LOGICAL session id      recorderContext.session_id       (session.start payload,
+//                                                             and manifest-<id>.json)
+//
+// `parse-bundle.ts` resolves each rolling seal to the log files it covers. The
+// seal is named by the LOGICAL id, so that lookup must live in the logical id
+// space. It lived in the filename space:
+// `new Map(sessionFiles.map((f) => [f.sessionId, f]))` was keyed by the FILENAME
+// uuid and looked up with `seal.sessionId`. In production that misses on every
+// session. `coverage` comes out empty — and empty coverage is not inert:
+// `verify-log-bytes.ts` reads its absence as "this is a classic seal" and applies
+// WHOLE-FILE equality to a digest that only ever committed to a PREFIX. So
+// `log_bytes_match` failed at high severity, confidence 1.0, on every honest git
+// submission whose last seal was non-final — a crash, a power cut, a full disk,
+// or simply an archive taken mid-session.
+//
+// No test caught it because every fixture in this repo spelled both uuids with
+// the SAME value, so the broken lookup hit. A fixture that cannot tell the two
+// ids apart cannot fail on confusing them. Every rolling fixture in this file
+// now defaults them apart (see `logFileUuid`), and the tests below pin the
+// consequence directly rather than relying on that default staying put.
+// ===========================================================================
+
+describe('THE TWO-UUID SPLIT: seal → log resolution is in the LOGICAL id space', () => {
+  /**
+   * The decisive scenario: production's two-uuid split, a NON-final seal, and a
+   * log that grew after it. This is a `git commit && git push` from an editor
+   * that is still open, and it must produce no finding whatsoever.
+   */
+  async function nonFinalGrownRepo(label: string): Promise<{
+    bundlePath: string;
+    sessionId: string;
+    fileUuid: string;
+  }> {
+    const root = await makeRoot(label);
+    const provenanceDir = path.join(root, '.provenance');
+    await fsPromises.mkdir(provenanceDir, { recursive: true });
+
+    const live = await openLiveSession({
+      provenanceDir,
+      sessionId: uuid(1),
+      prevSessionId: null,
+    });
+
+    await live.work({ path: 'main.py', initial: 'def solve():\n    pass\n', append: 'solve()\n' });
+    await live.flush();
+    // Materialize the workspace BEFORE the roll, so the seal records a real
+    // sha256 for `main.py` and check 8 genuinely runs rather than skipping.
+    // Without this the scenario would still exercise the keying, but it would
+    // assert less than it looks like it does.
+    await writeWorkspaceFiles(root, live.finalContent);
+    await live.roll(); // the checkpoint roll: non-final, signed over a prefix
+
+    live.idle(6); // …and the student keeps working. Nothing seals again.
+    await live.close();
+    await writeWorkspaceFiles(root, live.finalContent);
+
+    const bundlePath = await zipRepo({
+      root,
+      provenanceDir,
+      submissionFiles: live.finalContent,
+      outputPath: path.join(root, 'git-clone.zip'),
+    });
+
+    return { bundlePath, sessionId: live.sessionId, fileUuid: live.fileUuid };
+  }
+
+  it('the fixture really is production-shaped: the two uuids differ on disk', async () => {
+    // Guard the guard. If this ever collapses to a single value, every
+    // assertion below goes vacuous — which is exactly how the bug survived.
+    const { bundlePath, sessionId, fileUuid } = await nonFinalGrownRepo('two-uuid-shape');
+
+    expect(fileUuid).not.toBe(sessionId);
+
+    const names = await zipEntryNames(bundlePath);
+    expect(names).toContain(`session-${fileUuid}.slog`);
+    expect(names).toContain(`session-${fileUuid}.slog.meta`);
+    expect(names).toContain(`manifest-${sessionId}.json`);
+    expect(names).toContain(`manifest-${sessionId}.sig`);
+    // Neither name is derivable from the other id — asserted in both directions
+    // so they cannot quietly drift back into agreement.
+    expect(names).not.toContain(`session-${sessionId}.slog`);
+    expect(names).not.toContain(`manifest-${fileUuid}.json`);
+  });
+
+  it('DOES NOT ACCUSE an honest student whose log grew past a non-final seal', async () => {
+    const { bundlePath } = await nonFinalGrownRepo('two-uuid-honest');
+    const verified = await loadAndValidate(bundlePath);
+
+    expectAllChecksPass(verified.report);
+    expectNoBundleDetections(verified.report);
+    expect(detectionStatusOf(verified.report, 'log_bytes_match')).toBe('pass');
+  });
+
+  it('resolves coverage for the session, keyed by its LOGICAL id', async () => {
+    // The mechanism, pinned directly. An empty `coverage` is what silently
+    // downgraded the reading to whole-file equality, so "coverage exists, and is
+    // keyed by the logical id" is the load-bearing fact — not the pass above,
+    // which some future bug could reproduce for the wrong reason.
+    const { bundlePath, sessionId, fileUuid } = await nonFinalGrownRepo('two-uuid-coverage');
+    const verified = await loadAndValidate(bundlePath);
+
+    const coverage = verified.bundle.rollingSeal!.coverage!;
+    expect(coverage).toHaveLength(1);
+    expect(coverage[0]!.sessionId).toBe(sessionId);
+    expect(coverage[0]!.sessionId).not.toBe(fileUuid);
+    expect(coverage[0]!.final).toBe(false);
+    // The log grew after the roll, so the seal covers a strict prefix.
+    // `partial` is the honest reading; `no_match` would be the accusation.
+    expect(coverage[0]!.slog.kind).toBe('partial');
+
+    const detection = verified.report.bundleDetections!.find((d) => d.id === 'log_bytes_match')!;
+    expect(detection.status).toBe('pass');
+    expect(detection.detail).toContain('written after the last seal');
+  });
+
+  it('and a FINAL seal under the same split still catches a post-session append', async () => {
+    // The other half of the contract. Fixing the keying must not buy the append
+    // hole back: a seal the recorder marked `final` keeps whole-file semantics,
+    // with the two uuids just as different.
+    const root = await makeRoot('two-uuid-final-append');
+    const scenario = await buildRollingSealedBundle({
+      root,
+      sessionCount: 1,
+      files: [{ path: 'main.py', initial: 'def solve():\n    pass\n', append: 'solve()\n' }],
+    });
+
+    const recorded = scenario.sessions[0]!;
+    expect(recorded.fileUuid).not.toBe(recorded.sessionId);
+
+    const clean = await loadAndValidate(scenario.bundlePath);
+    expect(clean.bundle.rollingSeal!.coverage![0]!.final).toBe(true);
+    expect(clean.bundle.rollingSeal!.coverage![0]!.sessionId).toBe(recorded.sessionId);
+    expectNoBundleDetections(clean.report);
+
+    const slogName = `session-${recorded.fileUuid}.slog`;
+    const buf = await mutateZip(scenario.bundlePath, async (zip) => {
+      const lines = (await zip.file(slogName)!.async('string')).trim().split('\n');
+      const last = JSON.parse(lines[lines.length - 1]!) as {
+        seq: number;
+        t: number;
+        wall: string;
+        hash: string;
+      };
+      const appended = chainEntry(last.hash, {
+        seq: last.seq + 1,
+        t: last.t + 1000,
+        wall: new Date(new Date(last.wall).getTime() + 1000).toISOString(),
+        kind: 'session.heartbeat',
+        data: { focused: true, active_file: null, idle_since_ms: 0 },
+      });
+      zip.file(slogName, `${lines.join('\n')}\n${serializeEntry(appended)}`);
+    });
+
+    const report = await validateMutated(buf);
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('fail');
+    const detection = report.bundleDetections!.find((d) => d.id === 'log_bytes_match')!;
+    expect(detection.detail).toContain('FINAL');
+    expect(detection.detail).toContain('after the session ended');
+    // Named by the LOGICAL id — the id staff see next to a student's name.
+    expect(detection.detail).toContain(recorded.sessionId);
+  });
+
+  it('and the sealed PREFIX is still enforced under the split', async () => {
+    // Prefix leniency covers only what came AFTER the seal. Editing inside the
+    // sealed region reproduces no state the file ever passed through and must
+    // still fail — otherwise the fix would have traded a false accusation for a
+    // missed real one.
+    const { bundlePath, fileUuid } = await nonFinalGrownRepo('two-uuid-prefix');
+    const slogName = `session-${fileUuid}.slog`;
+
+    const buf = await mutateZip(bundlePath, async (zip) => {
+      const text = await zip.file(slogName)!.async('string');
+      const out = text.replace(
+        /"([0-9a-f]{64})"/,
+        (_m, hex: string) => `"${hex[0] === '0' ? '1' : '0'}${hex.slice(1)}"`,
+      );
+      expect(out).not.toBe(text);
+      zip.file(slogName, out);
+    });
+
+    expect(detectionStatusOf(await validateMutated(buf), 'log_bytes_match')).toBe('fail');
+  });
+
+  it('a CLASSIC bundle under the split is unaffected: no coverage, whole-file equality', async () => {
+    // Classic bundles legitimately get no coverage — a classic seal is taken
+    // once, over a finished log — and must keep catching an append at full
+    // strength. The keying fix touches only the rolling path; this is the proof.
+    const root = await makeRoot('two-uuid-classic');
+    const scenario = await buildSealedBundle({
+      root,
+      sessionCount: 1,
+      files: [{ path: 'main.py', initial: 'a = 1\n', append: 'b = 2\n' }],
+    });
+
+    const recorded = scenario.sessions[0]!;
+    expect(recorded.fileUuid).not.toBe(recorded.sessionId);
+
+    const verified = await loadAndValidate(scenario.bundlePath);
+    expect(verified.bundle.rollingSeal).toBeUndefined();
+    expectAllChecksPass(verified.report);
+    expectNoBundleDetections(verified.report);
+
+    const slogName = `session-${recorded.fileUuid}.slog`;
+    const buf = await mutateZip(scenario.bundlePath, async (zip) => {
+      const text = await zip.file(slogName)!.async('string');
+      const lines = text.trim().split('\n');
+      zip.file(slogName, `${text}${lines[lines.length - 1]!}\n`);
+    });
+    expect(detectionStatusOf(await validateMutated(buf), 'log_bytes_match')).toBe('fail');
+  });
+});
+
 describe('mutations: the sealed PREFIX of a mid-flight rolling bundle is still enforced', () => {
   let bundlePath: string;
   let slogName: string;
@@ -1791,7 +2068,7 @@ describe('mutations: the sealed PREFIX of a mid-flight rolling bundle is still e
     await live.close();
     await writeWorkspaceFiles(root, live.finalContent);
 
-    slogName = `session-${live.sessionId}.slog`;
+    slogName = `session-${live.fileUuid}.slog`;
     bundlePath = await zipRepo({
       root,
       provenanceDir,
@@ -1979,7 +2256,7 @@ describe('a both-shapes bundle keeps WHOLE-FILE semantics', () => {
     expect(verified.bundle.rollingSeal!.coverage).toBeUndefined();
     expectNoBundleDetections(verified.report);
 
-    const slogName = `session-${scenario.sessions[0]!.sessionId}.slog`;
+    const slogName = `session-${scenario.sessions[0]!.fileUuid}.slog`;
     const buf = await mutateZip(sealed.bundlePath, async (zip) => {
       const lines = (await zip.file(slogName)!.async('string')).trim().split('\n');
       const last = JSON.parse(lines[lines.length - 1]!) as {
@@ -2093,7 +2370,7 @@ describe('a FINAL rolling seal closes the append hole', () => {
       files: [{ path: 'main.py', initial: 'def solve():\n    pass\n', append: 'solve()\n' }],
     });
     verified = await loadAndValidate(scenario.bundlePath);
-    slogName = `session-${scenario.sessions[0]!.sessionId}.slog`;
+    slogName = `session-${scenario.sessions[0]!.fileUuid}.slog`;
   });
 
   it('writes a seal marked final, signed by the session’s own key', async () => {
@@ -2274,7 +2551,7 @@ describe('the same append under a NON-final seal is not a finding', () => {
       files: [{ path: 'main.py', initial: 'def solve():\n    pass\n', append: 'solve()\n' }],
       final: false,
     });
-    slogName = `session-${scenario.sessions[0]!.sessionId}.slog`;
+    slogName = `session-${scenario.sessions[0]!.fileUuid}.slog`;
   });
 
   it('carries no final marker and is read as a prefix commitment', async () => {

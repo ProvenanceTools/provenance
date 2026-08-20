@@ -33,6 +33,11 @@ export type LoaderError =
   | { kind: 'invalid_manifest'; detail: string }
   | { kind: 'missing_signature' }
   | { kind: 'no_sessions' }
+  // `sessionId` on these two is the `.slog` FILENAME uuid, not a logical
+  // session id — the log that would tell us the logical id is the very thing
+  // that is missing or unreadable. It is displayed, never matched on. Kept
+  // unbranded because the analyzer renders this union directly (`ErrorPanel`).
+  // See {@link LogFileId}.
   | { kind: 'orphaned_meta'; sessionId: string }
   | { kind: 'orphaned_slog'; sessionId: string }
   | { kind: 'unexpected_file'; filename: string; detail?: string }
@@ -52,9 +57,97 @@ export type SessionParseError =
 // BundleFiles — raw unzipped content
 // ---------------------------------------------------------------------------
 
+declare const LOG_FILE_ID_BRAND: unique symbol;
+
+/**
+ * The uuid in a `.slog` FILENAME. **Not** a session id.
+ *
+ * ## The two id spaces, and why this type exists
+ *
+ * A bundle carries two independent identifiers per session, and in production
+ * they are ALWAYS different values:
+ *
+ *  - the **log file id** — the uuid in `session-<uuid>.slog`, minted by the
+ *    recorder's writer (`session-registry.ts`: `session-${randomUUID()}.slog`).
+ *    It names a file and nothing else.
+ *  - the **logical session id** — `session.start.data.session_id`, which is
+ *    `recorderContext.session_id`. It is what a rolling seal is named after
+ *    (`manifest-<session_id>.json`), what the manifest's `sessions[].session_id`
+ *    carries, and what `ParsedSession.sessionId` / `Bundle.sessions[].sessionId`
+ *    hold everywhere downstream.
+ *
+ * Crossing them has now produced a maximum-severity false accusation TWICE.
+ * Most recently a `Map` keyed by log file id was looked up by a seal's logical
+ * id in `parse-bundle.ts`: the miss was silent, every rolling-only bundle came
+ * out with EMPTY prefix coverage, and `log_bytes_match` fell back to whole-file
+ * equality — failing at high severity / confidence 1.0 on every honest git
+ * submission whose last seal was non-final.
+ *
+ * The brand makes that specific mistake a COMPILE ERROR:
+ * `Map<LogFileId, …>.get(someLogicalId)` does not type-check, because a plain
+ * `string` is not assignable to `LogFileId`. Fixtures cannot save you here —
+ * every fixture in this repo used to spell both ids with the same value, so no
+ * test could distinguish confusing them. The type system can.
+ *
+ * One brand is not enough on its own — a `LogFileId` is still assignable to
+ * `string`, so a map keyed by a bare `string` would accept either id. See
+ * {@link LogicalSessionId} for the other half, which closes that direction.
+ *
+ * Both brands are deliberately narrow: they cover `loader/`, the one place the
+ * two spaces are in scope at once. Branding every downstream `sessionId` would
+ * reach `log-core`'s frozen manifest shape and every read path in `analyzer` and
+ * `server`.
+ */
+export type LogFileId = string & { readonly [LOG_FILE_ID_BRAND]: 'slog-filename-uuid' };
+
+/** Tag a `.slog` filename uuid. The only sanctioned way to mint a {@link LogFileId}. */
+export function asLogFileId(raw: string): LogFileId {
+  return raw as LogFileId;
+}
+
+declare const LOGICAL_SESSION_ID_BRAND: unique symbol;
+
+/**
+ * A LOGICAL session id — `session.start.data.session_id`. **Not** a filename.
+ *
+ * The other half of the pair described on {@link LogFileId}, and the reason that
+ * one is not enough on its own. A single brand is one-directional: it stops
+ * `Map<LogFileId, …>.get(logicalId)`, but a `LogFileId` is still assignable to
+ * `string`, so a map keyed by a bare `string` happily accepts EITHER id. That is
+ * the map at the centre of the false accusation, so leaving it unbranded would
+ * have left the hazard standing behind a fix that looked total.
+ *
+ * With both brands the two spaces are mutually unassignable: neither id can be
+ * used where the other belongs, in either direction, without a deliberate cast.
+ *
+ * Scope is still deliberately the loader. `ParsedSession.sessionId` and
+ * `Bundle.sessions[].sessionId` stay plain `string`, because branding those
+ * reaches `log-core`'s frozen manifest shape and every read path in `analyzer`
+ * and `server` — a much larger change than this defect justifies. What is
+ * branded is the pair that actually met: the seal's id and the log files.
+ */
+export type LogicalSessionId = string & {
+  readonly [LOGICAL_SESSION_ID_BRAND]: 'session-start-session-id';
+};
+
+/**
+ * Tag a `session.start.data.session_id`. The only sanctioned way to mint a
+ * {@link LogicalSessionId} — deliberately greppable, so every entry into the
+ * logical id space is one search away.
+ */
+export function asLogicalSessionId(raw: string): LogicalSessionId {
+  return raw as LogicalSessionId;
+}
+
 export type SessionFiles = {
-  /** Session UUID extracted from the filename (e.g. `session-<uuid>.slog`). */
-  sessionId: string;
+  /**
+   * The uuid in this session's `.slog` FILENAME — NOT its logical session id.
+   *
+   * Named `logFileId` rather than `sessionId` on purpose: the old name made two
+   * different id spaces read identically at the call site, which is how they got
+   * crossed. See {@link LogFileId}.
+   */
+  logFileId: LogFileId;
   /** Raw NDJSON text of the .slog file. */
   slogText: string;
   /** Raw JSON text of the .slog.meta file. */
@@ -122,8 +215,15 @@ export type BundleFiles = {
  * exactly one session whose `session_id` equals `sessionId`.
  */
 export type RollingSeal = {
-  /** Session id from the filename, which the manifest is proven to agree with. */
-  sessionId: string;
+  /**
+   * LOGICAL session id from the `manifest-<session_id>.json` filename, which the
+   * manifest is proven to agree with.
+   *
+   * Branded so it cannot be used to key anything in the `.slog`-filename id
+   * space — the exact confusion that made this seal's prefix coverage vanish.
+   * See {@link LogicalSessionId} and {@link LogFileId}.
+   */
+  sessionId: LogicalSessionId;
   /** Raw text of the `.json` file, kept verbatim; never rewritten. */
   manifestJson: string;
   manifest: RollingSessionManifest;

@@ -117,12 +117,52 @@ Every one of these was live on the branch and none was on any worklist.
 9. **Check 8 was wall-clock-decided.** "Last recorded state" was last-write-wins over wall-sorted
    sessions, so with two partners on divergent branches whoever's clock ran slow got a
    high-severity "changed outside the recording".
+10. **The rolling seal's prefix coverage was keyed on the wrong id, re-arming bug 5 in full.**
+    `parse-bundle.ts` resolved each seal to the log files it covers through
+    `new Map(sessionFiles.map((f) => [f.sessionId, f]))` — keyed by the `.slog` **FILENAME**
+    uuid — and looked it up with `seal.sessionId`, the **LOGICAL** id the seal is named after.
+    Production mints those independently (`session-${randomUUID()}.slog` in `session-registry.ts`
+    vs `recorderContext.session_id`), so the lookup missed on **every session of every git
+    submission**. The miss was a silent `continue`, so `coverage` came out **empty for the whole
+    bundle** — and empty coverage is not inert: `verify-log-bytes.ts` reads its absence as "this is
+    a classic seal" and applies **whole-file** equality to a digest that only ever committed to a
+    **prefix**. So `log_bytes_match` failed at high severity / confidence 1.0 on every honest git
+    submission whose last seal was non-final — a crash, a power cut, a full disk, or simply an
+    archive taken mid-session. Bug 5's fix was correct and was never reaching production data.
+    **This is the second id-space confusion** (bug 3 was the first: a containment predicate
+    written for files, handed a git repo root).
+
+### Why no test caught bug 10 — and the fixture rule that stops the next one
+
+Nothing was wrong with the assertions. **Every fixture in the repo spelled both uuids with the
+same value**, so the broken lookup hit and the honest reading came out. 972 `analysis-core` tests
+and the `tools/recorder-seal-conformance` gate — the gate that exists precisely to drive real
+recorder output through the real loader — were all green over a live maximum-severity false
+accusation.
+
+A fixture that cannot distinguish two ids **cannot fail on confusing them**. That is a property of
+the fixture, not of the tests written against it, and no amount of extra assertions recovers it.
+
+**The rule, now enforced by construction:** any fixture that produces a session gives its `.slog`
+filename a uuid that **differs** from its logical `session.start` id **by default**
+(`build-test-bundle.ts`'s `fakeLogFileUuid`, `recorder-seal-conformance`'s `logFileUuid`). A test
+that needs them equal must pass `fileUuid` explicitly, which makes it a visible claim in the diff.
+Generalised: **when two identifiers are the same shape and different values in production, a
+fixture that makes them equal is not a simplification — it deletes a bug class from the reachable
+test space.**
+
+The fix goes further than correcting the lookup: the filename id space is now a branded
+`LogFileId` and `SessionFiles.sessionId` is renamed `logFileId`, so the original line is a
+**compile error** (`Map<LogFileId, _>.get(string)`). Reintroducing it takes a deliberate cast —
+verified by mutation. The brand is deliberately narrow, covering only `loader/`, the one place
+both spaces are in scope at once; branding the logical id too would reach into `log-core`'s frozen
+manifest shape and every read path in `analyzer` and `server`.
 
 ---
 
 ## 4. Traps — these will bite again
 
-- **Worktrees are created from `main`, not the feature branch. 16 of 16 times.** Every agent must
+- **Worktrees are created from `main`, not the feature branch. 20 of 20 times.** Every agent must
   verify branch + ancestor and hard-reset before touching anything.
 - **Worktrees have no `node_modules`**, and `@provenance/*` symlinks resolve to the MAIN checkout —
   so a worktree agent's tests can silently run against a different tree and report green. Run
@@ -189,9 +229,11 @@ sessions across a partner's commit because that manufactures the accusation the 
 
 ## 6. State and what is owed
 
-Suites, all measured in the main tree:
-**log-core 541 · analysis-core 917 · recorder 582 · analyzer 1215 · tools 150 ·
+Suites:
+**log-core 541 · analysis-core 973 · recorder 583 · analyzer 1221 · tools 174 ·
 server 1420/1422 (2 confirmed flakes) · provjet 589 · provnvim 1007.**
+The first five re-measured 2026-08-20 after the id-space fix (bug 10); server,
+provjet and provnvim are carried forward and not re-measured since.
 Build, typecheck, lint clean. Branch ~145 commits, ~+50k lines vs `main`.
 
 ### Gating merge to `main`
@@ -236,6 +278,32 @@ completion contract, not a wish list.
   _mentions_ the Node-side `loadBundle + runValidation` in a comment — it is run separately, by
   hand. That is the same asymmetry that left the VS Code recorder's written output unvalidated
   until this session, and it is the test class that has caught the most. **Automate it.**
+- **Four staff-visible strings name an id that no file in the bundle carries** — found by the
+  id-space audit that followed bug 10, all behaviourally correct, none fixed (out of scope for that
+  change). They matter because each one appears on a FAILURE path, where a staff member who greps
+  the archive for the id we printed finds nothing — the tool's own report is unverifiable by
+  inspection:
+  1. `loader/rolling-seal.ts` `no_session_log`: `"…but no session-<LOGICAL id>.slog is present"`.
+     No file is ever named that. Reaches staff through check 1's `detail`
+     (`verify-manifest-sig.ts` maps every defect detail into `problems`) and is persisted to
+     `check_1_detail`. Suggested: name the fact, not a fabricated filename — "no `.slog` in the
+     bundle records session `<id>`".
+  2. `analyzer/views/load/ErrorPanel.tsx` renders `orphaned_slog` / `orphaned_meta` as
+     `"Session <id> …"`, but that id is the `.slog` FILENAME uuid. Render it as the filename.
+  3. `server/services/ingest/parse-bundle-phase.ts` labels the same value `sessionId:` in the
+     stored ingest-failure detail.
+  4. The sibling `unsealed_session` defect and every `manifest-<id>.json` mention are correct —
+     those filenames genuinely are named after the logical id.
+     One real incident hits 1–3 at once: after a crash recovery quarantines a `.slog`, the
+     git-native path has no equivalent of `seal.ts`'s orphan guard, so the stranded `.slog.meta`
+     is packed and the whole submission fails to load with exactly these messages as the only clue.
+- **Four fixture generators still spell both session ids identically**, so anything verified
+  against them is structurally incapable of reproducing an id-space crossing — the property that
+  hid bug 10: `server/scripts/seed/build-example-export.ts` (so the demo database contains
+  A === B bundles), `gen-large-fixture.ts`, `bench-stages.ts`, `profile-large-bundle.ts`. Align
+  them with `fakeLogFileUuid`. `tools/export-conformance-vectors.ts` also publishes an A === B
+  filename to the two sibling recorder repos as a negative-match string — harmless, but it teaches
+  the wrong shape.
 
 ### Known gaps, deliberately accepted
 

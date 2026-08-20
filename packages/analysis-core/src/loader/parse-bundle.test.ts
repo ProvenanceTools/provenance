@@ -319,3 +319,71 @@ describe('loadBundle', () => {
     expect(absent!.hashOk).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The two session-id spaces (see loader/types.ts, `LogFileId`)
+// ---------------------------------------------------------------------------
+
+describe('loadBundle — rolling-seal coverage lives in the LOGICAL id space', () => {
+  it('resolves a seal to its logs when the .slog filename uuid differs', async () => {
+    // Production ALWAYS makes these two differ: the writer names the file
+    // `session-${randomUUID()}.slog` while the seal is named after
+    // `session.start.data.session_id`. Keying the seal → files lookup on the
+    // filename uuid misses on every session, leaves `coverage` empty, and
+    // `verify-log-bytes.ts` reads empty coverage as "classic seal" — applying
+    // whole-file equality to a prefix commitment and accusing honest students.
+    const built = await buildTestBundle({
+      sessions: [
+        {
+          sessionId: 'aaaaaaaa-0000-4000-8000-000000000000',
+          fileUuid: 'bbbbbbbb-0000-4000-8000-000000000000',
+          eventCount: 4,
+        },
+      ],
+      rollingSeal: {},
+    });
+
+    const result = await loadBundle(built.zipBuffer, 'git-clone.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const coverage = result.value.rollingSeal!.coverage!;
+    expect(coverage).toHaveLength(1);
+    expect(coverage[0]!.sessionId).toBe('aaaaaaaa-0000-4000-8000-000000000000');
+    expect(coverage[0]!.sessionId).not.toBe('bbbbbbbb-0000-4000-8000-000000000000');
+    // The seal covers these exact bytes, so it is exact rather than absent.
+    expect(coverage[0]!.slog).toEqual({ kind: 'exact' });
+    // And no defect: the seal did find its session.
+    expect(result.value.rollingSeal!.defects).toEqual([]);
+  });
+
+  it('refuses to guess when two .slog files carry the SAME logical session id', async () => {
+    // Only reachable by duplicating a log under a second filename. No single
+    // file is then "the" file that session's seal covers, so computing coverage
+    // from either would be measuring bytes the seal may never have seen.
+    // Refusing leaves whole-file equality in place — the same reading a classic
+    // bundle gets — rather than silently taking last-write-wins.
+    const built = await buildTestBundle({
+      sessions: [
+        {
+          sessionId: 'aaaaaaaa-0000-4000-8000-000000000000',
+          fileUuid: '11111111-0000-4000-8000-000000000000',
+          eventCount: 4,
+        },
+        {
+          sessionId: 'aaaaaaaa-0000-4000-8000-000000000000',
+          fileUuid: '22222222-0000-4000-8000-000000000000',
+          eventCount: 4,
+        },
+      ],
+      rollingSeal: {},
+    });
+
+    const result = await loadBundle(built.zipBuffer, 'git-clone.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // No coverage entry is invented for the ambiguous id.
+    expect(result.value.rollingSeal!.coverage).toEqual([]);
+  });
+});
