@@ -746,5 +746,4 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
       expect(result.skipped.map((s) => s.reason)).toContain('submission_type_mismatch');
     });
   });
-
 });

@@ -177,9 +177,7 @@ describe('migration 0026 — declared submission types', () => {
       // The server reads the pre- and post-migration values to the SAME config,
       // which is what actually guarantees the deployment order does not matter:
       // an un-migrated replica behaves exactly like a migrated one.
-      expect(parseIngestScopeConfig(legacyBefore)).toEqual(
-        parseIngestScopeConfig(legacyAfter),
-      );
+      expect(parseIngestScopeConfig(legacyBefore)).toEqual(parseIngestScopeConfig(legacyAfter));
 
       // The column DEFAULT is untouched, so rows created after the migration
       // are indistinguishable from rows created before it.

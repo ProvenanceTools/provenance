@@ -490,7 +490,9 @@ describe('resolveRepoScopes — declared submission type: bundle_zip', () => {
   it('FAILS a tree whose only scope is nested — a bundle zip seals at its root', () => {
     const resolved = resolveRepoScopes([fakeScope('proj2/', 'proj2')], bundleZip);
     expect(resolved.accepted).toEqual([]);
-    expect(resolved.rejected).toEqual([{ scopePath: 'proj2/', reason: 'submission_type_mismatch' }]);
+    expect(resolved.rejected).toEqual([
+      { scopePath: 'proj2/', reason: 'submission_type_mismatch' },
+    ]);
   });
 
   it('fails exactly what self_identifying would have accepted — the declaration is the difference', () => {

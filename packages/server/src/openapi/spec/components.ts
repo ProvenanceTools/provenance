@@ -783,7 +783,7 @@ export const components = {
             'excluded rather than fanned out, and no root scope fails. ' +
             'repo_scoped: a git repo in which path_glob selects the scope(s); a glob that selects ' +
             'nothing fails rather than quietly ingesting zero submissions. ' +
-            "(`path` was the pre-2026-08 name for `repo_scoped`; it is no longer accepted here, " +
+            '(`path` was the pre-2026-08 name for `repo_scoped`; it is no longer accepted here, ' +
             'but rows stored under the old name still resolve to repo_scoped.)',
         },
         path_glob: {

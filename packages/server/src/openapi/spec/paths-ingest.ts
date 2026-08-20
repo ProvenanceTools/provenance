@@ -92,7 +92,7 @@ export const ingestPaths = {
       tags: ['Assignments'],
       summary: 'Update assignment label, sort order or ingest scope (semester admin)',
       description:
-        'At least one field is required. `ingest_scope` is the assignment\'s PERSISTED DEFAULT ' +
+        "At least one field is required. `ingest_scope` is the assignment's PERSISTED DEFAULT " +
         'declared submission type — the one provgate writes once at mapping time — and it is ' +
         'replaced wholesale, never merged, because the modes carry different meaningful fields. ' +
         'An individual ingest request can still override it without touching this row. Read the ' +
@@ -215,7 +215,7 @@ export const ingestPaths = {
           in: 'query',
           required: false,
           description:
-            'PER-REQUEST ingest-scope override. When given it replaces every assignment\'s ' +
+            "PER-REQUEST ingest-scope override. When given it replaces every assignment's " +
             'persisted `ingest_scope` default for this batch — a one-off re-ingest or fixup ' +
             'without mutating the assignment row. This request body is multipart/form-data ' +
             '(reserved for the archive), so the override travels as these three flat query ' +
@@ -576,7 +576,7 @@ export const ingestPaths = {
       summary: 'Complete a resumable upload and ingest it (semester admin)',
       description:
         'Finalize the multipart upload, assemble the export, and run it through the ingest pipeline. Returns the same body as the single-shot Gradescope upload. ' +
-        '`ingest_scope` is the PER-REQUEST override — it replaces every assignment\'s persisted default for this batch, and rides the background staging job, so it applies even though this call returns 202 before staging runs. ' +
+        "`ingest_scope` is the PER-REQUEST override — it replaces every assignment's persisted default for this batch, and rides the background staging job, so it applies even though this call returns 202 before staging runs. " +
         'NOTE: this path returns placeholder counts and an EMPTY `skipped` array; skips (including `submission_type_mismatch`) are not currently reported back on the chunked-upload path. Use the single-shot POST /ingest:gradescope when you need to see them.',
       security: [{ BearerAuth: [] }, { SessionCookie: [] }],
       parameters: [
