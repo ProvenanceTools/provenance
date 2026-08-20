@@ -165,21 +165,29 @@ export const HEARTBEAT_INTERVAL_MAX_MS = 120_000;
  * recorder hashing another student's log inside the approved protocol?) is
  * OPEN and explicitly gates Tier 4.
  *
- * It is on the floor anyway, for a narrow reason. The collaboration spec §5.6
- * already assigns the disambiguation to a different mechanism: whether
- * `.provenance/` witnessing was AVAILABLE is a `session.start` capability
- * report, alongside `git_capture`, not a capture knob. A capability report says
- * "I could not do this"; a capture knob says "I was told not to". The spec picks
- * the former, so there is no knob for this kind and the floor is where it lands.
+ * **DECIDED 2026-08-20: floor, confirmed by the product owner.** Three reasons,
+ * in the order that settled it:
  *
- * The consequence a reviewer should check: a knob key here would be a change to
- * the course-SIGNED manifest shape, published to two sibling recorder repos
- * ahead of the product decision that gives it meaning — the readers-before-
- * writers inversion program spec §9 forbids. If §8 item 5 comes back saying a
- * course must be able to switch witnessing off, the honest fix is to move this
- * entry to {@link POLICY_GATED_EVENT_KINDS} with a `peer_observation` key, in
- * the same change as the recorders' watcher. Until then no recorder emits the
- * kind at all, so the placement governs nothing that exists yet.
+ *  1. The floor test in this file is "what reconstruction and validation depend
+ *     on", NOT privacy sensitivity — sensitivity is explicitly not the criterion.
+ *     Deletion detection is a validation concern, so the floor is where it lands.
+ *  2. It is SELF-LIMITING. With no foreign `.slog` in `.provenance/` there is
+ *     nothing to witness, so it only ever activates in a shared repo — exactly
+ *     the situation where partner visibility was already the consent question.
+ *     A knob would therefore buy privacy only where no privacy was at stake.
+ *  3. A course that could switch it off could silently disable its own deletion
+ *     detection, which is the one protection a student cannot supply for
+ *     themselves.
+ *
+ * Collaboration spec §5.6 remains the right home for the other half: whether
+ * witnessing was AVAILABLE is a `session.start` capability report, alongside
+ * `git_capture`. A capability report says "I could not do this"; a capture knob
+ * says "I was told not to". Those are different facts and only the first is
+ * needed here.
+ *
+ * No recorder emits the kind yet — the writer half lands after these readers,
+ * per program spec §9 — so this placement governs nothing that exists today and
+ * everything that will.
  *
  * `paste` and `fs.external_change` were always floor as *events*; what changed is
  * that their content fields are too. There was briefly an `inline_content` knob
