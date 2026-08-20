@@ -573,6 +573,38 @@ partition — floor was the minimal spelling, since a knob would also have moved
 
 Written down here so the ports are mechanical rather than re-derived three times.
 
+> **CORRECTIONS FROM THE FIRST IMPLEMENTATION (VS Code, 2026-08-20).** The contract below was
+> written from the reader side, before anything emitted the kind. Implementing it surfaced seven
+> gaps. **provjet and provnvim must follow these, or three recorders will describe one event three
+> different ways** — which is precisely the divergence the shared vectors exist to prevent.
+>
+> 1. **The five `state` values do not partition reality.** A same-length rewrite is neither `grew`
+>    nor `shrank`. VS Code reports `grew` and emits `bytes` alongside, so a reader can see the
+>    length did not change. `shrank` is described in the vectors as "catches a truncation", so
+>    reaching for it here would lean a _descriptive_ field toward accusation. **Ports must make the
+>    same choice.**
+> 2. **An unchanged file must NOT be re-emitted.** The contract never said. Emitting
+>    unconditionally re-witnesses every partner log at every checkpoint, forever.
+> 3. **`disappeared` requires a prior observation.** "Carries the last state seen" is unreachable
+>    if you never saw it; a delete for a never-observed file has no honest digest. Skip.
+> 4. **A local read failure is not an absence.** `EACCES`/`EIO` is a fact about _your_ machine, not
+>    the partner's file. Emit nothing. Only `ENOENT`/`ENOTDIR` may reach `disappeared`.
+> 5. **`state: 'unparseable'` REQUIRES all three chain fields null.** Item 6 below says they are
+>    all-null or all-non-null, which is true but incomplete: a port emitting `grew` with all-nulls
+>    passes the narrowing while violating the intent. Route every unreadable chain to `unparseable`.
+> 6. **Item 3's "or a timer, whichever is later" is ambiguous and reads backwards** — running both
+>    gives whichever is _sooner_. VS Code wired checkpoint + dispose and no timer: a long-idle
+>    session delays witnessing but never loses it, because dispose always drains.
+> 7. **`rev-parse --is-shallow-repository` needs git ≥ 2.15.** Older git errors out, which lands in
+>    "omit on any failure" — correct, but ports should know that is the mechanism rather than
+>    treating it as a special case.
+>
+> Also settled while implementing: only `*.slog` is witnessed (not `.slog.meta`, not rolling
+> manifests — the payload's chain fields are by definition reads of a `.slog`), and the recorder
+> may **spawn git** for the discriminator (`execFile`, no shell, fixed args, 5s timeout, injectable
+> seam), approved by the product owner 2026-08-20 because the VS Code git API cannot walk
+> first-parent lineage and the alternative is thousands of async calls at activation.
+
 1. **One `FileSystemWatcher` on the `.provenance/` directory**, not one per file, and distinct from
    the `files_under_review` watchers.
 2. **Callbacks enqueue a filename and return.** No I/O, no hashing, no parsing on the callback —
