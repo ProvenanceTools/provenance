@@ -24,6 +24,7 @@ import { synthesizeRollingUnionManifest, validateRollingSeals } from './rolling-
 import { runValidation } from '../validation/run-validation.js';
 import { verifyManifestSig } from '../validation/verify-manifest-sig.js';
 import { buildTestBundle } from '../test-support/build-test-bundle.js';
+import { asLogicalSessionId } from './types.js';
 import type { RollingSeal } from './types.js';
 
 // Wire SHA-512 for jsdom compatibility (same pattern as build-test-bundle).
@@ -739,8 +740,11 @@ describe('unzipBundle rolling recognition', () => {
 });
 
 describe('synthesizeRollingUnionManifest', () => {
+  /** Session order as the loader supplies it: LOGICAL ids, never filenames. */
+  const order = (...ids: string[]) => ids.map(asLogicalSessionId);
+
   const seal = (sessionId: string, files: Array<[string, string]>): RollingSeal => ({
-    sessionId,
+    sessionId: asLogicalSessionId(sessionId),
     manifestJson: '{}',
     manifest: {
       format_version: '1.2',
@@ -771,14 +775,14 @@ describe('synthesizeRollingUnionManifest', () => {
   it('merges submission_files last-writer-wins in session order', () => {
     const a = seal('a', [['f.py', '1'.repeat(64)]]);
     const b = seal('b', [['f.py', '2'.repeat(64)]]);
-    const out = synthesizeRollingUnionManifest([a, b], ['a', 'b'])!;
+    const out = synthesizeRollingUnionManifest([a, b], order('a', 'b'))!;
     expect(out.manifest.submission_files).toEqual([
       { path: 'f.py', status: 'present', sha256: '2'.repeat(64) },
     ]);
     expect(out.manifest.sessions.map((s) => s.session_id)).toEqual(['a', 'b']);
 
     // Reverse the session order and the newest session's hash wins instead.
-    const reversed = synthesizeRollingUnionManifest([a, b], ['b', 'a'])!;
+    const reversed = synthesizeRollingUnionManifest([a, b], order('b', 'a'))!;
     expect(reversed.manifest.submission_files).toEqual([
       { path: 'f.py', status: 'present', sha256: '1'.repeat(64) },
     ]);
@@ -788,7 +792,7 @@ describe('synthesizeRollingUnionManifest', () => {
   it('orders seals with no parsed session deterministically after the rest', () => {
     const out = synthesizeRollingUnionManifest(
       [seal('z', []), seal('a', []), seal('m', [])],
-      ['m'],
+      order('m'),
     )!;
     expect(out.manifest.sessions.map((s) => s.session_id)).toEqual(['m', 'a', 'z']);
   });

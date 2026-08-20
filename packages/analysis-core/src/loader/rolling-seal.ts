@@ -52,7 +52,13 @@ import {
   ROLLING_MANIFEST_FORMAT_VERSION,
 } from '@provenance/log-core';
 import type { BundleManifest, SubmissionFileEntry } from '@provenance/log-core';
-import type { RawRollingSealFiles, RollingSeal, RollingSealDefect } from './types.js';
+import { asLogicalSessionId } from './types.js';
+import type {
+  LogicalSessionId,
+  RawRollingSealFiles,
+  RollingSeal,
+  RollingSealDefect,
+} from './types.js';
 
 // ---------------------------------------------------------------------------
 // 1. Shape + filename-binding validation
@@ -157,7 +163,15 @@ export function validateRollingSeals(candidates: readonly RawRollingSealFiles[])
       });
     }
 
-    seals.push({ sessionId, manifestJson, manifest: rolling.value, sigHex });
+    // The only entry into the logical id space on this path: the id came from
+    // a `manifest-<session_id>.json` filename and `validateRollingSessionManifest`
+    // has just proven the manifest inside agrees with it.
+    seals.push({
+      sessionId: asLogicalSessionId(sessionId),
+      manifestJson,
+      manifest: rolling.value,
+      sigHex,
+    });
   }
 
   return { seals, defects };
@@ -263,14 +277,18 @@ export function reconcileRollingSealsWithSessions(
  * wins" rule `lastRecordedHashes` applies to events.
  *
  * @param seals        Seals that survived {@link validateRollingSeals}.
- * @param sessionOrder Session ids oldest → newest, as the loader sorted them.
- *   Seals whose session is not in this list (no `.slog`) are appended after it
- *   in ascending id order, so the result is deterministic either way.
+ * @param sessionOrder LOGICAL session ids oldest → newest, as the loader sorted
+ *   them — read out of each packed `.slog`'s `session.start`, never from a
+ *   filename. Branded so a `.slog` filename uuid cannot be passed here: matching
+ *   seals against filename uuids is what silently emptied prefix coverage on
+ *   every git submission. Seals whose session is not in this list (no `.slog`)
+ *   are appended after it in ascending id order, so the result is deterministic
+ *   either way.
  * @returns `null` when there is no seal to synthesize from.
  */
 export function synthesizeRollingUnionManifest(
   seals: readonly RollingSeal[],
-  sessionOrder: readonly string[],
+  sessionOrder: readonly LogicalSessionId[],
 ): { manifest: BundleManifest; defects: RollingSealDefect[] } | null {
   if (seals.length === 0) return null;
 

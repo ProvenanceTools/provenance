@@ -89,16 +89,54 @@ declare const LOG_FILE_ID_BRAND: unique symbol;
  * every fixture in this repo used to spell both ids with the same value, so no
  * test could distinguish confusing them. The type system can.
  *
- * The brand is deliberately narrow. It covers the ONE place both id spaces are
- * in scope at once (`loader/`); branding the logical id too would ripple through
- * `analysis-core`, `analyzer` and `server` and reach into `log-core`'s frozen
- * manifest shape.
+ * One brand is not enough on its own — a `LogFileId` is still assignable to
+ * `string`, so a map keyed by a bare `string` would accept either id. See
+ * {@link LogicalSessionId} for the other half, which closes that direction.
+ *
+ * Both brands are deliberately narrow: they cover `loader/`, the one place the
+ * two spaces are in scope at once. Branding every downstream `sessionId` would
+ * reach `log-core`'s frozen manifest shape and every read path in `analyzer` and
+ * `server`.
  */
 export type LogFileId = string & { readonly [LOG_FILE_ID_BRAND]: 'slog-filename-uuid' };
 
 /** Tag a `.slog` filename uuid. The only sanctioned way to mint a {@link LogFileId}. */
 export function asLogFileId(raw: string): LogFileId {
   return raw as LogFileId;
+}
+
+declare const LOGICAL_SESSION_ID_BRAND: unique symbol;
+
+/**
+ * A LOGICAL session id — `session.start.data.session_id`. **Not** a filename.
+ *
+ * The other half of the pair described on {@link LogFileId}, and the reason that
+ * one is not enough on its own. A single brand is one-directional: it stops
+ * `Map<LogFileId, …>.get(logicalId)`, but a `LogFileId` is still assignable to
+ * `string`, so a map keyed by a bare `string` happily accepts EITHER id. That is
+ * the map at the centre of the false accusation, so leaving it unbranded would
+ * have left the hazard standing behind a fix that looked total.
+ *
+ * With both brands the two spaces are mutually unassignable: neither id can be
+ * used where the other belongs, in either direction, without a deliberate cast.
+ *
+ * Scope is still deliberately the loader. `ParsedSession.sessionId` and
+ * `Bundle.sessions[].sessionId` stay plain `string`, because branding those
+ * reaches `log-core`'s frozen manifest shape and every read path in `analyzer`
+ * and `server` — a much larger change than this defect justifies. What is
+ * branded is the pair that actually met: the seal's id and the log files.
+ */
+export type LogicalSessionId = string & {
+  readonly [LOGICAL_SESSION_ID_BRAND]: 'session-start-session-id';
+};
+
+/**
+ * Tag a `session.start.data.session_id`. The only sanctioned way to mint a
+ * {@link LogicalSessionId} — deliberately greppable, so every entry into the
+ * logical id space is one search away.
+ */
+export function asLogicalSessionId(raw: string): LogicalSessionId {
+  return raw as LogicalSessionId;
 }
 
 export type SessionFiles = {
@@ -177,8 +215,15 @@ export type BundleFiles = {
  * exactly one session whose `session_id` equals `sessionId`.
  */
 export type RollingSeal = {
-  /** Session id from the filename, which the manifest is proven to agree with. */
-  sessionId: string;
+  /**
+   * LOGICAL session id from the `manifest-<session_id>.json` filename, which the
+   * manifest is proven to agree with.
+   *
+   * Branded so it cannot be used to key anything in the `.slog`-filename id
+   * space — the exact confusion that made this seal's prefix coverage vanish.
+   * See {@link LogicalSessionId} and {@link LogFileId}.
+   */
+  sessionId: LogicalSessionId;
   /** Raw text of the `.json` file, kept verbatim; never rewritten. */
   manifestJson: string;
   manifest: RollingSessionManifest;

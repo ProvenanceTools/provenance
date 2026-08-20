@@ -42,10 +42,12 @@ import {
 } from './rolling-seal.js';
 import { computeSlogCoverage, computeMetaCoverage, wholeFileCoverage } from './rolling-coverage.js';
 import type { RollingSealCoverage } from './rolling-coverage.js';
+import { asLogicalSessionId } from './types.js';
 import type {
   Bundle,
   BundleRollingSeal,
   LoaderError,
+  LogicalSessionId,
   RollingSealDefect,
   SessionFiles,
   SessionParseError,
@@ -175,7 +177,7 @@ export async function loadBundle(
   // value in production and is now a distinct branded type so it cannot be used
   // here by accident. See `types.ts` / {@link LogFileId}.
   const parsedSessions = [];
-  const filesByLogicalSessionId = new Map<string, SessionFiles | 'ambiguous'>();
+  const filesByLogicalSessionId = new Map<LogicalSessionId, SessionFiles | 'ambiguous'>();
   for (let i = 0; i < sessionResults.length; i++) {
     const result = sessionResults[i]!;
     if (!result.ok) {
@@ -188,7 +190,7 @@ export async function loadBundle(
     // session's seal covers, and silently taking the last one would compute
     // coverage over bytes the seal never saw. Refuse rather than guess: the seal
     // falls through to whole-file equality, exactly as a classic bundle does.
-    const logicalId = result.value.sessionId;
+    const logicalId = asLogicalSessionId(result.value.sessionId);
     const files = sessionFiles[i]!;
     filesByLogicalSessionId.set(
       logicalId,
@@ -230,7 +232,8 @@ export async function loadBundle(
 
     const synthesized = synthesizeRollingUnionManifest(
       rollingValidation.seals,
-      parsedSessions.map((s) => s.sessionId),
+      // LOGICAL ids, read out of each `.slog`'s session.start by parse-session.
+      parsedSessions.map((s) => asLogicalSessionId(s.sessionId)),
     );
     if (synthesized !== null) {
       unionManifest = synthesized.manifest;
