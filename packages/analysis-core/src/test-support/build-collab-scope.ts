@@ -109,9 +109,15 @@ export function collabDocSave(content: string, path = COLLAB_FILE): EventSpec {
   return { kind: 'doc.save', data: { path, sha256: sha256Hex(content) } };
 }
 
+/**
+ * `explanation` stamps the recorder's timing-derived tag on the change, exactly
+ * as `explanation-tags.ts` does when the write lands within its window after a
+ * git state change. Needed to exercise D16, where a content-derived
+ * `git_unrecorded_in` overrides an `explanation: 'git'` tag.
+ */
 export function collabExternalChange(
   content: string,
-  opts: { path?: string; t?: number } = {},
+  opts: { path?: string; t?: number; explanation?: 'git' | 'formatter' } = {},
 ): EventSpec {
   const spec: EventSpec = {
     kind: 'fs.external_change',
@@ -123,6 +129,7 @@ export function collabExternalChange(
       new_content: content,
       new_content_size: content.length,
       diff_size: content.length,
+      ...(opts.explanation === undefined ? {} : { explanation: opts.explanation }),
     },
   };
   return opts.t === undefined ? spec : { ...spec, t: opts.t };
@@ -155,6 +162,8 @@ export function collabPullerSession(
     beforeChange?: EventSpec[];
     after?: EventSpec[];
     merge?: boolean;
+    /** Stamp the recorder's timing tag on the change — the D16 fixture. */
+    explanation?: 'git' | 'formatter';
   } = {},
 ): EventSpec[] {
   return [
@@ -163,7 +172,9 @@ export function collabPullerSession(
     collabGitEvent(COLLAB_C1, [COLLAB_C0]), // the pull: HEAD moves
     ...(opts.merge === true ? [collabGitEvent(COLLAB_C2, [COLLAB_C1])] : []),
     ...(opts.beforeChange ?? []),
-    collabExternalChange(newContent),
+    collabExternalChange(newContent, {
+      ...(opts.explanation === undefined ? {} : { explanation: opts.explanation }),
+    }),
     ...(opts.after ?? []),
   ];
 }

@@ -445,3 +445,65 @@ describe('mass_external_replacement — Tier 3.1 reclassification', () => {
     expect(f.description.endsWith('lines shared with post-change content).')).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// D16 — the recorder's tag was never consulted here, and still is not
+// ---------------------------------------------------------------------------
+
+describe('mass_external_replacement — D16 does not reach this heuristic', () => {
+  const OLD = Array.from({ length: 10 }, (_, i) => `old_line_${i}()\n`).join('');
+  const PARTNER_WORK = Array.from({ length: 10 }, (_, i) => `partner_line_${i}()\n`).join('');
+  const NOBODY_RECORDED = Array.from({ length: 10 }, (_, i) => `mystery_${i}()\n`).join('');
+
+  const typedNote: EventSpec = {
+    kind: 'doc.change',
+    data: {
+      path: COLLAB_FILE,
+      source: 'typed',
+      deltas: [
+        {
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          text: '#\n',
+        },
+      ],
+    },
+  };
+
+  /** The Tier 3.1 fixture, plus the recorder's timing tag on the change. */
+  function taggedPullThatReplaces(content: string): EventSpec[] {
+    return collabPullerSession(content, {
+      beforeChange: [collabDocOpen(OLD)],
+      after: [typedNote, collabDocSave('#\n' + content)],
+      merge: true,
+      explanation: 'git',
+    });
+  }
+
+  it('flags a tagged git_unrecorded_in — as it always did, tag or no tag', async () => {
+    // This heuristic has never read `explanation`, so D16 changes nothing here.
+    // Pinned because "make the three consumers consistent" is the natural next
+    // edit, and adding a tag test would be a regression, not consistency: the
+    // tag is timing-derived and this heuristic's evidence is content.
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession(PARTNER_WORK) },
+      { who: { studentRef: COLLAB_ALICE }, events: taggedPullThatReplaces(NOBODY_RECORDED) },
+    ]);
+    const flags = massExternalReplacementHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.severity).toBe('high');
+    expect(flags[0]!.detail!['externalChangeClass']).toBe('git_unrecorded_in');
+  });
+
+  it('a tagged git_merge_in is still suppressed — by content, not by the tag', async () => {
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession(PARTNER_WORK) },
+      { who: { studentRef: COLLAB_ALICE }, events: taggedPullThatReplaces(PARTNER_WORK) },
+    ]);
+    expect(massExternalReplacementHeuristic.run(index, bundle, cfg)).toHaveLength(0);
+    const events = index.byKind.get('fs.external_change') ?? [];
+    expect(
+      externalChangeClassificationFor(bundle, index).byGlobalIdx.get(events[0]!.globalIdx)!
+        .classification,
+    ).toBe('git_merge_in');
+  });
+});

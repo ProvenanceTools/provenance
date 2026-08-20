@@ -272,3 +272,51 @@ describe('terminal_active_during_external_change — Tier 3.1 reclassification',
     expect(f.description.endsWith('was responsible for the file change.')).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// D16 — the recorder's tag was never consulted here, and still is not
+// ---------------------------------------------------------------------------
+
+describe('terminal_active_during_external_change — D16 does not reach this heuristic', () => {
+  const PARTNER_WORK = 'def solve(n):\n    return n * 2\n';
+  const NOBODY_RECORDED = 'def solve(n):\n    return magic(n)\n';
+
+  const terminalOpen: EventSpec = {
+    kind: 'terminal.open',
+    data: { terminal_id: 't1', shell: 'zsh', shell_integration: true },
+  };
+
+  /** `git pull` run in the integrated terminal, with the recorder's timing tag. */
+  const taggedPullFromTerminal = (content: string): EventSpec[] =>
+    collabPullerSession(content, { before: [terminalOpen], explanation: 'git' });
+
+  it('flags a tagged git_unrecorded_in — as it always did, tag or no tag', async () => {
+    // This heuristic has never read `explanation` (see its docstring: filtering
+    // on the tag was considered as a noise mitigation and deliberately rejected
+    // in favour of the content classification). D16 therefore changes nothing
+    // here, and adding a tag test for "consistency" would undo that decision.
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession('something else\n') },
+      { who: { studentRef: COLLAB_ALICE }, events: taggedPullFromTerminal(NOBODY_RECORDED) },
+    ]);
+    const flags = terminalActiveDuringExternalChangeHeuristic.run(index, bundle, defaultConfig);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.severity).toBe('info');
+    expect(flags[0]!.detail!['externalChangeClass']).toBe('git_unrecorded_in');
+  });
+
+  it('a tagged git_merge_in is still suppressed — by content, not by the tag', async () => {
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession(PARTNER_WORK) },
+      { who: { studentRef: COLLAB_ALICE }, events: taggedPullFromTerminal(PARTNER_WORK) },
+    ]);
+    expect(
+      terminalActiveDuringExternalChangeHeuristic.run(index, bundle, defaultConfig),
+    ).toHaveLength(0);
+    const events = index.byKind.get('fs.external_change') ?? [];
+    expect(
+      externalChangeClassificationFor(bundle, index).byGlobalIdx.get(events[0]!.globalIdx)!
+        .classification,
+    ).toBe('git_merge_in');
+  });
+});

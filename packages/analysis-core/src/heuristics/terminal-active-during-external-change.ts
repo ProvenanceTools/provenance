@@ -58,6 +58,12 @@
  * shipped. `explanation` is the recorder's timing-based tag; the classification
  * consumed here is derived from content and is the sounder discriminator.
  *
+ * That is also why **D16 does not reach this heuristic**: D16 stops the
+ * `explanation: 'git'` tag suppressing a `git_unrecorded_in`, and this heuristic
+ * never let the tag suppress anything in the first place. No behaviour change,
+ * and adding a tag test for "consistency" would undo the paragraph above.
+ * `terminal-active-during-external-change.test.ts` pins it.
+ *
  * A SOLO scope produces no verdicts, so behaviour there is unchanged.
  */
 

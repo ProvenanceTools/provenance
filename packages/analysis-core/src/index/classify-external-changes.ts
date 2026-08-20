@@ -33,9 +33,18 @@
  *  - **`git_unrecorded_in`** — no such match, but a `git.event` that MOVED HEAD
  *    sits within {@link GIT_ADJACENCY_WINDOW_MS} before the change in the same
  *    session's chain. Code entered the working tree from a commit no recorder
- *    observed. **This is not innocent and it is not suppressed** — folding it
- *    into `git_merge_in` because both involve git would hide exactly what this
- *    system exists to surface.
+ *    observed. **It is not suppressed** — folding it into `git_merge_in`
+ *    because both involve git would hide exactly what this system exists to
+ *    surface, and (decision D16) the recorder's `explanation: 'git'` tag no
+ *    longer suppresses it either: a two-second timing window must not silence a
+ *    finding the content test says is real.
+ *
+ *    It is equally NOT an accusation. The class says the content has no
+ *    recorded authorship *in this scope* — which an honest pair whose partner
+ *    never enrolled produces just as readily as a paste from elsewhere. The
+ *    `detail` sentence states both readings and says what would distinguish
+ *    them (whether every collaborator is enrolled and recording), because a
+ *    grader must be able to tell them apart or know that the system cannot.
  *
  *  - **`external`** — neither. Today's meaning, preserved exactly.
  *
@@ -277,6 +286,11 @@ export type ExternalChangeVerdict = {
    * What the recorder's timing-based explanation tagger said about this event,
    * verbatim. Recorded for corroboration and for measuring the tagger's residual
    * value; it is NOT an input to the classification.
+   *
+   * It is still an input to `external_edits`, which suppresses on a tag — but
+   * only where the content test has nothing stronger to say. Per decision D16 a
+   * `git_unrecorded_in` overrides an `explanation: 'git'` tag there. See
+   * {@link overridesRecorderGitTag}.
    */
   recorderExplanation: 'git' | 'formatter' | null;
   /** One grader-readable sentence. Consumers surface this in their flag text. */
@@ -725,10 +739,14 @@ function classifyOne(e: IndexedEvent, deps: ClassifyDeps): ExternalChangeVerdict
       matches: [],
       dagCorroboration: 'not_applicable',
       detail:
-        `git moved HEAD to ${gitAdjacency.sha} ${gitAdjacency.withinMs} ms before ${path} ` +
-        `changed on disk, so a git operation is what wrote it — but the content matches ` +
-        `nothing anyone recorded working on. Code entered this submission from a commit no ` +
-        `recorder observed.`,
+        `${path} changed on disk ${gitAdjacency.withinMs} ms after git moved HEAD to ` +
+        `${gitAdjacency.sha}, so a git operation is the likely source — and no session in ` +
+        `this submission recorded producing these bytes. What is established is that this ` +
+        `content has no recorded authorship in this scope; who wrote it is NOT established. ` +
+        `That is equally consistent with a collaborator who never enrolled or was not ` +
+        `running a recorder, and with code brought in from outside the submission. Confirm ` +
+        `whether every collaborator on this repository is enrolled and recording before ` +
+        `reading it as either.`,
     };
   }
 
@@ -843,6 +861,37 @@ export function externalChangeVerdictFor(
  */
 export function isGitMergeIn(bundle: Bundle, index: EventIndex, globalIdx: number): boolean {
   return externalChangeClassificationFor(bundle, index).gitMergeIn.has(globalIdx);
+}
+
+/**
+ * Does this verdict override the recorder's `explanation: 'git'` tag?
+ *
+ * **Decision D16.** The recorder stamps `explanation: 'git'` on an external
+ * change that lands within ~2 s of a git state change. That tag is retained
+ * deliberately — it covers scopes the content test structurally cannot (solo,
+ * 1.x, an unenrolled partner) and it lives inside the signed chain at the moment
+ * of the operation. What changed is what the ANALYZER does with it: a
+ * `git_unrecorded_in` is a content-derived statement that the bytes match
+ * nothing anyone recorded, and a two-second timing window must not silence it.
+ * Left suppressing, the window is a hole a student could learn to exploit by
+ * timing an out-of-editor paste right after any git command.
+ *
+ * `git_merge_in` is not listed because it never reaches a tag test — it is
+ * skipped outright, by content, tag or no tag.
+ *
+ * Scoped to the `'git'` tag only. `'formatter'` is a narrower, different claim
+ * (a known formatter ran on this path) and D16 does not reach it; it also has no
+ * production caller today, so no shipped bundle can carry it.
+ *
+ * A predicate rather than an inline comparison so "which classes beat the tag"
+ * has exactly one home, the way {@link isGitMergeIn} does for suppression.
+ */
+export function overridesRecorderGitTag(
+  verdict: ExternalChangeVerdict | null | undefined,
+  tag: 'git' | 'formatter',
+): boolean {
+  if (verdict === null || verdict === undefined) return false;
+  return tag === 'git' && verdict.classification === 'git_unrecorded_in';
 }
 
 /**
