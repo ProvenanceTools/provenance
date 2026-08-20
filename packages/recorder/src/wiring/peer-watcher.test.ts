@@ -589,6 +589,11 @@ describe('the chain advance stays atomic with every other emitter', () => {
     const kinds = entries.map((e) => e.kind);
     expect(kinds.filter((k) => k === 'peer.observed')).toHaveLength(5);
     expect(kinds.indexOf('session.heartbeat')).toBeLessThan(kinds.indexOf('peer.observed'));
+
+    // And the drain is COMPLETE when it resolves: every observation is inside
+    // the session. A deferred emit lands after session.end — in production,
+    // after the writer has been closed and the final seal signed.
+    expect(kinds[kinds.length - 1]).toBe('session.end');
     handle.dispose();
   });
 
