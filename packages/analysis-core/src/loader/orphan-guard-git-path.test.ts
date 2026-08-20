@@ -215,6 +215,48 @@ describe('the other shapes a git-submitted .provenance/ can present', () => {
     expect(dropped[0]!.detail).toContain('INCOMPLETE RECORDING');
   });
 
+  it('tolerates a zero-byte .slog, drops its sidecar with it, and names the session', async () => {
+    // The other shape that is not hypothetical. `SessionWriter.open` creates the
+    // `.slog` eagerly while the buffer policy holds the first entries, and the
+    // sidecar is written eagerly too — so a session torn down before its first
+    // flush leaves a complete `.slog.meta` beside a log of zero bytes. It used to
+    // reach `parseSession` as `first_event_not_session_start` (actualKind
+    // "none"), and `parse-bundle.ts` fails fast on the first session parse error,
+    // so it killed the whole submission.
+    const ghostLogic = '99999999-0000-4000-8000-aaaaaaaaaaaa';
+    const ghostFile = '88888888-0000-4000-8000-bbbbbbbbbbbb';
+    const { zipBuffer } = await buildTestBundle({ sessions: [{ eventCount: 5 }] });
+    const buffer = await withExtraEntries(zipBuffer, {
+      [`session-${ghostFile}.slog`]: '',
+      [`session-${ghostFile}.slog.meta`]: JSON.stringify({
+        format_version: '1.0',
+        session_id: ghostLogic,
+        session_pubkey: 'ab'.repeat(32),
+        encrypted_session_privkey: '',
+        checkpoints: [],
+      }),
+    });
+
+    const result = await loadBundle(buffer, 'student-repo.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // The real session is untouched.
+    expect(result.value.sessions).toHaveLength(1);
+
+    const dropped = result.value.droppedArtifacts;
+    expect(dropped.map((d) => d.kind)).toEqual(['empty_slog']);
+    expect(dropped[0]!.filename).toBe(`session-${ghostFile}.slog`);
+    // Zero bytes means zero recorded events, so dropping discards no evidence —
+    // whereas keeping it discarded all of it.
+    expect(dropped[0]!.detail).toContain('INCOMPLETE RECORDING');
+    // The sidecar still names the recording, in the LOGICAL id space, even
+    // though the log itself never got a byte written to it. That is what would
+    // let this session's rolling seal be dropped with it.
+    expect(dropped[0]!.logicalSessionId).toBe(ghostLogic);
+    expect(dropped[0]!.logFileId).toBe(ghostFile);
+  });
+
   it('tolerates a .tmp staging leftover and reports it', async () => {
     const { zipBuffer } = await buildTestBundle({ sessions: [{ eventCount: 5 }] });
     const buffer = await withExtraEntries(zipBuffer, {
