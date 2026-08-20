@@ -157,6 +157,15 @@ export type BuildBundleOpts = {
   sessions?: Array<{
     /** Defaults to a deterministic UUID based on session index. */
     sessionId?: string;
+    /**
+     * The uuid in the `.slog` FILENAME, when a test needs to control it.
+     *
+     * Defaults to a value that DIFFERS from `sessionId`, because that is what
+     * production does — see {@link fakeLogFileUuid} for why the default is not
+     * `sessionId`. Pass `fileUuid: sessionId` to opt back into the old
+     * same-value shape, and say in the test why that is what it means to assert.
+     */
+    fileUuid?: string;
     /** Additional events after session.start; defaults to 5. */
     eventCount?: number;
     /** Optional explicit wall timestamps for events (starting from session.start). */
@@ -253,10 +262,25 @@ export type BuiltBundle = {
   /** Hex-encoded ed25519 private key used to sign the manifest. */
   sessionPrivkeyHex: string;
   /**
-   * Session ids in build order (index 0 = first session spec). Handy for asserting
-   * against rolling-seal filenames and per-session check details.
+   * LOGICAL session ids in build order (index 0 = first session spec) —
+   * `session.start.data.session_id`. This is what a rolling seal is named after
+   * (`manifest-<session_id>.json`), what the manifest's `sessions[].session_id`
+   * carries, and what per-session check details quote.
+   *
+   * It is NOT what the `.slog` file is called. See {@link BuiltBundle.logFileIds}.
    */
   sessionIds: string[];
+  /**
+   * The `.slog` FILENAME uuids in build order — what `session-<uuid>.slog` and
+   * `session-<uuid>.slog.meta` are actually named in the ZIP.
+   *
+   * Deliberately DIFFERENT from {@link BuiltBundle.sessionIds} unless a spec
+   * pins `fileUuid`, because that is what production does. A test that wants to
+   * reach into the ZIP for a session's log must index this, not `sessionIds` —
+   * the two used to be the same value, which is why crossing them went
+   * undetected all the way into a false accusation against real students.
+   */
+  logFileIds: string[];
   /**
    * The per-session rolling manifests actually emitted, keyed by session id.
    * Empty unless `rollingSeal` was requested.
@@ -272,6 +296,33 @@ export type BuiltBundle = {
 function fakeUuid(index: number): string {
   const hex = index.toString(16).padStart(8, '0');
   return `${hex}-0000-4000-8000-000000000000`;
+}
+
+/**
+ * The uuid in a session's `.slog` FILENAME — deliberately DIFFERENT from the
+ * logical `session.start.data.session_id` that {@link fakeUuid} produces.
+ *
+ * ## The fixture rule this encodes
+ *
+ * In production these are two independently minted uuids: the writer names the
+ * file `session-${randomUUID()}.slog` (`session-registry.ts`) while the logical
+ * id is `recorderContext.session_id`. Every fixture in this repo used to spell
+ * both with the same value, so a bundle in which they were CONFUSED was
+ * indistinguishable from one in which they were handled correctly — and a
+ * fixture that cannot distinguish two ids cannot fail on crossing them.
+ *
+ * It cost a maximum-severity false accusation to learn that: `parse-bundle.ts`
+ * keyed its rolling-seal → files map by the filename uuid and looked it up by
+ * the logical id, so prefix coverage came out empty for every git submission and
+ * `log_bytes_match` accused every honest student whose last seal was non-final.
+ * Not one test noticed, because in every fixture the lookup hit.
+ *
+ * So the default DIFFERS. A test that genuinely needs them equal must say so
+ * with `fileUuid: <the same value>`, which is a visible, reviewable claim.
+ */
+function fakeLogFileUuid(index: number): string {
+  const hex = index.toString(16).padStart(8, '0');
+  return `${hex}-0000-4000-8000-f11e00000000`;
 }
 
 /** ISO timestamp offset from a base epoch for deterministic walls. */
@@ -473,7 +524,10 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
   // 1. Build each session's slog + meta.
   // ---------------------------------------------------------------------------
   type SessionData = {
+    /** Logical id: `session.start.data.session_id`. */
     sessionId: string;
+    /** The uuid in the `.slog` FILENAME. Different from `sessionId` by default. */
+    fileUuid: string;
     slogText: string;
     metaJson: string;
     slogSha256: string;
@@ -484,6 +538,7 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
   for (let i = 0; i < sessionSpecs.length; i++) {
     const spec = sessionSpecs[i]!;
     const sessionId = spec.sessionId ?? fakeUuid(i);
+    const fileUuid = spec.fileUuid ?? fakeLogFileUuid(i);
     const eventCount = spec.eventCount ?? 5;
     const walls = spec.walls;
 
@@ -504,6 +559,7 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
 
     sessions.push({
       sessionId,
+      fileUuid,
       slogText,
       metaJson,
       slogSha256: sha256Hex(slogText),
@@ -862,8 +918,9 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
   if (!tamper.omitAllSlogs) {
     for (let i = 0; i < sessions.length; i++) {
       const s = sessions[i]!;
-      const slogName = `session-${s.sessionId}.slog`;
-      const metaName = `session-${s.sessionId}.slog.meta`;
+      // The FILENAME uuid, never the logical session id. See fakeLogFileUuid.
+      const slogName = `session-${s.fileUuid}.slog`;
+      const metaName = `session-${s.fileUuid}.slog.meta`;
 
       const isLastSession = i === sessions.length - 1;
 
@@ -903,6 +960,7 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
     manifest,
     sessionPrivkeyHex,
     sessionIds: sessions.map((s) => s.sessionId),
+    logFileIds: sessions.map((s) => s.fileUuid),
     rollingManifests,
   };
 }

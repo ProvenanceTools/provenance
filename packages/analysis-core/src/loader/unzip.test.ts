@@ -37,12 +37,35 @@ describe('unzipBundle', () => {
 
     expect(result.value.sessions).toHaveLength(1);
     const s = result.value.sessions[0]!;
-    expect(typeof s.sessionId).toBe('string');
-    expect(s.sessionId.length).toBeGreaterThan(0);
+    expect(typeof s.logFileId).toBe('string');
+    expect(s.logFileId.length).toBeGreaterThan(0);
     expect(typeof s.slogText).toBe('string');
     expect(s.slogText.length).toBeGreaterThan(0);
     expect(typeof s.metaJson).toBe('string');
     expect(s.metaJson.length).toBeGreaterThan(0);
+  });
+
+  it('reports the .slog FILENAME uuid, not the logical session id', async () => {
+    // The two are different values in production, and the loader has already
+    // crossed them once — with a maximum-severity false accusation as the
+    // result. Pin which one the unzipper reports, on a bundle where they differ.
+    const built = await buildTestBundle({
+      sessions: [
+        {
+          sessionId: 'aaaaaaaa-0000-4000-8000-000000000000',
+          fileUuid: 'bbbbbbbb-0000-4000-8000-000000000000',
+        },
+      ],
+    });
+    const result = await unzipBundle(built.blob);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const s = result.value.sessions[0]!;
+    expect(s.logFileId).toBe('bbbbbbbb-0000-4000-8000-000000000000');
+    expect(s.logFileId).not.toBe('aaaaaaaa-0000-4000-8000-000000000000');
+    expect(built.sessionIds).toEqual(['aaaaaaaa-0000-4000-8000-000000000000']);
   });
 
   it('returns ok for a multi-session ZIP', async () => {
