@@ -165,8 +165,8 @@ describe('listCohortSubmissions — protected mode', () => {
       });
 
       const res = await listCohortSubmissions(db, semester.id, {}, 'student_asc', null, 50, true);
-      const names = res.items.map((i) => i.student.display_name);
-      const sids = res.items.map((i) => i.student.sid);
+      const names = res.items.map((i) => i.student!.display_name);
+      const sids = res.items.map((i) => i.student!.sid);
 
       // No real names should appear
       expect(names).not.toContain('Zara');
@@ -180,8 +180,8 @@ describe('listCohortSubmissions — protected mode', () => {
 
       // student_asc in protected mode orders by protected_index, not name:
       // Aaron(index=1) comes before Zara(index=2)
-      expect(res.items[0]!.student.display_name).toBe('Student 1');
-      expect(res.items[1]!.student.display_name).toBe('Student 2');
+      expect(res.items[0]!.student!.display_name).toBe('Student 1');
+      expect(res.items[1]!.student!.display_name).toBe('Student 2');
     });
   });
 
@@ -296,7 +296,7 @@ describe('listCohortSubmissions — protected mode', () => {
         false,
       );
       expect(res.totalCount).toBe(1);
-      expect(res.items[0]!.student.display_name).toBe('Zara');
+      expect(res.items[0]!.student!.display_name).toBe('Zara');
     });
   });
 
@@ -317,7 +317,7 @@ describe('listCohortSubmissions — protected mode', () => {
       });
 
       const res = await listCohortSubmissions(db, semester.id, {}, 'score_desc', null, 50, false);
-      expect(res.items.map((i) => i.student.display_name)).toContain('Zara');
+      expect(res.items.map((i) => i.student!.display_name)).toContain('Zara');
       // Pre-0021 / not-yet-computed rows stay null until ingest or recompute.
       expect(res.items[0]!.total_active_ms).toBeNull();
       expect(res.items[0]!.total_idle_ms).toBeNull();
@@ -360,7 +360,7 @@ describe('listCohortSubmissions — protected mode', () => {
       );
       // Only Zara matched
       expect(res.totalCount).toBe(1);
-      expect(res.items[0]!.student.display_name).toBe('Zara');
+      expect(res.items[0]!.student!.display_name).toBe('Zara');
     });
   });
 
@@ -418,7 +418,7 @@ describe('listCohortSubmissions — protected mode', () => {
       // All 3 items, no duplicates, ordered by protected_index
       const allItems = [...res1.items, ...res2.items, ...res3.items];
       expect(new Set(allItems.map((i) => i.id)).size).toBe(3);
-      const indices = allItems.map((i) => parseInt(i.student.display_name.replace('Student ', '')));
+      const indices = allItems.map((i) => parseInt(i.student!.display_name.replace('Student ', '')));
       expect(indices).toEqual([1, 2, 3]);
     });
   });

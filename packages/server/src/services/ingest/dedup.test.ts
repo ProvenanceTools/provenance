@@ -5,9 +5,10 @@
  */
 
 import { vi, describe, it, expect } from 'vitest';
+import { eq } from 'drizzle-orm';
 
 import { withTestDb } from '../../../test/helpers/db.js';
-import { dedupFile } from './dedup.js';
+import { dedupFile, attachCoSubmitter } from './dedup.js';
 import {
   users,
   courses,
@@ -16,6 +17,7 @@ import {
   assignments,
   ingest_jobs,
   submissions,
+  submission_contributors,
 } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 
@@ -194,10 +196,23 @@ describe('dedupFile', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Student-scoped dedup (Gradescope group submissions)
+  // Group submissions (D9) — the co-submitter is ATTACHED, not fanned out
   // -------------------------------------------------------------------------
+  //
+  // These two tests replace a pair that pinned the OLD student-scoped dedup:
+  // "with studentId: matches only the same student (co-submitter blob is NOT a
+  // duplicate)". That behaviour existed to stop blob-only dedup ERASING the
+  // second co-submitter of a group export (census scenario S20), and the
+  // requirement underneath it — the second co-submitter must survive — is
+  // unchanged and is what these tests assert. What changed is the
+  // representation: they survive as a CONTRIBUTOR of the one submission rather
+  // than as a second submission row with a duplicated blob.
+  //
+  // The old assertions are not weakened, they are re-pinned: `isDuplicate` is
+  // now TRUE for the co-submitter (identical bytes really are the same
+  // artifact), and the thing that must not be lost is checked directly.
 
-  it('with studentId: matches only the same student (co-submitter blob is NOT a duplicate)', async () => {
+  it('a co-submitter of the same blob is a duplicate, and is ATTACHED as a contributor', async () => {
     await withTestDb(async (db) => {
       const user = await seedUser(db);
       const semester = await seedSemester(db, user.id);
@@ -206,21 +221,82 @@ describe('dedupFile', () => {
       const assignment = await seedAssignment(db, semester.id);
       const job = await seedIngestJob(db, semester.id, user.id);
 
-      // One group bundle: identical blob bytes ingested for student A.
+      // One group bundle: identical blob bytes, first ingested for student A.
       const sha256 = 'a1'.repeat(32);
-      await seedSubmission(db, semester.id, assignment.id, studentA.id, job.id, sha256);
+      const sub = await seedSubmission(
+        db,
+        semester.id,
+        assignment.id,
+        studentA.id,
+        job.id,
+        sha256,
+      );
 
-      // Student B (co-submitter, same blob) must NOT be seen as a duplicate.
-      const forB = await dedupFile(db, semester.id, sha256, studentB.id);
-      expect(forB.isDuplicate).toBe(false);
+      // Student B (co-submitter, same bytes) IS a duplicate of the artifact...
+      const forB = await dedupFile(db, semester.id, sha256);
+      expect(forB.isDuplicate).toBe(true);
+      if (!forB.isDuplicate) return;
+      expect(forB.existingSubmissionId).toBe(sub.id);
 
-      // Student A re-uploading the same blob IS a duplicate (their own resubmit).
-      const forA = await dedupFile(db, semester.id, sha256, studentA.id);
-      expect(forA.isDuplicate).toBe(true);
+      // ...but must NOT be erased. This is what the old student-scoped dedup
+      // was protecting, and it is now protected directly.
+      // (A is attached by the ingest path's contributor stage; seedSubmission
+      // writes only the submissions row, so attach both here explicitly.)
+      await attachCoSubmitter(db, sub.id, semester.id, studentA.id);
+      await attachCoSubmitter(db, sub.id, semester.id, studentB.id);
+
+      const contributors = await db
+        .select({ roster_entry_id: submission_contributors.roster_entry_id })
+        .from(submission_contributors)
+        .where(eq(submission_contributors.submission_id, sub.id));
+
+      expect(contributors.map((c) => c.roster_entry_id).sort()).toEqual(
+        [studentA.id, studentB.id].sort(),
+      );
+
+      // And there is exactly ONE submission — no fan-out, no duplicated blob.
+      const subs = await db
+        .select({ id: submissions.id })
+        .from(submissions)
+        .where(eq(submissions.blob_sha256, sha256));
+      expect(subs).toHaveLength(1);
     });
   });
 
-  it('with studentId: blob-only callers still see the existing submission as a duplicate', async () => {
+  it('attaching the same co-submitter twice is a no-op (ingest stays idempotent)', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const studentA = await seedRosterEntry(db, semester.id, '111111');
+      const studentB = await seedRosterEntry(db, semester.id, '222222');
+      const assignment = await seedAssignment(db, semester.id);
+      const job = await seedIngestJob(db, semester.id, user.id);
+
+      const sha256 = 'b2'.repeat(32);
+      const sub = await seedSubmission(
+        db,
+        semester.id,
+        assignment.id,
+        studentA.id,
+        job.id,
+        sha256,
+      );
+
+      await attachCoSubmitter(db, sub.id, semester.id, studentB.id);
+      await attachCoSubmitter(db, sub.id, semester.id, studentB.id);
+      // The submitter who already has a backfilled/ingest-written row too.
+      await attachCoSubmitter(db, sub.id, semester.id, studentA.id);
+
+      const contributors = await db
+        .select({ id: submission_contributors.id })
+        .from(submission_contributors)
+        .where(eq(submission_contributors.submission_id, sub.id));
+
+      expect(contributors).toHaveLength(2);
+    });
+  });
+
+  it('blob-only dedup still sees an existing submission as a duplicate', async () => {
     await withTestDb(async (db) => {
       const user = await seedUser(db);
       const semester = await seedSemester(db, user.id);
@@ -228,10 +304,9 @@ describe('dedupFile', () => {
       const assignment = await seedAssignment(db, semester.id);
       const job = await seedIngestJob(db, semester.id, user.id);
 
-      const sha256 = 'b2'.repeat(32);
+      const sha256 = 'c3'.repeat(32);
       const sub = await seedSubmission(db, semester.id, assignment.id, studentA.id, job.id, sha256);
 
-      // No studentId (normal /ingest path) — blob-only dedup still fires.
       const result = await dedupFile(db, semester.id, sha256);
       expect(result.isDuplicate).toBe(true);
       if (!result.isDuplicate) return;

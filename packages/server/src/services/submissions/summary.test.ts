@@ -206,9 +206,9 @@ describe('getSubmissionSummary — protected mode masking', () => {
         expect(summary).not.toBeNull();
 
         // student.display_name must match /^Student \d+$/
-        expect(summary!.student.display_name).toMatch(/^Student \d+$/);
+        expect(summary!.student!.display_name).toMatch(/^Student \d+$/);
         // student.sid must start with S
-        expect(summary!.student.sid).toMatch(/^S/);
+        expect(summary!.student!.sid).toMatch(/^S/);
         // source_filename must NOT contain 'smith' or 'john'
         expect(summary!.source_filename.toLowerCase()).not.toContain('smith');
         expect(summary!.source_filename.toLowerCase()).not.toContain('john');
@@ -247,8 +247,8 @@ describe('getSubmissionSummary — protected mode masking', () => {
         expect(summary).not.toBeNull();
 
         // Real display name and sid must be present
-        expect(summary!.student.display_name).toBe('John Smith');
-        expect(summary!.student.sid).toBe('smith123');
+        expect(summary!.student!.display_name).toBe('John Smith');
+        expect(summary!.student!.sid).toBe('smith123');
         // Real source_filename must be present
         expect(summary!.source_filename).toBe('smith_john_hw01.zip');
       });
@@ -280,7 +280,7 @@ describe('getSubmissionSummary — protected mode masking', () => {
         expect(summary).not.toBeNull();
 
         // Fallback: display_name uses UUID stub (still matches /^Student /)
-        expect(summary!.student.display_name).toMatch(/^Student /);
+        expect(summary!.student!.display_name).toMatch(/^Student /);
         // source_filename must not contain 'jones' or 'alice'
         expect(summary!.source_filename.toLowerCase()).not.toContain('jones');
         expect(summary!.source_filename.toLowerCase()).not.toContain('alice');

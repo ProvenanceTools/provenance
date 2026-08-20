@@ -313,12 +313,55 @@ ALTER TABLE submissions ADD COLUMN version_owner_key text
     END
   ) STORED NOT NULL;
 
--- Swap the unique constraint onto the lineage key. Same NAME, so the Drizzle
--- schema and every error message that quotes it stay accurate. For every row
--- that existed before this migration the key is 'student:' || student_id, so
--- this constraint partitions the existing table point-for-point as the old one
--- did.
-ALTER TABLE submissions DROP CONSTRAINT submissions_version_key;
+-- Swap the unique constraint onto the lineage key.
+--
+-- The old one is dropped BY DEFINITION, not by name. Migration 0006 declared it
+-- INLINE and UNNAMED —
+--
+--   UNIQUE (semester_id, assignment_id, student_id, version_index)
+--
+-- inside CREATE TABLE — so Postgres auto-generated its name (and, at 66
+-- characters, truncated it). `submissions_version_key`, the name the Drizzle
+-- schema has always declared, was never the name the database actually used.
+-- A plain `DROP CONSTRAINT submissions_version_key` therefore fails with
+-- `constraint ... does not exist` on every real database, empty or populated.
+--
+-- Looking it up by its COLUMN SET is both correct and self-checking: if no such
+-- constraint exists this RAISEs and the migration aborts, rather than quietly
+-- leaving the table with TWO unique constraints — the old one still keyed on
+-- student_id, which would reject exactly the group submissions this migration
+-- exists to allow.
+--
+-- After this the constraint really is called `submissions_version_key`, so the
+-- Drizzle schema's long-standing claim becomes true for the first time.
+DO $$
+DECLARE
+  old_constraint text;
+BEGIN
+  SELECT c.conname INTO old_constraint
+  FROM pg_constraint c
+  WHERE c.conrelid = 'submissions'::regclass
+    AND c.contype = 'u'
+    AND (
+      SELECT array_agg(a.attname::text ORDER BY a.attname::text)
+      FROM unnest(c.conkey) AS k(attnum)
+      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+    ) = ARRAY['assignment_id', 'semester_id', 'student_id', 'version_index'];
+
+  IF old_constraint IS NULL THEN
+    RAISE EXCEPTION
+      'migration 0029: no UNIQUE constraint on submissions '
+      '(semester_id, assignment_id, student_id, version_index) was found. '
+      'Refusing to continue: dropping nothing here would leave the old '
+      'student-keyed constraint in place and reject every group submission.';
+  END IF;
+
+  EXECUTE format('ALTER TABLE submissions DROP CONSTRAINT %I', old_constraint);
+END $$;
+
+-- For every row that existed before this migration the lineage key is
+-- 'student:' || student_id, so this constraint partitions the existing table
+-- point-for-point as the old one did.
 ALTER TABLE submissions ADD CONSTRAINT submissions_version_key
   UNIQUE (semester_id, assignment_id, version_owner_key, version_index);
 
