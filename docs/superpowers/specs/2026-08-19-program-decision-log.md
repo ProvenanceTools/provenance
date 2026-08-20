@@ -194,6 +194,21 @@ Build, typecheck, lint clean. Branch ~145 commits, ~+50k lines vs `main`.
    route nodes on `master.dot` / `ecosystem.dot`. Node _detail_ cannot be authored before the node
    exists — `nodes.coverage.test.ts` fails on metadata for a node no SVG contains.
 
+### Definition of done
+
+The system is finished when every row is true. Update this table as rows land — it is the
+completion contract, not a wish list.
+
+| Area                          | Done when                                                                                                                                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Format**                    | Rolling seal + `final` implemented in **all three** recorders, each passing the shared `rolling-manifest` vector unmodified.                                                                                 |
+| **Identity**                  | 2.1 chain walk ported to **all three** recorders, each carrying its own `enrollment.json` + `identity.json` vector updates **in the same change**.                                                           |
+| **Cross-implementation gate** | Each recorder produces a real bundle that the real `loadBundle` + `runValidation` accepts. This is the only test class that has ever caught a defect the producing repo's own suite asserted was impossible. |
+| **Collaboration**             | Contributor resolution, DAG, `≺`, segmented reconstruction — all landed — plus external-change reclassification, contributor-keyed heuristics, and the contributor schema cut-over.                          |
+| **No false accusations**      | Every high-severity flag reachable by honest pair work has been driven by a test that proves it does _not_ fire. This is the bar the whole programme is judged against.                                      |
+| **`/architecture`**           | Zero owed nodes; `nodes.coverage.test.ts` green; diagrams regenerate deterministically.                                                                                                                      |
+| **Verification**              | Every suite measured in the MAIN tree, server flakes distinguished from regressions by isolated re-runs, migration chain applied against a live database.                                                    |
+
 ### Remaining work
 
 - Branched replay UI (Tier 5.3), including surfacing a suppressed concurrent overlap as a **visible
