@@ -317,6 +317,39 @@ export type GitEventPayload = {
   parents?: string[];
   /** Current branch name. Absent when HEAD is detached; never invented. */
   branch?: string;
+  /**
+   * The repository this observation came from, identified by its **root-commit
+   * sha** — decision D12 (collaboration spec S14(b)).
+   *
+   * A scope can observe more than one repository: a submodule, or a repository
+   * nested inside the one that owns the assignment root. Their sha spaces are
+   * unrelated, so a reader that keys commits by sha alone merges two graphs that
+   * have nothing to do with each other. This field is what lets a reader key on
+   * `(repository, sha)` for real.
+   *
+   * The root-commit sha was chosen because **both partners derive the same value
+   * offline** — which is the whole point, since a discriminator two partners
+   * disagree about cannot correlate anything — and because a submodule has a
+   * different root commit, so it discriminates correctly. It is deliberately not
+   * the repository path and not a remote URL: a path is arguably an identifier
+   * and a remote URL embeds the org and often the student's own username.
+   *
+   * **Absent is ordinary and permanent.** Every bundle recorded before this
+   * landed has no such field, and a shallow clone has no reachable root commit,
+   * so a recorder must OMIT the field rather than emit a boundary commit that a
+   * full clone of the same repository would disagree with. Absent means "this
+   * observation is unlabelled" — never "a different repository", never a defect,
+   * and never evidence of anything.
+   *
+   * Omit it, never `null`: an absent key and a `null` value canonicalize
+   * differently and therefore chain to different hashes, exactly as `parents: []`
+   * and an absent `parents` do.
+   *
+   * Lowercase hex, 40 characters for a sha-1 repository or 64 for sha-256. See
+   * `readRepositoryDiscriminator` in `git-event.ts` for the narrowing every
+   * reader and every port shares.
+   */
+  root_commit_sha?: string;
 };
 
 export type ClockSkewPayload = {
