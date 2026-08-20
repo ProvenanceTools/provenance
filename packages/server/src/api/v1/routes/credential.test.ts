@@ -989,13 +989,16 @@ describe('POST /identity/credential', () => {
         setEnv({ private_key_hex: toHex(wrong.privateKey), cert: chain.cert });
         const { sessionId } = await seedUser(db, uniqueEmail());
 
-        const res = await createV1App().fetch(credentialRequest(sessionId, STUDENT_PUBKEY));
+        // A key used by no other test in this file, because the container is
+        // shared across the whole file and nothing truncates between cases.
+        const refusedKey = 'f'.repeat(64);
+        const res = await createV1App().fetch(credentialRequest(sessionId, refusedKey));
         expect(res.status).toBe(503);
 
         const rows = await db
           .select()
           .from(student_credentials)
-          .where(eq(student_credentials.student_pubkey, STUDENT_PUBKEY));
+          .where(eq(student_credentials.student_pubkey, refusedKey));
         expect(rows).toHaveLength(0);
       });
     });
