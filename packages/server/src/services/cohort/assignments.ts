@@ -15,6 +15,10 @@ import { eq, and, sql } from 'drizzle-orm';
 import { assignments } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import { Errors } from '../../api/v1/errors.js';
+import {
+  parseIngestScopeConfig,
+  type IngestScopeConfig,
+} from '../ingest/gradescope/repo-scopes.js';
 
 export type AssignmentSummary = {
   id: string;
@@ -29,6 +33,13 @@ export type AssignmentSummary = {
   p95_score: number;
   fail_count: number;
   warn_count: number;
+  /**
+   * The persisted ingest-scope default (`assignments.ingest_scope`). Always
+   * narrowed through `parseIngestScopeConfig` before it leaves the service, so
+   * a hand-written or pre-migration-0026 jsonb value can never reach the API as
+   * something the response schema would reject.
+   */
+  ingest_scope: IngestScopeConfig;
 };
 
 export async function listAssignments(
@@ -43,6 +54,7 @@ export async function listAssignments(
       assignment_id_str: assignments.assignment_id_str,
       label: assignments.label,
       sort_order: assignments.sort_order,
+      ingest_scope: assignments.ingest_scope,
     })
     .from(assignments)
     .where(eq(assignments.semester_id, semesterId))
@@ -118,6 +130,7 @@ export async function listAssignments(
       p95_score: stats?.p95_score ?? 0,
       fail_count: stats?.fail_count ?? 0,
       warn_count: stats?.warn_count ?? 0,
+      ingest_scope: parseIngestScopeConfig(a.ingest_scope),
     };
   });
 }
@@ -125,14 +138,22 @@ export async function listAssignments(
 // ---------------------------------------------------------------------------
 // PATCH /semesters/:semesterId/assignments/:assignmentId — PRD §8.5.
 //
-// Updates label and/or sort_order on a single assignment. Validates that the
-// assignment belongs to the semester before writing — a wrong-semester id
-// resolves to 404 rather than silently editing a sibling course's row.
+// Updates label, sort_order and/or ingest_scope on a single assignment.
+// Validates that the assignment belongs to the semester before writing — a
+// wrong-semester id resolves to 404 rather than silently editing a sibling
+// course's row.
+//
+// `ingest_scope` is REPLACED wholesale, never merged: the modes carry different
+// meaningful fields (`path_glob` belongs only to `repo_scoped`), so merging
+// would let a switch to `repo_whole` silently retain a stale glob. The route
+// validates the object before it gets here, so what is written is always a
+// complete, self-consistent config.
 // ---------------------------------------------------------------------------
 
 export type UpdateAssignmentInput = {
   label?: string;
   sort_order?: number;
+  ingest_scope?: IngestScopeConfig;
 };
 
 export async function updateAssignment(
@@ -148,9 +169,10 @@ export async function updateAssignment(
     .limit(1);
   if (existing.length === 0) throw Errors.notFound();
 
-  const updates: { label?: string; sort_order?: number } = {};
+  const updates: { label?: string; sort_order?: number; ingest_scope?: IngestScopeConfig } = {};
   if (input.label !== undefined) updates.label = input.label;
   if (input.sort_order !== undefined) updates.sort_order = input.sort_order;
+  if (input.ingest_scope !== undefined) updates.ingest_scope = input.ingest_scope;
 
   if (Object.keys(updates).length > 0) {
     await db.update(assignments).set(updates).where(eq(assignments.id, assignmentId));
@@ -177,6 +199,8 @@ export async function updateAssignment(
 export type CreateAssignmentInput = {
   assignmentIdStr: string;
   label?: string;
+  /** Omitted ⇒ the column default, `self_identifying` / `ingest_all`. */
+  ingest_scope?: IngestScopeConfig;
 };
 
 export async function createAssignment(
@@ -194,6 +218,9 @@ export async function createAssignment(
       assignment_id_str: input.assignmentIdStr,
       label,
       sort_order: 0,
+      // Left unset when not declared, so the column DEFAULT applies rather than
+      // this code restating it — one source of truth for what the default is.
+      ...(input.ingest_scope !== undefined ? { ingest_scope: input.ingest_scope } : {}),
     })
     .onConflictDoNothing({
       target: [assignments.semester_id, assignments.assignment_id_str],
@@ -204,6 +231,7 @@ export async function createAssignment(
       assignment_id_str: assignments.assignment_id_str,
       label: assignments.label,
       sort_order: assignments.sort_order,
+      ingest_scope: assignments.ingest_scope,
     });
 
   if (inserted.length === 0) throw Errors.assignmentIdStrTaken(input.assignmentIdStr);
@@ -222,5 +250,6 @@ export async function createAssignment(
     p95_score: 0,
     fail_count: 0,
     warn_count: 0,
+    ingest_scope: parseIngestScopeConfig(row.ingest_scope),
   };
 }

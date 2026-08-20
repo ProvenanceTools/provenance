@@ -38,6 +38,7 @@ import { recordPhase } from '../../jobs/ingest-profile.js';
 import { upsertRosterFromSubmitters } from './gradescope/upsert-roster.js';
 import { openLocalExport, type StreamedSkipReason } from './gradescope/stream-export.js';
 import { loadIngestScopeConfigs, scopeConfigResolver } from './gradescope/scope-config.js';
+import type { IngestScopeConfig } from './gradescope/repo-scopes.js';
 import { zipBundleEntries, type BundleEntry } from './gradescope/build-bundle-zip.js';
 import { createRebuildPool, type RebuildPool } from './gradescope/rebuild-pool.js';
 import { getBoss, JOB_KINDS } from '../../jobs/pg-boss.js';
@@ -90,6 +91,20 @@ export interface IngestLocalPathArgs {
    * connection for its row insert.
    */
   stageConcurrency?: number;
+  /**
+   * Per-request declared-submission-type override (§6).
+   *
+   * When present it REPLACES the per-assignment `assignments.ingest_scope`
+   * default for every scope in this batch, which is how a one-off re-ingest or
+   * a fixup declares a different shape without mutating the assignment row. It
+   * beats the default by the simplest possible mechanism: the resolver handed
+   * downstream ignores its assignment-id key and returns this config for every
+   * scope, so nothing below here knows or cares which of the two it got.
+   *
+   * Omitted ⇒ the DB-backed per-assignment resolver, i.e. the behaviour that
+   * existed before overrides.
+   */
+  ingestScopeOverride?: IngestScopeConfig;
 }
 
 export interface IngestLocalPathSkipped {
@@ -137,14 +152,18 @@ export async function ingestLocalPath(
   const { semesterId, userId, archivePath, maxBundleBytes, maxBatchFiles } = args;
   const existingJobId = args.jobId ?? null;
 
-  // Scope-resolution config is per assignment and keyed by the id each scope
-  // declares, so the whole semester's map is read once up front (a handful of
-  // rows) rather than per discovered scope.
-  const scopeConfigs = await loadIngestScopeConfigs(db, semesterId);
+  // A per-request override applies to the WHOLE batch, so it short-circuits the
+  // DB read entirely — there is nothing per-assignment left to look up. Without
+  // one, scope-resolution config is per assignment and keyed by the id each
+  // scope declares, so the whole semester's map is read once up front (a handful
+  // of rows) rather than per discovered scope.
+  const override = args.ingestScopeOverride;
+  const scopeConfigFor =
+    override !== undefined
+      ? () => override
+      : scopeConfigResolver(await loadIngestScopeConfigs(db, semesterId));
 
-  const opened = await openLocalExport(archivePath, {
-    scopeConfigFor: scopeConfigResolver(scopeConfigs),
-  });
+  const opened = await openLocalExport(archivePath, { scopeConfigFor });
   if (!opened.ok) {
     return { ok: false, error: opened.error, detail: opened.detail };
   }

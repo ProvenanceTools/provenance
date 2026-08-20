@@ -373,14 +373,20 @@ export const assignments = pgTable(
     assignment_id_str: text('assignment_id_str').notNull(),
     label: text('label').notNull().default(''),
     sort_order: integer('sort_order').notNull().default(0),
-    // Scope resolution for git-repo submissions (program architecture §6 /
-    // migration 0023). A cloned repo can contain several `.provenance/`
-    // directories; each one is self-identifying, so the default accepts every
-    // sealed scope wherever it sits. This overrides that for what
-    // self-identification cannot settle — two directories declaring the same
-    // assignment id, or a stale vendored copy.
-    //   { mode: 'self_identifying' | 'path', path_glob?: string,
-    //     on_multiple: 'error' | 'ingest_all' }
+    // The assignment's DECLARED SUBMISSION TYPE and scope resolution (program
+    // architecture §6 / migrations 0023 + 0026). A cloned repo can contain
+    // several `.provenance/` directories; each one is self-identifying, so the
+    // default accepts every sealed scope wherever it sits. Declaring a type
+    // narrows that, and makes a submission of the wrong shape fail rather than
+    // ingest as something it is not.
+    //   { mode: 'self_identifying' | 'bundle_zip' | 'repo_whole' | 'repo_scoped',
+    //     path_glob?: string, on_multiple: 'error' | 'ingest_all' }
+    // 'repo_scoped' was spelled 'path' before migration 0026; the parser still
+    // accepts the old name, so an un-migrated row behaves identically.
+    // This is the persisted DEFAULT — an individual ingest request may override
+    // it wholesale (see FinalizeUploadRequestSchema / the scope_* query params).
+    // Read+written over the API via AssignmentSummary.ingest_scope and
+    // PATCH/POST /semesters/:id/assignments.
     // Narrowed by parseIngestScopeConfig (services/ingest/gradescope/repo-scopes.ts).
     ingest_scope: jsonb('ingest_scope')
       .notNull()

@@ -316,7 +316,7 @@ describe('discoverRepoScopes — rolling-sealed scope', () => {
 
     // …and path_glob disambiguates them instead of refusing both.
     const byPath = resolveRepoScopes(discovered.scopes, () => ({
-      mode: 'path',
+      mode: 'repo_scoped',
       path_glob: 'proj2/**',
       on_multiple: 'error',
     }));
@@ -383,7 +383,7 @@ describe('resolveRepoScopes', () => {
   it('mode=path keeps only scopes matching path_glob', () => {
     const scopes = [fakeScope('proj2/', 'proj2'), fakeScope('vendor/proj2/', 'proj2')];
     const config: IngestScopeConfig = {
-      mode: 'path',
+      mode: 'repo_scoped',
       path_glob: 'proj2/**',
       on_multiple: 'ingest_all',
     };
@@ -415,7 +415,7 @@ describe('resolveRepoScopes', () => {
     const scopes = [fakeScope('proj2/', 'proj2'), fakeScope('lab5/', 'lab5')];
     const resolved = resolveRepoScopes(scopes, (id) =>
       id === 'lab5'
-        ? { mode: 'path', path_glob: 'never/**', on_multiple: 'ingest_all' }
+        ? { mode: 'repo_scoped', path_glob: 'never/**', on_multiple: 'ingest_all' }
         : DEFAULT_INGEST_SCOPE,
     );
     expect(resolved.accepted.map((s) => s.scopePath)).toEqual(['proj2/']);
@@ -425,7 +425,7 @@ describe('resolveRepoScopes', () => {
   it('matches a bare directory glob as well as an explicit /**', () => {
     const scopes = [fakeScope('proj2/', 'proj2'), fakeScope('lab5/', 'proj2')];
     const resolved = resolveRepoScopes(scopes, () => ({
-      mode: 'path',
+      mode: 'repo_scoped',
       path_glob: 'proj2',
       on_multiple: 'ingest_all',
     }));
@@ -435,7 +435,7 @@ describe('resolveRepoScopes', () => {
   it('a * glob does not cross a path separator', () => {
     const scopes = [fakeScope('a/b/', 'x'), fakeScope('a/', 'x')];
     const resolved = resolveRepoScopes(scopes, () => ({
-      mode: 'path',
+      mode: 'repo_scoped',
       path_glob: '*/',
       on_multiple: 'ingest_all',
     }));
@@ -456,7 +456,7 @@ describe('parseIngestScopeConfig', () => {
 
   it('accepts a well-formed override', () => {
     expect(
-      parseIngestScopeConfig({ mode: 'path', path_glob: 'proj2/**', on_multiple: 'error' }),
-    ).toEqual({ mode: 'path', path_glob: 'proj2/**', on_multiple: 'error' });
+      parseIngestScopeConfig({ mode: 'repo_scoped', path_glob: 'proj2/**', on_multiple: 'error' }),
+    ).toEqual({ mode: 'repo_scoped', path_glob: 'proj2/**', on_multiple: 'error' });
   });
 });

@@ -61,7 +61,13 @@ export interface GradescopeSkippedEntry {
   folderKey: string;
   scopePath: string;
   submitters: GradescopeSubmitter[];
-  reason: 'no_manifest' | 'no_submitters' | 'no_seal' | 'scope_excluded' | 'ambiguous_scope';
+  reason:
+    | 'no_manifest'
+    | 'no_submitters'
+    | 'no_seal'
+    | 'scope_excluded'
+    | 'ambiguous_scope'
+    | 'submission_type_mismatch';
 }
 
 export interface ParsedGradescopeExport {

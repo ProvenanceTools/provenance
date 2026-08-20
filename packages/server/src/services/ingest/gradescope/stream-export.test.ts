@@ -222,8 +222,12 @@ describe('openLocalExport — git repo with several .provenance/ scopes', () => 
     ]);
   });
 
-  it('honours ingest_scope mode=path, excluding the non-matching scopes', async () => {
-    const seen = await drain({ mode: 'path', path_glob: 'proj2/**', on_multiple: 'ingest_all' });
+  it('honours ingest_scope mode=repo_scoped, excluding the non-matching scopes', async () => {
+    const seen = await drain({
+      mode: 'repo_scoped',
+      path_glob: 'proj2/**',
+      on_multiple: 'ingest_all',
+    });
     const bundles = seen.filter((s) => s.kind === 'bundle');
     expect(bundles.map((b) => b.scopePath)).toEqual(['proj2/']);
     const excluded = seen.filter((s) => s.kind === 'skipped' && s.reason === 'scope_excluded');

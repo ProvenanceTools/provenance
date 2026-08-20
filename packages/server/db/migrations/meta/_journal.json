@@ -169,6 +169,13 @@
       "when": 1788134400000,
       "tag": "0025_students_institution_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788307200000,
+      "tag": "0026_ingest_scope_submission_types",
+      "breakpoints": true
     }
   ]
 }

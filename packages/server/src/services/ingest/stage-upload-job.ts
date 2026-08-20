@@ -24,6 +24,7 @@ import type { StorageClient } from '../storage/client.js';
 import { completeResumableUpload } from './resumable-upload.js';
 import { failIngestJob } from './job-control.js';
 import { JOB_KINDS } from '../../jobs/pg-boss.js';
+import type { IngestScopeConfig } from './gradescope/repo-scopes.js';
 import { getLogger } from '../../logging.js';
 
 /** pg-boss payload for an `ingest_stage_upload` job. */
@@ -33,6 +34,14 @@ export interface IngestStageUploadPayload {
   userId: string;
   uploadId: string;
   s3UploadId: string;
+  /**
+   * Per-request declared-submission-type override, carried across the pg-boss
+   * boundary because `/complete` returns 202 long before the staging work runs.
+   * Plain JSON, so it round-trips through the job payload unchanged. Absent on
+   * jobs enqueued before overrides existed, which is exactly the no-override
+   * case.
+   */
+  ingestScopeOverride?: IngestScopeConfig;
 }
 
 export interface StageUploadArgs extends IngestStageUploadPayload {
@@ -71,6 +80,9 @@ export async function stageUploadIntoJob(
       maxBundleBytes: args.maxBundleBytes,
       maxBatchFiles: args.maxBatchFiles,
       ...(args.stageConcurrency !== undefined ? { stageConcurrency: args.stageConcurrency } : {}),
+      ...(args.ingestScopeOverride !== undefined
+        ? { ingestScopeOverride: args.ingestScopeOverride }
+        : {}),
       jobId: args.ingestJobId,
     },
   );

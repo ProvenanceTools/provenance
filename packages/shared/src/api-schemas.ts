@@ -215,6 +215,66 @@ export type StudentListResponse = z.infer<typeof StudentListResponseSchema>;
 // Phase 21 — Assignment summary row (for filter dropdown)
 // ---------------------------------------------------------------------------
 
+/**
+ * The declared submission type for a batch of ingested submissions, plus the
+ * two knobs that settle what self-identification cannot.
+ *
+ * This ONE object lives in two places, deliberately:
+ *   - persisted per assignment as `assignments.ingest_scope` — the default
+ *     provgate sets once at Gradescope→Provenance mapping time; and
+ *   - passed on an individual ingest request as an override, for a one-off
+ *     re-ingest or a fixup. The override beats the persisted default.
+ *
+ * Modes:
+ *   - `self_identifying` (DEFAULT) — walk the tree and accept every sealed
+ *     `.provenance/` scope wherever it sits, however many. Nothing is declared;
+ *     each scope's manifest already says which assignment it is. This is what
+ *     makes a nested multi-assignment repo work, and it is what every
+ *     assignment predating this field already does.
+ *   - `bundle_zip` — the classic sealed `.zip` bundle: exactly one scope, at
+ *     the tree root. A tree carrying a nested `.provenance/` is a repo, not a
+ *     bundle zip, and fails.
+ *   - `repo_whole` — a git repo treated as ONE scope, at the repo root. Nested
+ *     scopes are excluded rather than fanned out. No root scope ⇒ fails.
+ *   - `repo_scoped` — a git repo in which `path_glob` selects the scope(s).
+ *     `path_glob` is REQUIRED. A glob that selects nothing fails, rather than
+ *     quietly ingesting zero submissions.
+ *
+ * A submission that does not match the declaration fails THAT SUBMISSION (not
+ * the batch) and is reported through the existing skipped/unmatched channel
+ * with reason `submission_type_mismatch` — see `GradescopeSkippedEntrySchema`.
+ *
+ * `path_glob` matches the scope's directory prefix (`''` = tree root, else e.g.
+ * `proj2/`); both `proj2` and `proj2/**` are accepted spellings. `on_multiple`
+ * is orthogonal to the mode and decides what happens when more than one
+ * ACCEPTED scope declares the same `assignment_id`.
+ *
+ * `mode: 'path'` was the pre-2026-08 spelling of `repo_scoped`. It is NOT
+ * accepted here — the API is the strict boundary — but the server still reads
+ * it out of storage as `repo_scoped`, so a row written before migration 0026
+ * behaves identically.
+ */
+export const IngestScopeConfigSchema = z
+  .object({
+    mode: z.enum(['self_identifying', 'bundle_zip', 'repo_whole', 'repo_scoped']),
+    path_glob: z.string().min(1).max(500).optional(),
+    // Deliberately required rather than `.default('ingest_all')`: a zod default
+    // makes the schema's input and output types diverge, and this object is
+    // round-tripped (written on PATCH, read back on AssignmentSummary), so the
+    // divergence would infect every consumer with an `on_multiple | undefined`.
+    // A declaration API is the right place to make the caller say what it means.
+    on_multiple: z.enum(['error', 'ingest_all']),
+  })
+  .refine((v) => v.mode !== 'repo_scoped' || v.path_glob !== undefined, {
+    message: "path_glob is required when mode is 'repo_scoped'",
+    path: ['path_glob'],
+  })
+  .refine((v) => v.mode === 'repo_scoped' || v.path_glob === undefined, {
+    message: "path_glob is only meaningful when mode is 'repo_scoped'",
+    path: ['path_glob'],
+  });
+export type IngestScopeConfig = z.infer<typeof IngestScopeConfigSchema>;
+
 export const AssignmentSummarySchema = z.object({
   id: z.string().uuid(),
   semester_id: z.string().uuid(),
@@ -228,6 +288,12 @@ export const AssignmentSummarySchema = z.object({
   p95_score: z.number(),
   fail_count: z.number().int(),
   warn_count: z.number().int(),
+  /**
+   * The assignment's persisted ingest-scope default. Always present — the
+   * column is NOT NULL with a `self_identifying` default — so provgate can read
+   * back exactly what it wrote without a second call.
+   */
+  ingest_scope: IngestScopeConfigSchema,
 });
 export type AssignmentSummary = z.infer<typeof AssignmentSummarySchema>;
 
@@ -243,10 +309,13 @@ export const UpdateAssignmentRequestSchema = z
   .object({
     label: z.string().min(1).max(200).optional(),
     sort_order: z.number().int().optional(),
+    /** Replaces the persisted ingest-scope default wholesale (not merged). */
+    ingest_scope: IngestScopeConfigSchema.optional(),
   })
-  .refine((v) => v.label !== undefined || v.sort_order !== undefined, {
-    message: 'at least one of label or sort_order is required',
-  });
+  .refine(
+    (v) => v.label !== undefined || v.sort_order !== undefined || v.ingest_scope !== undefined,
+    { message: 'at least one of label, sort_order or ingest_scope is required' },
+  );
 export type UpdateAssignmentRequest = z.infer<typeof UpdateAssignmentRequestSchema>;
 
 export const UpdateAssignmentResponseSchema = z.object({
@@ -259,6 +328,12 @@ export type UpdateAssignmentResponse = z.infer<typeof UpdateAssignmentResponseSc
 export const CreateAssignmentRequestSchema = z.object({
   assignment_id_str: z.string().min(1).max(200),
   label: z.string().max(200).optional(),
+  /**
+   * Declare the ingest-scope default at mapping time. Omitted ⇒ the column
+   * default (`self_identifying`), which is how every assignment auto-created by
+   * ingest behaves.
+   */
+  ingest_scope: IngestScopeConfigSchema.optional(),
 });
 export type CreateAssignmentRequest = z.infer<typeof CreateAssignmentRequestSchema>;
 
@@ -383,10 +458,19 @@ export type RosterUpsertSummary = z.infer<typeof RosterUpsertSummarySchema>;
  *     seal command on a git push, so this is the normal state of a git scope
  *     until the recorder's rolling seal ships. Reported per scope so a repo
  *     never disappears from ingest without a record.
- *   - `scope_excluded` — the assignment's `ingest_scope.path_glob` did not
- *     match this scope's directory.
+ *   - `scope_excluded` — the effective `ingest_scope` did not select this
+ *     scope's directory: either `repo_scoped` and `path_glob` did not match, or
+ *     `repo_whole`, which ingests only the repo root and excludes every nested
+ *     scope by declaration.
  *   - `ambiguous_scope` — `ingest_scope.on_multiple = 'error'` and more than
  *     one scope declared this assignment id.
+ *   - `submission_type_mismatch` — the HOMOGENEITY failure. The submission does
+ *     not have the shape the batch declared via `ingest_scope.mode`: a
+ *     `bundle_zip` batch handed a multi-scope repo, a `repo_whole` batch handed
+ *     a repo with no root scope, or a `repo_scoped` batch whose `path_glob`
+ *     selected nothing at all. It fails the submission, never the batch, so one
+ *     malformed repo cannot block a cohort — a heterogeneous batch simply shows
+ *     up as a pile of these entries.
  *
  * `scope_path` is `''` for the folder root (always so on the flat Gradescope
  * path) and a directory prefix such as `proj2/` for a fanned-out scope. Optional
@@ -404,6 +488,7 @@ export const GradescopeSkippedEntrySchema = z.object({
     'no_seal',
     'scope_excluded',
     'ambiguous_scope',
+    'submission_type_mismatch',
   ]),
 });
 export type GradescopeSkippedEntry = z.infer<typeof GradescopeSkippedEntrySchema>;
@@ -451,6 +536,67 @@ export const CreateUploadResponseSchema = z.object({
   total_parts: z.number().int().positive(),
 });
 export type CreateUploadResponse = z.infer<typeof CreateUploadResponseSchema>;
+
+/**
+ * Finalize a resumable upload and ingest it.
+ *
+ * `ingest_scope` is the PER-REQUEST OVERRIDE: when present it replaces the
+ * per-assignment `assignments.ingest_scope` default for every submission in
+ * this batch, which is what makes a one-off re-ingest or a fixup possible
+ * without mutating the assignment. Omitted ⇒ each scope uses its declared
+ * assignment's persisted default, exactly as before this field existed.
+ *
+ * The override rides the `ingest_stage_upload` pg-boss payload, so it survives
+ * the request returning 202 before the staging work runs.
+ */
+export const FinalizeUploadRequestSchema = z.object({
+  s3_upload_id: z.string().min(1),
+  ingest_scope: IngestScopeConfigSchema.optional(),
+});
+export type FinalizeUploadRequest = z.infer<typeof FinalizeUploadRequestSchema>;
+
+/**
+ * Per-request ingest-scope override for `POST /ingest:gradescope`, whose body
+ * is `multipart/form-data` reserved for the export archive — so the override
+ * travels as flat QUERY PARAMETERS instead of a nested JSON object.
+ *
+ * The three params map one-to-one onto `IngestScopeConfigSchema`:
+ *   ?scope_mode=repo_scoped&scope_path_glob=proj2/**&scope_on_multiple=error
+ *
+ * All absent ⇒ no override; each scope uses its assignment's persisted default.
+ * `scope_mode` is the trigger: supplying only `scope_path_glob` is a validation
+ * error rather than a silently-ignored parameter, because a typo'd override
+ * that quietly does nothing is exactly the failure this feature exists to stop.
+ */
+export const IngestScopeOverrideQuerySchema = z
+  .object({
+    scope_mode: z.enum(['self_identifying', 'bundle_zip', 'repo_whole', 'repo_scoped']).optional(),
+    scope_path_glob: z.string().min(1).max(500).optional(),
+    scope_on_multiple: z.enum(['error', 'ingest_all']).optional(),
+  })
+  .refine(
+    (v) =>
+      v.scope_mode !== undefined ||
+      (v.scope_path_glob === undefined && v.scope_on_multiple === undefined),
+    { message: 'scope_mode is required when any scope_* override parameter is given' },
+  );
+export type IngestScopeOverrideQuery = z.infer<typeof IngestScopeOverrideQuerySchema>;
+
+/**
+ * Fold the flat query form into the canonical object, or `undefined` when no
+ * override was requested. Shared so the route and its tests cannot disagree
+ * about what a given query string means.
+ */
+export function ingestScopeFromQuery(q: IngestScopeOverrideQuery): IngestScopeConfig | undefined {
+  if (q.scope_mode === undefined) return undefined;
+  return IngestScopeConfigSchema.parse({
+    mode: q.scope_mode,
+    ...(q.scope_path_glob !== undefined ? { path_glob: q.scope_path_glob } : {}),
+    // The query form may omit it; the canonical object may not. `ingest_all` is
+    // the same fallback `parseIngestScopeConfig` applies to stored jsonb.
+    on_multiple: q.scope_on_multiple ?? 'ingest_all',
+  });
+}
 
 /** Part numbers (1-based) already received — used to resume after an interruption. */
 export const UploadStatusResponseSchema = z.object({
