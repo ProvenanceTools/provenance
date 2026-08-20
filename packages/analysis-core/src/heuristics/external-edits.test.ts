@@ -694,6 +694,16 @@ describe("external_edits — D16: content beats the recorder's git tag", () => {
     expect(t.supportingSeqs).toEqual(u.supportingSeqs);
     expect(t.detail!['maxDiffSize']).toBe(u.detail!['maxDiffSize']);
     expect(t.detail!['externalChangeClass']).toBe(u.detail!['externalChangeClass']);
+
+    // The comparison above is relative, so it would survive a uniform
+    // de-scoring of the whole class. Anchor it to the pre-D16 answer: the
+    // identical stream in a solo scope, where no classification runs at all.
+    const solo = await buildCollabScope([
+      { who: { studentRef: COLLAB_ALICE }, events: collabPullerSession(NOBODY_RECORDED) },
+    ]);
+    const baseline = externalEditsHeuristic.run(solo.index, solo.bundle, cfg)[0]!;
+    expect(t.severity).toBe(baseline.severity);
+    expect(t.confidence).toBe(baseline.confidence);
   });
 
   it('says the recorder had tagged it, rather than calling a tagged event unexplained', async () => {
@@ -745,23 +755,43 @@ describe("external_edits — D16: content beats the recorder's git tag", () => {
     }
   });
 
-  it('a git_merge_in inside the tag window is STILL suppressed', async () => {
+  it('a git_merge_in is STILL suppressed — by CONTENT, tag or no tag', async () => {
     // The class where the bytes provably match a partner's recorded state. That
-    // is collaboration, and D16 does not touch it -- by content it never reaches
-    // a tag test at all.
-    const { bundle, index } = await buildCollabScope([
-      partner(PARTNER_WORK),
-      {
-        who: { studentRef: COLLAB_ALICE },
-        events: collabPullerSession(PARTNER_WORK, { explanation: 'git' }),
-      },
+    // is collaboration, and D16 does not touch it.
+    //
+    // Asserted with AND without the tag on purpose. The tagged case alone would
+    // pass for the wrong reason: `git_merge_in` does not override the tag, so
+    // deleting the content suppression entirely would leave the tag suppressing
+    // it and the assertion still green. The untagged case is what actually pins
+    // the content suppression.
+    const build = async (explanation?: 'git') =>
+      buildCollabScope([
+        partner(PARTNER_WORK),
+        {
+          who: { studentRef: COLLAB_ALICE },
+          events: collabPullerSession(PARTNER_WORK, {
+            ...(explanation === undefined ? {} : { explanation }),
+          }),
+        },
+      ]);
+
+    for (const explanation of ['git', undefined] as const) {
+      const { bundle, index } = await build(explanation);
+      expect(externalEditsHeuristic.run(index, bundle, cfg)).toHaveLength(0);
+      const events = index.byKind.get('fs.external_change') ?? [];
+      expect(
+        externalChangeClassificationFor(bundle, index).byGlobalIdx.get(events[0]!.globalIdx)!
+          .classification,
+      ).toBe('git_merge_in');
+    }
+
+    // The positive control: the identical untagged stream in a solo scope DOES
+    // flag, so the two zeros above are the classification and not an inert
+    // fixture.
+    const solo = await buildCollabScope([
+      { who: { studentRef: COLLAB_ALICE }, events: collabPullerSession(PARTNER_WORK) },
     ]);
-    expect(externalEditsHeuristic.run(index, bundle, cfg)).toHaveLength(0);
-    const events = index.byKind.get('fs.external_change') ?? [];
-    expect(
-      externalChangeClassificationFor(bundle, index).byGlobalIdx.get(events[0]!.globalIdx)!
-        .classification,
-    ).toBe('git_merge_in');
+    expect(externalEditsHeuristic.run(solo.index, solo.bundle, cfg)).toHaveLength(1);
   });
 
   it('an `external` inside the tag window still behaves as it did — the tagger keeps its job', async () => {
