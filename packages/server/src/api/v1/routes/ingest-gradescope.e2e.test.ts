@@ -41,6 +41,7 @@ import {
 import * as schema from '../../../db/schema.js';
 import { startWorker } from '../../../jobs/worker.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
+import { IngestJobSchema } from '@provenance/shared/api-schemas';
 import type { DrizzleDb } from '../../../db/client.js';
 
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
@@ -101,6 +102,18 @@ async function buildExportZip(): Promise<Uint8Array> {
   const buf = await outer.generateAsync({ type: 'arraybuffer' });
   return new Uint8Array(buf);
 }
+
+/**
+ * What `buildExportZip()` must report as skipped, on EVERY upload path.
+ *
+ * `submission_nobundle` carries no `.provenance/` at all, so it is the one
+ * folder that never becomes a submission. Asserted against the single-shot
+ * route's inline response AND against `GET /ingest/jobs/:jobId` for a job
+ * created by the chunked upload — the two must be indistinguishable.
+ */
+const EXPORT_ZIP_SKIPPED = [
+  { folder_key: 'submission_nobundle', scope_path: '', reason: 'no_manifest' },
+];
 
 describe('POST /ingest:gradescope (export → roster + worker)', () => {
   let pgContainer: StartedPostgreSqlContainer;
@@ -251,7 +264,7 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
         roster: { added: number; updated: number };
         bundles_processed: number;
         submissions_queued: number;
-        skipped: unknown[];
+        skipped: unknown;
       };
       expect(typeof completeBody.job_id).toBe('string');
       expect(completeBody.job_id.length).toBeGreaterThan(0);
@@ -259,12 +272,17 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
       expect(completeBody.roster).toEqual({ added: 0, updated: 0 });
       expect(completeBody.bundles_processed).toBe(0);
       expect(completeBody.submissions_queued).toBe(0);
+      // NOT `[]`. Nothing has been staged yet, so the honest answer is "unknown"
+      // — and `[]` here would read as "nothing was skipped", which is exactly
+      // the claim this route used to make falsely. Empty must mean empty.
+      expect(completeBody.skipped).toBeNull();
 
       const jobId = completeBody.job_id;
 
       // --- poll the job status until it reaches a terminal state ---
       const start = Date.now();
       let finalStatus: string | null = null;
+      let finalBody: unknown = null;
       while (Date.now() - start < 120_000) {
         const statusRes = await app.fetch(
           new Request(`http://localhost/semesters/${semesterId}/ingest/jobs/${jobId}`, {
@@ -274,11 +292,22 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
         const statusBody = (await statusRes.json()) as { status: string };
         if (['succeeded', 'partial', 'failed', 'cancelled'].includes(statusBody.status)) {
           finalStatus = statusBody.status;
+          finalBody = statusBody;
           break;
         }
         await new Promise((r) => setTimeout(r, 500));
       }
       expect(finalStatus).toBe('succeeded');
+
+      // The promise the 202's comment used to make and not keep. The job detail
+      // reports the SAME array the single-shot POST /ingest:gradescope inlines
+      // for this very export (see the sibling test asserting
+      // EXPORT_ZIP_SKIPPED on `body.skipped`) — so a consumer reading skip
+      // reasons cannot tell which upload mechanism was used, and provgate does
+      // not have to care.
+      const parsed = IngestJobSchema.safeParse(finalBody);
+      expect(parsed.success).toBe(true);
+      expect(parsed.success && parsed.data.skipped).toEqual(EXPORT_ZIP_SKIPPED);
     });
   });
 
@@ -376,9 +405,11 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
       // REGRESSION GUARD: the flat Gradescope folder path is unchanged by the
       // git-repo scope fan-out — one `.provenance/` per folder still yields one
       // bundle at the root scope, and a non-bundle folder is still no_manifest.
-      expect(body.skipped).toEqual([
-        { folder_key: 'submission_nobundle', scope_path: '', reason: 'no_manifest' },
-      ]);
+      //
+      // Shared with the chunked-upload test above, which asserts the SAME value
+      // on GET /ingest/jobs/:jobId for the SAME export. One constant, two upload
+      // mechanisms: that is the identical-shape guarantee, spelled out.
+      expect(body.skipped).toEqual(EXPORT_ZIP_SKIPPED);
 
       // Roster was populated from the metadata (all four submitters).
       const roster = await db
