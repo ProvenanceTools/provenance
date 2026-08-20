@@ -167,6 +167,10 @@ export {
 } from './peer-observed.js';
 export type { PeerObservedShapeError } from './peer-observed.js';
 
+// The git.event repository discriminator — root-commit sha (decision D12)
+export { readRepositoryDiscriminator, REPOSITORY_DISCRIMINATOR_FIELD } from './git-event.js';
+export type { RepositoryDiscriminatorRead, RepositoryDiscriminatorProblem } from './git-event.js';
+
 // Events
 export type {
   EventKindMap,

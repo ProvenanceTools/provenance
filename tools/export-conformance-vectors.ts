@@ -73,6 +73,8 @@ import {
   resolveCapturePolicy,
   validatePeerObservedPayload,
   PEER_OBSERVED_STATES,
+  readRepositoryDiscriminator,
+  REPOSITORY_DISCRIMINATOR_FIELD,
   DEFAULT_CAPTURE_POLICY,
   FLOOR_EVENT_KINDS,
   POLICY_GATED_EVENT_KINDS,
@@ -776,9 +778,33 @@ function buildGitEventVectors(): unknown {
     };
   };
 
+  /**
+   * A case that also publishes what the repository discriminator narrows to.
+   *
+   * Deliberately a SECOND helper rather than a field added to `gitCase`: every
+   * case above it is already published to provjet and provnvim, and perturbing
+   * an existing vector object is a breaking tri-repo change. New cases carry the
+   * new field; old cases are byte-identical.
+   */
+  const discriminatorCase = (
+    name: string,
+    note: string,
+    data: Record<string, unknown>,
+  ): unknown => {
+    const read = readRepositoryDiscriminator(data);
+    return {
+      ...(gitCase(name, note, data) as Record<string, unknown>),
+      discriminator: read,
+    };
+  };
+
   const A = 'a'.repeat(40);
   const B = 'b'.repeat(40);
   const C = 'c'.repeat(40);
+  /** A root-commit sha: the repository discriminator's one legal value. */
+  const ROOT = '9'.repeat(40);
+  /** The same, for a sha-256 repository. Git has two object formats. */
+  const ROOT_SHA256 = '8'.repeat(64);
 
   return {
     note:
@@ -803,6 +829,36 @@ function buildGitEventVectors(): unknown {
     parents_order_note:
       'JCS sorts object keys but NOT array elements. parents[0] is the branch merged INTO, so ' +
       'the order carries meaning and must never be sorted or normalized.',
+    repository_discriminator_note:
+      `${REPOSITORY_DISCRIMINATOR_FIELD} identifies WHICH REPOSITORY an observation came from, ` +
+      "by that repository's ROOT-COMMIT SHA (decision D12). A scope can observe more than one " +
+      'repository — a submodule, or a repo nested inside the one owning the assignment root — ' +
+      'and their sha spaces are unrelated, so a reader that keys commits by sha alone merges two ' +
+      'graphs that have nothing to do with each other. The root commit was chosen because BOTH ' +
+      'PARTNERS DERIVE THE SAME VALUE OFFLINE, which is the whole point: a discriminator two ' +
+      'partners disagree about cannot correlate anything. A session-salted hash of the repo path ' +
+      'was rejected for exactly that reason. It is NOT the repository path (arguably an ' +
+      'identifier, certainly noisy) and NOT a remote URL (embeds the org and often the ' +
+      "student's username), which is why a value that is not a commit sha is REJECTED rather " +
+      'than used.',
+    repository_discriminator_absence_note:
+      'ABSENT is the ordinary case and always will be. Every bundle recorded before this landed ' +
+      'has no such field, and a SHALLOW CLONE has no reachable root commit — the boundary commit ' +
+      'it reports has no parents but is not a root, so a recorder that emitted it would publish ' +
+      'a value a full clone of the same repository disagrees with. A port MUST OMIT the field in ' +
+      'both cases. Absent means "this observation is unlabelled": never "a different ' +
+      'repository", never a defect, and never evidence of anything about the student. OMIT, ' +
+      'never null — the two canonicalize differently and therefore chain to different hashes, ' +
+      'exactly as `parents: []` and an absent `parents` do.',
+    repository_discriminator_writer_note:
+      'WRITER RULE, so three ports derive the same value: take the root of the FIRST-PARENT ' +
+      'lineage of HEAD (git rev-list --max-parents=0 --first-parent HEAD); if that yields more ' +
+      'than one — an orphan branch or a squashed import merged in — take the lexicographically ' +
+      'smallest, so the choice is deterministic. OMIT the field if the repository is shallow ' +
+      '(git rev-parse --is-shallow-repository), if the command fails, or if it yields nothing. ' +
+      'Several root commits in one repository is ORDINARY and is never a finding, and neither is ' +
+      'two partners deriving different values: the cost of disagreement is lost correlation, ' +
+      'which surfaces as "unknown", and it must never be more than that.',
     cases: [
       gitCase(
         'legacy_1x',
@@ -864,6 +920,98 @@ function buildGitEventVectors(): unknown {
         'octopus_merge',
         'Three parents. Length is the structure: 0 = root, 1 = ordinary, 2+ = merge.',
         { operation: 'commit', commit_sha: C, sha: C, parents: [A, B, C], branch: 'main' },
+      ),
+
+      // --- repository discriminator (decision D12). Reader half only: no
+      //     recorder emits the field yet, so implement the narrowing and the
+      //     canonical form first and the derivation with the writer contract.
+      discriminatorCase(
+        'root_commit_sha_recorded',
+        'The ordinary labelled commit. Note where JCS sorts the new key: after `parents` and ' +
+          'before `sha`. This is the SAME payload as ordinary_commit plus the field, so the two ' +
+          'MUST hash differently — a port that drops an unrecognised field silently produces ' +
+          "the other one's hash.",
+        {
+          operation: 'commit',
+          commit_sha: B,
+          sha: B,
+          parents: [A],
+          branch: 'main',
+          root_commit_sha: ROOT,
+        },
+      ),
+      discriminatorCase(
+        'root_commit_sha_sha256_repository',
+        'A sha-256 repository: the root commit is 64 hex, not 40. Both lengths are legal object ' +
+          'names and both must be accepted.',
+        {
+          operation: 'commit',
+          commit_sha: B,
+          sha: B,
+          parents: [A],
+          root_commit_sha: ROOT_SHA256,
+        },
+      ),
+      discriminatorCase(
+        'root_commit_sha_is_the_root_itself',
+        'The root commit labelling its own repository: parents is [] and root_commit_sha equals ' +
+          'sha. Ordinary, and NOT a special case — a reader compares the discriminator for ' +
+          'equality and never relates it to the commit graph.',
+        { operation: 'commit', commit_sha: ROOT, sha: ROOT, parents: [], root_commit_sha: ROOT },
+      ),
+      discriminatorCase(
+        'root_commit_sha_absent_shallow_clone',
+        'A shallow clone: the root commit is unreachable, so the field is OMITTED. Note the ' +
+          'boundary commit reports parents [] and is NOT a root — recordedRoot means ' +
+          'root-or-truncated-lineage. Reads as absent, which is not a defect and not evidence. ' +
+          'Its hash deliberately EQUALS the root_commit case above: an unlabelled payload is ' +
+          'byte-identical to the pre-D12 world, which is the whole compatibility guarantee.',
+        { operation: 'commit', commit_sha: A, sha: A, parents: [], branch: 'main' },
+      ),
+      discriminatorCase(
+        'root_commit_sha_null_is_not_absent',
+        'A port that spells the unknown case as null instead of omitting the key produces ' +
+          'DIFFERENT canonical bytes and a different chain hash from ' +
+          'root_commit_sha_absent_shallow_clone. Readers accept null as absence so such a log ' +
+          'still parses, but a writer MUST omit.',
+        {
+          operation: 'commit',
+          commit_sha: A,
+          sha: A,
+          parents: [],
+          branch: 'main',
+          root_commit_sha: null,
+        },
+      ),
+      discriminatorCase(
+        'root_commit_sha_repository_path_rejected',
+        'A repository PATH — the identifier this field exists to avoid. Rejected, and the ' +
+          'observation is folded in with the unlabelled ones. This is the one place a path or a ' +
+          'remote URL can be stopped before it reaches a staff-facing UI.',
+        {
+          operation: 'commit',
+          sha: B,
+          parents: [A],
+          root_commit_sha: '/Users/student/cs61b/proj2',
+        },
+      ),
+      discriminatorCase(
+        'root_commit_sha_uppercase_rejected',
+        'Lowercase hex only, as git prints it. Rejected rather than case-folded: folding is the ' +
+          'normalization that could merge two values a reader must compare exactly.',
+        { operation: 'commit', sha: B, parents: [A], root_commit_sha: 'A'.repeat(40) },
+      ),
+      discriminatorCase(
+        'root_commit_sha_abbreviated_rejected',
+        'An abbreviated sha is not the same value as the full one, and expanding it here would ' +
+          'be a guess. Rejected.',
+        { operation: 'commit', sha: B, parents: [A], root_commit_sha: '9'.repeat(7) },
+      ),
+      discriminatorCase(
+        'root_commit_sha_empty_rejected',
+        'The empty string would key every repository the same, which is worse than no key at ' +
+          'all. Rejected.',
+        { operation: 'commit', sha: B, parents: [A], root_commit_sha: '' },
       ),
     ],
   };
