@@ -176,6 +176,13 @@
       "when": 1788307200000,
       "tag": "0026_ingest_scope_submission_types",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788393600000,
+      "tag": "0027_student_credentials",
+      "breakpoints": true
     }
   ]
 }

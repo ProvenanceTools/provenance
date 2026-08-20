@@ -30,7 +30,7 @@ import { StudentCredentialResponseSchema } from '@provenance/shared/api-schemas'
 import { mswServer } from '../../test-setup.js';
 import { meNoSemestersHandler } from '../../test/msw-handlers.js';
 import { ApiError, UnauthorizedError } from '../../api/client.js';
-import { EnrollView, describeMintError } from './EnrollView.js';
+import { EnrollView, describeMintError, describeIssuance } from './EnrollView.js';
 import { buildRecorderPasteText } from './enrollment-token.js';
 
 // ---------------------------------------------------------------------------
@@ -61,6 +61,8 @@ const RESPONSE = {
   institution_id: 'berkeley',
   student_ref: STUDENT_REF,
   reissued: false,
+  machine_count: 1,
+  key_first_issued: true,
 };
 
 // The fixture is the contract: if it stops matching the schema the server
@@ -171,16 +173,119 @@ describe('EnrollView — minting', () => {
     expect(screen.getByText(/not your student number/i)).toBeInTheDocument();
   });
 
-  it('explains a re-issue instead of looking like a duplicate', async () => {
-    mswServer.use(meNoSemestersHandler(), mintHandler({ ...RESPONSE, reissued: true }).handler);
+  // -------------------------------------------------------------------------
+  // The second machine reads as normal, not as a duplicate
+  // -------------------------------------------------------------------------
+
+  it('greets a second machine as a machine being added, not as a duplicate enrolment', async () => {
+    // `reissued` is true here, and presenting THAT as "you have already
+    // enrolled" is exactly what alarms a student doing the supported thing.
+    mswServer.use(
+      meNoSemestersHandler(),
+      mintHandler({ ...RESPONSE, reissued: true, machine_count: 2, key_first_issued: true })
+        .handler,
+    );
     renderEnroll();
     await waitFor(() => expect(screen.getByTestId('enroll-form')).toBeInTheDocument());
     submitKey();
 
     await waitFor(() => expect(screen.getByTestId('enroll-token-panel')).toBeInTheDocument());
+    const note = screen.getByTestId('enroll-issuance-note');
+    expect(note).toHaveTextContent(/2 machines set up/i);
+    expect(note).toHaveTextContent(/other ones keep working/i);
+    expect(note).toHaveTextContent(/same ref/i);
+    // Nothing that reads as a problem.
+    expect(note).not.toHaveTextContent(/already had a credential/i);
+    expect(screen.getByTestId('enroll-success-heading')).toHaveTextContent(/machine is set up/i);
+    expect(screen.getByTestId('enroll-machine-count')).toHaveTextContent('2');
+  });
+
+  it('tells a student who re-enrolled the SAME machine that nothing broke', async () => {
+    mswServer.use(
+      meNoSemestersHandler(),
+      mintHandler({ ...RESPONSE, reissued: true, machine_count: 1, key_first_issued: false })
+        .handler,
+    );
+    renderEnroll();
+    await waitFor(() => expect(screen.getByTestId('enroll-form')).toBeInTheDocument());
+    submitKey();
+
+    await waitFor(() => expect(screen.getByTestId('enroll-token-panel')).toBeInTheDocument());
+    const note = screen.getByTestId('enroll-issuance-note');
+    expect(note).toHaveTextContent(/already set up/i);
+    expect(note).toHaveTextContent(/still works until it expires/i);
+    // A single machine is not worth a machine count.
+    expect(screen.queryByTestId('enroll-machine-count')).not.toBeInTheDocument();
+  });
+
+  it('invites a first-time student to come back for their next machine', async () => {
+    mswServer.use(meNoSemestersHandler(), mintHandler().handler);
+    renderEnroll();
+    await waitFor(() => expect(screen.getByTestId('enroll-form')).toBeInTheDocument());
+    submitKey();
+
+    await waitFor(() => expect(screen.getByTestId('enroll-token-panel')).toBeInTheDocument());
+    expect(screen.getByTestId('enroll-issuance-note')).toHaveTextContent(
+      /another machine later\?.*come back here/is,
+    );
+  });
+
+  it('does not tell a student to move their identity secret to add a machine', async () => {
+    // The regression this guards: the page used to say moving to another
+    // machine "means exporting your identity secret", which is both untrue now
+    // and an instruction to hand-carry the one value that can sign as them.
+    mswServer.use(meNoSemestersHandler(), mintHandler().handler);
+    renderEnroll();
+    await waitFor(() => expect(screen.getByTestId('enroll-form')).toBeInTheDocument());
+
+    const note = screen.getByTestId('enroll-second-machine-note');
+    expect(note).toHaveTextContent(/install the recorder there and come back to this page/i);
+    expect(note).toHaveTextContent(/never have to move your identity secret/i);
+    expect(note.textContent ?? '').not.toMatch(/means exporting your identity secret/i);
+  });
+
+  it('positions the recorder secret command as a backup, not a transfer', async () => {
+    mswServer.use(meNoSemestersHandler(), mintHandler().handler);
+    renderEnroll();
+    await waitFor(() => expect(screen.getByTestId('enroll-form')).toBeInTheDocument());
+
+    // The renamed command, and the reason it still exists.
+    expect(screen.getAllByText(/Back Up Student Identity Secret/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/You do not need it to add a machine/i)).toBeInTheDocument();
+    // The old name must be gone, or the on-screen text names a command that
+    // does not appear in the student's command palette.
+    expect(screen.queryByText(/Export Student Identity Secret/i)).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// describeIssuance — the branch table, without a render
+// ---------------------------------------------------------------------------
+
+describe('describeIssuance', () => {
+  it('reads as a new machine only when the key is genuinely new', () => {
     expect(
-      screen.getByText(/already had a credential, so a fresh one was issued/i),
-    ).toBeInTheDocument();
+      describeIssuance({ ...RESPONSE, reissued: true, machine_count: 3, key_first_issued: true }),
+    ).toMatch(/3 machines set up/);
+    // Same key, several machines on the account: this is not a new machine, so
+    // the count must not be announced as if one was just added.
+    expect(
+      describeIssuance({ ...RESPONSE, reissued: true, machine_count: 3, key_first_issued: false }),
+    ).toMatch(/already set up/);
+  });
+
+  it('never tells a student their earlier credential stopped working', () => {
+    for (const machine_count of [1, 2, 5]) {
+      for (const key_first_issued of [true, false]) {
+        const text = describeIssuance({
+          ...RESPONSE,
+          reissued: machine_count > 1,
+          machine_count,
+          key_first_issued,
+        });
+        expect(text).not.toMatch(/invalid|revoked|no longer works|stopped working/i);
+      }
+    }
   });
 });
 

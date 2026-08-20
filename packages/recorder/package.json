@@ -40,11 +40,11 @@
       },
       {
         "command": "provenance.exportIdentitySecret",
-        "title": "Provenance: Export Student Identity Secret"
+        "title": "Provenance: Back Up Student Identity Secret"
       },
       {
         "command": "provenance.importIdentitySecret",
-        "title": "Provenance: Import Student Identity Secret"
+        "title": "Provenance: Restore Student Identity Secret"
       }
     ]
   },

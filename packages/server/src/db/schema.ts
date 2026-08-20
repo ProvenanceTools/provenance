@@ -1068,10 +1068,72 @@ export const students = pgTable(
   ],
 );
 
+/**
+ * Every 2.1 credential this server has ever issued. APPEND-ONLY.
+ *
+ * See migration 0026 for the full rationale. The load-bearing points:
+ *
+ *  - MULTIPLE MACHINES PER STUDENT IS THE SUPPORTED FLOW. Each machine derives
+ *    its own master secret and therefore its own keypair, signs in with the
+ *    same account, and gets its own credential over the SAME `student_ref`. So
+ *    one student legitimately has MANY public keys, and one row per issuance is
+ *    the only shape that can say so.
+ *  - `students.student_pubkey` holds only the most recent key and is
+ *    overwritten on every re-enrolment. That is fine for verification (a
+ *    credential is a signed artifact and consults no server) and useless for
+ *    adjudication, which asks a question about history: "was this key ever
+ *    issued to this student?". This table is what answers it — see
+ *    `services/enrollment/credential-history.ts`.
+ *  - there is deliberately NO unique key on (student_ref, student_pubkey) and
+ *    no `issue_count`. Two issuances are two facts with different `issued_at`,
+ *    and collapsing them is a smaller version of the overwrite this exists to
+ *    stop.
+ *  - PUBLIC MATERIAL ONLY. Nothing here would forge anything if disclosed; the
+ *    student's private half never leaves their machine.
+ *  - AUDIT MATERIAL. Nothing prunes it, ever. `ON DELETE RESTRICT` makes a
+ *    hypothetical future `students` deletion fail loudly rather than silently
+ *    take the trail with it.
+ *
+ * This does NOT replace `student_enrollments`, which holds archived 2.0
+ * per-course enrollments keyed through `student_refs`. The two eras share no
+ * join key (2.0 by roster SID, 2.1 by SSO subject); migration 0025 recorded why
+ * merging them is incorrect and that reasoning is unchanged.
+ */
+export const student_credentials = pgTable(
+  'student_credentials',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    student_ref: uuid('student_ref')
+      .notNull()
+      .references(() => students.student_ref, { onDelete: 'restrict' }),
+    /** Denormalised from `students`; it is inside the signed credential payload. */
+    institution_id: text('institution_id').notNull(),
+    /** The student's ed25519 PUBLIC key, 64 lowercase hex. One per machine. */
+    student_pubkey: text('student_pubkey').notNull(),
+    /** Copied from the SIGNED credential, so the row says what the artifact says. */
+    issued_at: timestamp('issued_at', { withTimezone: true }).notNull(),
+    expires_at: timestamp('expires_at', { withTimezone: true }).notNull(),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    // THE adjudication index: "was this key ever issued to this student?".
+    index('student_credentials_ref_pubkey_idx').on(t.student_ref, t.student_pubkey),
+    // The reverse lookup: "this bundle carries a key — whose was it?".
+    index('student_credentials_institution_pubkey_idx').on(t.institution_id, t.student_pubkey),
+    check('student_credentials_student_pubkey_check', sql`${t.student_pubkey} ~ '^[0-9a-f]{64}$'`),
+  ],
+);
+
 // ---------------------------------------------------------------------------
 // Re-exported for convenience
 // ---------------------------------------------------------------------------
 
+export type StudentCredentialRow = typeof student_credentials.$inferSelect;
+export type NewStudentCredentialRow = typeof student_credentials.$inferInsert;
 export type Student = typeof students.$inferSelect;
 export type NewStudent = typeof students.$inferInsert;
 export type StudentRef = typeof student_refs.$inferSelect;

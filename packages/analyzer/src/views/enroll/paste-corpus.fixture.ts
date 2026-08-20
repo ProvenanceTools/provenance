@@ -62,6 +62,8 @@ export const CORPUS_RESPONSE: StudentCredentialResponse = {
   institution_id: 'berkeley',
   student_ref: CORPUS_STUDENT_REF,
   reissued: false,
+  machine_count: 1,
+  key_first_issued: true,
 };
 
 /**

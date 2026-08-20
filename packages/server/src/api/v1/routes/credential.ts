@@ -125,6 +125,8 @@ export function createCredentialRouter(nowFn: () => Date = () => new Date()): Ho
         student_pubkey: result.value.credential.student_pubkey,
         institution_id: result.value.institution_id,
         reissued: result.value.reissued,
+        // How many machines this student has now enrolled. A count, not a name.
+        machine_count: result.value.machine_count,
       });
 
       return c.json(result.value, 200);

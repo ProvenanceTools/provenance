@@ -21,13 +21,23 @@
  * property, not an implementation detail — a recorder that phones home is a
  * recorder students are right not to trust.
  *
- * ## The other two commands
+ * ## The other two commands are a BACKUP, not the second-machine path
  *
- * "Export/Import Student Identity Secret" exist because `SecretStorage` is an OS
- * credential vault the student cannot read by hand. Without an export there is
- * literally no way to move an identity to a second machine, and since there is no
- * escrow (§5a: no server-side key store to breach) nobody could recover it for
- * them. See `identity/secret-store.ts` for the full new-machine story.
+ * "Back Up / Restore Student Identity Secret" exist because `SecretStorage` is an
+ * OS credential vault the student cannot read by hand, and there is no escrow
+ * (§5a: no server-side key store to breach) — so if a machine's secret is lost,
+ * a backup the student took themselves is the ONLY way it comes back.
+ *
+ * They are NOT how a student uses a second machine. That is a supported flow and
+ * it needs none of this: install the recorder on the other machine, run "Show My
+ * Enrollment Key" there, and enrol again. The second machine generates its own
+ * master secret and its own keypair, the server returns the SAME `student_ref`
+ * for the same account, and contributor resolution groups on that ref — so both
+ * machines are one person and the student can swap between them freely.
+ *
+ * Telling students to carry their identity secret between machines instead means
+ * moving the one value that can sign as them, by hand, for no benefit. See
+ * `identity/secret-store.ts`.
  */
 
 import { deriveCourseKeypair, deriveStudentKeypair } from '@provenance/log-core';
@@ -92,7 +102,7 @@ export async function showEnrollmentKey(deps: EnrollmentCommandDeps): Promise<vo
   if (!master.ok) {
     deps.showError(
       `Provenance: could not read your student identity secret (${master.error.kind}). ` +
-        'If you have a backup, run "Provenance: Import Student Identity Secret".',
+        'If you have a backup, run "Provenance: Restore Student Identity Secret".',
     );
     return;
   }
@@ -104,7 +114,7 @@ export async function showEnrollmentKey(deps: EnrollmentCommandDeps): Promise<vo
       'This is a PUBLIC key, and it is the same in every course. Paste it into your\n' +
       "institution's enrollment page to get a credential, then run\n" +
       '"Provenance: Import Enrollment Token" and paste the credential back in.\n\n' +
-      'It is NOT your identity secret. The secret shown by "Provenance: Export Student\n' +
+      'It is NOT your identity secret. The secret shown by "Provenance: Back Up Student\n' +
       'Identity Secret" is also 64 characters and must never be typed into a website.\n',
   );
   deps.showInfo('Provenance: enrollment key copied to the clipboard.');
@@ -187,19 +197,25 @@ export async function importEnrollmentToken(deps: EnrollmentCommandDeps): Promis
 
   if (derived.publicKeyHex !== expectedPubkey) {
     deps.showError(
-      'Provenance: this was issued to a different student identity secret than the one on ' +
-        'this machine. Run "Provenance: Import Student Identity Secret" with the secret from ' +
-        'your other machine, or enrol again with the key shown by "Provenance: Show My ' +
-        'Enrollment Key". Recording continues either way, without an identity claim.',
+      'Provenance: this credential was issued to a different key than this machine derives. ' +
+        'That is normal if you brought it from another machine — each machine has its own ' +
+        'credential. Enrol this machine with the key shown by "Provenance: Show My Enrollment ' +
+        'Key", or, if you meant to restore THIS machine from a backup, run "Provenance: ' +
+        'Restore Student Identity Secret" first. Recording continues either way, without an ' +
+        'identity claim.',
     );
   }
 }
 
 /**
- * Reveal + copy the master secret so the student can move to another machine.
+ * Reveal + copy the master secret so the student can BACK IT UP.
  *
  * The one place this value is ever surfaced. It is shown in a document as well as
  * copied because a clipboard is easy to lose and this is unrecoverable.
+ *
+ * This is not the second-machine path — enrolling the second machine is. It is
+ * insurance: there is no escrow, so a lost secret is lost unless the student
+ * kept this.
  */
 export async function exportIdentitySecret(deps: EnrollmentCommandDeps): Promise<void> {
   // load-or-create, so "export" on a fresh install produces something to back up
@@ -226,20 +242,32 @@ export async function exportIdentitySecret(deps: EnrollmentCommandDeps): Promise
   await deps.showDocument(
     `Provenance student identity secret\n\n${marked}\n\n` +
       'KEEP THIS PRIVATE. Anyone holding it can sign work as you, in every course.\n' +
-      'Store it in a password manager. There is no backup on any server, so if you lose it\n' +
-      'you will need a new credential.\n\n' +
+      'Store it in a password manager. There is no backup on any server, so this copy is\n' +
+      'the only one there will ever be.\n\n' +
       'NEVER paste this into a website, including the enrollment page. That page asks for\n' +
       'your enrollment KEY, which is a different value — use "Provenance: Show My\n' +
       'Enrollment Key" for it.\n\n' +
-      'On a new machine: run "Provenance: Import Student Identity Secret" and paste this in.\n',
+      'This is a BACKUP, for restoring THIS machine if its keyring is wiped: run\n' +
+      '"Provenance: Restore Student Identity Secret" and paste it back in.\n\n' +
+      'You do NOT need it to work on a second machine. Install the recorder there and\n' +
+      'enrol that machine on the enrollment page — it gets its own credential, and both\n' +
+      'machines count as you.\n',
   );
-  deps.showInfo('Provenance: identity secret copied to the clipboard. Store it somewhere private.');
+  deps.showInfo(
+    'Provenance: identity secret copied to the clipboard. Store this backup somewhere private.',
+  );
 }
 
-/** Adopt a master secret pasted from another machine. */
+/**
+ * Restore a master secret from the student's own backup.
+ *
+ * Also accepts a secret exported from another machine, which is why the copy
+ * below stays neutral about where it came from — but that is not the way to add
+ * a machine, it is the way to make a machine hold an identity it already had.
+ */
 export async function importIdentitySecret(deps: EnrollmentCommandDeps): Promise<void> {
   const pasted = await deps.promptInput({
-    prompt: 'Paste your Provenance student identity secret (64 hex characters)',
+    prompt: 'Paste your backed-up Provenance student identity secret (64 hex characters)',
     placeHolder: '0123456789abcdef...',
   });
   if (pasted === undefined || pasted.trim().length === 0) return;
@@ -253,7 +281,7 @@ export async function importIdentitySecret(deps: EnrollmentCommandDeps): Promise
     return;
   }
   deps.showInfo(
-    'Provenance: identity secret imported. Your keys are re-derived from it, so an existing ' +
+    'Provenance: identity secret restored. Your keys are re-derived from it, so an existing ' +
       'credential keeps working.',
   );
 }

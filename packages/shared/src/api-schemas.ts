@@ -1421,8 +1421,31 @@ export const StudentCredentialResponseSchema = z.object({
    * True when this account had already been issued a credential and the server
    * re-issued for it. The previously issued credential is NOT invalidated — it
    * stays valid until its own signed `expires_at`.
+   *
+   * On its own this says nothing a student should worry about: enrolling again
+   * is how a second machine is set up. Prefer `machine_count` and
+   * `key_first_issued` for anything shown to a student — they distinguish "you
+   * just added a machine" from "you asked this machine for another credential",
+   * which is the distinction that makes the page readable.
    */
   reissued: z.boolean(),
+  /**
+   * How many DISTINCT public keys have ever been issued to this student,
+   * counting the one just issued. Each machine derives its own keypair from its
+   * own master secret, so this is the number of machines the student has
+   * enrolled. Always ≥ 1.
+   *
+   * Only ever counts keys the server actually recorded. A deployment that
+   * upgraded through migration 0026 has no record of keys overwritten before
+   * it, so this can under-count for long-standing accounts.
+   */
+  machine_count: z.number().int().min(1),
+  /**
+   * True when the key just issued had never been issued to this student
+   * before — a new machine — as opposed to a machine that already had a
+   * credential asking for a fresh one.
+   */
+  key_first_issued: z.boolean(),
 });
 export type StudentCredentialResponse = z.infer<typeof StudentCredentialResponseSchema>;
 

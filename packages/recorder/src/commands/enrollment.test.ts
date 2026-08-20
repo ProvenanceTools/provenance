@@ -244,10 +244,35 @@ describe('importEnrollmentToken', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Master secret export / import — the new-machine story
+// Master secret export / import — a BACKUP, not the second-machine story
 // ---------------------------------------------------------------------------
 
 describe('identity secret export/import', () => {
+  it('presents the export as a backup and not as the way to add a machine', async () => {
+    // Enrolling the second machine is the supported path: it generates its own
+    // secret, gets its own credential over the same student_ref, and both
+    // machines resolve to one contributor. Telling a student to hand-carry the
+    // one value that can sign as them, for a flow that does not need it, is a
+    // real harm dressed up as a tip.
+    const store = makeStore();
+    const deps = makeDeps(store);
+    await exportIdentitySecret(deps);
+
+    const doc = deps.recorded.shown.join('\n');
+    expect(doc).toMatch(/this is a BACKUP/i);
+    expect(doc).toMatch(/Restore Student Identity Secret/);
+    expect(doc).toMatch(/do NOT need it to work on a second machine/i);
+    expect(doc).toMatch(/enrol that machine on the enrollment page/i);
+    // The instruction that used to be here.
+    expect(doc).not.toMatch(/On a new machine: run/i);
+
+    // The warnings that must survive the repositioning: the analyzer's paste
+    // guard keys off this exact prose (SECRET_DOCUMENT_TELLS).
+    expect(doc).toMatch(/KEEP THIS PRIVATE/);
+    expect(doc.toLowerCase()).toContain('identity secret');
+    expect(deps.recorded.info.join(' ')).toMatch(/backup/i);
+  });
+
   // UPDATED: the exported value is now MARKED rather than bare 64-hex. The old
   // assertion (`/^[0-9a-f]{64}$/`) pinned the exact shape that makes a master
   // secret indistinguishable from a public key in the enrollment page's key

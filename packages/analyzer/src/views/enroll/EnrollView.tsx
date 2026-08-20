@@ -11,8 +11,25 @@
  * semester from `?semester=<uuid>`. That route is gone from the server, and the
  * page now posts to `POST /api/v1/identity/credential`, which takes no path
  * parameter at all: a 2.1 credential names no course, no semester, and no
- * assignment. A student obtains ONE credential, once, and it serves every
- * course forever.
+ * assignment. One credential serves every course forever.
+ *
+ * ## Coming back is normal — that is how a second machine is set up
+ *
+ * A student who works on a laptop and a desktop enrols BOTH here. Each machine
+ * generates its own master secret and its own keypair; signing in with the same
+ * account returns the same global `student_ref`; each machine gets its own
+ * credential over that shared ref. Contributor resolution groups on the ref, so
+ * both machines are one person and the student can swap freely.
+ *
+ * The page must therefore never read like a duplicate warning on a return
+ * visit. `reissued` alone cannot tell "added a machine" from "asked the same
+ * machine for another credential", so the copy is driven by `machine_count` and
+ * `key_first_issued` instead — see {@link describeIssuance}.
+ *
+ * The corollary for the copy at the bottom of the page: "Back Up / Restore
+ * Student Identity Secret" is a BACKUP, not the second-machine path. Telling a
+ * student to hand-carry the one value that can sign as them, for a flow that
+ * does not need it, is a real harm dressed up as a tip.
  *
  * So the semester input is not merely unused, it would be misleading — there is
  * nothing to scope, and a `?semester=` query param is now silently irrelevant
@@ -61,6 +78,52 @@ import {
   normalizeStudentPubkey,
 } from './enrollment-token.js';
 import type { StudentCredentialResponse } from '@provenance/shared/api-schemas';
+
+// ---------------------------------------------------------------------------
+// Success presentation
+// ---------------------------------------------------------------------------
+
+/**
+ * What the green panel says, chosen by what actually happened to this student's
+ * machines rather than by the bare `reissued` flag.
+ *
+ * `reissued` is true whenever the account has enrolled before, which is exactly
+ * what a student legitimately doing the supported thing — setting up a second
+ * machine — will see. Presenting that as "you have already enrolled" alarms
+ * them about the one flow we want to be routine. So the page speaks in machines
+ * instead, using the two fields that can tell the cases apart:
+ *
+ *  - `key_first_issued` — this key had never been issued before, i.e. a machine
+ *    being set up for the first time;
+ *  - `machine_count` — how many distinct keys this student has enrolled, which
+ *    is one per machine because each machine derives its own.
+ *
+ * The count can under-report on an account that enrolled before the server
+ * started keeping a history, and over-report for a student who lost their
+ * secret and re-derived on the SAME machine. Both are harmless here: the number
+ * is context in a reassuring sentence, not a claim anyone acts on.
+ */
+export function describeIssuance(response: StudentCredentialResponse): string {
+  if (!response.key_first_issued) {
+    return (
+      'This machine was already set up, so this is simply a fresh credential for it. The one ' +
+      'you had before still works until it expires — nothing you have already recorded is ' +
+      'affected.'
+    );
+  }
+  if (response.machine_count > 1) {
+    return (
+      `That is ${response.machine_count} machines set up on this account. Each machine has its ` +
+      'own credential and your other ones keep working — all of them are you, under the same ' +
+      'ref, so your work is never split between two people.'
+    );
+  }
+  return (
+    'Copy it into VS Code with "Provenance: Import Enrollment Token". This credential works ' +
+    'for every course. Setting up another machine later? Just come back here and do this ' +
+    'again — that is the normal way to add one.'
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Failure presentation
@@ -203,15 +266,12 @@ function TokenPanel({
     <section className="mt-8" data-testid="enroll-token-panel">
       <div className="rounded-lg border border-green-300 bg-green-50 p-4">
         <h2 className="text-sm font-semibold text-green-900" data-testid="enroll-success-heading">
-          Your credential for {response.institution_id} is ready
+          {response.key_first_issued && response.machine_count > 1
+            ? `This machine is set up for ${response.institution_id}`
+            : `Your credential for ${response.institution_id} is ready`}
         </h2>
-        <p className="mt-1 text-xs text-green-900">
-          {response.reissued
-            ? 'You already had a credential, so a fresh one was issued. That is expected if you ' +
-              'are setting up a second machine — the one you had earlier is still valid until ' +
-              'it expires, and nothing you did with it stopped working.'
-            : 'Copy it into VS Code with "Provenance: Import Enrollment Token". You only need ' +
-              'to do this once — this credential works for every course.'}
+        <p className="mt-1 text-xs text-green-900" data-testid="enroll-issuance-note">
+          {describeIssuance(response)}
         </p>
       </div>
 
@@ -324,6 +384,14 @@ function TokenPanel({
             <dt className="w-28 shrink-0 text-gray-500">Valid until</dt>
             <dd className="font-mono break-all">{response.credential.expires_at}</dd>
           </div>
+          {response.machine_count > 1 && (
+            <div className="flex gap-2">
+              <dt className="w-28 shrink-0 text-gray-500">Machines</dt>
+              <dd data-testid="enroll-machine-count">
+                {response.machine_count} set up on this account
+              </dd>
+            </div>
+          )}
         </dl>
         <p className="mt-2 text-xs text-gray-500">
           Your ref is an opaque id, not your student number. It is what a shared repository shows
@@ -384,8 +452,9 @@ export function EnrollView() {
           </h1>
           <p className="mt-3 text-sm text-gray-700">
             Your credential is what lets your courses tell that the work in your recordings is
-            yours. You need it once — it is not tied to a course or a semester, and the same one
-            works everywhere.
+            yours. It is not tied to a course or a semester, so one is enough for everything you
+            take. Do this once per machine you work on — a laptop and a desktop each get their own,
+            and both count as you.
           </p>
           {me !== undefined && (
             <p className="mt-3 text-xs text-gray-600" data-testid="enroll-signed-in-as">
@@ -419,9 +488,9 @@ export function EnrollView() {
                 </p>
                 <p className="mt-1 text-xs text-amber-900">
                   Your identity secret — the one from{' '}
-                  <span className="font-mono">Export Student Identity Secret</span>, which warns you
-                  to keep it private — is also 64 characters. This page refuses it if you paste it
-                  with the label the recorder puts on it, but the bare value is indistinguishable
+                  <span className="font-mono">Back Up Student Identity Secret</span>, which warns
+                  you to keep it private — is also 64 characters. This page refuses it if you paste
+                  it with the label the recorder puts on it, but the bare value is indistinguishable
                   from your key and nothing here can catch that. Anyone holding that secret can sign
                   work as you, in every course. It should never be typed into a website, including
                   this one.
@@ -508,10 +577,17 @@ export function EnrollView() {
             have to be on a roster yet to get it, which matters because rosters usually arrive after
             your first submission.
           </p>
+          <p className="mt-2 text-xs text-gray-600" data-testid="enroll-second-machine-note">
+            To work on a second machine, install the recorder there and come back to this page with
+            that machine&rsquo;s key. It gets its own credential, and both machines are recognised
+            as you — you can swap between them freely, and you never have to move your identity
+            secret between them to do it.
+          </p>
           <p className="mt-2 text-xs text-gray-600">
-            Because there is no backup of your private key, moving to another machine means
-            exporting your identity secret from the recorder — not asking anyone to reissue it for
-            you.
+            The recorder&rsquo;s <span className="font-mono">Back Up Student Identity Secret</span>{' '}
+            command is for exactly that — a backup, kept in your password manager. There is no copy
+            on any server, so it is the only way to recover a machine&rsquo;s identity if you lose
+            it. You do not need it to add a machine.
           </p>
         </section>
       </div>

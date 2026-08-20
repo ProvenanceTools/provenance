@@ -18,19 +18,30 @@
  *    exactly the scope the secret needs — one student takes many courses, in many
  *    workspaces, and must present the same identity in all of them.
  *
- * ## Moving to a new machine
+ * ## Working on a second machine
+ *
+ * The student does NOT move this value. They install the recorder on the other
+ * machine, which generates its OWN master secret, and enrol that machine on the
+ * enrollment page. Signing in with the same account returns the SAME global
+ * `student_ref`, so the second machine gets its own credential over the same
+ * identity — and contributor resolution, which groups on `student_ref`, sees one
+ * person. Two machines, two keys, one contributor; swap between them freely.
+ *
+ * ## Backup and recovery
  *
  * There is no escrow and no server-side key store, by design — so nobody can
- * recover this for a student. The student runs **"Provenance: Export Student
- * Identity Secret"** on the old machine, copies the 64-hex-character string it
- * shows, and runs **"Provenance: Import Student Identity Secret"** on the new
- * one. Their per-course keys are then re-derived by HKDF (`deriveCourseKeypair`),
- * byte-identically, so every enrollment token they already hold keeps working and
+ * recover this for a student. That is what **"Provenance: Back Up Student
+ * Identity Secret"** is for: it shows the 64-hex-character string so the student
+ * can keep it in a password manager, and **"Provenance: Restore Student Identity
+ * Secret"** puts it back if the keyring is wiped or the machine is rebuilt. Keys
+ * are re-derived by HKDF (`deriveCourseKeypair` / `deriveStudentKeypair`)
+ * byte-identically, so every credential they already hold keeps working and
  * nothing has to be re-minted.
  *
- * If the secret is lost outright, the student generates a fresh one and asks for
- * a **new enrollment token** per course; past bundles remain verifiable, because
- * each one carries the token that was current when it was recorded.
+ * If the secret is lost with no backup, nothing breaks and nothing is
+ * unrecoverable at the level that matters: the student enrols that machine
+ * again, exactly as if it were new. Past bundles remain verifiable, because each
+ * one carries the credential that was current when it was recorded.
  *
  * ## Why enrollment tokens live here too
  *
@@ -115,13 +126,13 @@ export const CREDENTIAL_KEY = 'provenance.studentCredential';
 
 /**
  * Marker prefixed to the master secret when it is exported for the student to
- * carry to another machine.
+ * keep as a backup.
  *
  * ## Why the exported secret is no longer a bare hex string
  *
  * A student master secret and a student PUBLIC key are both 64 lowercase hex
  * characters, and the enrollment page cannot tell them apart by inspection. A
- * student who runs "Export Student Identity Secret" and pastes the result into
+ * student who runs "Back Up Student Identity Secret" and pastes the result into
  * that page's key field has handed their signing identity to a web server —
  * silently, because every check on both ends passes.
  *
@@ -334,7 +345,8 @@ export async function exportMasterSecret(
 }
 
 /**
- * Adopt a master secret pasted from another machine.
+ * Adopt a master secret from the student's own backup (or, equivalently, one
+ * exported on another machine).
  *
  * A malformed paste leaves any existing secret untouched — overwriting it on a
  * typo would be unrecoverable.
