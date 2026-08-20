@@ -169,7 +169,14 @@ export async function parseBundlePhase(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-function errorDetail(error: LoaderError | SessionParseError): string | undefined {
+/**
+ * Exported ONLY so the id-space wording below can be pinned by a pure test.
+ *
+ * These strings are persisted to `ingest_files.error.detail` and read by staff
+ * on a failure path; the wording is the contract, so it needs a test that fails
+ * when it regresses.
+ */
+export function errorDetail(error: LoaderError | SessionParseError): string | undefined {
   // Surface any human-readable detail stored on the error variants.
   const e = error as Record<string, unknown>;
 

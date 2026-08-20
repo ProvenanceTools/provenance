@@ -572,6 +572,37 @@ describe('edge case: a rolling manifest with no .slog, and a .slog with no rolli
     expect(check.supportingSeqs ?? []).not.toContainEqual({ sessionId: ghostId, seq: 0 });
   });
 
+  it('names the id space in no_session_log, and never a .slog filename that cannot exist', async () => {
+    // This string reaches staff through check 1's `detail` and is PERSISTED to
+    // `check_1_detail`. It used to read "…but no `session-<id>.slog` is present"
+    // — but `sessionId` here is the LOGICAL id (it came from a
+    // `manifest-<session_id>.json` filename), while `.slog` files are named
+    // after a per-file uuid the writer mints separately. So no file was ever
+    // named that, and a staff member who grepped the archive for the filename we
+    // printed found nothing: the tool's own report was unverifiable by
+    // inspection, on a failure path, which is exactly when someone looks.
+    const ghostId = 'deadbeef-0000-4000-8000-000000000000';
+    const built = await buildTestBundle({
+      rollingSeal: { tamper: { extraSealForSessionId: ghostId } },
+      sessions: [{ eventCount: 3 }],
+    });
+
+    const result = await loadBundle(built.blob, 'repo.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const ghost = result.value.rollingSeal!.defects.find((d) => d.kind === 'no_session_log')!;
+
+    // The fabricated filename must not appear.
+    expect(ghost.detail).not.toContain(`session-${ghostId}.slog`);
+    // The seal's own filename is genuinely named after the logical id, so it
+    // stays — this is the half that was always correct.
+    expect(ghost.detail).toContain(`manifest-${ghostId}.json`);
+    // And the reader is told which space the id belongs to, since they cannot
+    // be expected to know there are two.
+    expect(ghost.detail).toMatch(/LOGICAL session id/);
+  });
+
   it('reports unsealed_session for a .slog no rolling manifest covers', async () => {
     const built = await buildTestBundle({
       rollingSeal: { tamper: { omitSealFor: [1] } },
