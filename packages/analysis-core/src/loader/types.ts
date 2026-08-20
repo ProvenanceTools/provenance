@@ -33,6 +33,11 @@ export type LoaderError =
   | { kind: 'invalid_manifest'; detail: string }
   | { kind: 'missing_signature' }
   | { kind: 'no_sessions' }
+  // `sessionId` on these two is the `.slog` FILENAME uuid, not a logical
+  // session id — the log that would tell us the logical id is the very thing
+  // that is missing or unreadable. It is displayed, never matched on. Kept
+  // unbranded because the analyzer renders this union directly (`ErrorPanel`).
+  // See {@link LogFileId}.
   | { kind: 'orphaned_meta'; sessionId: string }
   | { kind: 'orphaned_slog'; sessionId: string }
   | { kind: 'unexpected_file'; filename: string; detail?: string }
@@ -52,9 +57,59 @@ export type SessionParseError =
 // BundleFiles — raw unzipped content
 // ---------------------------------------------------------------------------
 
+declare const LOG_FILE_ID_BRAND: unique symbol;
+
+/**
+ * The uuid in a `.slog` FILENAME. **Not** a session id.
+ *
+ * ## The two id spaces, and why this type exists
+ *
+ * A bundle carries two independent identifiers per session, and in production
+ * they are ALWAYS different values:
+ *
+ *  - the **log file id** — the uuid in `session-<uuid>.slog`, minted by the
+ *    recorder's writer (`session-registry.ts`: `session-${randomUUID()}.slog`).
+ *    It names a file and nothing else.
+ *  - the **logical session id** — `session.start.data.session_id`, which is
+ *    `recorderContext.session_id`. It is what a rolling seal is named after
+ *    (`manifest-<session_id>.json`), what the manifest's `sessions[].session_id`
+ *    carries, and what `ParsedSession.sessionId` / `Bundle.sessions[].sessionId`
+ *    hold everywhere downstream.
+ *
+ * Crossing them has now produced a maximum-severity false accusation TWICE.
+ * Most recently a `Map` keyed by log file id was looked up by a seal's logical
+ * id in `parse-bundle.ts`: the miss was silent, every rolling-only bundle came
+ * out with EMPTY prefix coverage, and `log_bytes_match` fell back to whole-file
+ * equality — failing at high severity / confidence 1.0 on every honest git
+ * submission whose last seal was non-final.
+ *
+ * The brand makes that specific mistake a COMPILE ERROR:
+ * `Map<LogFileId, …>.get(someLogicalId)` does not type-check, because a plain
+ * `string` is not assignable to `LogFileId`. Fixtures cannot save you here —
+ * every fixture in this repo used to spell both ids with the same value, so no
+ * test could distinguish confusing them. The type system can.
+ *
+ * The brand is deliberately narrow. It covers the ONE place both id spaces are
+ * in scope at once (`loader/`); branding the logical id too would ripple through
+ * `analysis-core`, `analyzer` and `server` and reach into `log-core`'s frozen
+ * manifest shape.
+ */
+export type LogFileId = string & { readonly [LOG_FILE_ID_BRAND]: 'slog-filename-uuid' };
+
+/** Tag a `.slog` filename uuid. The only sanctioned way to mint a {@link LogFileId}. */
+export function asLogFileId(raw: string): LogFileId {
+  return raw as LogFileId;
+}
+
 export type SessionFiles = {
-  /** Session UUID extracted from the filename (e.g. `session-<uuid>.slog`). */
-  sessionId: string;
+  /**
+   * The uuid in this session's `.slog` FILENAME — NOT its logical session id.
+   *
+   * Named `logFileId` rather than `sessionId` on purpose: the old name made two
+   * different id spaces read identically at the call site, which is how they got
+   * crossed. See {@link LogFileId}.
+   */
+  logFileId: LogFileId;
   /** Raw NDJSON text of the .slog file. */
   slogText: string;
   /** Raw JSON text of the .slog.meta file. */

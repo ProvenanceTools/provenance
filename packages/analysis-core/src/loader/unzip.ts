@@ -27,7 +27,8 @@
 import JSZip from 'jszip';
 import { ok, err, parseRollingManifestFilename, sha256Hex } from '@provenance/log-core';
 import type { Result } from '@provenance/log-core';
-import type { BundleFiles, LoaderError, RawRollingSealFiles } from './types.js';
+import { asLogFileId } from './types.js';
+import type { BundleFiles, LogFileId, LoaderError, RawRollingSealFiles } from './types.js';
 
 /**
  * Decode a log file's bytes to text AND hash the bytes, in one decompression.
@@ -113,10 +114,13 @@ export async function unzipBundle(
   /** Rolling seal halves, keyed by the session id in the filename. */
   const rollingJson = new Map<string, string>();
   const rollingSig = new Map<string, string>();
-  const slogIds = new Set<string>();
-  const metaIds = new Set<string>();
-  const slogContents = new Map<string, { text: string; sha256: string }>();
-  const metaContents = new Map<string, { text: string; sha256: string }>();
+  // Keyed by the `.slog` FILENAME uuid — a LogFileId, never a logical session
+  // id. Those are two different values in production and the brand is what stops
+  // the next reader keying one map with the other. See `types.ts`.
+  const slogIds = new Set<LogFileId>();
+  const metaIds = new Set<LogFileId>();
+  const slogContents = new Map<LogFileId, { text: string; sha256: string }>();
+  const metaContents = new Map<LogFileId, { text: string; sha256: string }>();
   // Deferred: entries that are neither manifest/sig nor slog/meta — may be
   // submission files (whitelisted below) or genuinely unexpected files.
   type ZipFileObject = Awaited<ReturnType<typeof JSZip.loadAsync>>['files'][string];
@@ -153,17 +157,17 @@ export async function unzipBundle(
 
     const slogMatch = SLOG_RE.exec(filename);
     if (slogMatch !== null) {
-      const sessionId = slogMatch[1]!;
-      slogIds.add(sessionId);
-      slogContents.set(sessionId, await readLogFile(zipObject));
+      const logFileId = asLogFileId(slogMatch[1]!);
+      slogIds.add(logFileId);
+      slogContents.set(logFileId, await readLogFile(zipObject));
       continue;
     }
 
     const metaMatch = SLOG_META_RE.exec(filename);
     if (metaMatch !== null) {
-      const sessionId = metaMatch[1]!;
-      metaIds.add(sessionId);
-      metaContents.set(sessionId, await readLogFile(zipObject));
+      const logFileId = asLogFileId(metaMatch[1]!);
+      metaIds.add(logFileId);
+      metaContents.set(logFileId, await readLogFile(zipObject));
       continue;
     }
 
@@ -264,11 +268,11 @@ export async function unzipBundle(
   // 6. Build the result.
   // ---------------------------------------------------------------------------
 
-  const sessions = Array.from(slogIds).map((sessionId) => {
-    const slog = slogContents.get(sessionId)!;
-    const meta = metaContents.get(sessionId)!;
+  const sessions = Array.from(slogIds).map((logFileId) => {
+    const slog = slogContents.get(logFileId)!;
+    const meta = metaContents.get(logFileId)!;
     return {
-      sessionId,
+      logFileId,
       slogText: slog.text,
       metaJson: meta.text,
       slogSha256: slog.sha256,
