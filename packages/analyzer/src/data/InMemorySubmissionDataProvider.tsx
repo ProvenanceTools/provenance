@@ -28,7 +28,6 @@ import React, { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useBundle } from '../context/BundleContext.js';
 import { computeStats } from '@provenance/analysis-core/index/stats.js';
-import { reconstructFile } from '@provenance/analysis-core/index/reconstruct-file.js';
 import {
   buildReconstructionScope,
   determinateValue,
@@ -36,7 +35,6 @@ import {
   reconstructFileSegmented,
   reconstructFileSegmentedWithProvenance,
 } from '@provenance/analysis-core/index/reconstruct-segments.js';
-import { reconstructFileWithProvenance } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
 import { SubmissionDataContext } from './SubmissionDataProvider.js';
 import { submittedFileVerdicts } from '@provenance/analysis-core/validation/verify-submitted-code.js';
 import type {

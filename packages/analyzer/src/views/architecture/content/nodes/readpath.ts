@@ -122,8 +122,12 @@ export const nodes: Record<string, ArchNode> = {
   },
   recon: {
     title: 'reconstructFileWithProvenance',
-    body: 'Replays the edits for one file up to a global index and returns not just the resulting text but a provenance tag per position (typed, pasted, or arrived by external change) which is what lets the UI colour a line by how it came to exist.\n\nIt is honest about its own limits. When a file was reshaped by a large paste or an external edit its reconstruction is marked tainted at ingest, and the content route then returns an empty body with a warning rather than text it cannot fully account for. Reconstruction reads only the log; it never consulted stored source even before stripping made that impossible.',
+    body: 'Replays the edits for one file up to a global index and returns not just the resulting text but a provenance tag per position (typed, pasted, or arrived by external change) which is what lets the UI colour a line by how it came to exist.\n\nIt is honest about its own limits. When a file was reshaped by a large paste or an external edit its reconstruction is marked tainted at ingest, and the content route then returns an empty body with a warning rather than text it cannot fully account for. Reconstruction reads only the log; it never consulted stored source even before stripping made that impossible.\n\nTainted is not the only way there can be no answer. Where two contributors edited one file on branches the recorded evidence does not order, there is no single content at all, and the segment-based path reports that as its own state rather than replaying the wall-ordered interleaving of two machines\u2019 clocks \u2014 which would produce text that existed on neither. The analyzer\u2019s in-browser provider already distinguishes the three answers; the server read path still calls the linear entry point and therefore still resolves such a file by wall order, which is the remaining gap on this route.',
     links: [
+      {
+        label: 'reconstruct-segments.ts',
+        href: `${GH}/packages/analysis-core/src/index/reconstruct-segments.ts`,
+      },
       {
         label: 'reconstruct-file-provenance.ts',
         href: `${GH}/packages/analysis-core/src/index/reconstruct-file-provenance.ts`,

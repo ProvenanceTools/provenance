@@ -43,7 +43,6 @@
  * the DOM-touching outer function is tested via a mock of html2canvas.
  */
 
-import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
 import {
   determinateValue,
   reconstructFileSegmentedWithProvenance,

@@ -118,9 +118,9 @@ export function useReplayEngine(
     skipIdle,
   }));
   const [fileStates, setFileStates] = useState<Map<string, FileReplayState>>(new Map());
-  const [ambiguousFiles, setAmbiguousFiles] = useState<ReadonlyMap<string, 'concurrent' | 'unknown'>>(
-    new Map(),
-  );
+  const [ambiguousFiles, setAmbiguousFiles] = useState<
+    ReadonlyMap<string, 'concurrent' | 'unknown'>
+  >(new Map());
   const [files, setFiles] = useState<string[]>([]);
   const [seams, setSeams] = useState<readonly Seam[]>([]);
 

@@ -141,7 +141,7 @@ export type UnknownReason =
    * `compareEvents` answered `'unknown'` — a relevant event is not in the
    * ordering's scope, so there is no basis for any statement about it.
    */
-  | 'event_outside_ordering';
+  'event_outside_ordering';
 
 /** One live, unordered lineage at the cut. Never to be silently preferred. */
 export type ReconstructionBranch<T> = {
@@ -185,7 +185,11 @@ export type DivergenceReport = {
  */
 export type SegmentedResult<T> =
   | { kind: 'determinate'; value: T; basis: DeterminateBasis }
-  | { kind: 'concurrent'; branches: readonly ReconstructionBranch<T>[]; divergence: DivergenceReport }
+  | {
+      kind: 'concurrent';
+      branches: readonly ReconstructionBranch<T>[];
+      divergence: DivergenceReport;
+    }
   | { kind: 'unknown'; reason: UnknownReason; detail: string };
 
 /**
@@ -633,11 +637,7 @@ function buildSegments(index: EventIndex, events: readonly IndexedEvent[]): Segm
   }
   // Deterministic, clock-free construction order.
   segments.sort((a, b) =>
-    a.sessionId !== b.sessionId
-      ? a.sessionId < b.sessionId
-        ? -1
-        : 1
-      : a.window - b.window,
+    a.sessionId !== b.sessionId ? (a.sessionId < b.sessionId ? -1 : 1) : a.window - b.window,
   );
   return segments;
 }

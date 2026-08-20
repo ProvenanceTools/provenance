@@ -103,9 +103,7 @@ export function reconstructionAmbiguityOf(
   bundle: Bundle,
   filePath: string,
 ): 'concurrent' | 'unknown' | undefined {
-  return ambiguityOf(
-    reconstructFileSegmented(reconstructionScopeFor(bundle, index), filePath),
-  );
+  return ambiguityOf(reconstructFileSegmented(reconstructionScopeFor(bundle, index), filePath));
 }
 
 function ambiguityOf<T>(result: SegmentedResult<T>): 'concurrent' | 'unknown' | undefined {

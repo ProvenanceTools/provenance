@@ -381,7 +381,7 @@ describe('two contributors on divergent branches', () => {
     expect(determinateValue(reconstructFileSegmented(scope, PATH))).toBeNull();
   });
 
-  it('each branch carries only its own contributor\'s edit', () => {
+  it("each branch carries only its own contributor's edit", () => {
     const { scope } = scopeOf(divergentPartners());
     const result = reconstructFileSegmented(scope, PATH);
     if (result.kind !== 'concurrent') throw new Error(`expected concurrent, got ${result.kind}`);
@@ -438,8 +438,7 @@ describe('two contributors on divergent branches', () => {
             ...spec,
             events: spec.events.map(
               (e) =>
-                ({ ...e, wall: new Date(Date.UTC(2020, 0, 1) + e.seq).toISOString() }) as
-                  typeof e,
+                ({ ...e, wall: new Date(Date.UTC(2020, 0, 1) + e.seq).toISOString() }) as typeof e,
             ),
           },
     );
@@ -525,9 +524,7 @@ describe('a merge commit resolves the divergence', () => {
    */
   it('a cut before the merge is still concurrent', () => {
     const { index, scope } = scopeOf(merged());
-    const mergeObservation = index.byFile
-      .get(PATH)!
-      .find((e) => e.kind === 'fs.external_change')!;
+    const mergeObservation = index.byFile.get(PATH)!.find((e) => e.kind === 'fs.external_change')!;
     expect(reconstructFileSegmented(scope, PATH, mergeObservation.globalIdx).kind).toBe(
       'concurrent',
     );
@@ -618,7 +615,11 @@ describe('degradation when git evidence is absent', () => {
     const real = scopeOf(divergentPartners());
     const foreign = scopeOf([
       { id: 's-other', events: [sessionStart(0, 's-other'), open(1, PATH, 'z')], student: 'zoe' },
-      { id: 's-other2', events: [sessionStart(0, 's-other2'), append(1, PATH, 0, 'q')], student: 'quinn' },
+      {
+        id: 's-other2',
+        events: [sessionStart(0, 's-other2'), append(1, PATH, 0, 'q')],
+        student: 'quinn',
+      },
     ]);
     const mismatched = { ...real.scope, ordering: foreign.scope.ordering };
 

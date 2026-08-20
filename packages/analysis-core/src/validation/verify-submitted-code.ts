@@ -61,11 +61,7 @@ import { contributorOf } from '../identity/resolve-contributors.js';
 import { compareContributors, type SessionContributor } from '../identity/types.js';
 import { resolveAliasesForBundle } from '../index/build-index.js';
 import type { Bundle } from '../loader/types.js';
-import {
-  buildEventOrdering,
-  compareEvents,
-  type EventOrdering,
-} from '../order/happens-before.js';
+import { buildEventOrdering, compareEvents, type EventOrdering } from '../order/happens-before.js';
 import type { ValidationCheck } from './check-types.js';
 
 export type SubmittedFileVerdict = {
