@@ -271,13 +271,13 @@ completion contract, not a wish list.
 - `submission_contributors` cut-over (D9), per-contributor heuristic scoping, `Flag.contributor_id`.
 - Peer witnessing (`peer.observed`) — tri-repo format change.
 - The repository discriminator (D12) as a signed-format change, with vectors.
-- **provjet has no AUTOMATED cross-implementation gate.** Verified 2026-08-20: provnvim's
-  `scripts/e2e/run_e2e.sh` produces a bundle via headless Neovim and hands it to the real monorepo
-  `analysis-core`; the monorepo has `tools/recorder-seal-conformance.test.ts` for VS Code. provjet
-  produces e2e bundles under `recorder/build/` but its `EndToEndRecoveryValidationTest` only
-  _mentions_ the Node-side `loadBundle + runValidation` in a comment — it is run separately, by
-  hand. That is the same asymmetry that left the VS Code recorder's written output unvalidated
-  until this session, and it is the test class that has caught the most. **Automate it.**
+- ~~provjet has no automated cross-implementation gate.~~ **DONE 2026-08-20.**
+  `provjet/scripts/e2e/run_e2e.sh` + `verify-bundle-with-analyzer.mjs` now drive real
+  JetBrains-produced archives (classic **and** rolling) through the real monorepo
+  `analysis-core`; verified green. **All three recorders now have one**, and each has already
+  caught something its own repo's suite could not: provnvim's found the orphaned rolling seal,
+  provjet's found that shipping code the log never saw left the Gradle suite BUILD SUCCESSFUL
+  while the gate went red, and the VS Code one found the seal path packing unopenable bundles.
 - **Four staff-visible strings name an id that no file in the bundle carries** — found by the
   id-space audit that followed bug 10, all behaviourally correct, none fixed (out of scope for that
   change). They matter because each one appears on a FAILURE path, where a staff member who greps
