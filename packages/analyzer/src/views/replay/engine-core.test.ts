@@ -749,6 +749,47 @@ describe('replay never linearizes concurrency', () => {
     expect(content).not.toContain('BOB');
   });
 
+  it('retains the branches rather than only their shape', () => {
+    const index = divergent();
+    const engine = createEngine(index, twoContributorScope(index));
+    engine.seek(1);
+
+    const ambiguity = engine.fileAmbiguity().get('hw.py');
+    expect(ambiguity?.kind).toBe('concurrent');
+    if (ambiguity?.kind !== 'concurrent') throw new Error('expected concurrent');
+
+    // Both lineages survive, each with its own replayed content. They were
+    // being computed and discarded before Tier 5.3; the UI cannot show what the
+    // engine has already thrown away.
+    expect(ambiguity.branches).toHaveLength(2);
+    const contents = ambiguity.branches.map((b) => b.value.content).sort();
+    expect(contents).toEqual(['ALICE', 'BOB']);
+    expect(ambiguity.branches.map((b) => b.contributor.kind)).toEqual(['attributed', 'attributed']);
+  });
+
+  it('still serves an EMPTY file state, so no branch can reach the editor', () => {
+    const index = divergent();
+    const engine = createEngine(index, twoContributorScope(index));
+    engine.seek(1);
+
+    // The branches travel on `fileAmbiguity()` only. `getFileStates()` — what
+    // the Monaco pane reads — must stay empty, or one lineage would be shown as
+    // though it were the file.
+    expect(engine.getFileStates().get('hw.py')?.content).toBe('');
+    expect(engine.fileAmbiguity().get('hw.py')?.kind).toBe('concurrent');
+  });
+
+  it('keeps ambiguousFiles() and fileAmbiguity() agreeing on which files are ambiguous', () => {
+    const index = divergent();
+    const engine = createEngine(index, twoContributorScope(index));
+    engine.seek(1);
+
+    expect([...engine.ambiguousFiles().keys()]).toEqual([...engine.fileAmbiguity().keys()]);
+    for (const [path, kind] of engine.ambiguousFiles()) {
+      expect(engine.fileAmbiguity().get(path)?.kind).toBe(kind);
+    }
+  });
+
   it('a single-contributor bundle reports nothing ambiguous', () => {
     const index = buildIndex([
       makeDocChangeEvent(0, 'hw.py', 'A', 'sess1'),
@@ -758,6 +799,7 @@ describe('replay never linearizes concurrency', () => {
     engine.seek(1);
 
     expect(engine.ambiguousFiles().size).toBe(0);
+    expect(engine.fileAmbiguity().size).toBe(0);
     expect(engine.getFileStates().get('hw.py')?.content).not.toBe('');
   });
 });
