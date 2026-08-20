@@ -175,7 +175,12 @@ export function GradescopeUpload({ basePath, semesterId }: GradescopeUploadProps
           <p className="mt-1">
             No provenance bundles were found in this export, so no submissions were queued.
           </p>
-          {result.skipped.length > 0 && (
+          {/* `skipped` is null when the server does not yet know — the chunked
+              upload route answers 202 before staging runs. Only a non-null
+              array is a statement about what was skipped; null means "poll the
+              job", and rendering it as zero would repeat the very claim the
+              server stopped making. */}
+          {result.skipped !== null && result.skipped.length > 0 && (
             <p className="mt-1 text-gray-500">
               {result.skipped.length} submission folder(s) skipped (no recorded bundle).
             </p>

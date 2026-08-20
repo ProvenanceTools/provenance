@@ -265,31 +265,53 @@ export const components = {
         bundles_processed: { type: 'integer' },
         submissions_queued: { type: 'integer' },
         skipped: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              folder_key: { type: 'string' },
-              scope_path: { type: 'string' },
-              reason: {
-                type: 'string',
-                enum: [
-                  'no_manifest',
-                  'no_submitters',
-                  'bundle_too_large',
-                  'no_seal',
-                  'scope_excluded',
-                  'ambiguous_scope',
-                  'submission_type_mismatch',
-                ],
-                description:
-                  'submission_type_mismatch is the homogeneity failure: this submission does not ' +
-                  'have the shape the batch declared via ingest_scope.mode. It fails the ' +
-                  'submission, not the batch, so a heterogeneous batch shows up as a pile of ' +
-                  'these entries rather than one aborted ingest.',
-              },
-            },
-          },
+          oneOf: [
+            { type: 'array', items: { $ref: '#/components/schemas/IngestSkippedEntry' } },
+            { type: 'null' },
+          ],
+          description:
+            'Scopes that did not become submissions. `null` means NOT KNOWN — the chunked ' +
+            'POST /ingest/uploads/{uploadId}/complete answers 202 before staging runs, so it ' +
+            'always returns null here and the answer arrives later on ' +
+            'GET /ingest/jobs/{jobId}. `[]` means resolution completed and skipped nothing. ' +
+            'The single-shot POST /ingest:gradescope ingests inside the request and so is ' +
+            'never null.',
+        },
+      },
+    },
+
+    IngestSkippedEntry: {
+      type: 'object',
+      required: ['folder_key', 'reason'],
+      description:
+        'One submission folder — or one assignment scope within it — that did not become a ' +
+        'submission. The SAME entries are served by POST /ingest:gradescope and by ' +
+        'GET /ingest/jobs/{jobId}, so a consumer never has to know which upload mechanism ' +
+        'was used to read them.',
+      properties: {
+        folder_key: { type: 'string' },
+        scope_path: {
+          type: 'string',
+          description:
+            "The scope's directory within the submission tree: '' for the folder root " +
+            "(always so on the flat Gradescope path), else a prefix such as 'proj2/'.",
+        },
+        reason: {
+          type: 'string',
+          enum: [
+            'no_manifest',
+            'no_submitters',
+            'bundle_too_large',
+            'no_seal',
+            'scope_excluded',
+            'ambiguous_scope',
+            'submission_type_mismatch',
+          ],
+          description:
+            'submission_type_mismatch is the homogeneity failure: this submission does not ' +
+            'have the shape the batch declared via ingest_scope.mode. It fails the ' +
+            'submission, not the batch, so a heterogeneous batch shows up as a pile of ' +
+            'these entries rather than one aborted ingest.',
         },
       },
     },

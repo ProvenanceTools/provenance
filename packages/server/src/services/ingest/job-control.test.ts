@@ -26,6 +26,7 @@ import {
   markStagingStarted,
   markStagingComplete,
   maybeEnqueueFinalize,
+  recordIngestJobSkipped,
 } from './job-control.js';
 import { users, courses, semesters, ingest_jobs, ingest_files } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
@@ -336,6 +337,214 @@ describe('maybeEnqueueFinalize gate', () => {
       await markStagingComplete(db, jobId);
       row = (await db.select().from(ingest_jobs).where(eq(ingest_jobs.id, jobId)))[0]!;
       expect(row.staging_complete).toBe(true);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// recordIngestJobSkipped (migration 0028)
+// ---------------------------------------------------------------------------
+//
+// A scope rejected during resolution never becomes an `ingest_files` row — that
+// is what being skipped means — so it is structurally invisible to `summary`,
+// which is nothing but a count of those rows. `ingest_jobs.skipped` is the only
+// record it existed, and it is what lets the chunked-upload path report skips
+// at all. These tests pin the two things that make it trustworthy: `null` and
+// `[]` mean different things, and nothing on the finish/cancel/fail paths is
+// allowed to overwrite it.
+
+/** The wire shape the column stores, as `toSkippedWire` produces it. */
+const SKIPPED_FIXTURE = [
+  { folder_key: 'submission_101', scope_path: '', reason: 'submission_type_mismatch' },
+  { folder_key: 'submission_101', scope_path: 'proj2/', reason: 'submission_type_mismatch' },
+  { folder_key: 'submission_202', scope_path: 'lab5/', reason: 'no_seal' },
+];
+
+async function readSkipped(db: DrizzleDb, jobId: string): Promise<unknown> {
+  const rows = await db
+    .select({ skipped: ingest_jobs.skipped })
+    .from(ingest_jobs)
+    .where(eq(ingest_jobs.id, jobId));
+  return rows[0]!.skipped;
+}
+
+describe('recordIngestJobSkipped', () => {
+  it('a fresh job reads back null — UNKNOWN, not an empty list', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const { jobId } = await enqueueIngestJob(db, semester.id, user.id);
+
+      // The whole point of the column being nullable with no DEFAULT. A job that
+      // has not resolved scopes yet must not be able to claim it skipped nothing.
+      expect(await readSkipped(db, jobId)).toBeNull();
+    });
+  });
+
+  it('persists the list in wire shape', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const { jobId } = await enqueueIngestJob(db, semester.id, user.id);
+
+      await recordIngestJobSkipped(db, jobId, SKIPPED_FIXTURE);
+      expect(await readSkipped(db, jobId)).toEqual(SKIPPED_FIXTURE);
+    });
+  });
+
+  it('writes [] as a real value, distinguishable from the null default', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const { jobId } = await enqueueIngestJob(db, semester.id, user.id);
+
+      await recordIngestJobSkipped(db, jobId, []);
+
+      // `[]` is a positive statement ("resolution ran and skipped nothing"), so
+      // it must survive as an array and NOT collapse back to null.
+      const stored = await readSkipped(db, jobId);
+      expect(stored).toEqual([]);
+      expect(stored).not.toBeNull();
+    });
+  });
+
+  it('REPLACES rather than appends, so a retry cannot duplicate reasons', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const { jobId } = await enqueueIngestJob(db, semester.id, user.id);
+
+      // Re-running staging recomputes an identical list. The ingest pipeline is
+      // required to be idempotent — a retry must produce the same result — so
+      // recording twice must leave three entries, not six.
+      await recordIngestJobSkipped(db, jobId, SKIPPED_FIXTURE);
+      await recordIngestJobSkipped(db, jobId, SKIPPED_FIXTURE);
+
+      expect(await readSkipped(db, jobId)).toEqual(SKIPPED_FIXTURE);
+    });
+  });
+
+  it('a later write can shrink the list back to empty', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const { jobId } = await enqueueIngestJob(db, semester.id, user.id);
+
+      await recordIngestJobSkipped(db, jobId, SKIPPED_FIXTURE);
+      await recordIngestJobSkipped(db, jobId, []);
+
+      // Proves replacement semantics in the direction an append-only child table
+      // could never express: a re-ingest of a now-fixed export reports clean.
+      expect(await readSkipped(db, jobId)).toEqual([]);
+    });
+  });
+
+  it('no-ops silently if jobId does not exist', async () => {
+    await withTestDb(async (db) => {
+      await expect(
+        recordIngestJobSkipped(db, crypto.randomUUID(), SKIPPED_FIXTURE),
+      ).resolves.toBeUndefined();
+    });
+  });
+});
+
+describe('skipped survives every terminal-state write', () => {
+  it('finalizeIngestJob (succeeded) does not clobber it', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const { jobId } = await enqueueIngestJob(db, semester.id, user.id);
+      await recordIngestJobSkipped(db, jobId, SKIPPED_FIXTURE);
+
+      await db
+        .update(ingest_jobs)
+        .set({ status: 'running', started_at: new Date() })
+        .where(eq(ingest_jobs.id, jobId));
+      await finalizeIngestJob(db, jobId);
+
+      const row = (await db.select().from(ingest_jobs).where(eq(ingest_jobs.id, jobId)))[0]!;
+      expect(row.status).toBe('succeeded');
+      // finalize REWRITES `summary` wholesale, which is exactly why `skipped`
+      // could not live inside it. It must not name this column.
+      expect(row.summary).toMatchObject({ total: 0 });
+      expect(row.skipped).toEqual(SKIPPED_FIXTURE);
+    });
+  });
+
+  it('finalizeIngestJob (partial) does not clobber it', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const { jobId } = await enqueueIngestJob(db, semester.id, user.id);
+      await recordIngestJobSkipped(db, jobId, SKIPPED_FIXTURE);
+
+      await db.insert(ingest_files).values({
+        ingest_job_id: jobId,
+        original_filename: 'a.zip',
+        size_bytes: 10,
+        blob_sha256: `sha-${crypto.randomUUID()}`,
+        status: 'unmatched',
+      });
+      await db
+        .update(ingest_jobs)
+        .set({ status: 'running', started_at: new Date() })
+        .where(eq(ingest_jobs.id, jobId));
+      await finalizeIngestJob(db, jobId);
+
+      const row = (await db.select().from(ingest_jobs).where(eq(ingest_jobs.id, jobId)))[0]!;
+      expect(row.status).toBe('partial');
+      expect(row.skipped).toEqual(SKIPPED_FIXTURE);
+    });
+  });
+
+  it('a CANCELLED job keeps them across both the cancel and the summary refresh', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const { jobId } = await enqueueIngestJob(db, semester.id, user.id);
+      await recordIngestJobSkipped(db, jobId, SKIPPED_FIXTURE);
+
+      await cancelIngestJob(db, jobId, semester.id);
+      expect(await readSkipped(db, jobId)).toEqual(SKIPPED_FIXTURE);
+
+      // A cancelled job is the one terminal state finalize still writes to: it
+      // refreshes `summary` so the cooperative-cancel counts show up. That second
+      // write is the easiest place to lose the reasons.
+      await finalizeIngestJob(db, jobId);
+      const row = (await db.select().from(ingest_jobs).where(eq(ingest_jobs.id, jobId)))[0]!;
+      expect(row.status).toBe('cancelled');
+      expect(row.skipped).toEqual(SKIPPED_FIXTURE);
+    });
+  });
+
+  it('failIngestJob does not clobber them', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const { jobId } = await enqueueIngestJob(db, semester.id, user.id);
+      await recordIngestJobSkipped(db, jobId, SKIPPED_FIXTURE);
+
+      await failIngestJob(db, jobId, 'boom');
+
+      const row = (await db.select().from(ingest_jobs).where(eq(ingest_jobs.id, jobId)))[0]!;
+      expect(row.status).toBe('failed');
+      expect(row.summary).toEqual({ error: 'boom' });
+      expect(row.skipped).toEqual(SKIPPED_FIXTURE);
+    });
+  });
+
+  it('a run that aborts BEFORE recording leaves null, not []', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const { jobId } = await enqueueIngestJob(db, semester.id, user.id);
+
+      // e.g. too_many_files, an invalid export, or a mid-stream staging error:
+      // scope resolution never finished, so the list it had is incomplete and
+      // must be reported as unknown rather than published as if it were whole.
+      await failIngestJob(db, jobId, 'exceeded INGEST_MAX_BATCH_FILES (10)');
+
+      expect(await readSkipped(db, jobId)).toBeNull();
     });
   });
 });

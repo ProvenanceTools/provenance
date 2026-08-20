@@ -35,6 +35,11 @@ import { Errors } from '../../api/v1/errors.js';
  * will clean them up.
  *
  * Silently no-ops if the job doesn't exist (worker idempotency).
+ *
+ * Does NOT name `skipped` — see `recordIngestJobSkipped`. A staging run that
+ * aborts part-way leaves it `null` (unknown), which is the truth: the reason
+ * list it had computed so far is incomplete and must not be published as if it
+ * were the whole story.
  */
 export async function failIngestJob(
   db: DrizzleDb,
@@ -48,6 +53,68 @@ export async function failIngestJob(
       completed_at: new Date(),
       summary: errorDetail !== undefined ? { error: errorDetail } : {},
     })
+    .where(eq(ingest_jobs.id, jobId));
+}
+
+// ---------------------------------------------------------------------------
+// recordIngestJobSkipped
+// ---------------------------------------------------------------------------
+
+/**
+ * One scope-resolution skip, in the WIRE shape the API serves.
+ *
+ * Stored exactly as it is returned so the read path is a pass-through and the
+ * single-shot and chunked upload routes cannot drift into different shapes.
+ * Structurally `GradescopeSkippedEntry` from `@provenance/shared`; declared
+ * locally so `job-control` (a DB module) does not take an HTTP-schema import
+ * just to name a jsonb payload. The two are pinned together by the only call
+ * site, `recordIngestJobSkipped(db, jobId, toSkippedWire(...))` in
+ * `local-path.ts`: `toSkippedWire` returns `GradescopeSkippedEntry[]`, so if the
+ * shared schema and this interface ever diverge, that line stops compiling.
+ */
+export interface IngestJobSkippedEntry {
+  folder_key: string;
+  /**
+   * Optional to stay assignable from `GradescopeSkippedEntry`, whose own
+   * optionality exists so a response predating scope fan-out still parses.
+   * `toSkippedWire` always emits it, so nothing this codebase writes omits it.
+   * Spelled `| undefined` because the server compiles with
+   * `exactOptionalPropertyTypes`.
+   */
+  scope_path?: string | undefined;
+  reason: string;
+}
+
+/**
+ * Persists the COMPLETE scope-resolution skip list for a job (migration 0028).
+ *
+ * Call this only once resolution has finished for the whole export, and always
+ * before `markStagingComplete` — after that point a worker may finalize the job
+ * at any moment, and a poller that sees a terminal status must not still be
+ * looking at `null`.
+ *
+ * Two properties are deliberate:
+ *
+ *  - **Replacement, not append.** The caller passes the whole list; this
+ *    overwrites. That is what makes the ingest pipeline's idempotency
+ *    requirement hold for free — re-running staging recomputes an identical
+ *    list and writes it over the old one, so a retry cannot duplicate reasons.
+ *  - **`[]` is meaningful.** Writing an empty array is not a no-op: it is the
+ *    positive statement "resolution ran and skipped nothing", as distinct from
+ *    the column's `null` (unknown). Never skip the write to save a round trip.
+ *
+ * Silently no-ops if the job doesn't exist (worker idempotency).
+ */
+export async function recordIngestJobSkipped(
+  db: DrizzleDb,
+  jobId: string,
+  skipped: readonly IngestJobSkippedEntry[],
+): Promise<void> {
+  await db
+    .update(ingest_jobs)
+    // Spread to a plain array: the column holds a JSON document, and a
+    // readonly view of the caller's live array is not one.
+    .set({ skipped: [...skipped] })
     .where(eq(ingest_jobs.id, jobId));
 }
 
@@ -143,6 +210,20 @@ export interface IngestJobSummary {
  * state (succeeded/partial/failed). For a cancelled job it preserves the
  * 'cancelled' status and completed_at but refreshes the summary, so the
  * matched/discarded counts from a cooperative cancel are reflected.
+ *
+ * ## `skipped` is not summary, and must not be rebuilt here
+ *
+ * This function derives EVERYTHING from `ingest_files` row statuses. A scope
+ * that was skipped during resolution has no `ingest_files` row at all — that is
+ * what being skipped means — so it is structurally invisible from here and no
+ * amount of counting will recover it. `ingest_jobs.skipped` is written
+ * separately by `recordIngestJobSkipped` before staging completes.
+ *
+ * Both UPDATE statements below therefore set `status` / `completed_at` /
+ * `summary` and nothing else. Adding `skipped` to either `.set()` — including
+ * "helpfully" resetting it to `[]` — would clobber the only record that those
+ * scopes ever existed, on the exact path (finalize, and the cancelled-job
+ * summary refresh) that runs after every ingest.
  */
 export async function finalizeIngestJob(db: DrizzleDb, jobId: string): Promise<void> {
   const rows = await db
@@ -204,6 +285,7 @@ export async function finalizeIngestJob(db: DrizzleDb, jobId: string): Promise<v
   // A cancelled job keeps its terminal status and completed_at; we only refresh
   // the summary so the matched/discarded counts from a cooperative cancel are
   // visible to staff. Cancel never becomes succeeded/partial.
+  // (`skipped` is intentionally absent from this .set() — see the doc comment.)
   if (job.status === 'cancelled') {
     await db
       .update(ingest_jobs)
@@ -276,7 +358,10 @@ export async function cancelIngestJob(
     throw Errors.ingestJobNotCancellable(currentStatus);
   }
 
-  // Cancel it (queued or running).
+  // Cancel it (queued or running). Sets status + completed_at only: a cancel
+  // must not erase `skipped`, and a cancel that lands BEFORE the stager records
+  // it must not block the later write either — the reasons a cancelled run did
+  // resolve are still audit material.
   await db
     .update(ingest_jobs)
     .set({ status: 'cancelled', completed_at: new Date() })

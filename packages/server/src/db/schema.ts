@@ -418,6 +418,27 @@ export const ingest_jobs = pgTable(
     summary: jsonb('summary')
       .notNull()
       .default(sql`'{}'`),
+    /**
+     * Scope-resolution skip reasons, in WIRE shape (migration 0028):
+     * `[{ folder_key, scope_path, reason }]`.
+     *
+     * A skipped scope never becomes an `ingest_files` row — it has no blob and
+     * no bytes — so it is invisible to `summary`, which is nothing but a count
+     * of `ingest_files` statuses. This column is the only record that it
+     * existed at all, and it is what lets the chunked-upload route report
+     * skips through `GET /ingest/jobs/:jobId` instead of dropping them.
+     *
+     * NULLABLE WITH NO DEFAULT, deliberately:
+     *   - `null` — UNKNOWN: resolution has not completed for this job (still
+     *     staging, aborted part-way, or the job predates migration 0028).
+     *   - `[]`   — KNOWN AND EMPTY: resolution completed and skipped nothing.
+     * A default of `'[]'` would collapse those two into one value, which is the
+     * exact ambiguity this column exists to remove.
+     *
+     * Written once, by REPLACEMENT, via `recordIngestJobSkipped`. Never touched
+     * by `finalizeIngestJob` / `cancelIngestJob` / `failIngestJob`.
+     */
+    skipped: jsonb('skipped'),
     // True once all ingest_files rows for this job have been staged (no more
     // will be added). The streaming local-path stager sets this false while it
     // streams and true when done; maybeEnqueueFinalize will not finalize a job
