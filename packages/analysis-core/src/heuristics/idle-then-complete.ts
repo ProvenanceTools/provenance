@@ -32,7 +32,7 @@ import type { EventIndex, IndexedEvent } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
-import { reconstructFileWithProvenance } from '../index/reconstruct-file-provenance.js';
+import { establishedReplayState } from './reconstruction-gate.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -107,7 +107,7 @@ function lastFileEventGlobalIdx(
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
   const { idleGapMs, sizeRatio, postIdleWindowMs } = config.idleThenComplete;
 
   const saveEvents = index.byKind.get('doc.save') ?? [];
@@ -134,18 +134,22 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
   }
 
   // Cache for final char count per file.
-  const finalCharCount = new Map<string, number>();
+  // `null` = no established final content for the file (Tier 2.2).
+  const finalCharCount = new Map<string, number | null>();
 
   // Cache for reconstruction results (keyed by filePath:upToGlobalIdx).
-  const reconstructionCache = new Map<string, number>();
+  // `null` = no established content at that boundary (Tier 2.2), so the
+  // "skeleton before the gap, complete file after" ratio has no operand.
+  const reconstructionCache = new Map<string, number | null>();
 
-  function getContentLengthAt(filePath: string, upToGlobalIdx: number): number {
+  function getContentLengthAt(filePath: string, upToGlobalIdx: number): number | null {
     const key = `${filePath}:${upToGlobalIdx}`;
     const cached = reconstructionCache.get(key);
     if (cached !== undefined) return cached;
-    const state = reconstructFileWithProvenance(index, filePath, upToGlobalIdx);
-    reconstructionCache.set(key, state.content.length);
-    return state.content.length;
+    const state = establishedReplayState(index, bundle, filePath, upToGlobalIdx);
+    const length = state === null ? null : state.content.length;
+    reconstructionCache.set(key, length);
+    return length;
   }
 
   const flags: Flag[] = [];
@@ -189,18 +193,22 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
 
         // Get final char count.
         if (!finalCharCount.has(filePath)) {
-          const finalState = reconstructFileWithProvenance(index, filePath);
-          finalCharCount.set(filePath, finalState.content.length);
+          const finalState = establishedReplayState(index, bundle, filePath);
+          finalCharCount.set(filePath, finalState === null ? null : finalState.content.length);
         }
-        const finalLen = finalCharCount.get(filePath)!;
-        if (finalLen === 0) continue;
+        const finalLen = finalCharCount.get(filePath);
+        if (finalLen === null || finalLen === undefined || finalLen === 0) continue;
 
         // Get pre-gap content: reconstruct up to (but not including) the first
         // file event after gapStartT. We use the globalIdx of the last file event
         // with t ≤ gapStartT, then take upTo = that globalIdx + 1.
         const preGapGi = lastFileEventGlobalIdx(index, filePath, sessionId, gap.gapStartT);
         const upTo = preGapGi !== undefined ? preGapGi + 1 : 0;
+        // `null` = no established pre-gap content (Tier 2.2). Without it the
+        // skeleton ratio has no numerator, and guessing one manufactures the
+        // flag rather than missing it.
         const preLen = getContentLengthAt(filePath, upTo);
+        if (preLen === null) continue;
 
         // Skeleton check: pre-gap content < sizeRatio × final.
         if (preLen >= sizeRatio * finalLen) continue;

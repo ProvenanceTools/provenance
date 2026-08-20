@@ -258,6 +258,30 @@ export function buildReconstructionScope(bundle: Bundle, index: EventIndex): Rec
 }
 
 /**
+ * Per-`EventIndex` memo of {@link buildReconstructionScope}.
+ *
+ * Every heuristic that reconstructs needs the same scope for the same index, and
+ * building the observed DAG plus the reachability closure once per heuristic
+ * would be a real regression on an ingest path that is already CPU-bound. Keyed
+ * weakly on the index, exactly like the reconstruction memos next door, so it is
+ * released with it.
+ *
+ * For a solo bundle the memoized value is the `ordering: null` scope, so the
+ * saving is the contributor scan rather than a graph — there is no graph.
+ */
+const scopeCache = new WeakMap<EventIndex, ReconstructionScope>();
+
+/** {@link buildReconstructionScope}, memoized per index. The accessor callers should use. */
+export function reconstructionScopeFor(bundle: Bundle, index: EventIndex): ReconstructionScope {
+  let scope = scopeCache.get(index);
+  if (scope === undefined) {
+    scope = buildReconstructionScope(bundle, index);
+    scopeCache.set(index, scope);
+  }
+  return scope;
+}
+
+/**
  * A scope for an index with no bundle behind it — hand-built test indexes, and
  * `buildIndexFromEventRows`. Always solo, so always today's exact behaviour.
  */
@@ -550,7 +574,7 @@ function buildSegments(index: EventIndex, events: readonly IndexedEvent[]): Segm
   for (const event of events) {
     const seqs = boundaries.get(event.sessionId) ?? [];
     const window = countBelow(seqs, event.seq);
-    const key = `${event.sessionId} ${window}`;
+    const key = `${event.sessionId} ${window}`;
     let segment = bySegment.get(key);
     if (segment === undefined) {
       segment = {

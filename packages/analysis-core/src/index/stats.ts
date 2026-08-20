@@ -6,8 +6,14 @@
  * Pure function over EventIndex. No side effects, no I/O.
  */
 
+import type { Bundle } from '../loader/types.js';
 import type { EventIndex } from './event-index.js';
 import { reconstructFile } from './reconstruct-file.js';
+import {
+  determinateValue,
+  reconstructFileSegmented,
+  reconstructionScopeFor,
+} from './reconstruct-segments.js';
 
 // ---------------------------------------------------------------------------
 // Output types
@@ -33,6 +39,25 @@ export type FileStats = {
   saves: number;
   /** True if reconstructFile reported tainted (large paste or external change). */
   reconstructionTainted: boolean;
+  /**
+   * Set when reconstruction has no single truth for this file (Tier 2.2):
+   * `'concurrent'` — two contributors' edits are unordered here; `'unknown'` —
+   * the happens-before relation does not cover these events.
+   *
+   * Distinct from {@link FileStats.reconstructionTainted}, which means "we have
+   * one content and it is best-effort". This means "there is no one content", a
+   * different fact that a grader must be told apart from the other. Absent for
+   * the overwhelmingly common determinate case, so a solo bundle's stats object
+   * is unchanged.
+   *
+   * `reconstructionTainted` is ALSO set whenever this is set, deliberately: it
+   * is the existing gate every content heuristic already honours, so a file with
+   * no established content is suppressed even in a consumer that predates this
+   * field and knows nothing about it. Failing toward suppression is correct
+   * here — the alternative is a finding against a named student derived from a
+   * file state that never existed.
+   */
+  reconstructionAmbiguity?: 'concurrent' | 'unknown';
 };
 
 export type TerminalOpenDuration = {
@@ -82,7 +107,13 @@ function wallToMs(wall: string): number {
 // computeStats
 // ---------------------------------------------------------------------------
 
-export function computeStats(index: EventIndex): BundleStats {
+/**
+ * `bundle` is optional so that every existing caller — the server's ingest
+ * stats, the analyzer's panels, hand-built test indexes — keeps compiling and
+ * keeps today's behaviour. Without it the scope is solo, which is exactly the
+ * pre-Tier-2.2 path. Pass it to get the concurrency-aware taint gate.
+ */
+export function computeStats(index: EventIndex, bundle?: Bundle): BundleStats {
   // ---------------------------------------------------------------------------
   // Per-file stats
   // ---------------------------------------------------------------------------
@@ -167,9 +198,23 @@ export function computeStats(index: EventIndex): BundleStats {
       }
     }
 
-    // Check reconstruction taint via reconstructFile.
-    const reconstruction = reconstructFile(index, filePath);
-    stats.reconstructionTainted = reconstruction.tainted;
+    // Reconstruction taint, and — when a bundle is available to resolve
+    // contributors — whether there is a single content at all.
+    if (bundle === undefined) {
+      stats.reconstructionTainted = reconstructFile(index, filePath).tainted;
+    } else {
+      const result = reconstructFileSegmented(reconstructionScopeFor(bundle, index), filePath);
+      const determinate = determinateValue(result);
+      if (determinate !== null) {
+        stats.reconstructionTainted = determinate.tainted;
+      } else {
+        // No single content. Record WHICH kind of no — `concurrent` and
+        // `unknown` are different facts — and set the existing taint gate so
+        // that consumers which only know about taint still suppress.
+        stats.reconstructionAmbiguity = result.kind === 'concurrent' ? 'concurrent' : 'unknown';
+        stats.reconstructionTainted = true;
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------

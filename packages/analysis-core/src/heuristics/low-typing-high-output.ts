@@ -71,7 +71,7 @@ import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic, Severity } from './types.js';
 import type { HeuristicConfig } from './config.js';
 import { computeStats } from '../index/stats.js';
-import { reconstructFile } from '../index/reconstruct-file.js';
+import { establishedResult } from './reconstruction-gate.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -91,10 +91,10 @@ function clamp(v: number, min: number, max: number): number {
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
   const { minRatio, highRatio, minCharsForConfidence } = config.lowTypingHighOutput;
 
-  const bundleStats = computeStats(index);
+  const bundleStats = computeStats(index, bundle);
 
   const flags: Flag[] = [];
   let flagIndex = 0;
@@ -105,8 +105,13 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
 
     const charsTyped = fileStats.charsTyped;
 
-    // Get the reconstructed final content length.
-    const reconstruction = reconstructFile(index, filePath);
+    // Tier 2.2: `null` when two contributors' edits are unordered here, so
+    // there is no single final length to divide by. `reconstructionTainted`
+    // above already catches this (computeStats sets it alongside
+    // `reconstructionAmbiguity`); the explicit check is what keeps the skip true
+    // if that coupling is ever loosened.
+    const reconstruction = establishedResult(index, bundle, filePath);
+    if (reconstruction === null) continue;
     const finalLength = reconstruction.content.length;
 
     // If final content is empty, there's nothing to flag.

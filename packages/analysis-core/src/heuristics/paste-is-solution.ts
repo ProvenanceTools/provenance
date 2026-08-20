@@ -31,7 +31,7 @@ import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
-import { reconstructFileWithProvenance } from '../index/reconstruct-file-provenance.js';
+import { establishedReplayState } from './reconstruction-gate.js';
 import { iterateCandidatePastes } from './candidate-pastes.js';
 import { classifyInternalMoves } from './internal-move.js';
 
@@ -74,19 +74,23 @@ function flagId(seqKey: string, idx: number): string {
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
   const threshold = config.pasteIsSolution.lineOverlap;
   const moves = classifyInternalMoves(index, config);
 
   // Cache the final state per file path to avoid re-running reconstruction.
-  const finalStateCache = new Map<string, string>();
+  // `null` marks a file with no established final state (Tier 2.2). This is the
+  // most damning flag in the catalogue, so "we cannot establish what the final
+  // file was" must mean no flag at all rather than a flag against one branch.
+  const finalStateCache = new Map<string, string | null>();
 
-  function getFinalContent(filePath: string): string {
+  function getFinalContent(filePath: string): string | null {
     const cached = finalStateCache.get(filePath);
     if (cached !== undefined) return cached;
-    const state = reconstructFileWithProvenance(index, filePath);
-    finalStateCache.set(filePath, state.content);
-    return state.content;
+    const state = establishedReplayState(index, bundle, filePath);
+    const content = state === null ? null : state.content;
+    finalStateCache.set(filePath, content);
+    return content;
   }
 
   const flags: Flag[] = [];
@@ -98,7 +102,7 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
     if (c.content === undefined || c.content.length === 0) continue;
 
     const finalContent = getFinalContent(c.path);
-    if (finalContent.length === 0) continue;
+    if (finalContent === null || finalContent.length === 0) continue;
 
     const pasteLines = lineCount(c.content);
     if (pasteLines === 0) continue;

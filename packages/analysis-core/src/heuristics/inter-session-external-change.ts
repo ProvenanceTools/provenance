@@ -75,7 +75,7 @@
 
 import type { EventIndex, IndexedEvent } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
-import { reconstructFileWithProvenance } from '../index/reconstruct-file-provenance.js';
+import { establishedContent } from './reconstruction-gate.js';
 import {
   contributorOf,
   compareContributors,
@@ -183,7 +183,13 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
       // Need to have touched the file in A so reconstruction is meaningful.
       if (!touchedInA.has(file)) continue;
 
-      const prevEnd = reconstructFileWithProvenance(index, file, upTo).content;
+      // Tier 2.2: this comparison is an exact string equality, so it is the
+      // most content-sensitive site in the codebase — one wrong character
+      // reports "the file changed while the recorder was off". A third
+      // contributor's segments can span this cut even when A and B are the same
+      // person, so the gate is needed here despite the check above.
+      const prevEnd = establishedContent(index, bundle, file, upTo);
+      if (prevEnd === null) continue;
       if (prevEnd === nextOpen.content) continue;
 
       const lenDiff = Math.abs(nextOpen.content.length - prevEnd.length);

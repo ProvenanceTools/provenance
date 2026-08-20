@@ -36,7 +36,7 @@ import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
-import { reconstructFileWithProvenance } from '../index/reconstruct-file-provenance.js';
+import { establishedReplayState } from './reconstruction-gate.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -50,7 +50,7 @@ function flagId(seqKey: string, idx: number): string {
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
   const { anomalySeconds, minChars } = config.timeToFirstSaveAnomaly;
   const anomalyMs = anomalySeconds * 1000;
 
@@ -105,7 +105,11 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
     // Check content size at the save point. upToGlobalIdx = firstSave.globalIdx + 1
     // (include the save event so hashBySaveSeq is populated, but content is the same
     // as just before the save — doc.save doesn't change content).
-    const state = reconstructFileWithProvenance(index, filePath, firstSave.globalIdx + 1);
+    // Tier 2.2: `null` when two contributors' edits are unordered at this cut.
+    // This heuristic counts per-character provenance, so an unestablished state
+    // fabricates the count as well as the content.
+    const state = establishedReplayState(index, bundle, filePath, firstSave.globalIdx + 1);
+    if (state === null) continue;
 
     // Skip tainted (empty) reconstructions — cannot reliably count chars.
     if (state.content.length === 0) continue;
