@@ -293,8 +293,14 @@ export function soloReconstructionScope(index: EventIndex): ReconstructionScope 
   return { index, contributorBySession: new Map(), ordering: null };
 }
 
-/** Is there a pair among these that `compareContributors` calls `'different'`? */
-function hasTwoDifferentContributors(contributors: readonly SessionContributor[]): boolean {
+/**
+ * Is there a pair among these that `compareContributors` calls `'different'`?
+ *
+ * Exported because Tier 3.1's external-change classification gates on the same
+ * question, and two implementations of "is this scope collaborative" is exactly
+ * how one of them ends up reading unattributed sessions as different people.
+ */
+export function hasTwoDifferentContributors(contributors: readonly SessionContributor[]): boolean {
   // `'different'` requires both sides attributed, so only attributed sessions
   // can produce one — comparing distinct attributed contributor keys is exactly
   // equivalent and is O(n) rather than O(n²).

@@ -8,6 +8,18 @@ import { buildIndex } from '../index/build-index.js';
 import { loadBundle } from '../loader/parse-bundle.js';
 import { buildTestBundle } from '../test-support/build-test-bundle.js';
 import { DEFAULT_HEURISTIC_CONFIG } from './config.js';
+import { externalChangeClassificationFor } from '../index/classify-external-changes.js';
+import {
+  buildCollabScope,
+  collabDocOpen,
+  collabExternalChange,
+  collabGitEvent,
+  collabPartnerSession,
+  collabPullerSession,
+  COLLAB_ALICE,
+  COLLAB_BOB,
+  COLLAB_C0,
+} from '../test-support/build-collab-scope.js';
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -528,5 +540,97 @@ describe('external_edits — operation discriminator', () => {
     const flags = externalEditsHeuristic.run(index, bundle, cfg);
     expect(flags).toHaveLength(1);
     expect(flags[0]!.description).toContain('was affected (create, delete) outside VS Code');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tier 3.1 — content-based reclassification
+// ---------------------------------------------------------------------------
+
+describe('external_edits — Tier 3.1 reclassification', () => {
+  const PARTNER_WORK = 'def solve(n):\n    return n * 2\n';
+  const NOBODY_RECORDED = 'def solve(n):\n    return magic(n)\n';
+
+  /** The identical external change, in a scope that is not collaborative. */
+  async function soloBaseline(content: string) {
+    const solo = await buildCollabScope([
+      { who: { studentRef: COLLAB_ALICE }, events: collabPullerSession(content) },
+    ]);
+    const flags = externalEditsHeuristic.run(solo.index, solo.bundle, cfg);
+    expect(flags).toHaveLength(1);
+    return flags[0]!;
+  }
+
+  it("raises NO flag when a pull delivered the partner's recorded work", async () => {
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession(PARTNER_WORK) },
+      { who: { studentRef: COLLAB_ALICE }, events: collabPullerSession(PARTNER_WORK) },
+    ]);
+    expect(externalEditsHeuristic.run(index, bundle, cfg)).toHaveLength(0);
+  });
+
+  it('R1 — the un-flagged event is still in the index, and still classified', async () => {
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession(PARTNER_WORK) },
+      { who: { studentRef: COLLAB_ALICE }, events: collabPullerSession(PARTNER_WORK) },
+    ]);
+    const events = index.byKind.get('fs.external_change') ?? [];
+    expect(events).toHaveLength(1);
+    const c = externalChangeClassificationFor(bundle, index);
+    expect(c.byGlobalIdx.get(events[0]!.globalIdx)!.classification).toBe('git_merge_in');
+    expect(c.counts.git_merge_in).toBe(1);
+  });
+
+  it('STILL flags a pull that delivered content nobody recorded, at unchanged severity', async () => {
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession('something else\n') },
+      { who: { studentRef: COLLAB_ALICE }, events: collabPullerSession(NOBODY_RECORDED) },
+    ]);
+    const flags = externalEditsHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(1);
+    const f = flags[0]!;
+
+    // git_unrecorded_in is NOT innocent: same severity, same confidence, same
+    // supporting evidence as the pre-3.1 flag for the identical change.
+    const baseline = await soloBaseline(NOBODY_RECORDED);
+    expect(f.severity).toBe(baseline.severity);
+    expect(f.confidence).toBe(baseline.confidence);
+    expect(f.detail!['maxDiffSize']).toBe(baseline.detail!['maxDiffSize']);
+
+    // ...and the classification is named, in the description and in the detail.
+    expect(f.detail!['externalChangeClass']).toBe('git_unrecorded_in');
+    expect(f.description).toContain('git_unrecorded_in');
+    expect(f.description.startsWith(baseline.description)).toBe(true);
+  });
+
+  it('STILL flags an out-of-editor paste, with the byte-identical pre-3.1 description', async () => {
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession('something else\n') },
+      {
+        who: { studentRef: COLLAB_ALICE },
+        events: [
+          collabGitEvent(COLLAB_C0),
+          collabDocOpen('start\n'),
+          collabExternalChange(NOBODY_RECORDED),
+        ],
+      },
+    ]);
+    const flags = externalEditsHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(1);
+    const f = flags[0]!;
+    expect(f.detail!['externalChangeClass']).toBe('external');
+    // `external` adds no clause.
+    expect(f.description).toBe((await soloBaseline(NOBODY_RECORDED)).description);
+  });
+
+  it('R3 — a solo bundle carries no classification fields at all', async () => {
+    const f = await soloBaseline(NOBODY_RECORDED);
+    expect(f.detail!['externalChangeClass']).toBeUndefined();
+    expect(f.detail!['externalChangeReason']).toBeUndefined();
+    expect(f.detail!['externalChangeDetail']).toBeUndefined();
+    expect(f.description).toBe(
+      'hw1.py was modified outside VS Code (1 unexplained event) ' +
+        `(max ±${NOBODY_RECORDED.length} chars).`,
+    );
   });
 });

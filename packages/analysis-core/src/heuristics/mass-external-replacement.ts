@@ -20,6 +20,23 @@
  * Confidence: 0.75 (we're using a proxy for post-change content).
  *
  * Threshold: sharedLines / max(oldLines, postLines) < massExternalReplacement.sharedThreshold.
+ *
+ * ## Tier 3.1 — content-based reclassification
+ *
+ * A `git pull` that brings a partner's rewritten file in replaces ~100% of its
+ * lines, which is exactly what this heuristic fires on — at high / 0.75. In a
+ * COLLABORATIVE scope the event's content-derived classification decides:
+ *
+ *  - `git_merge_in` — the post-change bytes are byte-identical to a state a
+ *    provably different verified contributor recorded on this path. The
+ *    replacement happened, and it was the partner's work; no flag. The event
+ *    remains in the index and in the classification, visible and countable.
+ *  - `git_unrecorded_in` — flagged, unchanged in severity and confidence, with
+ *    the classification named. A wholesale replacement by content nobody
+ *    recorded is precisely the case worth a grader's attention.
+ *  - `external` / `unclassified` — flagged exactly as before.
+ *
+ * A SOLO scope produces no verdicts, so behaviour there is unchanged.
  */
 
 import { diffLines } from 'diff';
@@ -28,6 +45,10 @@ import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
 import { establishedReplayState } from './reconstruction-gate.js';
+import {
+  externalChangeClassificationFor,
+  describeClassification,
+} from '../index/classify-external-changes.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -114,6 +135,8 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
   const externalEvents = index.byKind.get('fs.external_change') ?? [];
   if (externalEvents.length === 0) return [];
 
+  const classification = externalChangeClassificationFor(bundle, index);
+
   // Cache reconstructed content at specific globalIdx boundaries.
   // `null` = no established content at that boundary (Tier 2.2). This
   // heuristic's polarity is fail-DANGEROUS — a small overlap ratio is what
@@ -140,6 +163,11 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
 
     // D1: the recorder reporting the editor's own save -- never a replacement.
     if (index.selfInflictedExternalChanges?.has(e.globalIdx)) continue;
+
+    // Tier 3.1: git delivered a partner's recorded state. The file really was
+    // replaced, and by their work -- not by an external actor. Skipped here
+    // only; the event stays in the index and in the classification.
+    if (classification.gitMergeIn.has(e.globalIdx)) continue;
 
     // No inline post-change content (a file over the recorder's inline cap, so it stored only
     // head/tail) means the overlap ratio is not computable and this heuristic
@@ -193,6 +221,10 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
     const seqKey = `${e.sessionId}:${e.seq}`;
     const id = flagId(seqKey, flagIndex++);
 
+    // Tier 3.1. Empty for a solo scope and for `external` — those descriptions
+    // and details are byte-for-byte what they were.
+    const verdict = classification.byGlobalIdx.get(e.globalIdx) ?? null;
+
     flags.push({
       id,
       heuristic: 'mass_external_replacement',
@@ -202,7 +234,8 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
       supportingSeqs: [seqKey],
       description:
         `An external change to ${filePath} replaced ${Math.round((1 - ratio) * 100)}% ` +
-        `of the file's lines (${shared}/${denominator} lines shared with post-change content).`,
+        `of the file's lines (${shared}/${denominator} lines shared with post-change content).` +
+        describeClassification(verdict),
       detail: {
         filePath,
         sharedLines: shared,
@@ -210,6 +243,13 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
         newLines,
         overlapRatio: ratio,
         threshold,
+        ...(verdict === null
+          ? {}
+          : {
+              externalChangeClass: verdict.classification,
+              externalChangeReason: verdict.reason?.kind ?? null,
+              externalChangeDetail: verdict.detail,
+            }),
       },
     });
   }
