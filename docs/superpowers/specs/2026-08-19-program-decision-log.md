@@ -132,6 +132,16 @@ Every one of these was live on the branch and none was on any worklist.
   `dist` produces confusing phantom errors downstream.
 - **Explicit pathspec on every `git add`.** `docs/pilot-feedback-survey.txt` is the user's untracked
   work and must never be staged.
+- **Two concurrent agents will claim the same migration number.** It happened: both took `0026`.
+  Git merges the `.sql` files silently because the filenames differ, so the only signal is a
+  conflict in `db/migrations/meta/_journal.json` — and if that had merged cleanly, two migrations
+  would have shared an index and applied in **undefined order**. That works on an
+  already-migrated database and corrupts a fresh deploy. Assign numbers explicitly when
+  dispatching, make each agent state the number it used, and after resolving a renumber assert the
+  journal for unique+ordered `idx` and monotonic `when`, then **apply the chain against a live
+  database** — a filename renumber that leaves ordering broken passes every unit test.
+  Current chain: `0026` ingest scope submission types · `0027` student_credentials ·
+  `0028` ingest_jobs.skipped.
 - **Conformance vectors are a tri-repo contract.** A change that perturbs an existing vector's bytes
   is a breaking change to provjet and provnvim, not a refactor. `golden-bundle.{json,zip}` is
   genuinely non-deterministic; leave it at committed bytes.
