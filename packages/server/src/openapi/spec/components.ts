@@ -280,7 +280,13 @@ export const components = {
                   'no_seal',
                   'scope_excluded',
                   'ambiguous_scope',
+                  'submission_type_mismatch',
                 ],
+                description:
+                  'submission_type_mismatch is the homogeneity failure: this submission does not ' +
+                  'have the shape the batch declared via ingest_scope.mode. It fails the ' +
+                  'submission, not the batch, so a heterogeneous batch shows up as a pile of ' +
+                  'these entries rather than one aborted ingest.',
               },
             },
           },
@@ -753,6 +759,51 @@ export const components = {
         warnings: { type: 'array', items: { $ref: '#/components/schemas/FileWarning' } },
       },
     },
+    IngestScopeConfig: {
+      type: 'object',
+      required: ['mode', 'on_multiple'],
+      description:
+        'The declared submission type for a batch, plus what self-identification cannot settle. ' +
+        'The SAME object is both the per-assignment persisted default (assignments.ingest_scope, ' +
+        'which provgate sets once at Gradescope→Provenance mapping time) and the per-ingest-request ' +
+        'override that beats it for a one-off re-ingest. A submission that does not match the ' +
+        'declaration fails that submission — never the batch — and is reported in the ingest ' +
+        "response's `skipped` array with reason `submission_type_mismatch`.",
+      properties: {
+        mode: {
+          type: 'string',
+          enum: ['self_identifying', 'bundle_zip', 'repo_whole', 'repo_scoped'],
+          description:
+            'self_identifying (DEFAULT): walk the tree and accept every sealed .provenance/ scope ' +
+            'wherever it sits, however many — the mode that makes a nested multi-assignment repo ' +
+            'work, and the mode every assignment has unless told otherwise. ' +
+            'bundle_zip: the classic sealed .zip bundle — exactly one scope, at the tree root; a ' +
+            'tree carrying a nested .provenance/ is a repo and fails. ' +
+            'repo_whole: a git repo treated as ONE scope at the repo root; nested scopes are ' +
+            'excluded rather than fanned out, and no root scope fails. ' +
+            'repo_scoped: a git repo in which path_glob selects the scope(s); a glob that selects ' +
+            'nothing fails rather than quietly ingesting zero submissions. ' +
+            '(`path` was the pre-2026-08 name for `repo_scoped`; it is no longer accepted here, ' +
+            'but rows stored under the old name still resolve to repo_scoped.)',
+        },
+        path_glob: {
+          type: 'string',
+          description:
+            'REQUIRED when mode is repo_scoped and rejected otherwise. Matched against the ' +
+            "scope's directory prefix ('' = tree root, else e.g. `proj2/`). `*` does not cross a " +
+            'path separator; `**` does. Both `proj2` and `proj2/**` are accepted spellings.',
+        },
+        on_multiple: {
+          type: 'string',
+          enum: ['error', 'ingest_all'],
+          description:
+            'What to do when more than one ACCEPTED scope declares the same assignment_id. ' +
+            'ingest_all fans out to one submission each; error refuses them all rather than ' +
+            'guessing, reporting each as `ambiguous_scope`. Orthogonal to `mode`. Required — ' +
+            'this object is round-tripped, so it carries no server-side defaults.',
+        },
+      },
+    },
     AssignmentSummary: {
       type: 'object',
       required: [
@@ -768,6 +819,7 @@ export const components = {
         'p95_score',
         'fail_count',
         'warn_count',
+        'ingest_scope',
       ],
       properties: {
         id: { $ref: '#/components/schemas/UUID' },
@@ -782,6 +834,7 @@ export const components = {
         p95_score: { type: 'number' },
         fail_count: { type: 'integer' },
         warn_count: { type: 'integer' },
+        ingest_scope: { $ref: '#/components/schemas/IngestScopeConfig' },
       },
     },
 

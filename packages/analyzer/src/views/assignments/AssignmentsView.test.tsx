@@ -111,6 +111,9 @@ describe('AssignmentsView', () => {
               p95_score: 8.0,
               fail_count: 0,
               warn_count: 1,
+              // Required on AssignmentSummary since declared submission types landed;
+              // `self_identifying` is the column default every assignment starts at.
+              ingest_scope: { mode: 'self_identifying', on_multiple: 'ingest_all' },
             },
           ],
         }),
@@ -134,6 +137,9 @@ describe('AssignmentsView', () => {
               p95_score: 8.0,
               fail_count: 0,
               warn_count: 1,
+              // Required on AssignmentSummary since declared submission types landed;
+              // `self_identifying` is the column default every assignment starts at.
+              ingest_scope: { mode: 'self_identifying', on_multiple: 'ingest_all' },
             },
           });
         },
@@ -182,6 +188,7 @@ describe('AssignmentsView', () => {
           p95_score: 0,
           fail_count: 0,
           warn_count: 0,
+          ingest_scope: { mode: 'self_identifying', on_multiple: 'ingest_all' },
         };
         items.push(created);
         return HttpResponse.json({ assignment: created }, { status: 201 });

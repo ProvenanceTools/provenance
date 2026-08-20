@@ -245,6 +245,9 @@ export function assignmentsHandler() {
             p95_score: 8.0,
             fail_count: 0,
             warn_count: 1,
+            // The server always sends this (NOT NULL column, narrowed through
+            // parseIngestScopeConfig); `self_identifying` is its default value.
+            ingest_scope: { mode: 'self_identifying', on_multiple: 'ingest_all' },
           },
         ],
       },

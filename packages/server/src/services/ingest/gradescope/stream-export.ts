@@ -42,7 +42,8 @@ export type StreamedSkipReason =
   | 'no_submitters'
   | 'no_seal'
   | 'scope_excluded'
-  | 'ambiguous_scope';
+  | 'ambiguous_scope'
+  | 'submission_type_mismatch';
 
 /**
  * One assignment scope of one submission, streamed: either the selected bundle

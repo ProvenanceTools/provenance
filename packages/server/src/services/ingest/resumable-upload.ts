@@ -39,6 +39,7 @@ import {
   S3_MIN_PART_BYTES,
 } from '../storage/multipart.js';
 import { ingestLocalPath, type IngestLocalPathResult } from './local-path.js';
+import type { IngestScopeConfig } from './gradescope/repo-scopes.js';
 
 /** Largest part size we allow a client to request. */
 const MAX_CHUNK_BYTES = 512 * 1024 * 1024;
@@ -135,6 +136,8 @@ export interface CompleteResumableArgs {
   stageConcurrency?: number;
   /** Optional pre-created ingest job to stage into (see ingestLocalPath). */
   jobId?: string;
+  /** Per-request declared-submission-type override (see ingestLocalPath). */
+  ingestScopeOverride?: IngestScopeConfig;
 }
 
 /**
@@ -167,6 +170,9 @@ export async function completeResumableUpload(
         maxBatchFiles: args.maxBatchFiles,
         ...(args.stageConcurrency !== undefined ? { stageConcurrency: args.stageConcurrency } : {}),
         ...(args.jobId !== undefined ? { jobId: args.jobId } : {}),
+        ...(args.ingestScopeOverride !== undefined
+          ? { ingestScopeOverride: args.ingestScopeOverride }
+          : {}),
       },
     );
   } finally {

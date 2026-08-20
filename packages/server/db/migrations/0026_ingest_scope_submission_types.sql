@@ -1,0 +1,57 @@
+-- Migration 0026: declared submission types for `assignments.ingest_scope`.
+--
+-- Migration 0023 added the column with two modes:
+--
+--   mode  'self_identifying' (default) | 'path'
+--
+-- `'path'` never meant anything except "a git repo in which `path_glob` selects
+-- the scope(s)". Ingest now lets an operator declare the SUBMISSION TYPE of a
+-- whole batch, so that a submission of the wrong shape fails loudly instead of
+-- being ingested as something it is not, and the mode enum grows to say it:
+--
+--   mode  'self_identifying'  walk the tree, accept every sealed scope wherever
+--                             it sits, however many. The DEFAULT, and the only
+--                             value any existing row can hold besides 'path'.
+--         'bundle_zip'        the classic sealed .zip bundle: exactly one scope,
+--                             at the tree root.
+--         'repo_whole'        a git repo treated as ONE scope, at the repo root;
+--                             nested scopes are excluded, not fanned out.
+--         'repo_scoped'       a git repo in which `path_glob` selects the
+--                             scope(s). RENAMED FROM 'path'. Identical
+--                             semantics — same glob, same matching, same
+--                             `on_multiple` interaction.
+--
+-- `path_glob` and `on_multiple` are unchanged in name, type and meaning.
+--
+-- ---------------------------------------------------------------------------
+-- Why this is behaviour-preserving
+-- ---------------------------------------------------------------------------
+--
+-- 1. The column DEFAULT is not touched. It is still
+--    '{"mode":"self_identifying","on_multiple":"ingest_all"}', byte for byte,
+--    so every row that never had an explicit config — which is every row ingest
+--    auto-created, i.e. nearly all of them — is not rewritten and cannot change.
+--
+-- 2. 'self_identifying' rows are not rewritten and its semantics are unchanged:
+--    accept every sealed scope. That mode asserts no submission type, so none of
+--    the new homogeneity failures can fire for an assignment that predates this
+--    migration.
+--
+-- 3. The only rows this rewrites are `mode = 'path'`, and 'repo_scoped' is that
+--    same behaviour under a new name. `resolveRepoScopes` applies the identical
+--    glob filter for it.
+--
+-- 4. `parseIngestScopeConfig` (services/ingest/gradescope/repo-scopes.ts) still
+--    accepts 'path' as an alias for 'repo_scoped'. That is what makes this
+--    migration safe to deploy in EITHER order relative to the server: an old row
+--    read by a new server resolves correctly without this migration having run,
+--    and a rewritten row read by an old server... would not — so the alias, not
+--    the rewrite, is the compatibility mechanism. The rewrite exists to keep
+--    stored data canonical, not to make the code work.
+--
+-- No data is deleted and no row is removed. `jsonb_set` preserves `path_glob`
+-- and `on_multiple` untouched on every rewritten row.
+
+UPDATE assignments
+   SET ingest_scope = jsonb_set(ingest_scope, '{mode}', '"repo_scoped"'::jsonb)
+ WHERE ingest_scope ->> 'mode' = 'path';

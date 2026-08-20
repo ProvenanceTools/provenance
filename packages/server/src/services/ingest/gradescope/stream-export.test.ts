@@ -222,8 +222,12 @@ describe('openLocalExport — git repo with several .provenance/ scopes', () => 
     ]);
   });
 
-  it('honours ingest_scope mode=path, excluding the non-matching scopes', async () => {
-    const seen = await drain({ mode: 'path', path_glob: 'proj2/**', on_multiple: 'ingest_all' });
+  it('honours ingest_scope mode=repo_scoped, excluding the non-matching scopes', async () => {
+    const seen = await drain({
+      mode: 'repo_scoped',
+      path_glob: 'proj2/**',
+      on_multiple: 'ingest_all',
+    });
     const bundles = seen.filter((s) => s.kind === 'bundle');
     expect(bundles.map((b) => b.scopePath)).toEqual(['proj2/']);
     const excluded = seen.filter((s) => s.kind === 'skipped' && s.reason === 'scope_excluded');
@@ -236,5 +240,175 @@ describe('openLocalExport — git repo with several .provenance/ scopes', () => 
     expect(withDefault.filter((s) => s.kind === 'bundle').map((b) => b.scopePath)).toEqual(
       implicit.filter((s) => s.kind === 'bundle').map((b) => b.scopePath),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Declared submission types, end to end through the LIVE streaming path
+//
+// These drive real ZIP bytes through openLocalExport → discoverRepoScopes →
+// resolveRepoScopes, i.e. the path every production ingest actually takes
+// (parse-export.ts is only reachable from its own test). Each of the three
+// declared types is exercised against both a matching and a non-matching tree,
+// so the homogeneity failure is proven on real bundles rather than fakes.
+// ---------------------------------------------------------------------------
+
+describe('openLocalExport — declared submission types end to end', () => {
+  let tmpDir: string;
+  /** A tree that IS a classic flat bundle: one sealed scope, at the root. */
+  let flatZip: string;
+  /** A tree that is a repo: a sealed root scope PLUS a nested sealed scope. */
+  let repoRootedZip: string;
+  /** A tree that is a repo with NO root scope: two nested sealed scopes. */
+  let repoNestedZip: string;
+
+  const root = 'assignment_9100_export/';
+
+  async function buildExport(
+    file: string,
+    lay: (outer: JSZip, folder: string) => Promise<void>,
+  ): Promise<string> {
+    const outer = new JSZip();
+    outer.file(`${root}submission_metadata.yml`, REPO_METADATA);
+    await lay(outer, `${root}submission_repo/`);
+    const zipPath = path.join(tmpDir, file);
+    await writeFile(zipPath, await outer.generateAsync({ type: 'nodebuffer' }));
+    return zipPath;
+  }
+
+  beforeAll(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'prov-stream-types-'));
+
+    flatZip = await buildExport('flat.zip', async (outer, folder) => {
+      await layBundleIntoFolder(outer, folder, 'hw10');
+    });
+    repoRootedZip = await buildExport('repo-rooted.zip', async (outer, folder) => {
+      await layBundleIntoFolder(outer, folder, 'hw10');
+      await layBundleIntoFolder(outer, `${folder}vendor/`, 'lab5');
+    });
+    repoNestedZip = await buildExport('repo-nested.zip', async (outer, folder) => {
+      await layBundleIntoFolder(outer, `${folder}proj2/`, 'proj2');
+      await layBundleIntoFolder(outer, `${folder}lab5/`, 'lab5');
+    });
+  });
+
+  afterAll(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function run(
+    zipPath: string,
+    scopeConfig?: IngestScopeConfig,
+  ): Promise<StreamedSubmission[]> {
+    const opened = await openLocalExport(
+      zipPath,
+      scopeConfig === undefined ? {} : { scopeConfigFor: () => scopeConfig },
+    );
+    if (!opened.ok) throw new Error(`openLocalExport failed: ${opened.error}`);
+    const seen: StreamedSubmission[] = [];
+    for await (const sub of opened.submissions()) seen.push(sub);
+    await opened.close();
+    return seen;
+  }
+
+  const bundlePaths = (seen: StreamedSubmission[]): string[] =>
+    seen.filter((s) => s.kind === 'bundle').map((s) => s.scopePath);
+  const skipReasons = (seen: StreamedSubmission[]): string[] =>
+    seen.filter((s) => s.kind === 'skipped').map((s) => (s.kind === 'skipped' ? s.reason : ''));
+
+  // -- bundle_zip -----------------------------------------------------------
+
+  it('bundle_zip ingests a classic flat bundle', async () => {
+    const seen = await run(flatZip, { mode: 'bundle_zip', on_multiple: 'ingest_all' });
+    expect(bundlePaths(seen)).toEqual(['']);
+    expect(skipReasons(seen)).toEqual([]);
+  });
+
+  it('bundle_zip FAILS a repo, and says why through the normal skipped channel', async () => {
+    const seen = await run(repoRootedZip, { mode: 'bundle_zip', on_multiple: 'ingest_all' });
+    expect(bundlePaths(seen)).toEqual([]);
+    expect(skipReasons(seen)).toEqual(['submission_type_mismatch', 'submission_type_mismatch']);
+    // The reason rides the same per-scope shape as no_seal / scope_excluded —
+    // no parallel channel, so every existing reader already surfaces it.
+    for (const s of seen) {
+      expect(s.kind).toBe('skipped');
+      if (s.kind !== 'skipped') continue;
+      expect(s.folderKey).toBe('submission_repo');
+      expect(s.submitters.map((x) => x.sid)).toEqual(['555']);
+    }
+  });
+
+  // -- repo_whole -----------------------------------------------------------
+
+  it('repo_whole ingests a repo as ONE submission and excludes the nested scope', async () => {
+    const seen = await run(repoRootedZip, { mode: 'repo_whole', on_multiple: 'ingest_all' });
+    expect(bundlePaths(seen)).toEqual(['']);
+    expect(skipReasons(seen)).toEqual(['scope_excluded']);
+    // Contrast: self_identifying would have produced TWO submissions here.
+    expect(bundlePaths(await run(repoRootedZip))).toEqual(['', 'vendor/']);
+  });
+
+  it('repo_whole FAILS a repo that seals nothing at its root', async () => {
+    const seen = await run(repoNestedZip, { mode: 'repo_whole', on_multiple: 'ingest_all' });
+    expect(bundlePaths(seen)).toEqual([]);
+    expect(skipReasons(seen)).toEqual(['submission_type_mismatch', 'submission_type_mismatch']);
+  });
+
+  // -- repo_scoped ----------------------------------------------------------
+
+  it('repo_scoped ingests only the globbed scope', async () => {
+    const seen = await run(repoNestedZip, {
+      mode: 'repo_scoped',
+      path_glob: 'proj2/**',
+      on_multiple: 'ingest_all',
+    });
+    expect(bundlePaths(seen)).toEqual(['proj2/']);
+    expect(skipReasons(seen)).toEqual(['scope_excluded']);
+  });
+
+  it('repo_scoped FAILS loudly when the glob matches nothing — never a silent success', async () => {
+    const seen = await run(repoNestedZip, {
+      mode: 'repo_scoped',
+      path_glob: 'proj3/**',
+      on_multiple: 'ingest_all',
+    });
+    expect(bundlePaths(seen)).toEqual([]);
+    expect(skipReasons(seen)).toContain('submission_type_mismatch');
+  });
+
+  // -- back-compat + idempotence -------------------------------------------
+
+  it('an assignment with no declaration behaves exactly as it did before types existed', async () => {
+    for (const zipPath of [flatZip, repoRootedZip, repoNestedZip]) {
+      const legacy = await run(zipPath, DEFAULT_INGEST_SCOPE);
+      const implicit = await run(zipPath);
+      expect(bundlePaths(legacy)).toEqual(bundlePaths(implicit));
+      expect(skipReasons(legacy)).toEqual([]);
+    }
+  });
+
+  it('ingest stays idempotent under each mode — identical bundles and bytes on a re-run', async () => {
+    const cases: Array<[string, IngestScopeConfig]> = [
+      [flatZip, { mode: 'bundle_zip', on_multiple: 'ingest_all' }],
+      [repoRootedZip, { mode: 'repo_whole', on_multiple: 'ingest_all' }],
+      [repoNestedZip, { mode: 'repo_scoped', path_glob: 'proj2/**', on_multiple: 'ingest_all' }],
+      [repoNestedZip, DEFAULT_INGEST_SCOPE],
+    ];
+    for (const [zipPath, config] of cases) {
+      const first = await run(zipPath, config);
+      const second = await run(zipPath, config);
+      expect(bundlePaths(first)).toEqual(bundlePaths(second));
+      expect(skipReasons(first)).toEqual(skipReasons(second));
+      // Byte-identical rebuilds: the archive sha256 is the ingest dedup key, so
+      // a re-run must stage the same blob rather than a duplicate submission.
+      for (let i = 0; i < first.length; i++) {
+        const a = first[i]!;
+        const b = second[i]!;
+        if (a.kind !== 'bundle' || b.kind !== 'bundle') continue;
+        expect(Buffer.from(await zipBundleEntries(a.entries))).toEqual(
+          Buffer.from(await zipBundleEntries(b.entries)),
+        );
+      }
+    }
   });
 });

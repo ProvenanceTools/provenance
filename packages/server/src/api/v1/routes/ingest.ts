@@ -61,7 +61,14 @@ import {
   resolveChunkBytes,
 } from '../../../services/ingest/resumable-upload.js';
 import type { IngestStageUploadPayload } from '../../../services/ingest/stage-upload-job.js';
-import { CreateUploadRequestSchema } from '@provenance/shared/api-schemas';
+import { parseIngestScopeConfig } from '../../../services/ingest/gradescope/repo-scopes.js';
+import { ZodError } from 'zod';
+import {
+  CreateUploadRequestSchema,
+  FinalizeUploadRequestSchema,
+  IngestScopeOverrideQuerySchema,
+  ingestScopeFromQuery,
+} from '@provenance/shared/api-schemas';
 import { projectStudent, maskFilename, protectedLabel } from '../../../services/protect.js';
 
 // ---------------------------------------------------------------------------
@@ -549,6 +556,33 @@ export function createIngestRouter(): Hono {
       const db = getDb();
       const principal = c.var.principal!;
 
+      // Per-request declared-submission-type override. The body is
+      // multipart/form-data reserved for the archive, so the override travels as
+      // flat `scope_*` query params; `ingestScopeFromQuery` folds them into the
+      // same object the JSON routes take. Parsed BEFORE the body is streamed to
+      // disk so a bad override costs nothing.
+      const parsedScope = IngestScopeOverrideQuerySchema.safeParse(c.req.query());
+      if (!parsedScope.success) {
+        return c.json(Errors.validation(parsedScope.error.issues).toBody(), 400);
+      }
+      let scopeOverride;
+      try {
+        const fromQuery = ingestScopeFromQuery(parsedScope.data);
+        // Re-narrow through the SAME function every storage read uses, so an
+        // override and a persisted default are indistinguishable downstream
+        // (and so the optional `path_glob` lands with exact-optional typing).
+        scopeOverride = fromQuery === undefined ? undefined : parseIngestScopeConfig(fromQuery);
+      } catch (err) {
+        // The cross-field rules (repo_scoped needs a glob; nothing else may
+        // carry one) live on IngestScopeConfigSchema, so they surface here.
+        return c.json(
+          Errors.validation(
+            err instanceof ZodError ? err.issues : [{ error: 'Invalid scope override' }],
+          ).toBody(),
+          400,
+        );
+      }
+
       // Content-Length pre-check: reject obviously-oversize uploads up front.
       // The body is streamed to a temp file (not buffered), so the ceiling is
       // disk-bound (INGEST_MAX_UPLOAD_BYTES), not the ~2 GiB in-memory limit.
@@ -603,6 +637,7 @@ export function createIngestRouter(): Hono {
             archivePath: uploaded.path,
             maxBundleBytes: cfg.INGEST_MAX_BUNDLE_BYTES,
             maxBatchFiles: cfg.INGEST_MAX_BATCH_FILES,
+            ...(scopeOverride !== undefined ? { ingestScopeOverride: scopeOverride } : {}),
           },
         );
         recordPhase('upload:ingest', performance.now() - ingestStart);
@@ -1122,13 +1157,17 @@ export function createIngestRouter(): Hono {
       } catch {
         return c.json(Errors.validation([{ error: 'Invalid JSON' }]).toBody(), 400);
       }
-      const s3UploadId = (body as { s3_upload_id?: unknown })?.s3_upload_id;
-      if (typeof s3UploadId !== 'string' || s3UploadId === '') {
-        return c.json(
-          Errors.validation([{ field: 's3_upload_id', issue: 'Missing s3_upload_id.' }]).toBody(),
-          400,
-        );
+      const parsedBody = FinalizeUploadRequestSchema.safeParse(body);
+      if (!parsedBody.success) {
+        return c.json(Errors.validation(parsedBody.error.issues).toBody(), 400);
       }
+      const s3UploadId = parsedBody.data.s3_upload_id;
+      // Per-request declared-submission-type override; rides the pg-boss payload
+      // so it survives this request returning 202 before staging runs.
+      const scopeOverride =
+        parsedBody.data.ingest_scope === undefined
+          ? undefined
+          : parseIngestScopeConfig(parsedBody.data.ingest_scope);
 
       // Create the ingest job row up front so the client gets a job_id to poll
       // immediately, then hand the heavy assemble→download→stage work to a
@@ -1146,6 +1185,7 @@ export function createIngestRouter(): Hono {
           userId: principal.user.id,
           uploadId,
           s3UploadId,
+          ...(scopeOverride !== undefined ? { ingestScopeOverride: scopeOverride } : {}),
         } satisfies IngestStageUploadPayload,
         // Not retryable: S3 multipart completion is non-idempotent. On failure
         // the worker marks the job failed so the UI surfaces it.
