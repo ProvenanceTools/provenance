@@ -68,6 +68,17 @@ commit DAG (`src/git/observed-dag.ts`), and the `≺` relation (`src/order/happe
 (`src/index/reconstruct-segments.ts`). `determinateValue()` deliberately takes **no fallback
 argument** — a default parameter is how "just use the first branch" gets written unnoticed.
 
+**External changes classified by content, not timing** (Tier 3.1,
+`analysis-core/src/index/classify-external-changes.ts`). `git_merge_in` /
+`git_unrecorded_in` / `external` / `unclassified`, consumed by `external_edits`,
+`mass_external_replacement` and `terminal_active_during_external_change`. Only `git_merge_in`
+suppresses, and only on an exact sha256 match against a state a **provably different verified**
+contributor recorded on the same path — never on a clock. Reclassified events stay in the index
+and in the verdict map, so nothing is hidden. Gated on a collaborative scope, so a solo bundle is
+byte-for-byte unaffected. Measured: 1.3 ms on a 10k-event scope, 9.7 ms on 40k; 0.02 ms for the
+solo short-circuit. The explanation tagger is **kept and is no longer a bridge** — it is the only
+mitigation for solo, 1.x and unenrolled scopes, where Tier 3.1 deliberately does not run.
+
 **Institution identity.** log-core `institution.ts`, server `students` table + `POST
 /api/v1/identity/credential`, analyzer `/enroll` (no semester, no course — a static URL).
 
@@ -201,8 +212,11 @@ Build, typecheck, lint clean. Branch ~145 commits, ~+50k lines vs `main`.
   spec intends.
 - `submission_contributors` cut-over (D9), per-contributor heuristic scoping, `Flag.contributor_id`.
 - Peer witnessing (`peer.observed`) — tri-repo format change.
-- Tier 3.1 external-change reclassification by content match; the explanation tagger is currently an
-  explicit **bridge**, not the final design.
+- **Open product call from Tier 3.1:** should a content-derived `git_unrecorded_in` override the
+  recorder's `explanation: 'git'` tag in `external_edits`? Today the tag still suppresses, so a
+  finding the content test says is real can be silenced by a 2-second timing window. Overriding
+  surfaces it — and also surfaces it for honest pairs whose partner simply was not recording.
+  Deliberately not decided by an agent: it changes findings for real students.
 - The repository discriminator (D12) as a signed-format change, with vectors.
 - `student_credentials` history so the server can answer "was this key ever issued to this student?"
   — currently it overwrites, so after a second machine enrols the first machine's key reads as

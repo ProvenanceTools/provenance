@@ -9,44 +9,68 @@
  * Callers invoke markFormatter() or markGit() explicitly; no automatic detection
  * happens here.
  *
- * ## Why this is a per-path set and not a single slot
+ * ## What this is for, now that Tier 3.1 has landed
  *
- * BRIDGE — NOT THE FINAL DESIGN. This widening is Tier 3.6 of
- * `docs/superpowers/specs/2026-08-19-git-collaboration-semantics.md` (§3 S2,
- * §7), and the spec is explicit that it is an interim measure until Tier 3.1's
- * DAG-based reclassification lands. 3.1 replaces timing with CONTENT: an
- * external change whose post-change bytes match a state some contributor's
- * session demonstrably produced is git-delivered, provably and without a clock.
- * When that ships, this tagger stops being the discriminator. Do not mistake
- * the budget or the window for a tuned design — they are the crude parameters
- * of a stopgap.
+ * This used to describe itself as a bridge to the analyzer's content-based
+ * reclassification. That work has shipped
+ * (`analysis-core/src/index/classify-external-changes.ts`, Tier 3.1 of
+ * `docs/superpowers/specs/2026-08-19-git-collaboration-semantics.md`): an
+ * external change whose post-change sha256 equals a state a provably different
+ * verified contributor recorded on the same path is `git_merge_in`, which is a
+ * cryptographic statement rather than a timing guess, and the three
+ * external-change heuristics consume it.
  *
- * The thing it fixes: the tagger used to hold ONE entry, consumed by the first
- * taker. One `git pull` that rewrites twelve files raises twelve
- * `fs.external_change` events and could explain exactly one of them; the other
- * eleven became `external_edits` findings at medium — or high, once the diff
- * passed 100 characters — against a student who did nothing but pull their
- * partner's work. That is the single most damaging false-positive generator in
- * the system (spec §3 S2).
+ * **This tagger is deliberately kept, and it is no longer a bridge.** What it
+ * covers is precisely what the content test cannot:
  *
- * So a mark now explains EVERY path that asks within its window, up to
- * {@link DEFAULT_MAX_EXPLAINED_PATHS} distinct paths, rather than being spent
- * by whichever path happened to arrive first.
+ *  - **Scopes the content test never runs on.** Tier 3.1 is gated on a
+ *    collaborative scope — a course-signed `collaboration: 'group'` on a
+ *    VERIFIED manifest, or two contributors whose enrolment chains both verify.
+ *    That gate exists so a solo bundle is byte-for-byte unaffected, and its
+ *    consequence is that a solo student who runs `git checkout` gets no verdict
+ *    at all. The tag is the only thing that explains their rewritten files. The
+ *    same applies to every 1.x bundle and to any cohort that has not enrolled.
+ *  - **Content the partner never recorded through an editor.** A pull can
+ *    deliver a commit made outside any recording, or a merge resolution git
+ *    itself synthesised. Those bytes match nothing, correctly, and the analyzer
+ *    calls them `git_unrecorded_in`. The tag still says a git operation was
+ *    running, which is a true and independently-sourced fact.
+ *  - **`formatter`.** The content test says nothing about formatter runs; this
+ *    is the only channel for `explanation: 'formatter'` (PRD §4.5). Note
+ *    `markFormatter()` has no production caller today — a separate gap.
  *
- * ## What it deliberately does not fix
+ * It is also the only signal of the two that is inside the SIGNED chain at the
+ * moment the operation happened; the classification is derived later, by a
+ * reader. The analyzer records what this tagger said on each event
+ * (`ExternalChangeVerdict.recorderExplanation`) as corroboration, and
+ * deliberately does not let it decide the classification.
  *
- * Still timing-based, so still wrong at the edges, in both directions:
+ * ## Why it is a per-path set and not a single slot
+ *
+ * The tagger used to hold ONE entry, consumed by the first taker. One `git
+ * pull` that rewrites twelve files raises twelve `fs.external_change` events
+ * and could explain exactly one of them; the other eleven became
+ * `external_edits` findings at medium — or high, once the diff passed 100
+ * characters — against a student who did nothing but pull their partner's work.
+ * That is the single most damaging false-positive generator in the system (spec
+ * §3 S2). So a mark now explains EVERY path that asks within its window, up to
+ * {@link DEFAULT_MAX_EXPLAINED_PATHS} distinct paths, rather than being spent by
+ * whichever path happened to arrive first.
+ *
+ * ## What it still does not do, and must not be relied on for
+ *
+ * Timing-based, so wrong at the edges in both directions:
  *
  *  - a genuine hand edit landing inside the window of an unrelated git command
- *    is explained away (too wide — this was already true of the single slot,
- *    and the per-path set widens it from one path to the budget);
+ *    is explained away (too wide — already true of the single slot, and the
+ *    per-path set widens it from one path to the budget);
  *  - a watcher event that arrives more than `windowMs` after the git state
  *    change is unexplained even though the pull caused it (too narrow);
  *  - a pull larger than the budget leaves its tail unexplained (too narrow).
  *
- * Only the content test in 3.1 removes those. Until then the failure mode of
- * the budget is the SAFE one: exceeding it produces findings, it does not hide
- * them.
+ * In a collaborative scope the content test covers all three. Everywhere else
+ * these remain live, and the budget's failure mode is the SAFE one: exceeding it
+ * produces findings, it does not hide them.
  */
 
 // ---------------------------------------------------------------------------

@@ -68,9 +68,16 @@
  * accusation this change removes. The spec lists 3.3 as depending on Tier 3.1,
  * whose content-based git-delivery test ("do these bytes match a state some
  * contributor's session demonstrably produced?") is what makes an A1→A2
- * comparison sound. Until 3.1 lands, the honest position is to compare fewer
- * pairs rather than to invent findings, and the pairs dropped here are only the
- * ones that were never anything but false.
+ * comparison sound.
+ *
+ * Tier 3.1 has since landed (`index/classify-external-changes.ts`), but it
+ * classifies `fs.external_change` EVENTS, and the gap this heuristic covers is
+ * by definition the interval where the recorder emitted none. Closing the A1→A2
+ * case needs the same content test applied to a `doc.open` seed rather than to
+ * an external-change payload — a change to this heuristic, not a missing
+ * dependency. It is not done here, and until it is, the honest position remains
+ * to compare fewer pairs rather than to invent findings; the pairs dropped here
+ * are only the ones that were never anything but false.
  */
 
 import type { EventIndex, IndexedEvent } from '../index/event-index.js';
