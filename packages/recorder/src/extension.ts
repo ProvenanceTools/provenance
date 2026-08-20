@@ -26,7 +26,7 @@ import { loadAndVerifyManifest } from './activation/manifest-loader.js';
 import type { ActivationError } from './activation/manifest-loader.js';
 import { discoverManifests } from './activation/manifest-discovery.js';
 import { createRecordingStatusBar } from './activation/status-bar.js';
-import { sealBundle } from './commands/seal.js';
+import { sealBundle, sealDroppedArtifacts } from './commands/seal.js';
 import { chooseSessionForSeal } from './commands/seal-selector.js';
 import { computeExtensionHash } from './commands/extension-hash.js';
 import {
@@ -249,6 +249,14 @@ export async function activateImpl(deps: ActivateDeps): Promise<ActiveSession | 
             'Provenance bundle produced. Integrity issues were detected in the recording and will be reviewed by course staff.',
           );
         }
+        // A dropped artifact must never read as "nothing was wrong". Separate
+        // message from the one above: this is not evidence of tampering, it is
+        // an incomplete recording left out so the bundle stays readable.
+        if (sealDroppedArtifacts(result.warnings)) {
+          void vscode.window.showWarningMessage(
+            'Provenance bundle produced. Some incomplete session files were left out of it so it can be opened; nothing was removed from .provenance/. Mention this to course staff.',
+          );
+        }
       } else if (result.kind === 'no_sessions') {
         void vscode.window.showWarningMessage('No session data to seal.');
       } else if (result.kind === 'write_error') {
@@ -463,6 +471,14 @@ function registerSealCommand(context: vscode.ExtensionContext, extensionDistPath
         if (result.warnings.chainBroken || result.warnings.unreadableSession) {
           void vscode.window.showWarningMessage(
             'Provenance bundle produced. Integrity issues were detected in the recording and will be reviewed by course staff.',
+          );
+        }
+        // A dropped artifact must never read as "nothing was wrong". Separate
+        // message from the one above: this is not evidence of tampering, it is
+        // an incomplete recording left out so the bundle stays readable.
+        if (sealDroppedArtifacts(result.warnings)) {
+          void vscode.window.showWarningMessage(
+            'Provenance bundle produced. Some incomplete session files were left out of it so it can be opened; nothing was removed from .provenance/. Mention this to course staff.',
           );
         }
       } else if (result.kind === 'no_sessions') {
