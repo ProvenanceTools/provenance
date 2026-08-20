@@ -536,16 +536,20 @@ describe('verifyLogBytes — a duplicated log is not tampering, and is not a lic
     );
 
     const bundle = await load(dup);
-    const coverage = bundle.rollingSeal!.coverage!;
-    expect(coverage).toHaveLength(1);
-    expect(coverage[0]!.slog.kind).toBe('indeterminate');
 
+    // The verdict FIRST, deliberately: this is the assertion the bug moved, and
+    // a test that trips on the coverage shape before reaching it would prove
+    // only that the shape changed, not that the accusation is gone.
     const check = verifyLogBytes(bundle);
     expect(check.status).not.toBe('fail');
     // And it is not silent about having stopped checking: "not checked" must be
     // legible as something other than "checked and passed".
     expect(check.detail).toContain('could NOT be checked');
     expect(check.detail).toContain(sid);
+
+    const coverage = bundle.rollingSeal!.coverage!;
+    expect(coverage).toHaveLength(1);
+    expect(coverage[0]!.slog.kind).toBe('indeterminate');
   });
 
   it('STILL fails when every copy contradicts the seal — ambiguity is not a licence', async () => {
@@ -569,14 +573,18 @@ describe('verifyLogBytes — a duplicated log is not tampering, and is not a lic
     const dup = await duplicateLog(appended, fid, '99999999-0000-4000-8000-000000000000');
 
     const bundle = await load(dup);
+
+    // The verdict FIRST — over-correcting here is the dangerous direction, so
+    // the assertion that must trip is the one about the finding, not the one
+    // about the coverage shape that produced it.
+    const check = verifyLogBytes(bundle);
+    expect(check.status).toBe('fail');
+    expect(check.detail).toContain(sid);
+
     // The ambiguity IS present and IS reported...
     expect(bundle.rollingSeal!.defects.some((d) => d.kind === 'ambiguous_session_log')).toBe(true);
     // ...and the claimants agree, so the seal still gets an answer.
     expect(bundle.rollingSeal!.coverage![0]!.slog).toEqual({ kind: 'no_match' });
-
-    const check = verifyLogBytes(bundle);
-    expect(check.status).toBe('fail');
-    expect(check.detail).toContain(sid);
   });
 
   it('passes, with full prefix semantics, when the duplicate is byte-identical', async () => {
