@@ -67,8 +67,7 @@ import type { StudentCredential } from '@provenance/log-core';
 import type { StudentCredentialResponse } from '@provenance/shared/api-schemas';
 import { roster_entries, students } from '../../db/schema.js';
 import { type DrizzleDb } from '../../db/client.js';
-import { institutionKey } from '../../config/institution-keys.js';
-import { hex64ToBytes } from '../../config/enrollment-keys.js';
+import { institutionKey, hex64ToBytes } from '../../config/institution-keys.js';
 
 // ---------------------------------------------------------------------------
 // Types
