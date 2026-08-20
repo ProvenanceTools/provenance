@@ -172,6 +172,12 @@ async function issueCredential(
     institution_id: credential.institution_id,
     student_ref: credential.student_ref,
     reissued: false,
+    // First machine, first issuance. The recorder ignores both — they exist so
+    // the enrollment page can tell "you added a machine" from "you already
+    // enrolled" — but this fixture claims to be exactly what the route
+    // returns, so it carries them.
+    machine_count: 1,
+    key_first_issued: true,
   };
 }
 
