@@ -24,6 +24,7 @@ import { toFlagViewFromLocal, type SupportingRef } from './flag-view.js';
 import { collectActiveExtensions } from '../../extensions/collect-active-extensions.js';
 import { ActiveExtensionsCard } from '../../extensions/ActiveExtensionsCard.js';
 import { AssignmentManifestCard } from '../../components/AssignmentManifestCard.js';
+import { CoveragePanel } from '../coverage/CoveragePanel.js';
 import { summarizeBundleManifest } from '@provenance/analysis-core/manifest/bundle-manifest.js';
 import type { BundleManifestSummary } from '@provenance/analysis-core/manifest/bundle-manifest.js';
 import { getRootPublicKeyHex } from '../../lib/root-key.js';
@@ -99,6 +100,13 @@ export function OverviewView() {
   return (
     <div className="container mx-auto py-8 space-y-8" data-testid="overview-view">
       <Actions />
+      {/*
+        Coverage first, before any verdict surface: §6 Rule 3 wants the facts a
+        grader needs in order to READ the flags correctly, so they have to be
+        above the flags rather than below them. Never a finding — see
+        `views/coverage/CoveragePanel.tsx`.
+      */}
+      <CoveragePanel bundle={bundle} index={index} />
       <ValidationReportPanel report={validationReport} />
       <SummaryStatsPanel index={index} bundle={bundle} />
       <AssignmentManifestCard manifest={manifestSummary ?? undefined} />
