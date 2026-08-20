@@ -379,7 +379,15 @@ async function buildSealedBundle(opts: {
   if (result.kind !== 'ok') {
     throw new Error(`sealBundle did not succeed: ${JSON.stringify(result)}`);
   }
-  expect(result.warnings).toEqual({ chainBroken: false, unreadableSession: false });
+  // Every scenario built here is fully flushed and completely paired, so the
+  // orphan guard must have nothing to drop.
+  expect(result.warnings).toEqual({
+    chainBroken: false,
+    unreadableSession: false,
+    orphanedMeta: false,
+    emptySession: false,
+    orphanedRollingSeal: false,
+  });
 
   return {
     root,
@@ -1418,15 +1426,35 @@ async function openLiveSession(opts: {
   provenanceDir: string;
   sessionId: string;
   prevSessionId: string | null;
+  /**
+   * The uuid in the `.slog` FILENAME, when it must differ from the LOGICAL
+   * `session.start.data.session_id`.
+   *
+   * Defaults to `sessionId`, which is what every scenario above wants. In
+   * PRODUCTION the two are always different: `session-registry.ts` names the
+   * file `session-${randomUUID()}.slog` while the rolling seal is named after
+   * `recorderContext.session_id`. Any test that reasons about which id a seal
+   * is matched on has to make them differ, or it passes vacuously.
+   */
+  fileUuid?: string;
+  /**
+   * Make the periodic flush unreachable, so "never flushed" is a property of
+   * the fixture rather than a race with a 1000 ms timer.
+   */
+  neverFlush?: boolean;
 }): Promise<LiveSession> {
   const { provenanceDir, sessionId, prevSessionId } = opts;
 
   const keypair = await generateSessionKeypair();
   const encryptedPrivkey = await encryptSessionPrivkey(keypair.privateKey, MANIFEST_SIG, sessionId);
-  const slogPath = path.join(provenanceDir, `session-${sessionId}.slog`);
+  const slogPath = path.join(provenanceDir, `session-${opts.fileUuid ?? sessionId}.slog`);
 
   const clock = new FixedClock(0, new Date('2026-05-19T14:00:00.000Z'));
-  const writer = await SessionWriter.open({ slogPath, clock });
+  const writer = await SessionWriter.open({
+    slogPath,
+    clock,
+    ...(opts.neverFlush === true ? { bufferPolicy: { maxIntervalMs: 3_600_000 } } : {}),
+  });
   const meta = await MetaWriter.create({
     metaPath: `${slogPath}.meta`,
     sessionId,
@@ -2305,5 +2333,453 @@ describe('the same append under a NON-final seal is not a finding', () => {
       zip.file(slogName, out);
     });
     expect(detectionStatusOf(await validateMutated(buf), 'log_bytes_match')).toBe('fail');
+  });
+});
+
+// ===========================================================================
+// A SESSION TORN DOWN BEFORE ITS FIRST FLUSH MUST NOT COST THE WHOLE BUNDLE
+//
+// Every session the suite above builds is driven to completion — recorded,
+// flushed, closed — so every `.slog` in every fixture has content and every
+// artifact pairs up. That is why a passing gate was never proof this hazard
+// was absent: the shape that triggers it could not be expressed.
+//
+// The shape is a second session that starts against the same `.provenance/`
+// and is torn down before its first flush. All THREE of its per-session
+// artifacts are written eagerly, so all three exist while the log is empty:
+//
+//   SessionWriter.open   -> `session-<uuid>.slog`, 0 bytes (open(path, 'a'))
+//   MetaWriter.create    -> `session-<uuid>.slog.meta`, complete
+//   write point 1        -> `manifest-<id>.json` + `.sig`, signed over 0 bytes
+//                           (session-registry.ts step 6c, right after
+//                            session.start is emitted)
+//
+// Packed as-is, each one is fatal to the ENTIRE bundle — not to the session
+// that is malformed. An innocent student's whole submission is rejected:
+//
+//   the 0-byte `.slog`   -> loadBundle: first_event_not_session_start ("none")
+//   the stranded `.meta` -> loadBundle: orphaned_meta
+//   the stranded seal    -> no_session_log, failing check 1 for the bundle
+//
+// The tests below assert the loader's own invariant rather than a filename
+// list: every rolling seal in the zip names a session whose log is in the zip
+// too, with the logical ids read out of the packed `.slog`s' session.start.
+// ===========================================================================
+
+/** Seal one `.provenance/` through the real seal command. */
+async function sealDir(opts: {
+  root: string;
+  provenanceDir: string;
+  filesUnderReview: string[];
+  keypair: SessionKeypair;
+}): Promise<Extract<Awaited<ReturnType<typeof sealBundle>>, { kind: 'ok' }>> {
+  const result = await sealBundle({
+    assignmentRoot: opts.root,
+    provenanceDir: opts.provenanceDir,
+    assignmentId: ASSIGNMENT_ID,
+    semester: SEMESTER,
+    filesUnderReview: opts.filesUnderReview,
+    sessionPrivkey: opts.keypair.privateKey,
+    sessionPubkeyHex: opts.keypair.publicKeyHex,
+    computeExtensionHash: async () => EXTENSION_HASH,
+    outputDir: opts.root,
+    now: () => new Date('2026-05-19T14:30:00.000Z'),
+  });
+  if (result.kind !== 'ok') {
+    throw new Error(`sealBundle did not succeed: ${JSON.stringify(result)}`);
+  }
+  return result;
+}
+
+/** Every entry name in a sealed zip. */
+async function zipEntryNames(bundlePath: string): Promise<string[]> {
+  const zip = await JSZip.loadAsync(await fsPromises.readFile(bundlePath));
+  return Object.keys(zip.files).sort();
+}
+
+/**
+ * THE LOADER'S INVARIANT, asserted directly on the zip.
+ *
+ * Reads the LOGICAL session id out of every packed `.slog`'s session.start —
+ * the same id `parse-bundle.ts` reconciles seals against — and requires that
+ * every `manifest-<id>.json` / `.sig` in the zip names one of them. This is the
+ * property whose violation is `no_session_log`.
+ */
+async function expectEverySealHasItsSession(bundlePath: string): Promise<void> {
+  const zip = await JSZip.loadAsync(await fsPromises.readFile(bundlePath));
+
+  const packedLogicalIds = new Set<string>();
+  for (const name of Object.keys(zip.files)) {
+    if (!name.endsWith('.slog')) continue;
+    const text = await zip.files[name]!.async('string');
+    const first = text.split('\n').find((l) => l !== '');
+    expect(first, `${name} is empty — the loader cannot open this bundle`).toBeDefined();
+    const parsed = JSON.parse(first!) as { kind: string; data: { session_id: string } };
+    expect(parsed.kind).toBe('session.start');
+    packedLogicalIds.add(parsed.data.session_id);
+  }
+
+  const sealedIds = new Set<string>();
+  for (const name of Object.keys(zip.files)) {
+    const m = /^manifest-([0-9a-f-]+)\.(json|sig)$/.exec(name);
+    if (m !== null) sealedIds.add(m[1]!);
+  }
+
+  expect([...sealedIds].filter((id) => !packedLogicalIds.has(id))).toEqual([]);
+}
+
+describe('a session torn down before its first flush', () => {
+  // The two logical ids differ from the two FILENAME uuids on purpose — see
+  // `fileUuid` on openLiveSession.
+  const LOGICAL_GOOD = uuid(1);
+  const LOGICAL_ABANDONED = uuid(2);
+  const FILE_GOOD = uuid(101);
+  const FILE_ABANDONED = uuid(102);
+
+  let root: string;
+  let provenanceDir: string;
+  let good: LiveSession;
+  let sealed: Awaited<ReturnType<typeof sealDir>>;
+  let preSealNames: string[];
+
+  beforeAll(async () => {
+    root = await makeRoot('unflushed-session');
+    provenanceDir = path.join(root, '.provenance');
+    await fsPromises.mkdir(provenanceDir, { recursive: true });
+
+    // Session A: a real, complete recording, sealed at start and again at the
+    // end — exactly what the live recorder does.
+    good = await openLiveSession({
+      provenanceDir,
+      sessionId: LOGICAL_GOOD,
+      prevSessionId: null,
+      fileUuid: FILE_GOOD,
+    });
+    await good.roll();
+    await good.work({ path: 'main.py', initial: 'a = 1\n', append: 'b = 2\n' });
+    await good.close();
+    await writeWorkspaceFiles(root, good.finalContent);
+    await good.roll();
+
+    // Session B: starts against the same directory and is torn down before its
+    // first flush. Never flushed, never closed — the process died.
+    const abandoned = await openLiveSession({
+      provenanceDir,
+      sessionId: LOGICAL_ABANDONED,
+      prevSessionId: LOGICAL_GOOD,
+      fileUuid: FILE_ABANDONED,
+      neverFlush: true,
+    });
+    await abandoned.roll();
+
+    preSealNames = (await fsPromises.readdir(provenanceDir)).sort();
+
+    sealed = await sealDir({
+      root,
+      provenanceDir,
+      filesUnderReview: [...good.finalContent.keys()],
+      keypair: good.keypair,
+    });
+  });
+
+  it('leaves a 0-byte .slog and a complete .meta on disk', async () => {
+    const slog = path.join(provenanceDir, `session-${FILE_ABANDONED}.slog`);
+    expect((await fsPromises.stat(slog)).size).toBe(0);
+    expect(preSealNames).toContain(`session-${FILE_ABANDONED}.slog.meta`);
+  });
+
+  it('SEALS THE ZERO-EVENT SESSION ON DISK — write point 1 is not optional', () => {
+    // This is the assertion that stops anyone "fixing" the hazard by making the
+    // session-start roll conditional on a non-empty log. A zero-event session
+    // MUST still be sealed: a git-submitted repo has no seal step, and an
+    // unsealed session is an `unsealed_session` defect against a student who
+    // did nothing wrong. Removing write point 1 fails this line.
+    expect(preSealNames).toContain(`manifest-${LOGICAL_ABANDONED}.json`);
+    expect(preSealNames).toContain(`manifest-${LOGICAL_ABANDONED}.sig`);
+    expect(preSealNames).toContain(`manifest-${LOGICAL_GOOD}.json`);
+  });
+
+  it('reports what it left out rather than dropping it silently', () => {
+    expect(sealed.warnings).toEqual({
+      chainBroken: false,
+      unreadableSession: false,
+      orphanedMeta: false,
+      emptySession: true,
+      orphanedRollingSeal: true,
+    });
+  });
+
+  it('HAZARD 1+2: packs neither the empty .slog nor its stranded .meta', async () => {
+    const names = await zipEntryNames(sealed.bundlePath);
+    expect(names).not.toContain(`session-${FILE_ABANDONED}.slog`);
+    expect(names).not.toContain(`session-${FILE_ABANDONED}.slog.meta`);
+    // The good session is packed whole.
+    expect(names).toContain(`session-${FILE_GOOD}.slog`);
+    expect(names).toContain(`session-${FILE_GOOD}.slog.meta`);
+  });
+
+  it('HAZARD 3: packs neither half of the stranded rolling seal', async () => {
+    const names = await zipEntryNames(sealed.bundlePath);
+    expect(names).not.toContain(`manifest-${LOGICAL_ABANDONED}.json`);
+    expect(names).not.toContain(`manifest-${LOGICAL_ABANDONED}.sig`);
+  });
+
+  it('KEEPS the live session’s own seal — matched on the LOGICAL id', async () => {
+    // The `.slog` filename uuid and the logical session id differ by
+    // construction here, as they do in production. Keying the guard on the
+    // filename uuid would drop this pair, and so would dropping every rolling
+    // seal.
+    const names = await zipEntryNames(sealed.bundlePath);
+    expect(names).toContain(`manifest-${LOGICAL_GOOD}.json`);
+    expect(names).toContain(`manifest-${LOGICAL_GOOD}.sig`);
+  });
+
+  it('satisfies the loader invariant: every packed seal has its session', async () => {
+    await expectEverySealHasItsSession(sealed.bundlePath);
+  });
+
+  it('drops the session from the MANIFEST as well as the zip', async () => {
+    const zip = await JSZip.loadAsync(await fsPromises.readFile(sealed.bundlePath));
+    const manifest = JSON.parse(await zip.files['manifest.json']!.async('string')) as {
+      sessions: Array<{ session_id: string | null }>;
+    };
+    expect(manifest.sessions.map((s) => s.session_id)).toEqual([LOGICAL_GOOD]);
+  });
+
+  it('OPENS: the whole bundle is readable, where before it was rejected', async () => {
+    const verified = await loadAndValidate(sealed.bundlePath);
+    expect(verified.bundle.sessions.map((s) => s.sessionId)).toEqual([LOGICAL_GOOD]);
+  });
+
+  it('passes all 8 validation checks', async () => {
+    const verified = await loadAndValidate(sealed.bundlePath);
+    expectAllChecksPass(verified.report);
+  });
+
+  it('DELETES NOTHING: every dropped artifact is still on disk afterwards', async () => {
+    // Drop from the ZIP only. A git-submitted `.provenance/` is read straight
+    // off disk and must keep the seal write point 1 exists to provide, and in a
+    // shared repo these files may be a partner's evidence.
+    expect((await fsPromises.readdir(provenanceDir)).sort()).toEqual(
+      [...preSealNames, 'manifest.json', 'manifest.sig'].sort(),
+    );
+  });
+});
+
+describe('a quarantined .slog whose .meta and seal are left behind', () => {
+  // `chain-recovery.ts` renames a damaged `.slog` to `.corrupt-<ts>` and leaves
+  // the `.slog.meta` under its original name, so the salvage path itself
+  // produces an unopenable bundle (`orphaned_meta`) — and strands the rolling
+  // seal too, since the quarantine has no unflushed session involved at all.
+  const LOGICAL_GOOD = uuid(1);
+  const LOGICAL_CORRUPT = uuid(2);
+  const FILE_GOOD = uuid(101);
+  const FILE_CORRUPT = uuid(102);
+
+  let provenanceDir: string;
+  let sealed: Awaited<ReturnType<typeof sealDir>>;
+
+  beforeAll(async () => {
+    const root = await makeRoot('quarantined-slog');
+    provenanceDir = path.join(root, '.provenance');
+    await fsPromises.mkdir(provenanceDir, { recursive: true });
+
+    const good = await openLiveSession({
+      provenanceDir,
+      sessionId: LOGICAL_GOOD,
+      prevSessionId: null,
+      fileUuid: FILE_GOOD,
+    });
+    await good.work({ path: 'main.py', initial: 'a = 1\n', append: 'b = 2\n' });
+    await good.close();
+    await writeWorkspaceFiles(root, good.finalContent);
+    await good.roll();
+
+    const doomed = await openLiveSession({
+      provenanceDir,
+      sessionId: LOGICAL_CORRUPT,
+      prevSessionId: LOGICAL_GOOD,
+      fileUuid: FILE_CORRUPT,
+    });
+    await doomed.roll();
+    await doomed.work({ path: 'notes.py', initial: 'x = 1\n', append: 'y = 2\n' });
+    await doomed.close();
+
+    // Quarantine exactly as chain-recovery.ts does: rename the `.slog` only.
+    const slogPath = path.join(provenanceDir, `session-${FILE_CORRUPT}.slog`);
+    await fsPromises.rename(slogPath, `${slogPath}.corrupt-2026-05-19T13-59-00-000Z`);
+
+    sealed = await sealDir({
+      root,
+      provenanceDir,
+      filesUnderReview: [...good.finalContent.keys()],
+      keypair: good.keypair,
+    });
+  });
+
+  it('reports the orphaned meta and the stranded seal', () => {
+    expect(sealed.warnings.orphanedMeta).toBe(true);
+    expect(sealed.warnings.orphanedRollingSeal).toBe(true);
+    expect(sealed.warnings.emptySession).toBe(false);
+  });
+
+  it('packs neither the orphaned .meta nor the stranded seal', async () => {
+    const names = await zipEntryNames(sealed.bundlePath);
+    expect(names).not.toContain(`session-${FILE_CORRUPT}.slog.meta`);
+    expect(names).not.toContain(`manifest-${LOGICAL_CORRUPT}.json`);
+    expect(names).not.toContain(`manifest-${LOGICAL_CORRUPT}.sig`);
+    expect(names).toContain(`manifest-${LOGICAL_GOOD}.json`);
+  });
+
+  it('OPENS and passes all 8 checks', async () => {
+    const verified = await loadAndValidate(sealed.bundlePath);
+    await expectEverySealHasItsSession(sealed.bundlePath);
+    expectAllChecksPass(verified.report);
+  });
+
+  it('leaves the quarantined evidence on disk', async () => {
+    const onDisk = (await fsPromises.readdir(provenanceDir)).sort();
+    expect(onDisk).toContain(`session-${FILE_CORRUPT}.slog.corrupt-2026-05-19T13-59-00-000Z`);
+    expect(onDisk).toContain(`session-${FILE_CORRUPT}.slog.meta`);
+    expect(onDisk).toContain(`manifest-${LOGICAL_CORRUPT}.json`);
+  });
+});
+
+describe('a rolling seal whose session is gone entirely', () => {
+  // The `no_session_log` shape on its own: both logs removed (a `git clean`, a
+  // partial checkout, a student tidying `.provenance/`), seal left behind.
+  const LOGICAL_GOOD = uuid(1);
+  const LOGICAL_GONE = uuid(2);
+  const FILE_GOOD = uuid(101);
+  const FILE_GONE = uuid(102);
+
+  let sealed: Awaited<ReturnType<typeof sealDir>>;
+
+  beforeAll(async () => {
+    const root = await makeRoot('seal-without-session');
+    const provenanceDir = path.join(root, '.provenance');
+    await fsPromises.mkdir(provenanceDir, { recursive: true });
+
+    const good = await openLiveSession({
+      provenanceDir,
+      sessionId: LOGICAL_GOOD,
+      prevSessionId: null,
+      fileUuid: FILE_GOOD,
+    });
+    await good.work({ path: 'main.py', initial: 'a = 1\n', append: 'b = 2\n' });
+    await good.close();
+    await writeWorkspaceFiles(root, good.finalContent);
+    await good.roll();
+
+    const gone = await openLiveSession({
+      provenanceDir,
+      sessionId: LOGICAL_GONE,
+      prevSessionId: LOGICAL_GOOD,
+      fileUuid: FILE_GONE,
+    });
+    await gone.work({ path: 'notes.py', initial: 'x = 1\n', append: 'y = 2\n' });
+    await gone.close();
+    await gone.roll();
+
+    const gonePath = path.join(provenanceDir, `session-${FILE_GONE}.slog`);
+    await fsPromises.rm(gonePath);
+    await fsPromises.rm(`${gonePath}.meta`);
+
+    sealed = await sealDir({
+      root,
+      provenanceDir,
+      filesUnderReview: [...good.finalContent.keys()],
+      keypair: good.keypair,
+    });
+  });
+
+  it('drops the seal, reports it, and keeps the bundle openable', async () => {
+    expect(sealed.warnings.orphanedRollingSeal).toBe(true);
+    expect(sealed.warnings.emptySession).toBe(false);
+    expect(sealed.warnings.orphanedMeta).toBe(false);
+
+    const names = await zipEntryNames(sealed.bundlePath);
+    expect(names).not.toContain(`manifest-${LOGICAL_GONE}.json`);
+    expect(names).not.toContain(`manifest-${LOGICAL_GONE}.sig`);
+
+    await expectEverySealHasItsSession(sealed.bundlePath);
+    expectAllChecksPass((await loadAndValidate(sealed.bundlePath)).report);
+  });
+});
+
+describe('the classic seal path is untouched by the orphan guard', () => {
+  it('produces byte-identical manifest.json, manifest.sig and zip entries', async () => {
+    // ONE recording, sealed twice: once in a clean directory, once after the
+    // artifacts of an abandoned session and an orphaned `.meta` are dropped
+    // alongside it. Two separate recordings could not answer this — the
+    // per-session keypair is random, so their `.slog` bytes legitimately differ.
+    const root = await makeRoot('classic-untouched');
+    const provenanceDir = path.join(root, '.provenance');
+    await fsPromises.mkdir(provenanceDir, { recursive: true });
+
+    const good = await openLiveSession({
+      provenanceDir,
+      sessionId: uuid(1),
+      prevSessionId: null,
+      fileUuid: uuid(101),
+    });
+    await good.work({ path: 'main.py', initial: 'a = 1\n', append: 'b = 2\n' });
+    await good.close();
+    await writeWorkspaceFiles(root, good.finalContent);
+    await good.roll();
+
+    const seal = (): Promise<Extract<Awaited<ReturnType<typeof sealBundle>>, { kind: 'ok' }>> =>
+      sealDir({
+        root,
+        provenanceDir,
+        filesUnderReview: [...good.finalContent.keys()],
+        keypair: good.keypair,
+      });
+
+    const before = await seal();
+    const manifestBefore = await fsPromises.readFile(
+      path.join(provenanceDir, 'manifest.json'),
+      'utf8',
+    );
+    const sigBefore = await fsPromises.readFile(path.join(provenanceDir, 'manifest.sig'), 'utf8');
+    const entriesBefore = await zipEntryNames(before.bundlePath);
+    expect(before.warnings).toEqual({
+      chainBroken: false,
+      unreadableSession: false,
+      orphanedMeta: false,
+      emptySession: false,
+      orphanedRollingSeal: false,
+    });
+
+    // Now litter the same directory with everything the guard drops.
+    const abandoned = await openLiveSession({
+      provenanceDir,
+      sessionId: uuid(2),
+      prevSessionId: uuid(1),
+      fileUuid: uuid(102),
+      neverFlush: true,
+    });
+    await abandoned.roll();
+    await fsPromises.writeFile(
+      path.join(provenanceDir, `session-${uuid(103)}.slog.meta`),
+      '{"format_version":"1.0"}',
+      'utf8',
+    );
+
+    const after = await seal();
+
+    // Byte-for-byte. The guard only ever REMOVES candidates; with nothing of
+    // the good session's to remove, the signed bytes are identical.
+    expect(await fsPromises.readFile(path.join(provenanceDir, 'manifest.json'), 'utf8')).toBe(
+      manifestBefore,
+    );
+    expect(await fsPromises.readFile(path.join(provenanceDir, 'manifest.sig'), 'utf8')).toBe(
+      sigBefore,
+    );
+    expect(after.manifestSha256).toBe(before.manifestSha256);
+    expect(await zipEntryNames(after.bundlePath)).toEqual(entriesBefore);
+    expect(after.warnings.emptySession).toBe(true);
+    expect(after.warnings.orphanedMeta).toBe(true);
+    expect(after.warnings.orphanedRollingSeal).toBe(true);
   });
 });
