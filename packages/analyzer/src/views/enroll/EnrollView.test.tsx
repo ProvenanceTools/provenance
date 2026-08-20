@@ -178,7 +178,9 @@ describe('EnrollView — minting', () => {
     submitKey();
 
     await waitFor(() => expect(screen.getByTestId('enroll-token-panel')).toBeInTheDocument());
-    expect(screen.getByText(/already had a credential, so a fresh one was issued/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/already had a credential, so a fresh one was issued/i),
+    ).toBeInTheDocument();
   });
 });
 

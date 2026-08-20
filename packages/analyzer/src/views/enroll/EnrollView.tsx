@@ -261,9 +261,9 @@ function TokenPanel({
           </p>
           <p className="mt-2 text-xs text-gray-600" data-testid="enroll-version-note">
             If VS Code instead says the paste is{' '}
-            <span className="font-mono">unsupported_format_version</span>, your Provenance
-            extension is too old to read this credential. Nothing was saved and nothing is broken
-            — update the extension and paste it again.
+            <span className="font-mono">unsupported_format_version</span>, your Provenance extension
+            is too old to read this credential. Nothing was saved and nothing is broken — update the
+            extension and paste it again.
           </p>
         </div>
 
@@ -458,7 +458,6 @@ export function EnrollView() {
               )}
             </div>
 
-
             {failure !== null && (
               <ErrorRegion className="mt-4 rounded-lg border border-red-300 bg-red-50 p-4">
                 <p className="text-sm font-semibold text-red-900" data-testid="enroll-error-title">
@@ -504,10 +503,10 @@ export function EnrollView() {
             statement that this public key belongs to you. That signed statement is the credential.
           </p>
           <p className="mt-2 text-xs text-gray-600">
-            The credential says who you are, not which classes you are in. It names no course and
-            no semester, so you never have to come back here when you start a new one — and you do
-            not have to be on a roster yet to get it, which matters because rosters usually arrive
-            after your first submission.
+            The credential says who you are, not which classes you are in. It names no course and no
+            semester, so you never have to come back here when you start a new one — and you do not
+            have to be on a roster yet to get it, which matters because rosters usually arrive after
+            your first submission.
           </p>
           <p className="mt-2 text-xs text-gray-600">
             Because there is no backup of your private key, moving to another machine means

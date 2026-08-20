@@ -29,49 +29,31 @@ import {
   parseInstitutionCert,
   parseStudentCredential,
 } from '@provenance/log-core';
-import type { StudentCredentialResponse } from '@provenance/shared/api-schemas';
 import {
   buildRecorderPasteText,
   checkRecorderPasteText,
   normalizeStudentPubkey,
   MASTER_SECRET_MARKER,
 } from './enrollment-token.js';
+import {
+  CORPUS_RESPONSE as RESPONSE,
+  CORPUS_PUBKEY as PUBKEY,
+  CORPUS_SIG as SIG,
+  CORPUS_STUDENT_REF as STUDENT_REF,
+  legacyTwoZeroPaste,
+  pasteCorpus,
+} from './paste-corpus.fixture.js';
 
 // ---------------------------------------------------------------------------
-// Fixtures
+// The recorder's decision, transcribed
+//
+// The fixtures and the corpus live in `paste-corpus.fixture.ts` so that
+// `tools/enrollment-paste-conformance.test.ts` runs the IDENTICAL cases through
+// the recorder's real compiled importer. See that module's docstring.
 // ---------------------------------------------------------------------------
-
-const PUBKEY = 'a'.repeat(64);
-const INSTITUTION_PUBKEY = 'b'.repeat(64);
-const SIG = 'c'.repeat(128);
-const ROOT_SIG = 'd'.repeat(128);
-const STUDENT_REF = '3f0b7c22-9a1e-4a55-8b3d-2c6e1f4a8d90';
-
-export const RESPONSE: StudentCredentialResponse = {
-  credential: {
-    format_version: INSTITUTION_IDENTITY_FORMAT_VERSION,
-    institution_id: 'berkeley',
-    student_ref: STUDENT_REF,
-    student_pubkey: PUBKEY,
-    issued_at: '2026-08-19T17:00:00.000Z',
-    expires_at: '2026-12-20',
-    institution_sig: SIG,
-  },
-  institution_cert: {
-    format_version: INSTITUTION_IDENTITY_FORMAT_VERSION,
-    institution_id: 'berkeley',
-    institution_pubkey: INSTITUTION_PUBKEY,
-    valid_from: '2026-08-01',
-    valid_until: '2026-12-31',
-    root_sig: ROOT_SIG,
-  },
-  institution_id: 'berkeley',
-  student_ref: STUDENT_REF,
-  reissued: false,
-};
 
 /** The recorder's own accept/reject decision, via the functions it calls. */
-export function recorderWouldAccept(text: string): boolean {
+function recorderWouldAccept(text: string): boolean {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -89,71 +71,6 @@ export function recorderWouldAccept(text: string): boolean {
   const credential = parseStudentCredential(obj['enrollment']);
   if (!credential.ok) return false;
   return credential.value.institution_id === cert.value.institution_id;
-}
-
-/**
- * The shared drift corpus. Exported so `tools/enrollment-paste-conformance.test.ts`
- * runs the SAME cases through the recorder's real compiled importer.
- */
-export function pasteCorpus(): string[] {
-  const good = buildRecorderPasteText(RESPONSE);
-  return [
-    good,
-    `  ${good}  `,
-    good.slice(0, good.length - 1),
-    good.slice(1),
-    '{}',
-    '[]',
-    'null',
-    '"x"',
-    'not json at all',
-    JSON.stringify({ enrollment: RESPONSE.credential }),
-    JSON.stringify({ enrollment_cert: RESPONSE.institution_cert }),
-    // Two institutions mixed — the 2.1 analogue of a course_id mismatch.
-    JSON.stringify({
-      enrollment: RESPONSE.credential,
-      enrollment_cert: { ...RESPONSE.institution_cert, institution_id: 'stanford' },
-    }),
-    JSON.stringify({
-      enrollment: { ...RESPONSE.credential, student_pubkey: 'zz' },
-      enrollment_cert: RESPONSE.institution_cert,
-    }),
-    JSON.stringify({
-      enrollment: { ...RESPONSE.credential, expires_at: '2020-01-01' },
-      enrollment_cert: RESPONSE.institution_cert,
-    }),
-    // A future version on both halves.
-    JSON.stringify({
-      enrollment: { ...RESPONSE.credential, format_version: '3.0' },
-      enrollment_cert: { ...RESPONSE.institution_cert, format_version: '3.0' },
-    }),
-    // A 2.0 artifact pasted into a 2.1 page: refused, never read under 2.1 rules.
-    JSON.stringify({
-      enrollment: {
-        format_version: '2.0',
-        student_ref: STUDENT_REF,
-        course_id: 'berkeley-cs61b-fa26',
-        student_pubkey: PUBKEY,
-        issued_at: '2026-08-19T17:00:00.000Z',
-        expires_at: '2026-12-20',
-        enrollment_sig: SIG,
-      },
-      enrollment_cert: {
-        format_version: '2.0',
-        course_id: 'berkeley-cs61b-fa26',
-        enrollment_pubkey: INSTITUTION_PUBKEY,
-        valid_from: '2026-08-01',
-        valid_until: '2026-12-31',
-        course_sig: ROOT_SIG,
-      },
-    }),
-    // Unknown keys are ignored for forward compatibility — both sides must agree.
-    JSON.stringify({
-      enrollment: { ...RESPONSE.credential, future_field: 1 },
-      enrollment_cert: RESPONSE.institution_cert,
-      note: 'hello',
-    }),
-  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -391,8 +308,7 @@ describe('checkRecorderPasteText', () => {
     // 2.0 minting is retired, so this page never produces one — but a student
     // may still hold an old token and try it here. It must be named as a
     // version mismatch rather than silently read under 2.1 rules.
-    const legacy = pasteCorpus().find((t) => t.includes('"2.0"'))!;
-    expect(checkRecorderPasteText(legacy)).toMatchObject({
+    expect(checkRecorderPasteText(legacyTwoZeroPaste())).toMatchObject({
       ok: false,
       kind: 'unsupported_format_version',
     });

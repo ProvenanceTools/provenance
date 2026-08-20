@@ -60,11 +60,7 @@ import type {
   Manifest,
   SessionIdentity,
 } from '@provenance/log-core';
-import {
-  loadEnrollment,
-  loadMasterSecret,
-  loadStudentCredentialArtifact,
-} from './secret-store.js';
+import { loadEnrollment, loadMasterSecret, loadStudentCredentialArtifact } from './secret-store.js';
 import type { SecretStore, StoredCredential } from './secret-store.js';
 
 // ---------------------------------------------------------------------------
