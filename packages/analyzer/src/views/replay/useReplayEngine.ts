@@ -32,7 +32,7 @@ import {
   soloReconstructionScope,
 } from '@provenance/analysis-core/index/reconstruct-segments.js';
 import type { Bundle } from '@provenance/analysis-core/loader/types.js';
-import type { EngineHandle, ReplayState } from './engine-core.js';
+import type { AmbiguousReconstruction, EngineHandle, ReplayState } from './engine-core.js';
 import type { FileReplayState } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
 import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
 import type { Seam } from './bundle-clock.js';
@@ -56,6 +56,12 @@ export type UseReplayEngineResult = {
    * (Tier 2.2, spec §6 Rule 4). Always empty for a single-contributor bundle.
    */
   ambiguousFiles: ReadonlyMap<string, 'concurrent' | 'unknown'>;
+  /**
+   * The same files as {@link ambiguousFiles}, carrying the evidence: for a
+   * `concurrent` file, every live branch with its contributor and its own
+   * content, so the UI can show them side by side instead of only refusing.
+   */
+  fileAmbiguity: ReadonlyMap<string, AmbiguousReconstruction>;
   play(speed?: number): void;
   pause(): void;
   step(n?: number): void;
@@ -121,6 +127,9 @@ export function useReplayEngine(
   const [ambiguousFiles, setAmbiguousFiles] = useState<
     ReadonlyMap<string, 'concurrent' | 'unknown'>
   >(new Map());
+  const [fileAmbiguity, setFileAmbiguity] = useState<
+    ReadonlyMap<string, AmbiguousReconstruction>
+  >(new Map());
   const [files, setFiles] = useState<string[]>([]);
   const [seams, setSeams] = useState<readonly Seam[]>([]);
 
@@ -145,6 +154,8 @@ export function useReplayEngine(
         skipIdle: skipIdleRef.current,
       });
       setFileStates(new Map());
+      setAmbiguousFiles(new Map());
+      setFileAmbiguity(new Map());
       setFiles([]);
       setSeams([]);
       return;
@@ -161,6 +172,7 @@ export function useReplayEngine(
     setReplayState(engine.getState());
     setFileStates(engine.getFileStates());
     setAmbiguousFiles(new Map(engine.ambiguousFiles()));
+    setFileAmbiguity(new Map(engine.fileAmbiguity()));
     setFiles(engine.getFiles());
     setSeams(engine.seams());
 
@@ -180,6 +192,7 @@ export function useReplayEngine(
     setReplayState(engine.getState());
     setFileStates(engine.getFileStates());
     setAmbiguousFiles(new Map(engine.ambiguousFiles()));
+    setFileAmbiguity(new Map(engine.fileAmbiguity()));
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -310,11 +323,12 @@ export function useReplayEngine(
       files,
       seams,
       ambiguousFiles,
+      fileAmbiguity,
       play,
       pause,
       step,
       seek,
     }),
-    [replayState, fileStates, files, seams, ambiguousFiles, play, pause, step, seek],
+    [replayState, fileStates, files, seams, ambiguousFiles, fileAmbiguity, play, pause, step, seek],
   );
 }

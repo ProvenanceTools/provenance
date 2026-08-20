@@ -42,6 +42,9 @@ import type { Bundle } from '@provenance/analysis-core/loader/types.js';
 import { useReplayEngine } from './useReplayEngine.js';
 import { FileTabs } from './FileTabs.js';
 import { SessionSelect } from './SessionSelect.js';
+import { ContributorSelect } from './ContributorSelect.js';
+import { BranchedFileView } from './BranchedFileView.js';
+import { CoveragePanel } from './CoveragePanel.js';
 import { MonacoMount, languageFromPath } from './MonacoMount.js';
 import { TransportBar } from './TransportBar.js';
 import { SpeedControl } from './SpeedControl.js';
@@ -217,7 +220,7 @@ export function ReplayInner({
   const [skipIdle, setSkipIdle] = useState<boolean>(() => searchParams.get('skipIdle') !== '0');
 
   const engine = useReplayEngine(index, { skipIdle, bundle });
-  const { state, fileStates, files, seams, ambiguousFiles, play, pause, step, seek } = engine;
+  const { state, fileStates, files, seams, fileAmbiguity, play, pause, step, seek } = engine;
 
   // Active file tab — null means "use first file".
   const [activeFile, setActiveFile] = useState<string | null>(null);
@@ -231,9 +234,10 @@ export function ReplayInner({
   // FileReplayState for the active file (used by GutterDecorations + LineHoverProvider).
   const activeFileState = resolvedFile !== null ? (fileStates.get(resolvedFile) ?? null) : null;
 
-  // Set when the active file has no single content at the playhead (Tier 2.2).
-  // Always undefined for a single-contributor bundle.
-  const ambiguity = resolvedFile !== null ? ambiguousFiles.get(resolvedFile) : undefined;
+  // Set when the active file has no single content at the playhead (Tier 2.2),
+  // carrying the branches when it is `concurrent`. Always undefined for a
+  // single-contributor bundle.
+  const ambiguity = resolvedFile !== null ? fileAmbiguity.get(resolvedFile) : undefined;
 
   // Total event count for the bundle (passed to TransportBar).
   const eventCount = index?.ordered.length ?? 0;
@@ -493,6 +497,12 @@ export function ReplayInner({
           FileTabs is min-w-0 flex-1 so its wrapping tab list can't squeeze the
           select out of the row. */}
       <div className="flex items-center gap-3 px-4 pt-3 pb-1 border-b bg-background shrink-0">
+        <ContributorSelect
+          contributors={bundle?.contributors ?? null}
+          index={index}
+          currentSessionId={state.sessionId}
+          onSeek={handleJumpSeek}
+        />
         <SessionSelect index={index} currentSessionId={state.sessionId} onSeek={handleJumpSeek} />
         <div className="min-w-0 flex-1">
           <FileTabs
@@ -514,31 +524,15 @@ export function ReplayInner({
             /*
              * Spec §6 Rule 4: replay never linearizes concurrency. It shows the
              * branches side by side or refuses with an explanation — it does not
-             * pick one and it does not interleave. Side-by-side is Tier 5.3;
-             * this is the refusal, and it is the half that prevents a file that
-             * never existed being shown in a meeting as what the student wrote.
+             * pick one and it does not interleave.
+             *
+             * Tier 5.3 promotes this from a refusal to the side-by-side reading:
+             * the branches were always being computed and were being discarded
+             * one frame later. What has NOT changed is that no branch reaches
+             * `content` above, so the Monaco pane can still never show one
+             * lineage as though it were the file.
              */
-            <div
-              className="flex h-full w-full items-center justify-center p-8"
-              data-testid="replay-ambiguous"
-            >
-              <div className="max-w-xl text-center text-sm text-gray-400">
-                <p className="mb-2 font-medium text-gray-200">
-                  {ambiguity === 'concurrent'
-                    ? 'No single version of this file existed at this point'
-                    : 'This file’s history cannot be ordered at this point'}
-                </p>
-                <p>
-                  {ambiguity === 'concurrent'
-                    ? 'Two contributors edited ' +
-                      resolvedFile +
-                      ' on branches the recorded evidence does not order — hash chains, session links and the observed commit DAG all leave them unordered, and the two machines’ clocks are not evidence. Showing one of them here would show a file that never existed on anyone’s machine. A merge commit followed by any disk observation of this file resolves it.'
-                    : 'The happens-before relation does not cover some of ' +
-                      resolvedFile +
-                      '’s events, so no statement can be made about their order. This is the absence of a record, not a claim that the edits raced.'}
-                </p>
-              </div>
-            </div>
+            <BranchedFileView filePath={resolvedFile} ambiguity={ambiguity} />
           ) : resolvedFile !== null ? (
             <>
               <MonacoMount
@@ -624,6 +618,9 @@ export function ReplayInner({
           </div>
         </div>
       </div>
+
+      {/* Coverage panel — facts about the record, never findings (spec §6 Rule 3). */}
+      <CoveragePanel bundle={bundle} index={index} />
 
       {/* Jump controls strip */}
       <div className="shrink-0">
