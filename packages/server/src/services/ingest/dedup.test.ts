@@ -223,14 +223,7 @@ describe('dedupFile', () => {
 
       // One group bundle: identical blob bytes, first ingested for student A.
       const sha256 = 'a1'.repeat(32);
-      const sub = await seedSubmission(
-        db,
-        semester.id,
-        assignment.id,
-        studentA.id,
-        job.id,
-        sha256,
-      );
+      const sub = await seedSubmission(db, semester.id, assignment.id, studentA.id, job.id, sha256);
 
       // Student B (co-submitter, same bytes) IS a duplicate of the artifact...
       const forB = await dedupFile(db, semester.id, sha256);
@@ -273,14 +266,7 @@ describe('dedupFile', () => {
       const job = await seedIngestJob(db, semester.id, user.id);
 
       const sha256 = 'b2'.repeat(32);
-      const sub = await seedSubmission(
-        db,
-        semester.id,
-        assignment.id,
-        studentA.id,
-        job.id,
-        sha256,
-      );
+      const sub = await seedSubmission(db, semester.id, assignment.id, studentA.id, job.id, sha256);
 
       await attachCoSubmitter(db, sub.id, semester.id, studentB.id);
       await attachCoSubmitter(db, sub.id, semester.id, studentB.id);
@@ -293,6 +279,57 @@ describe('dedupFile', () => {
         .where(eq(submission_contributors.submission_id, sub.id));
 
       expect(contributors).toHaveLength(2);
+    });
+  });
+
+  it('attaching someone already present under an ATTRIBUTED key is a no-op, not an error', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const studentA = await seedRosterEntry(db, semester.id, '111111');
+      const assignment = await seedAssignment(db, semester.id);
+      const job = await seedIngestJob(db, semester.id, user.id);
+
+      const sha256 = 'd4'.repeat(32);
+      const sub = await seedSubmission(db, semester.id, assignment.id, studentA.id, job.id, sha256);
+
+      // The BUNDLE side named this person first: they recorded, their chain
+      // verified, so their row carries an `attributed:` key — NOT `roster:`.
+      await db.insert(submission_contributors).values({
+        submission_id: sub.id,
+        semester_id: semester.id,
+        contributor_key: 'attributed:2.1:institution:berkeley:a-ref',
+        kind: 'attributed',
+        roster_entry_id: studentA.id,
+        student_ref: 'a-ref',
+        is_submitter: false,
+      });
+
+      // Now the Gradescope path attaches the same human as a co-submitter. The
+      // keys DIFFER, so a conflict target of (submission_id, contributor_key)
+      // does not match — but the partial unique index on
+      // (submission_id, roster_entry_id) does, and a targeted ON CONFLICT would
+      // RAISE, failing the ingest of an ordinary group upload. The attach must
+      // be an untargeted DO NOTHING.
+      await expect(
+        attachCoSubmitter(db, sub.id, semester.id, studentA.id),
+      ).resolves.toBeUndefined();
+
+      // Still ONE row for the person, and it is the RICHER one — the attributed
+      // key, ref and kind survive. Overwriting them with this path's
+      // roster-only knowledge would downgrade a verified contributor.
+      const rows = await db
+        .select({
+          contributor_key: submission_contributors.contributor_key,
+          kind: submission_contributors.kind,
+          student_ref: submission_contributors.student_ref,
+        })
+        .from(submission_contributors)
+        .where(eq(submission_contributors.submission_id, sub.id));
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.kind).toBe('attributed');
+      expect(rows[0]!.student_ref).toBe('a-ref');
     });
   });
 

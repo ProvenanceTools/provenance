@@ -37,6 +37,12 @@ import { AssignmentManifestCard } from '../../components/AssignmentManifestCard.
 import { CoveragePanel } from '../coverage/CoveragePanel.js';
 import { StatusRegion } from '../../components/a11y/StatusRegion.js';
 import { ErrorRegion } from '../../components/a11y/ErrorRegion.js';
+import {
+  contributorLabel,
+  contributorSid,
+  contributorsLabel,
+  contributorsSidLabel,
+} from '../../lib/contributor-display.js';
 
 // ---------------------------------------------------------------------------
 // Severity chip
@@ -200,6 +206,11 @@ export function Overview() {
   const summary = summaryQuery.data;
   if (!summary) return null;
 
+  // `contributors` is the authoritative "who is this submission about";
+  // `student` is only the fallback for a response that predates it.
+  const soloName = contributorsLabel(summary.contributors, { fallbackStudent: summary.student });
+  const soloSid = contributorsSidLabel(summary.contributors, { fallbackStudent: summary.student });
+
   return (
     <div className="container mx-auto py-6 space-y-6" data-testid="submission-overview">
       {/* Summary card */}
@@ -210,10 +221,34 @@ export function Overview() {
         <h2 className="text-xl font-semibold text-gray-900">Submission</h2>
         <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4 text-sm">
           <div>
-            <dt className="text-gray-500">Student</dt>
+            <dt className="text-gray-500">
+              {summary.contributors.length > 1 ? 'Contributors' : 'Student'}
+            </dt>
+            {/*
+              Solo submissions keep the exact markup they had before the 0029
+              cut-over: `contributors` holds one entry, the same person as
+              `student`, so the label and sid below are byte-identical to
+              `student.display_name` / `student.sid`. Only a group submission
+              takes the list branch.
+            */}
             <dd className="font-medium" data-testid="summary-student">
-              {summary.student.display_name}
-              <span className="ml-1 text-gray-600">({summary.student.sid})</span>
+              {summary.contributors.length > 1 ? (
+                <ul data-testid="summary-contributors" className="space-y-0.5">
+                  {summary.contributors.map((c) => (
+                    <li key={c.contributor_key} data-testid="summary-contributor">
+                      {contributorLabel(c)}
+                      {contributorSid(c) && (
+                        <span className="ml-1 text-gray-600">({contributorSid(c)})</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <>
+                  {soloName}
+                  {soloSid && <span className="ml-1 text-gray-600">({soloSid})</span>}
+                </>
+              )}
             </dd>
           </div>
           <div>

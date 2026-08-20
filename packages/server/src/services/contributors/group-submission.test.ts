@@ -63,7 +63,10 @@ async function expectConstraintViolation(
   } catch (e) {
     caught = e;
   }
-  expect(caught, `expected a ${constraintName} violation, but the statement succeeded`).toBeDefined();
+  expect(
+    caught,
+    `expected a ${constraintName} violation, but the statement succeeded`,
+  ).toBeDefined();
   const cause = (caught as { cause?: { constraint_name?: string } }).cause;
   const name = cause?.constraint_name ?? (caught as { constraint_name?: string }).constraint_name;
   expect(name).toBe(constraintName);
@@ -338,9 +341,10 @@ describe('group submissions', () => {
       expect(list.items).toHaveLength(1);
       expect(list.totalCount).toBe(1);
       expect(list.items[0]!.contributors).toHaveLength(2);
-      expect(
-        list.items[0]!.contributors.map((c) => c.student?.display_name).sort(),
-      ).toEqual(['Alice', 'Bob']);
+      expect(list.items[0]!.contributors.map((c) => c.student?.display_name).sort()).toEqual([
+        'Alice',
+        'Bob',
+      ]);
 
       // BOB — who did not submit it — finds it under his own filter. Under the
       // old `submissions.student_id` filter his own work was invisible to him.
@@ -533,8 +537,15 @@ describe('a submission with no single owning student', () => {
       const seen: string[] = [];
       let cursor: CohortCursor | null = null;
       for (let page = 0; page < 5; page += 1) {
-        const res: Awaited<ReturnType<typeof listCohortSubmissions>> =
-          await listCohortSubmissions(db, semester.id, {}, 'student_asc', cursor, 1, false);
+        const res: Awaited<ReturnType<typeof listCohortSubmissions>> = await listCohortSubmissions(
+          db,
+          semester.id,
+          {},
+          'student_asc',
+          cursor,
+          1,
+          false,
+        );
         seen.push(...res.items.map((i) => i.id));
         if (res.nextCursor === null) break;
         cursor = decodeCursor(res.nextCursor);

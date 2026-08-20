@@ -386,7 +386,6 @@ function sqlExcluded(column: string) {
   return sql.raw(`excluded.${column}`);
 }
 
-
 /**
  * The roster entries already recorded as SUBMITTERS of this submission.
  *
@@ -409,7 +408,5 @@ export async function existingSubmitterRosterIds(
         eq(submission_contributors.is_submitter, true),
       ),
     );
-  return rows
-    .map((r) => r.roster_entry_id)
-    .filter((id): id is string => id !== null);
+  return rows.map((r) => r.roster_entry_id).filter((id): id is string => id !== null);
 }

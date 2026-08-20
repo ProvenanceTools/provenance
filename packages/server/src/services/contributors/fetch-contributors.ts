@@ -123,10 +123,7 @@ export async function fetchContributors(
  * Deterministic display order: submitters first, then named contributors by
  * name, then unnamed ones by key.
  */
-function compareContributorsForDisplay(
-  a: SubmissionContributor,
-  b: SubmissionContributor,
-): number {
+function compareContributorsForDisplay(a: SubmissionContributor, b: SubmissionContributor): number {
   if (a.is_submitter !== b.is_submitter) return a.is_submitter ? -1 : 1;
   const an = a.student?.display_name ?? '';
   const bn = b.student?.display_name ?? '';

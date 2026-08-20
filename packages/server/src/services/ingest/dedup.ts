@@ -88,9 +88,7 @@ export async function dedupFile(
   const rows = await db
     .select({ id: submissions.id })
     .from(submissions)
-    .where(
-      and(eq(submissions.semester_id, semesterId), eq(submissions.blob_sha256, blobSha256)),
-    )
+    .where(and(eq(submissions.semester_id, semesterId), eq(submissions.blob_sha256, blobSha256)))
     .limit(1);
 
   if (rows.length > 0) {

@@ -35,6 +35,7 @@ import { z } from 'zod';
 import { FlagRowSchema, type SubmissionRow } from '@provenance/shared/api-schemas';
 import type { CohortSort } from '../../api/queries.js';
 import { apiFetch } from '../../api/client.js';
+import { contributorsLabel, contributorsSidLabel } from '../../lib/contributor-display.js';
 import { useActiveSemester } from '../../api/use-active-semester.js';
 import { RowLink } from '../../components/a11y/RowLink.js';
 import { SortableHeader, type SortDirection } from '../../components/a11y/SortableHeader.js';
@@ -263,14 +264,21 @@ export function CohortTable({
 
   const columns = useMemo(
     () => [
-      ch.accessor((r) => r.student.display_name, {
+      // Named from `contributors`, not from `student`: `student` is the
+      // SUBMITTER of record and is null for a submission no single roster entry
+      // owns, while `contributors` is always populated and holds exactly one
+      // entry — the same person — for every solo submission. The header stays
+      // "Student" because the sort key it drives is still `student_asc/desc`.
+      ch.accessor((r) => contributorsLabel(r.contributors, { fallbackStudent: r.student }), {
         id: 'student',
         header: 'Student',
         cell: (info) => {
+          const row = info.row.original;
+          const sids = contributorsSidLabel(row.contributors, { fallbackStudent: row.student });
           const content = (
             <div>
               <div className="text-sm font-medium text-gray-900">{info.getValue()}</div>
-              <div className="text-xs text-gray-500">{info.row.original.student.sid}</div>
+              <div className="text-xs text-gray-500">{sids}</div>
             </div>
           );
           // basePath is only '' when courseSlug/semesterSlug are unresolved,

@@ -418,7 +418,9 @@ describe('listCohortSubmissions — protected mode', () => {
       // All 3 items, no duplicates, ordered by protected_index
       const allItems = [...res1.items, ...res2.items, ...res3.items];
       expect(new Set(allItems.map((i) => i.id)).size).toBe(3);
-      const indices = allItems.map((i) => parseInt(i.student!.display_name.replace('Student ', '')));
+      const indices = allItems.map((i) =>
+        parseInt(i.student!.display_name.replace('Student ', '')),
+      );
       expect(indices).toEqual([1, 2, 3]);
     });
   });

@@ -31,6 +31,24 @@ const SUBMISSION_ID = 'aaaaaaaa-0000-0000-0000-000000000001';
 const submissionSummaryFixture = {
   id: SUBMISSION_ID,
   student: { sid: '3031234', display_name: 'Alice Liddell' },
+  // Solo submission: exactly one contributor, the same person as `student`.
+  contributors: [
+    {
+      contributor_key: 'roster:30000000-0000-0000-0000-000000000001',
+      kind: 'roster',
+      student: {
+        id: '30000000-0000-0000-0000-000000000001',
+        sid: '3031234',
+        display_name: 'Alice Liddell',
+      },
+      student_ref: null,
+      session_count: 0,
+      is_submitter: true,
+      score_total: 5.5,
+      score_max_severity: 'medium',
+      flag_counts: { info: 0, low: 0, medium: 2, high: 0 },
+    },
+  ],
   assignment: { assignment_id_str: 'hw1', label: 'Homework 1' },
   version_index: 1,
   score_total: 5.5,

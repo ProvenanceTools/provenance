@@ -26,6 +26,7 @@ import {
   CROSS_SUBMISSION_HEURISTIC_IDS,
 } from '@provenance/analysis-core/heuristics/known-flag-ids.js';
 import { RecomputeProgress } from './RecomputeProgress.js';
+import { personLabel } from '../../lib/contributor-display.js';
 
 // ---------------------------------------------------------------------------
 // All known heuristic/flag IDs.
@@ -399,7 +400,7 @@ export function TuningView() {
                     <tbody>
                       {dryRunData.top_movers.slice(0, 20).map((m) => (
                         <tr key={m.submission_id} className="border-b border-gray-50">
-                          <td className="px-4 py-1.5">{m.student.display_name}</td>
+                          <td className="px-4 py-1.5">{personLabel(m.student)}</td>
                           <td className="px-4 py-1.5 text-gray-500">
                             {m.assignment.assignment_id_str}
                           </td>

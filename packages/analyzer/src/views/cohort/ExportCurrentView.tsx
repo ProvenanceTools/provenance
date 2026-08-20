@@ -17,6 +17,7 @@ import type { CohortSort } from '../../api/queries.js';
 import type { CohortFilters } from './use-cohort-filters.js';
 import { CohortListResponseSchema, type SubmissionRow } from '@provenance/shared/api-schemas';
 import { formatDuration } from '../../lib/format.js';
+import { contributorsLabel, contributorsSidLabel } from '../../lib/contributor-display.js';
 
 const PAGE_LIMIT = 200;
 const MAX_EXPORT_ROWS = 10_000;
@@ -32,7 +33,12 @@ function csvEscape(value: string): string {
   return value;
 }
 
-function buildCsv(rows: SubmissionRow[]): string {
+/**
+ * Exported for tests: the CSV column contract is consumed by graders'
+ * spreadsheets, so the exact header order and the exact cell values for a
+ * solo row are behaviour worth pinning.
+ */
+export function buildCsv(rows: SubmissionRow[]): string {
   const headers = [
     'submission_id',
     'student_sid',
@@ -51,6 +57,15 @@ function buildCsv(rows: SubmissionRow[]): string {
     'ingested_at',
     'recompute_status',
     'superseded',
+    // Appended at the END so every existing consumer's column positions are
+    // unchanged. `student_sid`/`student_name` above still carry the SUBMITTER
+    // of record (empty when no single roster entry owns the submission); these
+    // three carry everyone the submission is attributable to. For a solo
+    // submission contributor_count is 1 and the two lists repeat student_sid /
+    // student_name exactly.
+    'contributor_count',
+    'contributor_sids',
+    'contributor_names',
   ];
 
   const lines = [headers.join(',')];
@@ -59,8 +74,8 @@ function buildCsv(rows: SubmissionRow[]): string {
     const topFlagsStr = row.top_flags.map((f) => f.heuristic_id).join(';');
     const cells = [
       row.id,
-      row.student.sid,
-      row.student.display_name,
+      row.student?.sid ?? '',
+      row.student?.display_name ?? '',
       row.assignment.label || row.assignment.assignment_id_str,
       String(row.score_total),
       row.score_max_severity,
@@ -75,6 +90,9 @@ function buildCsv(rows: SubmissionRow[]): string {
       row.ingested_at,
       row.recompute_status,
       String(row.superseded),
+      String(row.contributors.length),
+      contributorsSidLabel(row.contributors, { separator: ';' }),
+      contributorsLabel(row.contributors, { separator: ';' }),
     ];
     lines.push(cells.map(csvEscape).join(','));
   }

@@ -89,6 +89,19 @@ function makeLoadingResult<T>(): UseQueryResult<T> {
 const DUMMY_SUMMARY: SubmissionSummary = {
   id: 'test',
   student: { sid: 'test', display_name: 'Test' },
+  contributors: [
+    {
+      contributor_key: 'roster:30000000-0000-0000-0000-0000000000aa',
+      kind: 'roster',
+      student: { id: '30000000-0000-0000-0000-0000000000aa', sid: 'test', display_name: 'Test' },
+      student_ref: null,
+      session_count: 0,
+      is_submitter: true,
+      score_total: 0,
+      score_max_severity: 'info',
+      flag_counts: { info: 0, low: 0, medium: 0, high: 0 },
+    },
+  ],
   assignment: { assignment_id_str: 'hw1', label: 'HW1' },
   version_index: 1,
   score_total: 0,

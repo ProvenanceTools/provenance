@@ -247,10 +247,7 @@ export async function listStudents(
     })
     .from(submissions)
     .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
-    .innerJoin(
-      submission_contributors,
-      eq(submission_contributors.submission_id, submissions.id),
-    )
+    .innerJoin(submission_contributors, eq(submission_contributors.submission_id, submissions.id))
     // INNER, deliberately: this list is "students and their submissions", so a
     // contributor with no roster row (D13) has no row to appear under. They are
     // not dropped from the system — they are listed on the submission itself.

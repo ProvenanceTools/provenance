@@ -284,9 +284,7 @@ describe('migration 0029 — submission_contributors on a populated database', (
 
       // ...and the SAME group at version 1 twice does NOT. This is the exact
       // failure that plain NULL-distinctness would have allowed silently.
-      await expect(insertGroup('pair-alice-bob', 1)).rejects.toThrow(
-        /submissions_version_key/,
-      );
+      await expect(insertGroup('pair-alice-bob', 1)).rejects.toThrow(/submissions_version_key/);
 
       // A blank group key would put every keyless group into one lineage.
       await expect(insertGroup('', 1)).rejects.toThrow(/submissions_group_key_check/);
