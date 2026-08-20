@@ -300,9 +300,7 @@ export function soloReconstructionScope(index: EventIndex): ReconstructionScope 
  * question, and two implementations of "is this scope collaborative" is exactly
  * how one of them ends up reading unattributed sessions as different people.
  */
-export function hasTwoDifferentContributors(
-  contributors: readonly SessionContributor[],
-): boolean {
+export function hasTwoDifferentContributors(contributors: readonly SessionContributor[]): boolean {
   // `'different'` requires both sides attributed, so only attributed sessions
   // can produce one — comparing distinct attributed contributor keys is exactly
   // equivalent and is O(n) rather than O(n²).

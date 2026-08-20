@@ -394,7 +394,10 @@ type SessionObservation = {
  * `commit_sha` fallback and the repository keying, and a second implementation
  * of a contract that exists to have exactly one is how the two drift apart.
  */
-function bucketObservations(dag: ObservedDag, index: EventIndex): Map<string, SessionObservation[]> {
+function bucketObservations(
+  dag: ObservedDag,
+  index: EventIndex,
+): Map<string, SessionObservation[]> {
   const bySession = new Map<string, SessionObservation[]>();
 
   for (const obs of dag.observations) {

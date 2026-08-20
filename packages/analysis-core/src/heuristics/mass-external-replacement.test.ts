@@ -8,6 +8,18 @@ import { buildIndex } from '../index/build-index.js';
 import { loadBundle } from '../loader/parse-bundle.js';
 import { buildTestBundle } from '../test-support/build-test-bundle.js';
 import { DEFAULT_HEURISTIC_CONFIG } from './config.js';
+import { externalChangeClassificationFor } from '../index/classify-external-changes.js';
+import {
+  buildCollabScope,
+  collabDocOpen,
+  collabDocSave,
+  collabPartnerSession,
+  collabPullerSession,
+  COLLAB_ALICE,
+  COLLAB_BOB,
+  COLLAB_FILE,
+} from '../test-support/build-collab-scope.js';
+import type { EventSpec } from '../test-support/build-test-bundle.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -314,5 +326,122 @@ describe('mass_external_replacement — negative', () => {
     // Should NOT flag because at immediate post-change (e.globalIdx+1), the content
     // is the whitespace-reformatted version with 3 shared lines / 3 max = 100% shared.
     expect(flags.filter((f) => f.heuristic === 'mass_external_replacement')).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tier 3.1 — content-based reclassification
+// ---------------------------------------------------------------------------
+
+describe('mass_external_replacement — Tier 3.1 reclassification', () => {
+  const OLD = Array.from({ length: 10 }, (_, i) => `old_line_${i}()\n`).join('');
+  const PARTNER_WORK = Array.from({ length: 10 }, (_, i) => `partner_line_${i}()\n`).join('');
+  const NOBODY_RECORDED = Array.from({ length: 10 }, (_, i) => `mystery_${i}()\n`).join('');
+
+  /** A tiny typed edit, so reconstruction has a post-change anchor to read. */
+  const typedNote: EventSpec = {
+    kind: 'doc.change',
+    data: {
+      path: COLLAB_FILE,
+      source: 'typed',
+      deltas: [
+        {
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          text: '#\n',
+        },
+      ],
+    },
+  };
+
+  /**
+   * Alice: pulls and merges, opens her copy, the file is then wholesale replaced
+   * on disk, and she edits and saves.
+   *
+   * The ORDER here is a fixture concern, not a claim about how students work.
+   * Tier 2.2 refuses to reconstruct a file whose two contributors' edits are
+   * unordered under `≺`, and this heuristic then skips the file for THAT reason
+   * — which would make every assertion below pass without exercising Tier 3.1 at
+   * all. Alice's disk observation has to sit after a merge commit that descends
+   * from the partner's commit for the two lineages to be ordered. (The natural
+   * ordering — open, then pull — is genuinely concurrent, and is pinned as such
+   * in its own test below.)
+   */
+  function pullThatReplaces(content: string): EventSpec[] {
+    return collabPullerSession(content, {
+      beforeChange: [collabDocOpen(OLD)],
+      after: [typedNote, collabDocSave('#\n' + content)],
+      merge: true,
+    });
+  }
+
+  it("raises NO flag when the replacement is the partner's recorded work", async () => {
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession(PARTNER_WORK) },
+      { who: { studentRef: COLLAB_ALICE }, events: pullThatReplaces(PARTNER_WORK) },
+    ]);
+    // The control: the identical stream in a solo scope DOES flag, so the
+    // suppression above is the classification and not a broken fixture.
+    const solo = await buildCollabScope([
+      { who: { studentRef: COLLAB_ALICE }, events: pullThatReplaces(PARTNER_WORK) },
+    ]);
+    expect(massExternalReplacementHeuristic.run(solo.index, solo.bundle, cfg)).toHaveLength(1);
+
+    expect(massExternalReplacementHeuristic.run(index, bundle, cfg)).toHaveLength(0);
+
+    // R1: the event is still there, and still classified.
+    const events = index.byKind.get('fs.external_change') ?? [];
+    expect(events).toHaveLength(1);
+    expect(
+      externalChangeClassificationFor(bundle, index).byGlobalIdx.get(events[0]!.globalIdx)!
+        .classification,
+    ).toBe('git_merge_in');
+  });
+
+  it('STILL flags a wholesale replacement by content nobody recorded', async () => {
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession(PARTNER_WORK) },
+      { who: { studentRef: COLLAB_ALICE }, events: pullThatReplaces(NOBODY_RECORDED) },
+    ]);
+    const flags = massExternalReplacementHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(1);
+    const f = flags[0]!;
+    expect(f.severity).toBe('high');
+    expect(f.confidence).toBeCloseTo(0.75);
+    expect(f.detail!['externalChangeClass']).toBe('git_unrecorded_in');
+    expect(f.description).toContain('git_unrecorded_in');
+  });
+
+  it('the natural open-then-pull ordering is skipped by Tier 2.2 before Tier 3.1 is reached', async () => {
+    // Documented rather than asserted-around: a student who opens the file and
+    // THEN pulls leaves two lineages that `≺` does not order, so reconstruction
+    // has no single pre-change content and this heuristic must not guess one.
+    // Both classes are skipped here for that earlier reason.
+    const openThenPull = (content: string): EventSpec[] =>
+      collabPullerSession(content, {
+        before: [collabDocOpen(OLD)],
+        after: [typedNote, collabDocSave('#\n' + content)],
+      });
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession(PARTNER_WORK) },
+      { who: { studentRef: COLLAB_ALICE }, events: openThenPull(NOBODY_RECORDED) },
+    ]);
+    expect(massExternalReplacementHeuristic.run(index, bundle, cfg)).toHaveLength(0);
+    // ...and Tier 3.1 still classified it, so the fact is not lost.
+    const events = index.byKind.get('fs.external_change') ?? [];
+    expect(
+      externalChangeClassificationFor(bundle, index).byGlobalIdx.get(events[0]!.globalIdx)!
+        .classification,
+    ).toBe('git_unrecorded_in');
+  });
+
+  it('R3 — a solo bundle carries no classification fields at all', async () => {
+    const solo = await buildCollabScope([
+      { who: { studentRef: COLLAB_ALICE }, events: pullThatReplaces(NOBODY_RECORDED) },
+    ]);
+    const flags = massExternalReplacementHeuristic.run(solo.index, solo.bundle, cfg);
+    expect(flags).toHaveLength(1);
+    const f = flags[0]!;
+    expect(f.detail!['externalChangeClass']).toBeUndefined();
+    expect(f.description.endsWith('lines shared with post-change content).')).toBe(true);
   });
 });

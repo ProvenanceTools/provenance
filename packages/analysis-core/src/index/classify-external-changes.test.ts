@@ -352,7 +352,12 @@ describe('git_merge_in — a pull delivering a partner’s recorded work', () =>
         // Alice opens her own (older) copy first, so the file's replayed state
         // before the pull is hers and D1c's edit-derived rule does not claim the
         // event as the recorder reporting its own write.
-        events: [gitEvent(C0), docOpen('start\n'), gitEvent(C1, [C0]), externalChange(PARTNER_WORK)],
+        events: [
+          gitEvent(C0),
+          docOpen('start\n'),
+          gitEvent(C1, [C0]),
+          externalChange(PARTNER_WORK),
+        ],
       },
     ]);
     const v = only(classifyExternalChanges(bundle, index));
@@ -619,6 +624,89 @@ describe('properties', () => {
     expect(externalChangeClassificationFor(bundle, index)).toBe(
       externalChangeClassificationFor(bundle, index),
     );
+  });
+
+  /**
+   * The cost the spec's §9 asks to be measured rather than assumed.
+   *
+   * The shape: one pass over `doc.save` + `doc.open` to build `path → sha →
+   * states`, one `buildObservedDag` over `git.event`, then two map lookups and a
+   * scan of the session's own observations per `fs.external_change`. Linear in
+   * events, with the per-change work bounded by the session's git-event count
+   * rather than by the event count — deliberately NOT the O(n²) shape the older
+   * heuristics have.
+   *
+   * The bound is generous because CI machines vary; the number that matters is
+   * the one printed, and the assertion exists to catch an accidental quadratic.
+   */
+  it('classifies a 10k-event two-contributor scope in well under a second', async () => {
+    const FILES = 40;
+    const partner: EventSpec[] = [];
+    for (let i = 0; i < 5000; i++) {
+      const file = `src/f${i % FILES}.py`;
+      partner.push(
+        i % 5 === 0
+          ? { kind: 'doc.save', data: { path: file, sha256: sha256Hex(`${file}:${i}`) } }
+          : {
+              kind: 'doc.change',
+              data: {
+                path: file,
+                source: 'typed',
+                deltas: [
+                  {
+                    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+                    text: 'x',
+                  },
+                ],
+              },
+            },
+      );
+    }
+    const puller: EventSpec[] = [];
+    for (let i = 0; i < 5000; i++) {
+      const file = `src/f${i % FILES}.py`;
+      if (i % 25 === 0) {
+        puller.push(gitEvent(`${i}`.padStart(40, '0'), [`${i - 25}`.padStart(40, '0')]));
+      } else if (i % 25 === 1) {
+        // Half of these hit a partner state (the sha the partner saved at i-1,
+        // on the partner's path); half hit nothing.
+        const j = i - 1; // divisible by 25, therefore by 5 — a partner doc.save
+        const matched = i % 50 === 1;
+        const path = matched ? `src/f${j % FILES}.py` : file;
+        const content = matched ? `${path}:${j}` : `mystery-${i}`;
+        puller.push({
+          kind: 'fs.external_change',
+          data: {
+            path,
+            operation: 'modify',
+            old_hash: sha256Hex('stale'),
+            new_hash: sha256Hex(content),
+            new_content: content,
+            diff_size: content.length,
+          },
+        });
+      } else {
+        puller.push({ kind: 'selection.change', data: { path: file } });
+      }
+    }
+
+    const { bundle, index } = await build([
+      { who: { studentRef: BOB }, events: partner },
+      { who: { studentRef: ALICE }, events: puller },
+    ]);
+    expect((index.byKind.get('fs.external_change') ?? []).length).toBe(200);
+
+    const t0 = performance.now();
+    const c = classifyExternalChanges(bundle, index);
+    const elapsed = performance.now() - t0;
+    console.log(
+      `[perf] classifyExternalChanges: ${elapsed.toFixed(1)} ms for ${index.ordered.length} events, ` +
+        `${c.byGlobalIdx.size} external changes, counts=${JSON.stringify(c.counts)}`,
+    );
+
+    expect(c.applicability).toBe('ran');
+    expect(c.byGlobalIdx.size).toBe(200);
+    expect(elapsed).toBeLessThan(1000);
   });
 
   it('records the recorder tag without letting it decide anything', async () => {
