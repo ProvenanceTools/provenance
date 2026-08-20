@@ -390,6 +390,12 @@ export async function listStudents(
           submission_contributors,
           eq(submission_contributors.submission_id, submissions.id),
         )
+        // roster_entries stays joined even though this query selects nothing
+        // from it: `buildConditions` can emit the free-text `q` predicate,
+        // which is an ILIKE over roster_entries.display_name / sid. Dropping
+        // the join would make that a "missing FROM-clause entry" error — and
+        // only when a grader happens to be typing in the search box.
+        .innerJoin(roster_entries, eq(submission_contributors.roster_entry_id, roster_entries.id))
         .where(
           and(
             ...buildConditions(true),

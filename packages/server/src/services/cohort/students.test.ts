@@ -22,6 +22,7 @@ import {
 } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import { listStudents, decodeStudentCursor } from './students.js';
+import { seedContributor } from '../../../test/helpers/seed-contributor.js';
 
 // ---------------------------------------------------------------------------
 // Seed helpers (adapted from cohort.test.ts)
@@ -132,6 +133,20 @@ async function seedSubmission(
       recorder_version: '1.0.0',
     })
     .returning();
+
+  // Every real submission has a contributor row (migration 0029's backfill for
+  // pre-existing rows, `finalizeContributors` for every write path since), and
+  // the rollup this file tests reads that table. A fixture without one is
+  // describing a state production cannot reach.
+  //
+  // The contributor carries the submission's OWN score, which is what both the
+  // backfill and `scoreContributors` produce for a SOLE contributor: with one
+  // contributor there is no partner to protect, so they own the whole scope
+  // score. Leaving it at zero here would make every score_sum assertion read 0.
+  await seedContributor(db, sub!.id, opts.semesterId, opts.studentId, {
+    score: { total: opts.scoreTotal ?? 0, maxSeverity: 'info' },
+  });
+
   return sub!;
 }
 
