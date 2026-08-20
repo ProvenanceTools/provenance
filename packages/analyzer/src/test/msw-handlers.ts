@@ -263,7 +263,17 @@ export function assignmentsHandler() {
 
 export const DEFAULT_JOB_ID = 'aaaa0000-0000-0000-0000-000000000001';
 
-export function makeIngestJob(status: string = 'succeeded', files: object[] = []): object {
+export function makeIngestJob(
+  status: string = 'succeeded',
+  files: object[] = [],
+  /**
+   * Scope-resolution skips. `null` (the default for a job that has not settled)
+   * means UNKNOWN — staging has not finished resolving scopes — and is what the
+   * chunked upload path serves until its background job records them. `[]` is
+   * the positive "resolution ran and skipped nothing".
+   */
+  skipped: object[] | null = status === 'queued' || status === 'running' ? null : [],
+): object {
   return {
     id: DEFAULT_JOB_ID,
     semester_id: DEFAULT_SEMESTER_ID,
@@ -280,6 +290,7 @@ export function makeIngestJob(status: string = 'succeeded', files: object[] = []
       superseded: 0,
       discarded: 0,
     },
+    skipped,
     files,
   };
 }

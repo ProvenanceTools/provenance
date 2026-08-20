@@ -596,7 +596,7 @@ export const ingestPaths = {
         'Finalize the multipart upload, assemble the export, and run it through the ingest pipeline. Returns the same body as the single-shot Gradescope upload. ' +
         "`ingest_scope` is the PER-REQUEST override — it replaces every assignment's persisted default for this batch, and rides the background staging job, so it applies even though this call returns 202 before staging runs. " +
         'NOTE: this call returns 202 before any staging has run, so the counts in the body are placeholder zeros and `skipped` is **null** — meaning NOT YET KNOWN, not "nothing was skipped". ' +
-        'Poll `GET /ingest/jobs/{jobId}`: once the background staging job finishes resolving scopes, that response\'s `skipped` array carries the same entries (including `submission_type_mismatch`) that the single-shot POST /ingest:gradescope inlines for the same export. ' +
+        "Poll `GET /ingest/jobs/{jobId}`: once the background staging job finishes resolving scopes, that response's `skipped` array carries the same entries (including `submission_type_mismatch`) that the single-shot POST /ingest:gradescope inlines for the same export. " +
         'It stays null while the job is still staging, and also if staging aborted before resolution completed; `[]` there means resolution ran and skipped nothing.',
       security: [{ BearerAuth: [] }, { SessionCookie: [] }],
       parameters: [
