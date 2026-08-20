@@ -301,7 +301,7 @@ synchronous `400`.
 
 **`skipped` is `null`, not `[]`, when it is not yet known.** The counts above are numbers
 and have no null to spend, so they read as zeros you are meant to ignore. `skipped` does
-have one, and uses it — `null` means *scope resolution has not finished*, never "nothing
+have one, and uses it — `null` means _scope resolution has not finished_, never "nothing
 was skipped". Read the real list off the job:
 
 ```bash
