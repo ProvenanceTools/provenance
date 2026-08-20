@@ -56,7 +56,7 @@ import {
 } from '../services/ingest/stage-upload-job.js';
 import { recordIngestJobTerminal } from '../api/middleware/metrics.js';
 import { timePhase, recordPhase, dumpProfile } from './ingest-profile.js';
-import { dedupFile } from '../services/ingest/dedup.js';
+import { dedupFile, attachCoSubmitter } from '../services/ingest/dedup.js';
 import { parseBundlePhase } from '../services/ingest/parse-bundle-phase.js';
 import { matchStudent, type MatchStudentResult } from '../services/ingest/match-student.js';
 import { createSubmission } from '../services/ingest/create-submission.js';
@@ -272,28 +272,45 @@ export async function startWorker(): Promise<() => Promise<void>> {
       }
 
       // -----------------------------------------------------------------------
-      // Phase 2: Dedup
+      // Phase 2: Dedup — per (semester, blob) for every path (D9).
       //
-      // Hinted (Gradescope) files dedup per (semester, student, blob); normal
-      // files dedup per (semester, blob). See dedupFile docs.
+      // The Gradescope path used to dedup per (semester, student, blob) so that
+      // each co-submitter of one group bundle got their own submission row.
+      // That fan-out is gone: identical bytes are the same artifact, so the
+      // duplicate is linked to the existing submission and the CO-SUBMITTER is
+      // attached to it as a contributor. The student is preserved — which is
+      // all the narrow dedup was protecting — without a second row and a second
+      // copy of the blob. See dedupFile docs.
       // -----------------------------------------------------------------------
       recordPhase('setup:db_lookups', performance.now() - handlerStart);
 
       const dedupResult = await timePhase('dedup', () =>
-        dedupFile(db, semesterId, fileRow.blob_sha256, hintedStudentId ?? undefined),
+        dedupFile(db, semesterId, fileRow.blob_sha256),
       );
 
       if (dedupResult.isDuplicate) {
+        // A hinted co-submitter joins the existing submission rather than being
+        // silently erased by the duplicate (census scenario S20). Idempotent.
+        if (hintedStudentId !== null) {
+          await timePhase('attach_co_submitter', () =>
+            attachCoSubmitter(db, dedupResult.existingSubmissionId, semesterId, hintedStudentId),
+          );
+        }
+
         await db
           .update(ingest_files)
           .set({
             status: 'duplicate',
             submission_id: dedupResult.existingSubmissionId,
+            matched_student_id: hintedStudentId,
             resolved_at: new Date(),
           })
           .where(eq(ingest_files.id, ingestFileId));
 
-        logger.info({ ingestFileId }, 'ingest_file: duplicate detected');
+        logger.info(
+          { ingestFileId, attachedCoSubmitter: hintedStudentId !== null },
+          'ingest_file: duplicate detected',
+        );
         await maybeEnqueueFinalize(boss, db, ingestJobId);
         return;
       }

@@ -84,6 +84,8 @@ import { configuredValidationOptions } from '../../config/root-key.js';
 import { computeAndStoreStats } from '../ingest/stats.js';
 import { computeScore } from './compute.js';
 import { computeFlagCounts, computeTopFlags } from './denorm.js';
+import { finalizeContributors } from '../contributors/finalize.js';
+import { existingSubmitterRosterIds } from '../contributors/store-contributors.js';
 
 // ---------------------------------------------------------------------------
 // Threshold forwarding: ServerHeuristicConfig.per_flag[id].thresholds →
@@ -384,6 +386,24 @@ export async function recomputeSubmission(
         top_flags: computeTopFlags(flagRows),
       })
       .where(eq(submissions.id, submissionId));
+
+    // 5f: contributor stage (D9/D14). The flags were just DELETEd and
+    // reinserted with fresh ids and a default `contributor_key`, so every
+    // per-contributor score is now stale — a partner would keep a score from
+    // flags that no longer exist. Same function ingest calls, so the two paths
+    // cannot drift (which `resolvePerFlag` exists because they once did).
+    //
+    // Existing SUBMITTERS are read back and passed in rather than re-derived:
+    // the roster side of attribution is not recoverable from the bundle, so
+    // rebuilding from the bundle alone would drop every co-submitter who never
+    // recorded, and their submission would disappear from their rollup.
+    //
+    // Note the bundle HERE is stamped: it came from `loadSubmissionIndex`,
+    // which calls `establishBundleContributors`. That is the pre-existing
+    // asymmetry with ingest (which runs heuristics on an unstamped bundle) and
+    // this change neither introduces nor widens it.
+    const submitterRosterIds = await existingSubmitterRosterIds(tx, submissionId);
+    await finalizeContributors(tx, submissionId, semesterId, bundle, submitterRosterIds);
   });
 
   return { score_total, score_max_severity, flag_count };

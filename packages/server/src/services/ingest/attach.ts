@@ -58,6 +58,7 @@ import { computeAndStoreStats } from './stats.js';
 import { runAndStoreValidation } from './validation.js';
 import { configuredValidationOptions } from '../../config/root-key.js';
 import { runAndStoreHeuristics } from '../heuristics/run-per-submission.js';
+import { finalizeContributors } from '../contributors/finalize.js';
 import { enqueueCrossFlagsJob } from '../../jobs/recompute-cross-flags.js';
 import { Errors } from '../../api/v1/errors.js';
 import { getLogger } from '../../logging.js';
@@ -298,6 +299,22 @@ export async function attachUnmatchedFile(
     } catch (e) {
       const cause = e instanceof Error ? e.message : String(e);
       throw Object.assign(new Error(cause), { phase: 'run_heuristics' as const });
+    }
+
+    // Contributor stage (D9/D14). This path creates a submission, so it owes
+    // the same attribution the worker's path does — without it a manually
+    // attached submission would have no contributor rows at all and would be
+    // invisible in the students rollup and the student filter.
+    //
+    // AFTER heuristics for the same reason as the worker: stamping the bundle
+    // earlier would change which flags this path produces.
+    try {
+      await finalizeContributors(tx, submissionResult.submissionId, semesterId, bundle, [
+        studentId,
+      ]);
+    } catch (e) {
+      const cause = e instanceof Error ? e.message : String(e);
+      throw Object.assign(new Error(cause), { phase: 'store_contributors' as const });
     }
 
     // Update the ingest_files row to 'matched'. This is the final write that

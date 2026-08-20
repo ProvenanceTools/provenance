@@ -16,7 +16,13 @@
 
 import { and, eq, isNull, inArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
-import { submissions, assignments, roster_entries, flags } from '../../db/schema.js';
+import {
+  submissions,
+  assignments,
+  roster_entries,
+  flags,
+  submission_contributors,
+} from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import type { SubmissionRow, CohortFilters } from './list.js';
 import { listCohortSubmissions } from './list.js';
@@ -133,7 +139,15 @@ export async function listStudents(
       conds.push(isNull(submissions.superseded_by_submission_id));
     }
     if (!omitStudent && filters.studentId !== undefined) {
-      conds.push(eq(submissions.student_id, filters.studentId));
+      // Contributor semi-join, matching the cohort list and the facets (D9).
+      const wantedStudentId = filters.studentId;
+      conds.push(
+        sql`EXISTS (
+          SELECT 1 FROM submission_contributors sc
+          WHERE sc.submission_id = ${submissions.id}
+            AND sc.roster_entry_id = ${wantedStudentId}
+        )`,
+      );
     }
     if (filters.assignmentId !== undefined) {
       conds.push(eq(submissions.assignment_id, filters.assignmentId));
@@ -201,6 +215,25 @@ export async function listStudents(
   // We can't easily apply HAVING clause cursor via Drizzle typed API,
   // so we fetch all matching students and paginate in-memory for correctness.
   // For large semesters (10k+ students) this is O(N) but acceptable per V34.
+  // THE rollup query, and the one D14 changes most (D9).
+  //
+  // It groups on `submission_contributors.roster_entry_id`, not on
+  // `submissions.student_id`. Two consequences, both intended:
+  //
+  //  - a group submission now appears under EVERY partner, not only whoever
+  //    happened to submit it. Under the old join a partner's own work was
+  //    missing from their own rollup.
+  //  - the score summed is the CONTRIBUTOR's score, not the submission's. This
+  //    is the load-bearing half of D14: summing `submissions.score_total` per
+  //    partner would charge each of them for everything the other did, which is
+  //    precisely the manufactured finding against an innocent student that this
+  //    programme is judged on.
+  //
+  // Unchanged for every existing row: the 0029 backfill gives each pre-existing
+  // submission exactly ONE contributor whose `roster_entry_id` is its
+  // `student_id` and whose `score_total` is the submission's own. So the join
+  // is 1:1, the grouping is identical, and every number here is the same number
+  // it was before.
   const aggRows = await db
     .select({
       student_id: roster_entries.id,
@@ -208,13 +241,20 @@ export async function listStudents(
       display_name: roster_entries.display_name,
       email: roster_entries.email,
       protected_index: roster_entries.protected_index,
-      submission_count: sql<number>`COUNT(*)::int`,
-      score_sum: sql<number>`SUM(${submissions.score_total})`,
-      score_max: sql<number>`MAX(${submissions.score_total})`,
+      submission_count: sql<number>`COUNT(DISTINCT ${submissions.id})::int`,
+      score_sum: sql<number>`SUM(${submission_contributors.score_total})`,
+      score_max: sql<number>`MAX(${submission_contributors.score_total})`,
     })
     .from(submissions)
     .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
-    .innerJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
+    .innerJoin(
+      submission_contributors,
+      eq(submission_contributors.submission_id, submissions.id),
+    )
+    // INNER, deliberately: this list is "students and their submissions", so a
+    // contributor with no roster row (D13) has no row to appear under. They are
+    // not dropped from the system — they are listed on the submission itself.
+    .innerJoin(roster_entries, eq(submission_contributors.roster_entry_id, roster_entries.id))
     .where(and(...buildConditions()))
     .groupBy(
       roster_entries.id,
@@ -337,24 +377,45 @@ export async function listStudents(
       );
 
       // Fetch all submission recompute statuses for this student
+      // Through the join table (D9), matching the aggregate above. Keyed on the
+      // roster entry, not `submissions.student_id`, so a partner's group
+      // submission counts toward their recompute status too. DISTINCT because
+      // one submission joins once per contributor and a group submission must
+      // not contribute its status twice.
       const subRows = await db
-        .select({ recompute_status: submissions.recompute_status })
+        .selectDistinct({
+          submission_id: submissions.id,
+          recompute_status: submissions.recompute_status,
+        })
         .from(submissions)
         .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
-        .innerJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
-        .where(and(...buildConditions(), eq(submissions.student_id, agg.student_id)));
+        .innerJoin(
+          submission_contributors,
+          eq(submission_contributors.submission_id, submissions.id),
+        )
+        .where(
+          and(
+            ...buildConditions(true),
+            eq(submission_contributors.roster_entry_id, agg.student_id),
+          ),
+        );
 
       const recomputeStatuses = subRows.map((r) => r.recompute_status);
 
       // Fetch flag counts for this student's submissions
       const studentSubIds = (
         await db
-          .select({ id: submissions.id })
+          .selectDistinct({ id: submissions.id })
           .from(submissions)
+          .innerJoin(
+            submission_contributors,
+            eq(submission_contributors.submission_id, submissions.id),
+          )
           .where(
             and(
               eq(submissions.semester_id, semesterId),
-              eq(submissions.student_id, agg.student_id),
+              // Through the join table (D9) — see the aggregate above.
+              eq(submission_contributors.roster_entry_id, agg.student_id),
               ...(!filters.includeSuperseded
                 ? [isNull(submissions.superseded_by_submission_id)]
                 : []),

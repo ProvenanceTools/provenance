@@ -721,8 +721,10 @@ export function createIngestRouter(): Hono {
   // "Download Submissions": a single archive with a submission_metadata.yml and
   // one (already-unzipped) folder per submission. Unlike POST /ingest this does
   // NOT require a pre-existing roster — it populates/upserts the roster from the
-  // metadata, then rebuilds and stages one bundle per submitter (group projects
-  // → one submission per co-submitter via the match_sid hint).
+  // metadata, then rebuilds and stages one bundle per submitter. For a group
+  // project every submitter stages IDENTICAL bytes, so since D9 the first
+  // becomes the submission and the rest are attached to it as contributors —
+  // ONE submission with N contributors, not N submissions.
   // -------------------------------------------------------------------------
 
   router.post(

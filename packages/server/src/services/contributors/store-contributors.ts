@@ -385,3 +385,31 @@ export async function storeContributors(
 function sqlExcluded(column: string) {
   return sql.raw(`excluded.${column}`);
 }
+
+
+/**
+ * The roster entries already recorded as SUBMITTERS of this submission.
+ *
+ * Recompute must preserve them. The roster side of a submission's attribution
+ * is not derivable from the bundle — a co-submitter attached by the Gradescope
+ * path may never have recorded a single session — so a recompute that rebuilt
+ * the contributor set from the bundle alone would silently DROP every partner
+ * who did not record, and their submission would vanish from their rollup.
+ */
+export async function existingSubmitterRosterIds(
+  db: DrizzleDb,
+  submissionId: string,
+): Promise<string[]> {
+  const rows = await db
+    .select({ roster_entry_id: submission_contributors.roster_entry_id })
+    .from(submission_contributors)
+    .where(
+      and(
+        eq(submission_contributors.submission_id, submissionId),
+        eq(submission_contributors.is_submitter, true),
+      ),
+    );
+  return rows
+    .map((r) => r.roster_entry_id)
+    .filter((id): id is string => id !== null);
+}

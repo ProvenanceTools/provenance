@@ -26,6 +26,8 @@ import type { DrizzleDb } from '../../db/client.js';
 import type { Severity } from '@provenance/analysis-core/heuristics/types.js';
 import { SEVERITY_RANK } from '../scoring/denorm.js';
 import { projectStudent } from '../protect.js';
+import { fetchContributorsFor } from '../contributors/fetch-contributors.js';
+import type { SubmissionContributor } from '@provenance/shared/api-schemas';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -67,7 +69,14 @@ export type SubmissionRow = {
   id: string;
   semester_id: string;
   assignment: { id: string; assignment_id_str: string; label: string };
-  student: { id: string; sid: string; display_name: string };
+  /**
+   * The submitter of record, or null when no single roster entry owns this
+   * submission (D9). Mirrors `SubmissionRowSchema.student` in
+   * `@provenance/shared`.
+   */
+  student: { id: string; sid: string; display_name: string } | null;
+  /** Everyone this submission is attributable to. Exactly one entry for solo. */
+  contributors: SubmissionContributor[];
   score_total: number;
   score_max_severity: Severity;
   flag_counts: { info: number; low: number; medium: number; high: number };
@@ -165,8 +174,25 @@ export async function listCohortSubmissions(
   }
 
   // studentId
+  //
+  // A semi-join on `submission_contributors`, NOT `submissions.student_id`
+  // (D9). Filtering on the scalar column would show a group submission only to
+  // the partner who happened to submit it — the other partner would filter
+  // their own work out of view. Every existing solo submission has exactly one
+  // contributor row naming its `student_id`, so this matches precisely the same
+  // rows it always did for them.
+  //
+  // EXISTS rather than a join: a join would emit one row per matching
+  // contributor and inflate both the page and COUNT(*).
   if (filters.studentId !== undefined) {
-    whereConditions.push(eq(submissions.student_id, filters.studentId));
+    const wantedStudentId = filters.studentId;
+    whereConditions.push(
+      sql`EXISTS (
+        SELECT 1 FROM submission_contributors sc
+        WHERE sc.submission_id = ${submissions.id}
+          AND sc.roster_entry_id = ${wantedStudentId}
+      )`,
+    );
   }
 
   // validationStatus
@@ -303,7 +329,12 @@ export async function listCohortSubmissions(
     })
     .from(submissions)
     .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
-    .innerJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
+    // LEFT, not INNER (D9). `submissions.student_id` is nullable now, and an
+    // INNER join would make a submission with no single owning roster entry
+    // DISAPPEAR from the cohort list entirely — no row, no error, and a
+    // `total_count` that silently disagrees with the page. The roster columns
+    // become nullable here and `student` carries the absence.
+    .leftJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
     .where(whereClause)
     .orderBy(...orderBy)
     .limit(limit + 1);
@@ -319,6 +350,15 @@ export async function listCohortSubmissions(
     nextCursor = encodeCursor(c);
   }
 
+  // One batched fetch of every contributor on this page (D9). Not per row —
+  // the cohort list is the query the denormalised columns exist to keep fast,
+  // and an N+1 here would undo that.
+  const contributorsBySubmission = await fetchContributorsFor(
+    db,
+    pageRows.map((r) => r.id),
+    protectedMode,
+  );
+
   // Assemble SubmissionRow items directly from the row's jsonb columns.
   // The defaults in migration 0014 (empty counts / empty array) cover
   // freshly-ingested rows that haven't been scored yet.
@@ -330,15 +370,21 @@ export async function listCohortSubmissions(
       assignment_id_str: row.assignment_assignment_id_str,
       label: row.assignment_label,
     },
-    student: projectStudent(
-      {
-        id: row.student_id,
-        sid: row.student_sid,
-        display_name: row.student_display_name,
-        protected_index: row.student_protected_index,
-      },
-      protectedMode,
-    ),
+    // Null when no single roster entry owns this submission. The LEFT join
+    // above is what makes that reachable instead of dropping the row.
+    student:
+      row.student_id === null || row.student_sid === null || row.student_display_name === null
+        ? null
+        : projectStudent(
+            {
+              id: row.student_id,
+              sid: row.student_sid,
+              display_name: row.student_display_name,
+              protected_index: row.student_protected_index,
+            },
+            protectedMode,
+          ),
+    contributors: contributorsBySubmission.get(row.id) ?? [],
     score_total: row.score_total,
     score_max_severity: row.score_max_severity as Severity,
     flag_counts: row.flag_counts as { info: number; low: number; medium: number; high: number },
@@ -362,7 +408,14 @@ export async function listCohortSubmissions(
     countConditions.push(eq(submissions.assignment_id, filters.assignmentId));
   }
   if (filters.studentId !== undefined) {
-    countConditions.push(eq(submissions.student_id, filters.studentId));
+    const wantedStudentId = filters.studentId;
+    countConditions.push(
+      sql`EXISTS (
+        SELECT 1 FROM submission_contributors sc
+        WHERE sc.submission_id = ${submissions.id}
+          AND sc.roster_entry_id = ${wantedStudentId}
+      )`,
+    );
   }
   if (filters.validationStatus !== undefined) {
     countConditions.push(eq(submissions.validation_status, filters.validationStatus));
@@ -426,7 +479,10 @@ export async function listCohortSubmissions(
     .select({ count: sql<number>`COUNT(*)::int` })
     .from(submissions)
     .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
-    .innerJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
+    // LEFT for the same reason as the page query — the two must agree, or the
+    // pager reports a count it can never reach. Still COUNT(*) over one row per
+    // submission: the contributor filter above is an EXISTS, so nothing fans out.
+    .leftJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
     .where(and(...countConditions));
 
   const totalCount = countResult?.count ?? 0;
@@ -437,6 +493,30 @@ export async function listCohortSubmissions(
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * The name the `student_asc` / `student_desc` sorts order by.
+ *
+ * `COALESCE(..., '')` because the roster join is LEFT since D9: a submission
+ * with no single owning roster entry has a NULL display name, and a keyset
+ * predicate of the form `display_name > $cursor` evaluates to NULL — never
+ * true — for such a row, so it would be silently unreachable on every page
+ * after the first.
+ *
+ * Provably identity for every row that existed before the cut-over:
+ * `roster_entries.display_name` is NOT NULL, and the join was INNER, so a
+ * pre-0029 row can never have produced a NULL here. Solo ordering is unchanged
+ * byte for byte.
+ *
+ * KNOWN GAP, deliberately not closed: the protected-mode sorts order by
+ * `roster_entries.protected_index`, which was ALREADY nullable before this
+ * change, and the same keyset argument applies to a row whose index is unset.
+ * Coalescing it would move existing NULL-index rows in the ordering, which is a
+ * behaviour change to shipped data that this task has no mandate for. No
+ * current ingest path produces a null-roster submission, so the combination is
+ * unreachable today.
+ */
+const STUDENT_SORT_NAME = sql`COALESCE(${roster_entries.display_name}, '')`;
 
 function buildOrderBy(sort: CohortSort, protectedMode: boolean): SQL[] {
   switch (sort) {
@@ -449,11 +529,11 @@ function buildOrderBy(sort: CohortSort, protectedMode: boolean): SQL[] {
     case 'student_asc':
       return protectedMode
         ? [sql`${roster_entries.protected_index} ASC`, sql`${submissions.id} ASC`]
-        : [sql`${roster_entries.display_name} ASC`, sql`${submissions.id} ASC`];
+        : [sql`${STUDENT_SORT_NAME} ASC`, sql`${submissions.id} ASC`];
     case 'student_desc':
       return protectedMode
         ? [sql`${roster_entries.protected_index} DESC`, sql`${submissions.id} DESC`]
-        : [sql`${roster_entries.display_name} DESC`, sql`${submissions.id} DESC`];
+        : [sql`${STUDENT_SORT_NAME} DESC`, sql`${submissions.id} DESC`];
     case 'assignment_asc':
       return [sql`${assignments.label} ASC`, sql`${submissions.id} ASC`];
   }
@@ -519,9 +599,9 @@ function buildCursorCondition(
       }
       if (cursor.kind !== 'display_name') return null;
       return or(
-        sql`${roster_entries.display_name} > ${cursor.display_name}`,
+        sql`${STUDENT_SORT_NAME} > ${cursor.display_name}`,
         and(
-          sql`${roster_entries.display_name} = ${cursor.display_name}`,
+          sql`${STUDENT_SORT_NAME} = ${cursor.display_name}`,
           sql`${submissions.id} > ${cursor.id}`,
         ),
       )!;
@@ -539,9 +619,9 @@ function buildCursorCondition(
       }
       if (cursor.kind !== 'display_name') return null;
       return or(
-        sql`${roster_entries.display_name} < ${cursor.display_name}`,
+        sql`${STUDENT_SORT_NAME} < ${cursor.display_name}`,
         and(
-          sql`${roster_entries.display_name} = ${cursor.display_name}`,
+          sql`${STUDENT_SORT_NAME} = ${cursor.display_name}`,
           sql`${submissions.id} < ${cursor.id}`,
         ),
       )!;
@@ -565,7 +645,8 @@ function buildCursorFromRow(
     id: string;
     score_total: number;
     ingested_at: Date;
-    student_display_name: string;
+    /** Nullable since the roster join became LEFT (D9); mirrors STUDENT_SORT_NAME. */
+    student_display_name: string | null;
     student_protected_index: number | null;
     assignment_label: string;
   },
@@ -581,7 +662,9 @@ function buildCursorFromRow(
     case 'student_desc':
       return protectedMode
         ? { kind: 'protected_index', protected_index: row.student_protected_index ?? 0, id: row.id }
-        : { kind: 'display_name', display_name: row.student_display_name, id: row.id };
+        : // `?? ''` mirrors STUDENT_SORT_NAME exactly — the cursor value and the
+          // predicate it is compared against must be the same expression.
+          { kind: 'display_name', display_name: row.student_display_name ?? '', id: row.id };
     case 'assignment_asc':
       return { kind: 'assignment_label', assignment_label: row.assignment_label, id: row.id };
   }

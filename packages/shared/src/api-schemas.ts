@@ -97,6 +97,76 @@ export const ValidationStatusSchema = z.enum(['pass', 'warn', 'fail']);
 export type ValidationStatus = z.infer<typeof ValidationStatusSchema>;
 
 // ---------------------------------------------------------------------------
+// Submission contributors (D9 / parent spec §7 / migration 0029)
+// ---------------------------------------------------------------------------
+
+/**
+ * One PERSON a submission is attributable to.
+ *
+ * A submission used to belong to exactly one student, and a pair working in one
+ * repo was represented by fanning the same bundle out into N submission rows.
+ * D9 replaced that: one submission, N contributors.
+ *
+ * ## `student` is nullable here, and that is the point
+ *
+ * A contributor whose verified identity has no row on this semester's roster is
+ * a real contributor we cannot NAME (D13 — an unenrolled or not-yet-imported
+ * student). Nulling the name is the honest answer; inventing one, or dropping
+ * the contributor, are both worse. An administrative gap must never present to
+ * a grader as an integrity signal.
+ *
+ * ## Why the score is here as well as on the submission
+ *
+ * D14: group scoring is per-contributor AND per-scope. The submission's own
+ * `score_total` is the scope roll-up and is unchanged. These are the same three
+ * values computed for THIS person alone, which is the only shape in which a
+ * grader can act on one partner without implicating the other. A finding whose
+ * evidence spans contributors, or names none, is charged to nobody and appears
+ * only in the scope roll-up.
+ *
+ * For a submission with a SINGLE contributor these values equal the scope
+ * values exactly — with one contributor there is no innocent partner to
+ * protect. That is what keeps every existing solo submission reading exactly as
+ * it did before the cut-over.
+ */
+export const SubmissionContributorSchema = z.object({
+  /**
+   * The join primitive — `analysis-core`'s `Contributor.key` for a verified
+   * contributor, or `roster:<roster_entry_id>` for someone known only as a
+   * submitter. Stable across recomputes.
+   */
+  contributor_key: z.string(),
+  /**
+   * `roster` — known only as a submitter; says nothing about who recorded.
+   * `attributed` — a verified identity chain, grouped on `student_ref`.
+   */
+  kind: z.enum(['roster', 'attributed']),
+  /** Null when this contributor is not on the semester's roster (D13). */
+  student: z
+    .object({
+      id: z.string().uuid(),
+      sid: z.string(),
+      display_name: z.string(),
+    })
+    .nullable(),
+  /** The verified attribution primitive. Opaque — never a name, SID or email. */
+  student_ref: z.string().nullable(),
+  /** How much of the scope this person recorded. Always 0 for `roster`. */
+  session_count: z.number().int(),
+  /** Did the roster side name them (a filename match or a Gradescope sid)? */
+  is_submitter: z.boolean(),
+  score_total: z.number(),
+  score_max_severity: SeveritySchema,
+  flag_counts: z.object({
+    info: z.number().int(),
+    low: z.number().int(),
+    medium: z.number().int(),
+    high: z.number().int(),
+  }),
+});
+export type SubmissionContributor = z.infer<typeof SubmissionContributorSchema>;
+
+// ---------------------------------------------------------------------------
 // Phase 21 cohort schemas — SubmissionRow (PRD §8.8 line 1083+)
 // ---------------------------------------------------------------------------
 
@@ -108,11 +178,35 @@ export const SubmissionRowSchema = z.object({
     assignment_id_str: z.string(),
     label: z.string(),
   }),
-  student: z.object({
-    id: z.string().uuid(),
-    sid: z.string(),
-    display_name: z.string(),
-  }),
+  /**
+   * The SUBMITTER of record, or null when no single roster entry owns this
+   * submission (D9).
+   *
+   * WIDENED from a mandatory object in the 0029 cut-over. It had to widen: a
+   * group submission has no one student, and naming one anyway would attribute
+   * the whole submission — including flags earned by a partner — to a single
+   * named person, which is the wrongful-accusation failure D14 exists to
+   * prevent. It is non-null for every solo submission and for every submission
+   * the current ingest paths create, so nothing that existed before this change
+   * observes a null.
+   *
+   * Render {@link SubmissionRowSchema.contributors} instead where you need "who
+   * is this submission about" — it is always populated and is correct for both
+   * shapes.
+   */
+  student: z
+    .object({
+      id: z.string().uuid(),
+      sid: z.string(),
+      display_name: z.string(),
+    })
+    .nullable(),
+  /**
+   * Everyone this submission is attributable to. Exactly one entry for a solo
+   * submission — the same student as `student` — so this is a strict
+   * generalisation, not a replacement.
+   */
+  contributors: z.array(SubmissionContributorSchema),
   score_total: z.number(),
   score_max_severity: SeveritySchema,
   flag_counts: z.object({
@@ -905,10 +999,24 @@ export type AssignmentManifest = z.infer<typeof AssignmentManifestSchema>;
 
 export const SubmissionSummarySchema = z.object({
   id: z.string().uuid(),
-  student: z.object({
-    sid: z.string(),
-    display_name: z.string(),
-  }),
+  /**
+   * The SUBMITTER of record, or null when no single roster entry owns this
+   * submission (D9). See `SubmissionRowSchema.student` for why this widened.
+   *
+   * Before 0029 the summary route INNER JOINed the roster and returned 404 when
+   * the join was empty, so a submission without a single owning student took
+   * down the entire detail shell. The join is now LEFT and this field carries
+   * the absence, which is the difference between "no one student" and "no such
+   * submission".
+   */
+  student: z
+    .object({
+      sid: z.string(),
+      display_name: z.string(),
+    })
+    .nullable(),
+  /** Everyone this submission is attributable to. Exactly one entry for solo. */
+  contributors: z.array(SubmissionContributorSchema),
   assignment: z.object({
     assignment_id_str: z.string(),
     label: z.string().nullable(),
@@ -1011,10 +1119,16 @@ export type HeuristicConfigHistoryResponse = z.infer<typeof HeuristicConfigHisto
 
 export const TopMoverSchema = z.object({
   submission_id: z.string().uuid(),
-  student: z.object({
-    sid: z.string(),
-    display_name: z.string(),
-  }),
+  /**
+   * The SUBMITTER of record, or null when no single roster entry owns this
+   * submission (D9). See `SubmissionRowSchema.student`.
+   */
+  student: z
+    .object({
+      sid: z.string(),
+      display_name: z.string(),
+    })
+    .nullable(),
   assignment: z.object({
     assignment_id_str: z.string(),
     label: z.string().nullable(),
@@ -1095,11 +1209,22 @@ export type CommitConfigResponse = z.infer<typeof CommitConfigResponseSchema>;
 
 export const CrossFlagParticipantSchema = z.object({
   submission_id: z.string().uuid(),
-  student: z.object({
-    id: z.string().uuid(),
-    sid: z.string(),
-    display_name: z.string(),
-  }),
+  /**
+   * The SUBMITTER of record, or null when no single roster entry owns this
+   * submission (D9). See `SubmissionRowSchema.student`.
+   *
+   * Before 0029 this came from an INNER JOIN, so a participant whose roster
+   * join was empty was silently DROPPED and a two-party cross flag could render
+   * as one-party — evidence disappearing with no error. The join is now LEFT:
+   * the participant is always listed, named or not.
+   */
+  student: z
+    .object({
+      id: z.string().uuid(),
+      sid: z.string(),
+      display_name: z.string(),
+    })
+    .nullable(),
   assignment: z.object({
     id: z.string().uuid(),
     assignment_id_str: z.string(),

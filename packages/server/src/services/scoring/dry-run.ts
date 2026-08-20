@@ -48,7 +48,11 @@ import type { Severity } from '@provenance/analysis-core/heuristics/types.js';
 
 export type TierMover = {
   submission_id: string;
-  student: { id: string; sid: string; display_name: string };
+  /**
+   * The submitter of record, or null when no single roster entry owns this
+   * submission (D9). Mirrors `TopMoverSchema.student` in `@provenance/shared`.
+   */
+  student: { id: string; sid: string; display_name: string } | null;
   assignment: { id: string; assignment_id_str: string; label: string };
   old_score: number;
   new_score: number;
@@ -143,7 +147,17 @@ export async function computeDryRunDiff(
       assignment_label: assignments.label,
     })
     .from(submissions)
-    .innerJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
+    // LEFT, not INNER (D9). An INNER join here silently EXCLUDES a submission
+    // with no single owning roster entry from the dry run entirely — it is
+    // never recomputed, so the diff under-reports the effect of the config
+    // change. If every submission dropped out the route would answer "your
+    // change does nothing", which is a plausible-looking wrong answer rather
+    // than a visible failure.
+    //
+    // Still one row per submission: contributors are fetched separately, so a
+    // group bundle is recomputed ONCE, not once per partner. `recomputeSubmission`
+    // is CPU-bound and sequential here.
+    .leftJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
     .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
     .where(
       and(eq(submissions.semester_id, semesterId), isNull(submissions.superseded_by_submission_id)),
@@ -172,9 +186,10 @@ export async function computeDryRunDiff(
   // -------------------------------------------------------------------------
   type SubmissionDiff = {
     submission_id: string;
-    student_id: string;
-    student_sid: string;
-    student_display_name: string;
+    /** Null when no single roster entry owns this submission (D9). */
+    student_id: string | null;
+    student_sid: string | null;
+    student_display_name: string | null;
     student_protected_index: number | null;
     assignment_id: string;
     assignment_id_str: string;
@@ -227,15 +242,18 @@ export async function computeDryRunDiff(
   );
   const topMovers: TierMover[] = sorted.slice(0, 20).map((d) => ({
     submission_id: d.submission_id,
-    student: projectStudent(
-      {
-        id: d.student_id,
-        sid: d.student_sid,
-        display_name: d.student_display_name,
-        protected_index: d.student_protected_index,
-      },
-      protectedMode,
-    ),
+    student:
+      d.student_id === null || d.student_sid === null || d.student_display_name === null
+        ? null
+        : projectStudent(
+            {
+              id: d.student_id,
+              sid: d.student_sid,
+              display_name: d.student_display_name,
+              protected_index: d.student_protected_index,
+            },
+            protectedMode,
+          ),
     assignment: {
       id: d.assignment_id,
       assignment_id_str: d.assignment_id_str,

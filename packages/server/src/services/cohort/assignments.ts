@@ -75,19 +75,42 @@ export async function listAssignments(
     warn_count: number;
   }>(
     sql`
+      WITH live AS (
+        SELECT id, assignment_id, score_total, validation_status
+        FROM submissions
+        WHERE semester_id = ${semesterId}
+          AND superseded_by_submission_id IS NULL
+      ),
+      -- distinct_students counts PEOPLE, via submission_contributors (D9), not
+      -- COUNT(DISTINCT submissions.student_id). The scalar column names only
+      -- the submitter, so a group submission would have counted one person and
+      -- hidden the rest. Every pre-0029 submission has exactly one contributor
+      -- row naming its student_id, so this returns the identical number for all
+      -- existing data.
+      --
+      -- Computed in its OWN aggregate and joined back, deliberately: joining
+      -- contributors into the main aggregate would fan each submission out to
+      -- one row per contributor and silently weight COUNT(*), AVG(score_total)
+      -- and both percentiles by group size.
+      contrib AS (
+        SELECT l.assignment_id,
+               COUNT(DISTINCT sc.roster_entry_id)::int AS distinct_students
+        FROM live l
+        JOIN submission_contributors sc ON sc.submission_id = l.id
+        GROUP BY l.assignment_id
+      )
       SELECT
-        assignment_id,
+        l.assignment_id,
         COUNT(*)::int AS submission_count,
-        COUNT(DISTINCT student_id)::int AS distinct_students,
-        AVG(score_total) AS mean_score,
-        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY score_total) AS median_score,
-        PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY score_total) AS p95_score,
-        COUNT(*) FILTER (WHERE validation_status = 'fail')::int AS fail_count,
-        COUNT(*) FILTER (WHERE validation_status = 'warn')::int AS warn_count
-      FROM submissions
-      WHERE semester_id = ${semesterId}
-        AND superseded_by_submission_id IS NULL
-      GROUP BY assignment_id
+        COALESCE(c.distinct_students, 0) AS distinct_students,
+        AVG(l.score_total) AS mean_score,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY l.score_total) AS median_score,
+        PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY l.score_total) AS p95_score,
+        COUNT(*) FILTER (WHERE l.validation_status = 'fail')::int AS fail_count,
+        COUNT(*) FILTER (WHERE l.validation_status = 'warn')::int AS warn_count
+      FROM live l
+      LEFT JOIN contrib c ON c.assignment_id = l.assignment_id
+      GROUP BY l.assignment_id, c.distinct_students
     `,
   );
 

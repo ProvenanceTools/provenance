@@ -36,6 +36,8 @@ import { loadSubmissionIndex } from '../bundle/load-index.js';
 import { summarizeBundleManifest } from '@provenance/analysis-core/manifest/bundle-manifest.js';
 import type { BundleManifestSummary } from '@provenance/analysis-core/manifest/bundle-manifest.js';
 import { projectStudent, maskFilename, protectedLabel } from '../protect.js';
+import { fetchContributors } from '../contributors/fetch-contributors.js';
+import type { SubmissionContributor } from '@provenance/shared/api-schemas';
 
 // ---------------------------------------------------------------------------
 // Response type
@@ -45,7 +47,14 @@ export type SubmissionSummary = {
   id: string;
   semester_id: string;
   assignment: { id: string; assignment_id_str: string; label: string };
-  student: { id: string; sid: string; display_name: string };
+  /**
+   * The submitter of record, or null when no single roster entry owns this
+   * submission (D9). Mirrors `SubmissionSummarySchema.student` in
+   * `@provenance/shared`.
+   */
+  student: { id: string; sid: string; display_name: string } | null;
+  /** Everyone this submission is attributable to. Exactly one entry for solo. */
+  contributors: SubmissionContributor[];
   ingested_at: string;
   source_filename: string;
   blob_sha256: string;
@@ -159,12 +168,27 @@ export async function getSubmissionSummary(
     })
     .from(submissions)
     .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
-    .innerJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
+    // LEFT, not INNER (D9). THIS is the one that mattered most: with an INNER
+    // join, a submission whose roster join came back empty produced zero rows,
+    // this function returned null, and the route turned that null into a 404 —
+    // so the entire submission detail shell (overview, timeline, replay,
+    // validation, source) went missing for a submission that exists and is
+    // perfectly analysable. "No single owning student" and "no such submission"
+    // are different facts and must not share a response.
+    //
+    // Now the row always comes back and `student` carries the absence. The
+    // null return below is reserved for its real meaning: no such submission.
+    .leftJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
     .where(eq(submissions.id, submissionId))
     .limit(1);
 
+  // The only remaining null: there is no submission with this id.
   if (rows.length === 0) return null;
   const row = rows[0]!;
+
+  // Everyone this submission is attributable to (D9). Always populated for a
+  // solo submission — exactly one entry, the same student `student` names.
+  const contributors = await fetchContributors(db, submissionId, protectedMode);
 
   // Query 2: flag_counts (GROUP BY severity)
   const flagRows = await db
@@ -228,20 +252,29 @@ export async function getSubmissionSummary(
       assignment_id_str: row.assignment_id_str,
       label: row.assignment_label,
     },
-    student: projectStudent(
-      {
-        id: row.student_id,
-        sid: row.student_sid,
-        display_name: row.student_display_name,
-        protected_index: row.student_protected_index,
-      },
-      protectedMode,
-    ),
+    student:
+      row.student_id === null || row.student_sid === null || row.student_display_name === null
+        ? null
+        : projectStudent(
+            {
+              id: row.student_id,
+              sid: row.student_sid,
+              display_name: row.student_display_name,
+              protected_index: row.student_protected_index,
+            },
+            protectedMode,
+          ),
+    contributors,
     ingested_at: row.ingested_at.toISOString(),
+    // The protected-mode filename label is derived from the submitter when
+    // there is one. With no single student the submission id is the only
+    // non-PII handle available, and `protectedLabel` already falls back to a
+    // uuid stub — so this stays a stable, name-independent placeholder either
+    // way and never degrades to a real filename.
     source_filename: maskFilename(
       row.source_filename,
       protectedMode,
-      `${protectedLabel(row.student_protected_index, row.student_id)} — submission`,
+      `${protectedLabel(row.student_protected_index, row.student_id ?? row.id)} — submission`,
     ),
     blob_sha256: row.blob_sha256,
     recorder_version: row.recorder_version,

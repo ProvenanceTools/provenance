@@ -33,7 +33,13 @@ import { projectStudent } from '../protect.js';
 
 export type CrossFlagParticipantRow = {
   submission_id: string;
-  student: { id: string; sid: string; display_name: string };
+  /**
+   * The submitter of record, or null when no single roster entry owns this
+   * submission (D9). Mirrors `CrossFlagParticipantSchema.student` in
+   * `@provenance/shared`. The participant is always listed; only the NAME can
+   * be absent.
+   */
+  student: { id: string; sid: string; display_name: string } | null;
   assignment: { id: string; assignment_id_str: string };
   supporting_seqs: number[];
 };
@@ -218,7 +224,15 @@ export async function fetchParticipants(
     })
     .from(cross_flag_participants)
     .innerJoin(submissions, eq(cross_flag_participants.submission_id, submissions.id))
-    .innerJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
+    // LEFT, not INNER (D9). `cross_flag_participants` has no student column of
+    // its own — the only route to one is through `submissions.student_id` — so
+    // an INNER join silently DROPPED any participant whose roster join was
+    // empty. A two-party cross flag could then render as one-party, or as
+    // zero-party, with no error anywhere: the caller does
+    // `participantsMap.get(id) ?? []` and an empty list reads as "no
+    // participants" rather than "we lost them". Evidence must not disappear
+    // because a submission has no single owning student.
+    .leftJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
     .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
     .where(inArray(cross_flag_participants.cross_flag_id, crossFlagIds));
 
@@ -228,15 +242,18 @@ export async function fetchParticipants(
     }
     result.get(row.cross_flag_id)!.push({
       submission_id: row.submission_id,
-      student: projectStudent(
-        {
-          id: row.student_id,
-          sid: row.student_sid,
-          display_name: row.student_display_name,
-          protected_index: row.student_protected_index,
-        },
-        protectedMode,
-      ),
+      student:
+        row.student_id === null || row.student_sid === null || row.student_display_name === null
+          ? null
+          : projectStudent(
+              {
+                id: row.student_id,
+                sid: row.student_sid,
+                display_name: row.student_display_name,
+                protected_index: row.student_protected_index,
+              },
+              protectedMode,
+            ),
       assignment: {
         id: row.assignment_id,
         assignment_id_str: row.assignment_id_str,
