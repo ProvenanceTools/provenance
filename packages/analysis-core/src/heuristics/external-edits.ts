@@ -11,7 +11,8 @@
  *
  * A fs.external_change event is "explained" if its payload contains:
  *   explanation: 'formatter' | 'git'
- * Explained events are silently skipped and do NOT produce flags.
+ * Explained events are skipped and do NOT produce flags — with one exception,
+ * decision D16, described under Tier 3.1 below.
  *
  * Severity:
  *   - medium: any unexplained fs.external_change
@@ -42,8 +43,37 @@
  *    says why it could not be checked, in the description and in `detail`, so
  *    "we could not tell" never reads as "we checked and it was external".
  *
+ * ## D16 — content beats the recorder's timing tag
+ *
+ * Tier 3.1 left one hole: the `explanation: 'git'` tag above is applied
+ * recorder-side on TIMING (a ~2 s window after a git state change) and was
+ * consulted BEFORE the classification, so a `git_unrecorded_in` — bytes the
+ * content test says match nothing anyone recorded — could still be silenced by
+ * landing inside that window. A student who learned this could time an
+ * out-of-editor paste right after any git command and be sure of no finding.
+ *
+ * So: a `git_unrecorded_in` now overrides an `explanation: 'git'` tag and is
+ * flagged. See `overridesRecorderGitTag`, which owns the rule. Everything else
+ * about the tag is unchanged — it still suppresses `external` and
+ * `unclassified`, still suppresses everywhere the content test cannot run
+ * (a solo scope, a 1.x bundle, an unenrolled partner), and `'formatter'` is
+ * untouched. The tagger itself is retained; this is about what the analyzer does
+ * with it.
+ *
+ * **The accepted cost**, and how the flag text handles it: this also fires for
+ * an honest pair whose partner simply was not recording, whose genuine work then
+ * arrives as bytes nobody recorded. The flag must therefore not assert
+ * authorship it cannot establish. It does not: the description names the class,
+ * says the recorder had tagged the change git-explained on timing alone, and
+ * carries the verdict's `detail`, which states that the content has no recorded
+ * authorship IN THIS SCOPE, that this is equally consistent with an unenrolled
+ * collaborator and with code from elsewhere, and that checking whether every
+ * collaborator is enrolled is what distinguishes them.
+ *
  * A SOLO scope produces no verdicts at all, so every flag this heuristic emits
- * there is byte-for-byte what it emitted before Tier 3.1.
+ * there is byte-for-byte what it emitted before Tier 3.1 and D16 — including the
+ * `explanation: 'git'` suppression, which needs a verdict to be overridden and
+ * can never get one there.
  */
 
 import type { EventIndex, IndexedEvent } from '../index/event-index.js';
@@ -53,6 +83,7 @@ import type { HeuristicConfig } from './config.js';
 import {
   externalChangeClassificationFor,
   describeClassification,
+  overridesRecorderGitTag,
   type ExternalChangeVerdict,
 } from '../index/classify-external-changes.js';
 
@@ -68,11 +99,13 @@ const EXPLAINED_VALUES = new Set<string>(['formatter', 'git']);
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-function isExplained(payload: unknown): boolean {
-  if (typeof payload !== 'object' || payload === null) return false;
+/** The recorder's timing-derived tag, or `null` when there is none we honour. */
+function recorderTag(payload: unknown): 'formatter' | 'git' | null {
+  if (typeof payload !== 'object' || payload === null) return null;
   const p = payload as Record<string, unknown>;
   const explanation = p['explanation'];
-  return typeof explanation === 'string' && EXPLAINED_VALUES.has(explanation);
+  if (typeof explanation !== 'string' || !EXPLAINED_VALUES.has(explanation)) return null;
+  return explanation as 'formatter' | 'git';
 }
 
 function getDiffSize(payload: unknown): number {
@@ -214,6 +247,11 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
 
   // Separate by file, collecting only unexplained events.
   const unexplainedByFile = new Map<string, IndexedEvent[]>();
+  // globalIdx of every event that carried a recorder tag but was collected
+  // anyway, because the content test overrode it (D16). Counted per group so the
+  // flag text can say so rather than silently calling a tagged event
+  // "unexplained".
+  const tagOverridden = new Set<number>();
   for (const e of externalEvents) {
     // D1: never happened -- the recorder reported the editor's own save.
     if (index.selfInflictedExternalChanges?.has(e.globalIdx)) continue;
@@ -221,7 +259,15 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
     // external edit. Skipped here only -- the event stays in the index and in
     // the classification, so the timeline can still show it as reclassified.
     if (classification.gitMergeIn.has(e.globalIdx)) continue;
-    if (isExplained(e.payload)) continue;
+    const tag = recorderTag(e.payload);
+    if (tag !== null) {
+      // D16: the recorder's timing tag still suppresses -- unless the content
+      // test independently says these bytes match nothing anyone recorded. A
+      // ~2 s window must not silence a finding the content test says is real,
+      // or timing a paste right after any git command becomes an exploit.
+      if (!overridesRecorderGitTag(classification.byGlobalIdx.get(e.globalIdx), tag)) continue;
+      tagOverridden.add(e.globalIdx);
+    }
     const file = getFilePath(e.payload);
     let arr = unexplainedByFile.get(file);
     if (arr === undefined) {
@@ -261,6 +307,18 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
           : `affected (${ops.sort().join(', ')})`;
       const plural = eventCount === 1 ? 'event' : 'events';
 
+      // D16. How many members of this group carried a recorder tag that the
+      // content test overrode. Zero for every pre-D16 group, which is what keeps
+      // those descriptions byte-for-byte identical.
+      const overriddenCount = group.events.filter((e) => tagOverridden.has(e.globalIdx)).length;
+      // Calling a tagged event "unexplained" would withhold something in the
+      // student's favour, so a group containing one says what the tag said.
+      const countPhrase =
+        overriddenCount === 0
+          ? `${eventCount} unexplained ${plural}`
+          : `${eventCount} ${plural}, ${overriddenCount} of which the recorder tagged ` +
+            `git-explained on timing alone`;
+
       // Tier 3.1. Empty string for a solo scope and for `external`, so those
       // descriptions and details stay byte-for-byte what they were.
       const verdict = leadVerdict(group.events, classification.byGlobalIdx);
@@ -274,7 +332,7 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
         confidence: CONFIDENCE,
         supportingSeqs,
         description:
-          `${file} was ${opLabel} outside VS Code (${eventCount} unexplained ${plural})` +
+          `${file} was ${opLabel} outside VS Code (${countPhrase})` +
           (group.maxDiffSize > 0 ? ` (max ±${group.maxDiffSize} chars).` : '.') +
           classificationNote,
         detail: {
@@ -283,6 +341,7 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
           maxDiffSize: group.maxDiffSize,
           operations: ops,
           seqs: supportingSeqs,
+          ...(overriddenCount === 0 ? {} : { recorderTagOverridden: overriddenCount }),
           ...(verdict === null
             ? {}
             : {
