@@ -498,3 +498,98 @@ describe('Check 8 — two contributors with concurrent recorded states', () => {
     expect(verifySubmittedCode(bundle, { chainIntact: true }).status).toBe('fail');
   });
 });
+
+/**
+ * The gate is PER PATH, not per bundle.
+ *
+ * Inside a genuine two-contributor bundle the ordering is built, so the
+ * concurrency branch is reachable for every path. A file only one partner
+ * touched must still take the unchanged comparison: two of Alice's own sessions
+ * being unordered against each other is not a cross-contributor divergence, and
+ * amnestying a real mismatch there would quietly weaken the check for
+ * solo-authored files inside group work.
+ */
+describe('Check 8 — the concurrency gate is per path', () => {
+  function contributor(sessionId: string, studentRef: string): SessionContributor {
+    return {
+      kind: 'attributed',
+      sessionId,
+      contributorKey: `attributed:2.0:course:c1:${studentRef}`,
+      studentRef,
+      identityVersion: '2.0',
+      scope: 'course',
+      scopeId: 'c1',
+      studentPubkey: 'pk',
+      certWindow: { in_window: true },
+      credentialWindow: { in_window: true },
+    };
+  }
+
+  function session(
+    sessionId: string,
+    path: string,
+    sha: string,
+    commit: string,
+    wallBase: number,
+  ): ParsedSession {
+    const at = (seq: number, kind: string, data: Record<string, unknown>) => ({
+      seq,
+      t: seq,
+      wall: new Date(Date.UTC(2026, 0, 1, wallBase, seq)).toISOString(),
+      kind,
+      data,
+      prev_hash: '0'.repeat(64),
+      hash: '1'.repeat(64),
+    });
+    const events = [
+      at(0, 'session.start', {
+        format_version: '1.0',
+        session_id: sessionId,
+        prev_session_id: null,
+        assignment: { id: 'hw1', semester: 'sp26' },
+      }),
+      at(1, 'doc.save', { path, sha256: sha }),
+      at(2, 'git.event', { operation: 'commit', sha: commit, parents: [] }),
+    ] as unknown as HashedEnvelope[];
+    return {
+      sessionId,
+      events,
+      meta: {} as ParsedSession['meta'],
+      slogSha256: 'c'.repeat(64),
+      metaSha256: 'd'.repeat(64),
+      firstEvent: events[0] as ParsedSession['firstEvent'],
+    };
+  }
+
+  it('still reports a mismatch on a file only one contributor touched', () => {
+    // Alice has two unordered sessions on a.py; Bob is elsewhere in the bundle,
+    // which is what makes this a two-contributor scope at all.
+    const bundle: Bundle = {
+      id: 'bundle-1',
+      manifest: { format_version: '1.1' } as BundleManifest,
+      manifestSigHex: null,
+      sessions: [
+        session('s-alice-1', 'a.py', 'ALICE_ONE', 'a'.repeat(40), 1),
+        session('s-alice-2', 'a.py', 'ALICE_TWO', 'b'.repeat(40), 2),
+        session('s-bob', 'b.py', 'BOB', 'c'.repeat(40), 3),
+      ],
+      sourceFilename: 'b.zip',
+      loadedAt: '2026-01-01T00:00:00.000Z',
+      submissionFiles: new Map([
+        ['a.py', { status: 'present' as const, sha256: 'SOMETHING_ELSE', hashOk: true }],
+      ]),
+      contributors: {
+        bySession: new Map<string, SessionContributor>([
+          ['s-alice-1', contributor('s-alice-1', 'alice')],
+          ['s-alice-2', contributor('s-alice-2', 'alice')],
+          ['s-bob', contributor('s-bob', 'bob')],
+        ]),
+        contributors: [],
+        rootKeyConfigured: true,
+        counts: { attributed: 3, unverifiable: 0, unattributed: 0 },
+      },
+    };
+
+    expect(verifySubmittedCode(bundle, { chainIntact: true }).status).toBe('fail');
+  });
+});
