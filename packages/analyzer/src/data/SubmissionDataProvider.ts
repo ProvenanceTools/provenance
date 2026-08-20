@@ -66,7 +66,18 @@ export type FileContentResult = {
   content: string;
   at_seq: number;
   computed_at_ms: number;
+  /**
+   * `FILE_RECONSTRUCTION_TAINTED` — one content, best-effort.
+   * `FILE_RECONSTRUCTION_CONCURRENT` — two contributors' edits are unordered
+   * here, so there is NO single content and `content` is empty rather than one
+   * branch presented as the file (Tier 2.2).
+   * `FILE_RECONSTRUCTION_UNKNOWN` — the happens-before relation does not cover
+   * these events. A different fact from `CONCURRENT`: no record, versus two
+   * records that race.
+   */
   warning?: string | undefined;
+  /** Human-readable explanation for the warning, when one is available. */
+  warning_detail?: string | undefined;
 };
 
 export type ProvenanceRun = {

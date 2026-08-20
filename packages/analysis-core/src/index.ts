@@ -17,6 +17,7 @@ export * from './index/event-index.js';
 export * from './index/stats.js';
 export * from './index/reconstruct-file.js';
 export * from './index/reconstruct-file-provenance.js';
+export * from './index/reconstruct-segments.js';
 export * from './index/provenance-utils.js';
 export * from './heuristics/run-heuristics.js';
 export * from './heuristics/config.js';

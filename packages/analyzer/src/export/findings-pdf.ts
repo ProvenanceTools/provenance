@@ -28,6 +28,7 @@ import type { Flag } from '@provenance/analysis-core/heuristics/types.js';
 import { renderPdf, pdfFilenameFor } from './pdf-renderer.js';
 import type { FlagScreenshot, PdfRenderInput } from './pdf-renderer.js';
 import { screenshotReplayAt } from './screenshot.js';
+import { buildReconstructionScope } from '@provenance/analysis-core/index/reconstruct-segments.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -101,6 +102,7 @@ function resolveFilePath(index: EventIndex, seqKey: string): string | null {
  */
 export async function generatePdf(input: GeneratePdfInput): Promise<GeneratePdfResult> {
   const { bundle, index, report, flags, generatedAt, bundleSha256, onProgress } = input;
+  const scope = buildReconstructionScope(bundle, index);
 
   // Determine which flags need screenshots and how many.
   const flagsNeedingScreenshot = flags.filter(requiresScreenshot);
@@ -136,12 +138,17 @@ export async function generatePdf(input: GeneratePdfInput): Promise<GeneratePdfR
 
     // Take screenshot at globalIdx (exclusive end — snapshot shows state AFTER the event).
     try {
-      const dataUrl = await screenshotReplayAt(index, filePath, event.globalIdx + 1);
-      screenshots.push({
-        flagId: flag.id,
-        dataUrl,
-        label: `${filePath} — event #${event.globalIdx} (seq ${firstKey}) @ ${event.wall}`,
-      });
+      const dataUrl = await screenshotReplayAt(scope, filePath, event.globalIdx + 1);
+      // `null` = no single file state at that position (Tier 2.2). Omit the
+      // image; the flag is still rendered, just without a picture of a file
+      // that may never have existed.
+      if (dataUrl !== null) {
+        screenshots.push({
+          flagId: flag.id,
+          dataUrl,
+          label: `${filePath} — event #${event.globalIdx} (seq ${firstKey}) @ ${event.wall}`,
+        });
+      }
     } catch {
       // Screenshot failed — skip, do not abort the whole export.
       // The flag will be rendered without an image.

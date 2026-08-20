@@ -27,7 +27,7 @@ import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
-import { reconstructFileWithProvenance } from '../index/reconstruct-file-provenance.js';
+import { establishedReplayState } from './reconstruction-gate.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -108,22 +108,27 @@ function nextSaveAfter(
   return undefined;
 }
 
-function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
   const threshold = config.massExternalReplacement.sharedThreshold;
 
   const externalEvents = index.byKind.get('fs.external_change') ?? [];
   if (externalEvents.length === 0) return [];
 
   // Cache reconstructed content at specific globalIdx boundaries.
-  const reconstructionCache = new Map<string, string>();
+  // `null` = no established content at that boundary (Tier 2.2). This
+  // heuristic's polarity is fail-DANGEROUS — a small overlap ratio is what
+  // FIRES it — so an unestablished content would manufacture a high-severity
+  // "mass replacement" rather than merely miss one. The caller must skip.
+  const reconstructionCache = new Map<string, string | null>();
 
-  function getContentAt(filePath: string, upToGlobalIdx: number): string {
+  function getContentAt(filePath: string, upToGlobalIdx: number): string | null {
     const cacheKey = `${filePath}:${upToGlobalIdx}`;
     const cached = reconstructionCache.get(cacheKey);
     if (cached !== undefined) return cached;
-    const state = reconstructFileWithProvenance(index, filePath, upToGlobalIdx);
-    reconstructionCache.set(cacheKey, state.content);
-    return state.content;
+    const state = establishedReplayState(index, bundle, filePath, upToGlobalIdx);
+    const content = state === null ? null : state.content;
+    reconstructionCache.set(cacheKey, content);
+    return content;
   }
 
   const flags: Flag[] = [];
@@ -152,9 +157,11 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
     // Pre-change content: reconstruct up to (but not including) this event.
     const preContent = getContentAt(filePath, e.globalIdx);
 
-    // If we have no pre-content at all (empty before first save, tainted, etc.),
-    // skip — we cannot compute a meaningful overlap ratio.
-    if (preContent.length === 0) continue;
+    // If we have no pre-content at all (empty before first save, tainted, or —
+    // Tier 2.2 — two contributors' edits unordered at this cut), skip: we cannot
+    // compute a meaningful overlap ratio, and a small ratio is what FIRES this
+    // flag, so a guess here is a high-severity accusation rather than a miss.
+    if (preContent === null || preContent.length === 0) continue;
 
     // Liveness check: there must be a subsequent doc.save in the same session.
     // This prevents flagging on stale external changes that the user never accepted.
@@ -171,7 +178,7 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
     const postGlobalIdx = (firstContentGi ?? e.globalIdx) + 1;
     const postContent = getContentAt(filePath, postGlobalIdx);
 
-    if (postContent.length === 0) continue;
+    if (postContent === null || postContent.length === 0) continue;
 
     const oldLines = lineCount(preContent);
     const newLines = lineCount(postContent);

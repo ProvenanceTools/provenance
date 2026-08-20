@@ -27,6 +27,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createEngine } from './engine-core.js';
+import {
+  buildReconstructionScope,
+  soloReconstructionScope,
+} from '@provenance/analysis-core/index/reconstruct-segments.js';
+import type { Bundle } from '@provenance/analysis-core/loader/types.js';
 import type { EngineHandle, ReplayState } from './engine-core.js';
 import type { FileReplayState } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
 import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
@@ -45,6 +50,12 @@ export type UseReplayEngineResult = {
   files: string[];
   /** Session boundaries in the stream. Empty for a single-session bundle. */
   seams: readonly Seam[];
+  /**
+   * Files with no single content at the current playhead, and which kind of no
+   * it is. Their `fileStates` entry is empty rather than one branch's content
+   * (Tier 2.2, spec §6 Rule 4). Always empty for a single-contributor bundle.
+   */
+  ambiguousFiles: ReadonlyMap<string, 'concurrent' | 'unknown'>;
   play(speed?: number): void;
   pause(): void;
   step(n?: number): void;
@@ -59,6 +70,14 @@ export type UseReplayEngineOptions = {
    * by that. Defaults to the engine's own default (off).
    */
   skipIdle?: boolean;
+  /**
+   * The bundle behind `index`. Supplying it lets replay tell a file whose
+   * content at the playhead has no single truth from one that simply has none
+   * (Tier 2.2, spec §6 Rule 4). Omitted, the engine takes a solo scope, which
+   * is the behaviour that predates this and is correct for every
+   * single-contributor bundle.
+   */
+  bundle?: Bundle | null | undefined;
 };
 
 /**
@@ -72,6 +91,7 @@ export function useReplayEngine(
   options: UseReplayEngineOptions = {},
 ): UseReplayEngineResult {
   const skipIdle = options.skipIdle ?? false;
+  const bundle = options.bundle ?? null;
 
   // Engine handle lives in a ref so we don't re-create it on every render.
   const engineRef = useRef<EngineHandle | null>(null);
@@ -98,6 +118,9 @@ export function useReplayEngine(
     skipIdle,
   }));
   const [fileStates, setFileStates] = useState<Map<string, FileReplayState>>(new Map());
+  const [ambiguousFiles, setAmbiguousFiles] = useState<
+    ReadonlyMap<string, 'concurrent' | 'unknown'>
+  >(new Map());
   const [files, setFiles] = useState<string[]>([]);
   const [seams, setSeams] = useState<readonly Seam[]>([]);
 
@@ -127,13 +150,17 @@ export function useReplayEngine(
       return;
     }
 
-    const engine = createEngine(index);
+    const engine = createEngine(
+      index,
+      bundle === null ? soloReconstructionScope(index) : buildReconstructionScope(bundle, index),
+    );
     engineRef.current = engine;
     speedRef.current = engine.getState().speed;
     engine.setSkipIdle(skipIdleRef.current);
 
     setReplayState(engine.getState());
     setFileStates(engine.getFileStates());
+    setAmbiguousFiles(new Map(engine.ambiguousFiles()));
     setFiles(engine.getFiles());
     setSeams(engine.seams());
 
@@ -144,7 +171,7 @@ export function useReplayEngine(
         rafRef.current = null;
       }
     };
-  }, [index]);
+  }, [index, bundle]);
 
   // ---------------------------------------------------------------------------
   // Helper: sync React state from the engine after a mutation.
@@ -152,6 +179,7 @@ export function useReplayEngine(
   const syncFromEngine = useCallback((engine: EngineHandle) => {
     setReplayState(engine.getState());
     setFileStates(engine.getFileStates());
+    setAmbiguousFiles(new Map(engine.ambiguousFiles()));
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -276,7 +304,17 @@ export function useReplayEngine(
   // Stable result object (avoids unnecessary re-renders in consumers).
   // ---------------------------------------------------------------------------
   return useMemo(
-    () => ({ state: replayState, fileStates, files, seams, play, pause, step, seek }),
-    [replayState, fileStates, files, seams, play, pause, step, seek],
+    () => ({
+      state: replayState,
+      fileStates,
+      files,
+      seams,
+      ambiguousFiles,
+      play,
+      pause,
+      step,
+      seek,
+    }),
+    [replayState, fileStates, files, seams, ambiguousFiles, play, pause, step, seek],
   );
 }

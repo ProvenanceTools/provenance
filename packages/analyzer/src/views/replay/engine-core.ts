@@ -59,7 +59,12 @@
  * PRD ref: §7.2 (replay view core).
  */
 
-import { reconstructFileWithProvenance } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
+import {
+  determinateValue,
+  reconstructFileSegmentedWithProvenance,
+  soloReconstructionScope,
+  type ReconstructionScope,
+} from '@provenance/analysis-core/index/reconstruct-segments.js';
 import type { FileReplayState } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
 import type { EventIndex, IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import { buildBundleClock, type Seam } from './bundle-clock.js';
@@ -140,6 +145,16 @@ export type EngineHandle = {
   eventCount(): number;
   /** Session boundaries in the stream. Empty for a single-session bundle. */
   seams(): readonly Seam[];
+  /**
+   * Files whose content at the CURRENT position has no single truth, and which
+   * kind of no it is (Tier 2.2, spec §6 Rule 4: "replay never linearizes
+   * concurrency").
+   *
+   * Such a file's entry in {@link EngineHandle.getFileStates} is empty rather
+   * than one branch's content, and the UI is expected to explain the gap. It is
+   * always empty for a single-contributor bundle.
+   */
+  ambiguousFiles(): ReadonlyMap<string, 'concurrent' | 'unknown'>;
 
   /** Advance by n events (may be negative). Clamps to valid range. Returns new state. */
   step(n?: number): ReplayState;
@@ -210,6 +225,10 @@ type InternalState = {
   checkpoints: Map<number, Checkpoint>;
   /** The EventIndex (needed to call reconstructFileWithProvenance). */
   index: EventIndex;
+  /** Who each session belongs to, plus `≺`. Solo unless a bundle was supplied. */
+  scope: ReconstructionScope;
+  /** Files with no single content at the current position. Rebuilt per seek. */
+  ambiguous: Map<string, 'concurrent' | 'unknown'>;
 };
 
 // ---------------------------------------------------------------------------
@@ -285,8 +304,24 @@ function buildFileStates(
   upToGlobalIdx: number,
 ): Map<string, FileReplayState> {
   const result = new Map<string, FileReplayState>();
+  internal.ambiguous.clear();
   for (const filePath of internal.files) {
-    const state = reconstructFileWithProvenance(internal.index, filePath, upToGlobalIdx);
+    const segmented = reconstructFileSegmentedWithProvenance(
+      internal.scope,
+      filePath,
+      upToGlobalIdx,
+    );
+    const state = determinateValue(segmented);
+    if (state === null) {
+      // Spec §6 Rule 4: a replay position inside a concurrent interval shows the
+      // branches side by side or REFUSES with an explanation. It does not pick
+      // one and it does not interleave. Side-by-side is Tier 5.3 UI; refusing is
+      // the honest half we can ship now, and it is the half that matters —
+      // picking would put a file that never existed on screen in a meeting.
+      internal.ambiguous.set(filePath, segmented.kind === 'concurrent' ? 'concurrent' : 'unknown');
+      result.set(filePath, emptyFileState());
+      continue;
+    }
     result.set(filePath, state);
   }
   return result;
@@ -327,7 +362,12 @@ function clamp(idx: number, maxIdx: number): number {
  * @param index  The EventIndex for the whole bundle (we read ordered + byFile).
  * @returns      An EngineHandle with mutable internal state.
  */
-export function createEngine(index: EventIndex): EngineHandle {
+/**
+ * `scope` carries who each session belongs to and the happens-before relation.
+ * It defaults to a SOLO scope, which is today's exact behaviour, so a caller
+ * that has no bundle to hand keeps working unchanged.
+ */
+export function createEngine(index: EventIndex, scope?: ReconstructionScope): EngineHandle {
   const events = index.ordered;
   const files = computeFiles(events);
   const { bundleT, seams } = buildBundleClock(events);
@@ -355,6 +395,8 @@ export function createEngine(index: EventIndex): EngineHandle {
       [0, new Map(files.map((f) => [f, emptyFileState()]))],
     ]),
     index,
+    scope: scope ?? soloReconstructionScope(index),
+    ambiguous: new Map(),
   };
 
   // ---------------------------------------------------------------------------
@@ -434,6 +476,9 @@ export function createEngine(index: EventIndex): EngineHandle {
 
     seams() {
       return internal.seams;
+    },
+    ambiguousFiles() {
+      return internal.ambiguous;
     },
 
     step(n = 1) {

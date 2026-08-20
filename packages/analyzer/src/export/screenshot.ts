@@ -43,8 +43,11 @@
  * the DOM-touching outer function is tested via a mock of html2canvas.
  */
 
-import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
-import { reconstructFileWithProvenance } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
+import {
+  determinateValue,
+  reconstructFileSegmentedWithProvenance,
+  type ReconstructionScope,
+} from '@provenance/analysis-core/index/reconstruct-segments.js';
 import { runsFromProvenance } from '../views/replay/replay-decoration-utils.js';
 
 // ---------------------------------------------------------------------------
@@ -240,19 +243,31 @@ export async function captureElement(element: HTMLElement): Promise<string> {
  *   5. Capture via html2canvas at 2× scale.
  *   6. Remove the div and return the data URL.
  *
- * @param index     EventIndex for the bundle.
+ * Returns `null` when reconstruction has no single truth at that position —
+ * two contributors' edits unordered, or events the happens-before relation does
+ * not cover (Tier 2.2). This is the highest-consequence display site in the
+ * product: the image is captioned with a file and an event number and embedded
+ * in a findings PDF that leaves the tool and reaches an integrity panel. A
+ * screenshot of one arbitrarily chosen branch would be a picture of a file that
+ * never existed, presented as photographic evidence against a named student.
+ * The caller omits the image rather than showing a guess.
+ *
+ * @param scope     Reconstruction scope for the bundle (see `reconstruct-segments`).
  * @param filePath  Which file to snapshot.
  * @param globalIdx Snapshot at this event position (exclusive — same semantics
  *                  as `upToGlobalIdx` in reconstructFileWithProvenance).
- * @returns         Promise<DataUrl> — base64 PNG data URL.
+ * @returns         Promise<DataUrl | null> — base64 PNG data URL, or null.
  */
 export async function screenshotReplayAt(
-  index: EventIndex,
+  scope: ReconstructionScope,
   filePath: string,
   globalIdx: number,
-): Promise<DataUrl> {
+): Promise<DataUrl | null> {
   // Reconstruct file state at globalIdx.
-  const fileState = reconstructFileWithProvenance(index, filePath, globalIdx);
+  const fileState = determinateValue(
+    reconstructFileSegmentedWithProvenance(scope, filePath, globalIdx),
+  );
+  if (fileState === null) return null;
 
   // Convert provenance runs to flat offsets for HTML building.
   const runs = runsFromProvenance(fileState);
