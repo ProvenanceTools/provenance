@@ -114,6 +114,22 @@ export const nodes: Record<string, ArchNode> = {
       { label: 'retention-sweep.ts', href: `${GH}/packages/server/src/jobs/retention-sweep.ts` },
     ],
   },
+  stamp: {
+    title: 'Contributor stamp',
+    body: 'Between parsing the bundle and building the index, two passes run that answer questions about the bundle as a whole rather than about any one event: establishBundleTrust walks the Manifest 2.0 chain, and then establishBundleContributors resolves who produced each session. The order is load-bearing — contributors runs second because an archived 2.0 identity anchors to the Manifest 2.0 course_cert that the trust pass has just established.\n\nBoth stamp the Bundle IN PLACE rather than returning a copy. That looks like a smell and is deliberate: every holder of the reference — this cached { bundle, index }, the browser’s bundle context, the heuristics handed the same object — must see the same verdict, and returning a copy would silently leave the originals unattributed. Since unattributed is the state under which contributor-gated behaviour keeps firing, a copy would degrade quietly rather than loudly.\n\nThe placement on this plate is the point. The call sits INSIDE the cached region, past the early return, so it happens once per parse and not once per read. A cache hit returns the identical SubmissionIndex object, hence the identical Bundle, hence the identical contributors object — asserted by identity, not by equality, in load-index.contributors.test.ts. Chain walking is signature verification, so paying it on every timeline scrub or replay seek would be a real cost on a hot path.\n\nTwo submissions can never share one stamp. The cache key is the submission id joined to the stored blob’s sha256, so entries are submission-scoped by construction and each was produced by its own resolution pass over its own parsed bundle; a regression test reads Alice, then Bob, then Alice again and asserts the two stamps are not the same object. The sha half of the key is also the only invalidation there is: nothing evicts explicitly on re-ingest or recompute, but a superseded blob has a different sha and therefore a different key, so a stale parse is simply unreachable rather than actively freed.\n\nThe root public key reaches this point from the server’s own configuration, not from the bundle. When it is unset the stamp still happens and still succeeds — every identified session simply resolves unverifiable / no_root_key, which reads as "cannot check" rather than as a finding.\n\nOne consequence worth knowing: the cache is a sixteen-entry LRU held per PROCESS, so the API and the worker each keep their own. The cross-flags job walks every submission in a semester and will churn straight through sixteen entries, so it gets no benefit from this cache at all.',
+    invariant:
+      'The stamp is computed inside the cached region and mutates the bundle in place, so one submission has exactly one contributor verdict that every consumer shares.',
+    links: [
+      {
+        label: 'load-index.ts',
+        href: `${GH}/packages/server/src/services/bundle/load-index.ts`,
+      },
+      {
+        label: 'resolve-contributors.ts',
+        href: `${GH}/packages/analysis-core/src/identity/resolve-contributors.ts`,
+      },
+    ],
+  },
   idx: {
     title: 'EventIndex',
     body: 'Building the index is where a bundle of independent per-session logs becomes one stream. Every event is placed in a single chronological order across all sessions and assigned a globalIdx (its position in that order) alongside per-session and per-file views for the readers that want them.\n\nThat globalIdx is the reason dropping the events table cost the stored findings nothing. flags.supporting_seqs and cross_flag_participants.supporting_seqs are arrays of these indices, and buildIndex recomputes them identically from the re-parsed bundle (same chronological ordering, same integers), so evidence written months ago still resolves to the right events today.',

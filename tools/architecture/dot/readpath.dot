@@ -39,6 +39,8 @@ digraph readpath {
     blob  [label="Blob store\nthe stored bundle —\nprovenance-only, no source"
            shape=cylinder fillcolor="#0d1c33" color="#4b90f7" height=0.7]
     parse [label="unzip + parse every .slog"]
+    stamp [label="establishBundleTrust, then\nestablishBundleContributors\nstamps bundle.contributors IN PLACE —\ninside the cached region, so it costs\nonce per parse, never once per read"
+           fillcolor="#1e1830" color="#9d7bf5"]
     idx   [label="EventIndex\nordered access, per-session views"]
     recon [label="reconstructFileWithProvenance\nreplays edits to rebuild file content,\ntagging every line typed / pasted / external"]
     ret   [label="{ bundle, index }" shape=note]
@@ -60,7 +62,8 @@ digraph readpath {
   cache -> fetch [label="miss" color="#4b90f7"]
   fetch -> blob
   blob -> parse [color="#4b90f7"]
-  parse -> idx
+  parse -> stamp [color="#9d7bf5"]
+  stamp -> idx [label="root key from the server's own\nconfig — unset ⇒ “cannot check”,\nnever a finding" color="#9d7bf5"]
   idx -> ret
   idx -> recon [label="/files/:path/content\n(reconstructFile)" style=dashed color="#3fbf62"]
   recon -> ret [style=dashed color="#3fbf62"]
