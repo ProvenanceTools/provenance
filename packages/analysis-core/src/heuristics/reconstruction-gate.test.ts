@@ -79,6 +79,7 @@ function bundleOf(specs: readonly Spec[]): Bundle {
   );
   return {
     id: 'bundle-1',
+    droppedArtifacts: [],
     manifest: { format_version: '1.1' } as Bundle['manifest'],
     manifestSigHex: null,
     sessions,

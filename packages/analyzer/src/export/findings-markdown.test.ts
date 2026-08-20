@@ -72,6 +72,7 @@ function makeFixtureBundle(): Bundle {
 
   return {
     id: 'test-bundle-id',
+    droppedArtifacts: [],
     manifest: {
       format_version: '1.0',
       assignment_id: 'hw1',

@@ -67,18 +67,33 @@ function getMessages(error: AnyError): ErrorMessages {
           'Make sure the recorder was active during your work session before preparing the bundle.',
       };
 
+    // These two name a FILE, not a session.
+    //
+    // `error.sessionId` on both variants is the uuid in the `.slog` FILENAME,
+    // minted by the recorder's writer. It is NOT a session id: no `session.start`
+    // in the archive carries that value, and a staff member who read "Session
+    // <id>" here and searched the bundle for that session found nothing. Render
+    // the filename, which is the thing the id actually identifies and the thing
+    // they can go and look at.
+    //
+    // Reachability, so the next reader is not misled: the loader no longer FAILS
+    // a bundle on either shape — `unzip.ts`'s read-side orphan guard drops the
+    // artifact and reports it on `bundle.droppedArtifacts` instead. These cases
+    // survive because `LoaderError` is the declared vocabulary of loader
+    // failures and the server persists these `cause` values in `ingest_files`
+    // rows, so the wording still has to be right where it is read.
     case 'orphaned_meta':
       return {
         title: 'A session is incomplete.',
-        explanation: `Session ${error.sessionId} has a .slog.meta file but its matching .slog is missing.`,
+        explanation: `The file session-${error.sessionId}.slog.meta is present, but its log session-${error.sessionId}.slog is missing. (That uuid names the log FILE — it is not a session id, so searching the bundle for a session by that id will find nothing.)`,
         suggestion:
-          'The bundle may be corrupted. Re-run the "Prepare Submission Bundle" command to regenerate it.',
+          'This usually means a damaged log was quarantined by crash recovery. Re-run the "Prepare Submission Bundle" command to regenerate the bundle.',
       };
 
     case 'orphaned_slog':
       return {
         title: 'A session is incomplete.',
-        explanation: `Session ${error.sessionId} has a .slog file but its matching .slog.meta is missing.`,
+        explanation: `The file session-${error.sessionId}.slog is present, but its sidecar session-${error.sessionId}.slog.meta is missing. (That uuid names the log FILE — it is not a session id, so searching the bundle for a session by that id will find nothing.)`,
         suggestion:
           'The bundle may be corrupted. Re-run the "Prepare Submission Bundle" command to regenerate it.',
       };

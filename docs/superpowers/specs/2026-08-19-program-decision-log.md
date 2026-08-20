@@ -132,6 +132,29 @@ Every one of these was live on the branch and none was on any worklist.
     **This is the second id-space confusion** (bug 3 was the first: a containment predicate
     written for files, handed a git repo root).
 
+11. **A leftover file failed a whole git submission, and the git path had no guard at all.**
+    All three recorders guard the ZIP path: `sealBundle` drops an artifact the analyzer could not
+    open and reports it in the seal warnings. **The git path never runs seal** — the student
+    pushes, the grader clones, and whatever is in `.provenance/` on disk IS the submission — so
+    that guard protected it not at all, and the leftovers it exists to catch are precisely the
+    ones a git submission carries. After a crash-recovery quarantine (`chain-recovery.ts` renames
+    the damaged `.slog` to `.corrupt-<ISO>` and leaves the sidecar), the stranded `.slog.meta`
+    reached the loader as `orphaned_meta`, which `unzip.ts` raised as a **hard error for the whole
+    bundle, before any check ran**. `loadSubmissionIndex` throws on a load failure, so every
+    server read path threw with it. One leftover file cost a student every session they had
+    recorded, for a crash they could not have prevented.
+    Fixed in the LOADER, as a read-side mirror of the seal guard: an artifact that cannot be
+    analysed is dropped from the ANALYSIS and reported on `Bundle.droppedArtifacts`. Never from
+    disk — the loader only reads, and in a shared repo those bytes may be a partner's evidence.
+    The loader is the right layer because it is where all three consumers converge (server
+    ingest, the analyzer's in-browser `/local`, the `tools/` gates); normalising in ingest would
+    have fixed one of the three, and the recorder cannot fix it at all with no seal step to hook.
+    The half that is easy to miss: the dropped session's **rolling seal must be dropped with it**,
+    matched on the logical session id recovered from the sidecar. Left in place it becomes a
+    `no_session_log` defect, which fails check 1 at high severity with text offering "either the
+    log was deleted or the seal was planted" — so degrading gracefully would have converted the
+    crash into an accusation, strictly worse than the load failure it replaced.
+
 ### Why no test caught bug 10 — and the fixture rule that stops the next one
 
 Nothing was wrong with the assertions. **Every fixture in the repo spelled both uuids with the
@@ -150,6 +173,19 @@ that needs them equal must pass `fileUuid` explicitly, which makes it a visible 
 Generalised: **when two identifiers are the same shape and different values in production, a
 fixture that makes them equal is not a simplification — it deletes a bug class from the reachable
 test space.**
+
+**Follow-through, 2026-08-20.** The rule now holds everywhere a fixture is produced. The four
+remaining generators — `server/scripts/seed/build-example-export.ts`, `gen-large-fixture.ts`,
+`bench-stages.ts`, `profile-large-bundle.ts` — mint a distinct log-file uuid by default, so the
+**demo database no longer contains A === B bundles**; anything a person or a test checks against
+the seed data can now reproduce an id crossing. Verified by mutation: reverting any one of them to
+a shared id is caught by `verify-log-bytes.test.ts`'s "does NOT accuse the same append when the
+seal is not final" (the bug-10 regression) and by the new
+`loader/orphan-guard-git-path.test.ts`, which asserts a dropped sidecar's logical id differs from
+its filename uuid. `tools/export-conformance-vectors.ts` is deliberately NOT changed: its A === B
+filename is published to provjet and provnvim as a negative-match string, and perturbing a vector's
+bytes is a breaking tri-repo change, not a refactor. It teaches the wrong shape and should be
+corrected the next time those vectors are legitimately regenerated.
 
 The fix goes further than correcting the lookup: the filename id space is now a branded
 `LogFileId` and `SessionFiles.sessionId` is renamed `logFileId`, so the original line is a
@@ -230,10 +266,18 @@ sessions across a partner's commit because that manufactures the accusation the 
 ## 6. State and what is owed
 
 Suites:
-**log-core 541 · analysis-core 973 · recorder 583 · analyzer 1221 · tools 174 ·
-server 1420/1422 (2 confirmed flakes) · provjet 589 · provnvim 1007.**
-The first five re-measured 2026-08-20 after the id-space fix (bug 10); server,
+**log-core 541 · analysis-core 988 · recorder 583 · analyzer 1223 · tools 174 ·
+server 1488/1490 (2 testcontainers flakes) · provjet 589 · provnvim 1007.**
+The first five re-measured 2026-08-20 after the read-side orphan guard (bug 11);
+analysis-core 973 → 988 and analyzer 1221 → 1223 are the guard's own tests plus
+the id-space regressions.
 provjet and provnvim are carried forward and not re-measured since.
+Server was re-measured too: the carried-forward `1420/1422` was stale (the real
+total had grown to 1490). Both failures in the full run were
+`Timed out after 10000ms while waiting for container ports to be bound to the
+host` — `cohort.test.ts` (a known flake) and
+`load-index.contributors.test.ts` (a new one) — and both files pass in
+isolation, 27/27 and 8/8. Infrastructure, not logic.
 Build, typecheck, lint clean. Branch ~145 commits, ~+50k lines vs `main`.
 
 ### Gating merge to `main`
@@ -278,32 +322,34 @@ completion contract, not a wish list.
   caught something its own repo's suite could not: provnvim's found the orphaned rolling seal,
   provjet's found that shipping code the log never saw left the Gradle suite BUILD SUCCESSFUL
   while the gate went red, and the VS Code one found the seal path packing unopenable bundles.
-- **Four staff-visible strings name an id that no file in the bundle carries** — found by the
-  id-space audit that followed bug 10, all behaviourally correct, none fixed (out of scope for that
-  change). They matter because each one appears on a FAILURE path, where a staff member who greps
-  the archive for the id we printed finds nothing — the tool's own report is unverifiable by
-  inspection:
-  1. `loader/rolling-seal.ts` `no_session_log`: `"…but no session-<LOGICAL id>.slog is present"`.
-     No file is ever named that. Reaches staff through check 1's `detail`
-     (`verify-manifest-sig.ts` maps every defect detail into `problems`) and is persisted to
-     `check_1_detail`. Suggested: name the fact, not a fabricated filename — "no `.slog` in the
-     bundle records session `<id>`".
-  2. `analyzer/views/load/ErrorPanel.tsx` renders `orphaned_slog` / `orphaned_meta` as
-     `"Session <id> …"`, but that id is the `.slog` FILENAME uuid. Render it as the filename.
-  3. `server/services/ingest/parse-bundle-phase.ts` labels the same value `sessionId:` in the
-     stored ingest-failure detail.
-  4. The sibling `unsealed_session` defect and every `manifest-<id>.json` mention are correct —
-     those filenames genuinely are named after the logical id.
-     One real incident hits 1–3 at once: after a crash recovery quarantines a `.slog`, the
-     git-native path has no equivalent of `seal.ts`'s orphan guard, so the stranded `.slog.meta`
-     is packed and the whole submission fails to load with exactly these messages as the only clue.
-- **Four fixture generators still spell both session ids identically**, so anything verified
-  against them is structurally incapable of reproducing an id-space crossing — the property that
-  hid bug 10: `server/scripts/seed/build-example-export.ts` (so the demo database contains
-  A === B bundles), `gen-large-fixture.ts`, `bench-stages.ts`, `profile-large-bundle.ts`. Align
-  them with `fakeLogFileUuid`. `tools/export-conformance-vectors.ts` also publishes an A === B
-  filename to the two sibling recorder repos as a negative-match string — harmless, but it teaches
-  the wrong shape.
+
+### Landed 2026-08-20 — the id-space strings
+
+All four staff-visible strings that named an id no file carries are fixed. Each sat on a FAILURE
+path, where a staff member greps the archive for the id we printed and finds nothing — the tool's
+own report unverifiable by inspection, at the one moment someone checks.
+
+| Where                                                | Was                                                       | Now                                                                                                                                                          |
+| ---------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `loader/rolling-seal.ts` `no_session_log`            | `…but no session-<LOGICAL id>.slog is present`            | `…but no .slog in this bundle records that session` + names the space explicitly. Keeps `manifest-<id>.json`, which genuinely is named after the logical id. |
+| `analyzer/views/load/ErrorPanel.tsx` `orphaned_meta` | `Session <FILE uuid> has a .slog.meta file…`              | `The file session-<uuid>.slog.meta is present, but its log session-<uuid>.slog is missing.`                                                                  |
+| `ErrorPanel.tsx` `orphaned_slog`                     | same mislabel, separate literal — **this was the fourth** | names the file, same as above                                                                                                                                |
+| `server/ingest/parse-bundle-phase.ts` `errorDetail`  | `sessionId: <FILE uuid>`                                  | `log file: session-<uuid>.slog (.slog filename uuid, not a session id)`                                                                                      |
+
+Also reworded `errorDetail`'s `session_id_mismatch` branch: bare `slog=` / `meta=` read as "the
+file is called this", sending a grader after filenames that do not exist, even though both values
+genuinely are logical ids.
+
+**Mutation testing was the whole value here.** Reverting each string to its old wording left every
+suite green — all three fixes were unpinned, and a fix nothing can fail on is not a fix. Each now
+has a regression test. `errorDetail` is exported for that reason: its output is persisted to
+`ingest_files.error.detail` and read by staff, so the wording is contract, not internal.
+
+**Reachability, flagged rather than acted on.** With the loader no longer failing a bundle on
+either orphan shape, `LoaderError.orphaned_meta` / `orphaned_slog` are no longer produced. The
+variants and their renderers are kept: `LoaderError` is the declared vocabulary of loader failures
+and the server persists these `cause` values in `ingest_files` rows that outlive the change. Whether
+to delete them outright is a separate call.
 
 ### Known gaps, deliberately accepted
 

@@ -33,7 +33,7 @@ import {
   isFinalRollingSeal,
 } from '@provenance/log-core';
 import type { BundleManifest, Result } from '@provenance/log-core';
-import { unzipBundle } from './unzip.js';
+import { unzipBundle, logicalSessionIdFromMeta } from './unzip.js';
 import { parseSession } from './parse-session.js';
 import {
   validateRollingSeals,
@@ -46,6 +46,7 @@ import { asLogicalSessionId } from './types.js';
 import type {
   Bundle,
   BundleRollingSeal,
+  DroppedArtifact,
   LoaderError,
   LogicalSessionId,
   RollingSealDefect,
@@ -99,10 +100,81 @@ export async function loadBundle(
   const {
     manifestJson,
     manifestSigHex,
-    rollingSeals: rawRollingSeals,
+    rollingSeals: allRawRollingSeals,
     sessions: sessionFiles,
     submissionFiles: bundleSubmissionFiles,
+    droppedArtifacts: unzipDropped,
   } = unzipResult.value;
+
+  // ---------------------------------------------------------------------------
+  // Step 1b: drop the rolling seal of any session the unzipper already dropped.
+  //
+  // This completes the read-side orphan guard. Without it, degrading gracefully
+  // would MANUFACTURE A FINDING out of the very crash it exists to absorb: a
+  // seal whose `.slog` is not in the bundle becomes a `no_session_log` defect,
+  // which fails check 1 (`manifest_sig`) for the WHOLE bundle at high severity
+  // and whose text offers "either the log was deleted or the seal was planted".
+  // A student whose editor crashed would go from "your submission will not open"
+  // to "your submission looks tampered with" — strictly worse.
+  //
+  // The seal is matched on the LOGICAL session id recovered from the dropped
+  // session's `.slog.meta` sidecar, which is the id space `manifest-<id>.json`
+  // filenames live in. The `.slog` FILENAME uuid would match nothing here; the
+  // brands make that a compile error rather than a silent miss (types.ts).
+  //
+  // Dropping a seal cannot itself create a finding: `unsealed_session` is
+  // reported only for a session whose log IS present and uncovered, and this
+  // only ever drops seals whose session is absent. Same rule the recorders'
+  // seal-side guard follows — and, as there, nothing is deleted; the seal is
+  // simply not analysed, and the fact is reported.
+  // ---------------------------------------------------------------------------
+  const droppedArtifacts: DroppedArtifact[] = [...unzipDropped];
+
+  // Logical ids the SURVIVING sessions claim, read straight from their sidecars.
+  //
+  // A guard on the guard. If a stranded sidecar happens to name the same logical
+  // session as a session that IS here — a `.slog.meta` copied or renamed, so two
+  // sidecars claim one recording — then dropping "the seal of the dropped
+  // session" would drop a HEALTHY session's seal, and that session would come
+  // out `unsealed_session`: a finding manufactured against work we actually
+  // hold, by the very code meant to stop findings being manufactured. So a seal
+  // is only ever dropped when NO surviving session claims it.
+  //
+  // Read here rather than after step 3 because the seals have to be filtered
+  // before `validateRollingSeals` runs. A sidecar we cannot parse contributes
+  // nothing, which fails safe: the seal is kept and the existing defect path
+  // reports it.
+  const survivingLogicalIds = new Set<string>();
+  for (const files of sessionFiles) {
+    const id = logicalSessionIdFromMeta(files.metaJson);
+    if (id !== null) survivingLogicalIds.add(id);
+  }
+
+  const droppedLogicalIds = new Set<string>(
+    unzipDropped
+      .map((d) => d.logicalSessionId)
+      .filter((id): id is NonNullable<typeof id> => id !== undefined)
+      .filter((id) => !survivingLogicalIds.has(id)),
+  );
+  const rawRollingSeals =
+    droppedLogicalIds.size === 0
+      ? allRawRollingSeals
+      : allRawRollingSeals.filter((seal) => {
+          if (!droppedLogicalIds.has(seal.sessionId)) return true;
+          droppedArtifacts.push({
+            kind: 'orphaned_rolling_seal',
+            filename: `manifest-${seal.sessionId}.json`,
+            logicalSessionId: asLogicalSessionId(seal.sessionId),
+            detail:
+              `manifest-${seal.sessionId}.json seals a session whose log is not in ` +
+              `this bundle, because the log was left out as an incomplete ` +
+              `recording. Its signature can never be checked — the key that would ` +
+              `verify it lives in that session's own session.start — so it is left ` +
+              `out with the session it names. This records an INCOMPLETE ` +
+              `RECORDING, not an integrity problem.`,
+          });
+          return false;
+        });
 
   // ---------------------------------------------------------------------------
   // Step 2: Validate the manifest JSON shape.
@@ -362,6 +434,9 @@ export async function loadBundle(
     manifestSigHex,
     ...(rollingSeal !== undefined ? { rollingSeal } : {}),
     sessions: parsedSessions,
+    droppedArtifacts: droppedArtifacts.sort((a, b) =>
+      a.filename === b.filename ? 0 : a.filename < b.filename ? -1 : 1,
+    ),
     sourceFilename,
     loadedAt: nowFn(),
     submissionFiles,

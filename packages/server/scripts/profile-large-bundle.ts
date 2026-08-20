@@ -131,6 +131,14 @@ function buildLargeBundleFiles(
     const rng = mulberry32(0xc0ffee);
     const keypair = await generateSessionKeypair();
     const sessionId = '0e33e8dd-584e-4f24-8262-b948264f0001';
+    // The uuid in the `.slog` FILENAME — deliberately a DIFFERENT value from the
+    // logical `session_id` above, as production mints them (`session-${randomUUID()}
+    // .slog` in the writer vs `recorderContext.session_id`). A fixture that spells
+    // both the same cannot distinguish code that confuses the two id spaces from
+    // code that handles them correctly, which is the property that hid a
+    // maximum-severity false accusation from the entire suite. See
+    // `analysis-core`'s `fakeLogFileUuid`.
+    const logFileUuid = '7c2b41a6-9d05-4e18-9f33-f11e00000001';
     const machineId = sha256Hex(`large-machine:${STUDENT.sid}`);
     const path0 = `${ASSIGNMENT}.py`;
 
@@ -308,8 +316,9 @@ function buildLargeBundleFiles(
     return {
       'manifest.json': signed.canonicalJson,
       'manifest.sig': signed.signatureHex,
-      [`session-${sessionId}.slog`]: slogText,
-      [`session-${sessionId}.slog.meta`]: metaJson,
+      // Filenames take the FILE uuid; the manifest above takes the LOGICAL id.
+      [`session-${logFileUuid}.slog`]: slogText,
+      [`session-${logFileUuid}.slog.meta`]: metaJson,
       [path0]: content,
     };
   })();

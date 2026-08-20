@@ -91,6 +91,7 @@ function makeSyntheticBundle(totalEvents: number): Bundle {
   const envs = Array.from({ length: totalEvents }, (_, i) => makeEnvelope(i, sessionId, wallBase));
   return {
     id: crypto.randomUUID(),
+    droppedArtifacts: [],
     // extension_hash must be in the known-good list to suppress
     // extension_hash_mismatch so the "clean" test produces zero flags.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: synthetic test bundle

@@ -82,6 +82,7 @@ function makeTwoFileBundle(): Bundle {
 
   return {
     id: crypto.randomUUID(),
+    droppedArtifacts: [],
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: synthetic test
     manifest: {} as any,
     manifestSigHex: '',
@@ -135,6 +136,7 @@ function makeNoFileBundle(): Bundle {
 
   return {
     id: crypto.randomUUID(),
+    droppedArtifacts: [],
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: synthetic test
     manifest: {} as any,
     manifestSigHex: '',

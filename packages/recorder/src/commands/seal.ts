@@ -246,10 +246,9 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
   // ---------------------------------------------------------------------------
   // Step 1b: THE ORPHAN GUARD.
   //
-  // `analysis-core`'s loader refuses to open a bundle whose per-session
-  // artifacts do not line up, and it refuses BEFORE a single validation check
-  // runs. Three shapes are fatal to THE WHOLE BUNDLE, not to the one session
-  // that is malformed:
+  // `analysis-core`'s loader used to refuse to open a bundle whose per-session
+  // artifacts do not line up, BEFORE a single validation check ran. Three shapes
+  // were fatal to THE WHOLE BUNDLE, not to the one session that is malformed:
   //
   //   * a `.slog.meta` with no `.slog`          → `orphaned_meta`
   //   * a zero-byte `.slog`                     → `first_event_not_session_start`
@@ -267,8 +266,16 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
   // one. It is also the one shape the recorder does not produce: `MetaWriter.
   // create` writes the `.meta` eagerly, in the same breath as the `.slog`.
   //
-  // So one stray file costs a student every session they recorded. That blast
+  // So one stray file cost a student every session they recorded. That blast
   // radius is the whole reason this guard exists.
+  //
+  // The loader now degrades instead of dying on all three (its read-side orphan
+  // guard drops and reports them), because the GIT path has no seal step to
+  // filter anything. That does NOT make this guard redundant. Sealing junk
+  // produces a degraded submission where a clean one was available, and — the
+  // part that matters here — the seal warnings are the only place the STUDENT
+  // is told. Leave it to the reader and the first person to find out is a
+  // grader.
   //
   // None of these are hypothetical. A session that starts and is torn down
   // before its first flush leaves ALL THREE artifacts behind: the buffer policy

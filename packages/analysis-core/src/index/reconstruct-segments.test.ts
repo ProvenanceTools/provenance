@@ -179,6 +179,7 @@ function bundleOf(specs: readonly SessionSpec[]): Bundle {
   );
   return {
     id: 'bundle-1',
+    droppedArtifacts: [],
     manifest: { format_version: '1.1' } as Bundle['manifest'],
     manifestSigHex: null,
     sessions,

@@ -203,9 +203,22 @@ export type BuildBundleOpts = {
     omitManifest?: boolean;
     omitSig?: boolean;
     omitAllSlogs?: boolean;
-    /** Omit one session's .slog.meta — produces orphaned_slog error. */
+    /**
+     * Omit one session's .slog.meta, keeping its .slog.
+     *
+     * No longer an error: the loader's read-side orphan guard DROPS the
+     * unpairable log and reports it on `Bundle.droppedArtifacts`. Only a bundle
+     * left with no analysable session at all still fails (`no_sessions`).
+     */
     omitOneSlogMeta?: boolean;
-    /** Omit one session's .slog (while keeping its .meta) — produces orphaned_meta error. */
+    /**
+     * Omit one session's .slog while keeping its .meta — the shape a
+     * crash-recovery quarantine leaves in a git-submitted `.provenance/`.
+     *
+     * No longer an error: the loader drops the stranded sidecar (and that
+     * session's rolling seal) and reports both. See
+     * `loader/orphan-guard-git-path.test.ts`.
+     */
     omitOneSlog?: boolean;
     addStrayFile?: { name: string; content: string };
     corruptNdjsonAtLine?: { sessionIndex: number; line: number };
@@ -924,9 +937,11 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
 
       const isLastSession = i === sessions.length - 1;
 
-      // omitOneSlogMeta: omit meta for the last session → orphaned_slog error.
+      // omitOneSlogMeta: omit meta for the last session → an unpairable .slog,
+      // which the loader's orphan guard drops and reports (it used to be fatal).
       const skipMeta = tamper.omitOneSlogMeta === true && isLastSession;
-      // omitOneSlog: omit slog for the last session but keep its meta → orphaned_meta error.
+      // omitOneSlog: omit slog for the last session but keep its meta → a
+      // stranded sidecar, dropped and reported (it used to be fatal).
       const skipSlog = tamper.omitOneSlog === true && isLastSession;
 
       if (!skipSlog) {
