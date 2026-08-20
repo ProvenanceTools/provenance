@@ -154,6 +154,33 @@ export const HEARTBEAT_INTERVAL_MAX_MS = 120_000;
  * so negligible privacy exposure: a knob governing a bare path is surface for
  * nothing. Both are floor.
  *
+ * `peer.observed` is here, and it is the one entry on this list that the "where
+ * the floor is drawn" test below does NOT obviously reach — so it is spelled out
+ * rather than left to be inferred.
+ *
+ * It is the most privacy-sensitive signal in the protocol: it is the only one
+ * describing a DIFFERENT student's artifact. By the stated test — sensitivity is
+ * an argument FOR a knob — that points at a `policy.capture` key, and the CPHS
+ * question it depends on (collaboration spec §8 item 5: is one student's
+ * recorder hashing another student's log inside the approved protocol?) is
+ * OPEN and explicitly gates Tier 4.
+ *
+ * It is on the floor anyway, for a narrow reason. The collaboration spec §5.6
+ * already assigns the disambiguation to a different mechanism: whether
+ * `.provenance/` witnessing was AVAILABLE is a `session.start` capability
+ * report, alongside `git_capture`, not a capture knob. A capability report says
+ * "I could not do this"; a capture knob says "I was told not to". The spec picks
+ * the former, so there is no knob for this kind and the floor is where it lands.
+ *
+ * The consequence a reviewer should check: a knob key here would be a change to
+ * the course-SIGNED manifest shape, published to two sibling recorder repos
+ * ahead of the product decision that gives it meaning — the readers-before-
+ * writers inversion program spec §9 forbids. If §8 item 5 comes back saying a
+ * course must be able to switch witnessing off, the honest fix is to move this
+ * entry to {@link POLICY_GATED_EVENT_KINDS} with a `peer_observation` key, in
+ * the same change as the recorders' watcher. Until then no recorder emits the
+ * kind at all, so the placement governs nothing that exists yet.
+ *
  * `paste` and `fs.external_change` were always floor as *events*; what changed is
  * that their content fields are too. There was briefly an `inline_content` knob
  * that stripped the snippets while leaving the events, and it was removed for the
@@ -180,6 +207,7 @@ export const FLOOR_EVENT_KINDS = [
   'ext.activate',
   'recorder.degraded',
   'recorder.recovered_from_corruption',
+  'peer.observed',
 ] as const satisfies readonly EventKind[];
 
 /**

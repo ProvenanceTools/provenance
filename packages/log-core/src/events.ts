@@ -343,6 +343,112 @@ export type RecorderRecoveredFromCorruptionPayload = {
   quarantined_path: string;
 };
 
+/**
+ * A foreign `.provenance/` log observed in the working tree — peer witnessing
+ * (program spec §7 mechanism 2, collaboration spec §5.5, Tier 4.1).
+ *
+ * ## What problem this exists to solve
+ *
+ * In a shared repository either partner can `rm` the other's `.slog` in an
+ * ordinary-looking commit, and nothing in the resulting archive records that the
+ * file was ever there. When the recorder sees a foreign log appear — typically a
+ * `git pull` dropping it into the tree — it writes what it saw into its **own**
+ * signed chain. Deleting a partner's log then leaves your own chain testifying
+ * that it existed, and to hide the deletion you must destroy both chains, which
+ * yields a submission with no provenance at all: the loudest possible signal.
+ *
+ * It also closes a gap that is otherwise unclosable from an archive alone. A
+ * rolling seal present with no log (`no_session_log`) is equally consistent with
+ * a deletion and with an innocent partial push — a partner who committed
+ * `manifest-<id>.json` before their `.slog` landed produces the identical bytes.
+ * A witness is the only thing that distinguishes them, which is why
+ * `loader/rolling-seal.ts` deliberately states it cannot.
+ *
+ * ## A witness is a claim, not a fact
+ *
+ * This payload records what one contributor's recorder saw about **another
+ * contributor's** file. It is exactly as trustworthy as the chain it sits in, so
+ * a reader must weight it by the witnessing session's own identity verdict and
+ * must never treat a witness inside an `unverifiable` session as authoritative.
+ * See `analysis-core/src/witness/reconcile-witnesses.ts`.
+ *
+ * ## No identity, of any kind
+ *
+ * There is no student ref, no key, no git author, and no path outside
+ * `.provenance/` here. A witness names a FILE and a CHAIN POSITION. Attribution
+ * runs, as everywhere else, through `session.start.identity.student_ref`; the
+ * witnessed session is joined to a contributor by its own `session.start`, never
+ * by anything asserted here. The same CPHS constraint that keeps git author
+ * identity out of {@link GitEventPayload} applies with more force to a payload
+ * describing someone else's artifact.
+ *
+ * ## Every cross-reference field is nullable, permanently
+ *
+ * `session_id`, `seq_high` and `last_hash` are read out of the foreign file, and
+ * a foreign file may not parse — it may be mid-write, conflict-marked, or
+ * truncated. `null` means "the recorder could not read this", and a reader must
+ * not confuse it with a value: a witness with a null `seq_high` commits to
+ * nothing checkable and can never support a finding.
+ *
+ * ## The recorder never touches the file
+ *
+ * Reading and hashing is the whole response. It never renames, rewrites, or
+ * deletes a foreign log — that was a live defect once already (a startup
+ * recovery that quarantined a partner's log), and `state: 'unparseable'` is the
+ * entire reaction to a foreign file that cannot be read.
+ */
+export type PeerObservedPayload = {
+  /**
+   * `.provenance/`-relative filename exactly as seen, e.g.
+   * `session-<uuid>.slog`. This is the FILENAME uuid space, which in production
+   * is minted independently of the logical `session.start` id — the two are
+   * different values of the same shape and must never be used to key each other.
+   */
+  file: string;
+  /**
+   * sha256 hex of the file's exact bytes at observation time.
+   *
+   * NOT a corroboration test on its own. A foreign log is append-only and its
+   * partner keeps recording, so the bytes seen here are almost always a PREFIX
+   * of the bytes finally committed. Comparing this against the archived file's
+   * digest and reading inequality as tampering is precisely the prefix-versus-
+   * whole-file error that produced three separate maximum-severity false
+   * accusations in this system's history. The chain commitment below is the
+   * test; this digest is corroborating detail.
+   */
+  sha256: string;
+  /** Byte length of the file at observation time. */
+  bytes: number;
+  /**
+   * The foreign chain's logical session id, from its `session.start`. `null`
+   * when the file did not parse.
+   */
+  session_id: string | null;
+  /** Highest `seq` in the foreign chain. `null` when the file did not parse. */
+  seq_high: number | null;
+  /**
+   * The foreign chain's final entry `hash`. `null` when the file did not parse.
+   *
+   * This is what upgrades the witness from a size claim to a verifiable
+   * commitment to an exact prefix: an archived log that stops before
+   * {@link PeerObservedPayload.seq_high}, or that reaches it with a different
+   * hash, cannot reproduce this value. `seq_high` alone would make truncation
+   * detectable only by length, which a forger can match.
+   */
+  last_hash: string | null;
+  /**
+   * What the recorder observed happening to the file.
+   *
+   * Descriptive context, NOT a verdict input: a reader must not let it change
+   * what the witness proves. `'disappeared'` in particular is not evidence of
+   * misconduct — checking out a branch that does not contain a partner's `.slog`
+   * removes it from the working tree, and stashing does the same. When the file
+   * is gone the digest and chain fields describe the LAST state the recorder
+   * saw, which is what makes the observation evidentiary at all.
+   */
+  state: 'appeared' | 'grew' | 'shrank' | 'disappeared' | 'unparseable';
+};
+
 // ---------------------------------------------------------------------------
 // Discriminated union map and derived types
 // ---------------------------------------------------------------------------
@@ -370,6 +476,7 @@ export type EventKindMap = {
   'chain.broken': ChainBrokenPayload;
   'recorder.degraded': RecorderDegradedPayload;
   'recorder.recovered_from_corruption': RecorderRecoveredFromCorruptionPayload;
+  'peer.observed': PeerObservedPayload;
 };
 
 /** All valid event kind strings. */

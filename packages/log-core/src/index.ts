@@ -159,6 +159,14 @@ export {
 } from './policy.js';
 export type { CapturePolicy, CapturePolicyBlock } from './policy.js';
 
+// Peer witnessing (program spec §7 mechanism 2 / collaboration spec §5.5)
+export {
+  validatePeerObservedPayload,
+  describePeerObservedShapeError,
+  PEER_OBSERVED_STATES,
+} from './peer-observed.js';
+export type { PeerObservedShapeError } from './peer-observed.js';
+
 // Events
 export type {
   EventKindMap,
@@ -192,6 +200,7 @@ export type {
   ChainBrokenPayload,
   RecorderDegradedPayload,
   RecorderRecoveredFromCorruptionPayload,
+  PeerObservedPayload,
 } from './events.js';
 
 // Envelope
