@@ -117,12 +117,52 @@ Every one of these was live on the branch and none was on any worklist.
 9. **Check 8 was wall-clock-decided.** "Last recorded state" was last-write-wins over wall-sorted
    sessions, so with two partners on divergent branches whoever's clock ran slow got a
    high-severity "changed outside the recording".
+10. **The rolling seal's prefix coverage was keyed on the wrong id, re-arming bug 5 in full.**
+    `parse-bundle.ts` resolved each seal to the log files it covers through
+    `new Map(sessionFiles.map((f) => [f.sessionId, f]))` — keyed by the `.slog` **FILENAME**
+    uuid — and looked it up with `seal.sessionId`, the **LOGICAL** id the seal is named after.
+    Production mints those independently (`session-${randomUUID()}.slog` in `session-registry.ts`
+    vs `recorderContext.session_id`), so the lookup missed on **every session of every git
+    submission**. The miss was a silent `continue`, so `coverage` came out **empty for the whole
+    bundle** — and empty coverage is not inert: `verify-log-bytes.ts` reads its absence as "this is
+    a classic seal" and applies **whole-file** equality to a digest that only ever committed to a
+    **prefix**. So `log_bytes_match` failed at high severity / confidence 1.0 on every honest git
+    submission whose last seal was non-final — a crash, a power cut, a full disk, or simply an
+    archive taken mid-session. Bug 5's fix was correct and was never reaching production data.
+    **This is the second id-space confusion** (bug 3 was the first: a containment predicate
+    written for files, handed a git repo root).
+
+### Why no test caught bug 10 — and the fixture rule that stops the next one
+
+Nothing was wrong with the assertions. **Every fixture in the repo spelled both uuids with the
+same value**, so the broken lookup hit and the honest reading came out. 972 `analysis-core` tests
+and the `tools/recorder-seal-conformance` gate — the gate that exists precisely to drive real
+recorder output through the real loader — were all green over a live maximum-severity false
+accusation.
+
+A fixture that cannot distinguish two ids **cannot fail on confusing them**. That is a property of
+the fixture, not of the tests written against it, and no amount of extra assertions recovers it.
+
+**The rule, now enforced by construction:** any fixture that produces a session gives its `.slog`
+filename a uuid that **differs** from its logical `session.start` id **by default**
+(`build-test-bundle.ts`'s `fakeLogFileUuid`, `recorder-seal-conformance`'s `logFileUuid`). A test
+that needs them equal must pass `fileUuid` explicitly, which makes it a visible claim in the diff.
+Generalised: **when two identifiers are the same shape and different values in production, a
+fixture that makes them equal is not a simplification — it deletes a bug class from the reachable
+test space.**
+
+The fix goes further than correcting the lookup: the filename id space is now a branded
+`LogFileId` and `SessionFiles.sessionId` is renamed `logFileId`, so the original line is a
+**compile error** (`Map<LogFileId, _>.get(string)`). Reintroducing it takes a deliberate cast —
+verified by mutation. The brand is deliberately narrow, covering only `loader/`, the one place
+both spaces are in scope at once; branding the logical id too would reach into `log-core`'s frozen
+manifest shape and every read path in `analyzer` and `server`.
 
 ---
 
 ## 4. Traps — these will bite again
 
-- **Worktrees are created from `main`, not the feature branch. 16 of 16 times.** Every agent must
+- **Worktrees are created from `main`, not the feature branch. 20 of 20 times.** Every agent must
   verify branch + ancestor and hard-reset before touching anything.
 - **Worktrees have no `node_modules`**, and `@provenance/*` symlinks resolve to the MAIN checkout —
   so a worktree agent's tests can silently run against a different tree and report green. Run
@@ -189,9 +229,11 @@ sessions across a partner's commit because that manufactures the accusation the 
 
 ## 6. State and what is owed
 
-Suites, all measured in the main tree:
-**log-core 541 · analysis-core 917 · recorder 582 · analyzer 1215 · tools 150 ·
+Suites:
+**log-core 541 · analysis-core 973 · recorder 583 · analyzer 1221 · tools 174 ·
 server 1420/1422 (2 confirmed flakes) · provjet 589 · provnvim 1007.**
+The first five re-measured 2026-08-20 after the id-space fix (bug 10); server,
+provjet and provnvim are carried forward and not re-measured since.
 Build, typecheck, lint clean. Branch ~145 commits, ~+50k lines vs `main`.
 
 ### Gating merge to `main`
