@@ -51,9 +51,12 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fsPromises from 'node:fs/promises';
+import * as fsSync from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import JSZip from 'jszip';
 import * as ed from '@noble/ed25519';
 import { bytesToHex } from '@noble/hashes/utils.js';
@@ -66,11 +69,21 @@ import {
   encryptSessionPrivkey,
   serializeEntry,
   signCheckpoint,
+  readRepositoryDiscriminator,
 } from '@provenance/log-core';
 import type { SessionKeypair } from '@provenance/log-core';
 
 // The analyzer's REAL read path.
-import { loadBundle, runValidation } from '@provenance/analysis-core';
+import {
+  loadBundle,
+  runValidation,
+  reconcileWitnesses,
+  isWitnessAlterationEvidence,
+  buildObservedDag,
+  getCommitNode,
+  repositoryKeyForRootCommit,
+  ASSUMED_SINGLE_REPOSITORY,
+} from '@provenance/analysis-core';
 import type { ValidationCheckId } from '@provenance/analysis-core';
 
 // The recorder's REAL write path, from its build output.
@@ -79,6 +92,8 @@ import { SessionWriter } from '../packages/recorder/dist/io/session-writer.js';
 import { MetaWriter } from '../packages/recorder/dist/io/meta-writer.js';
 import { sealBundle } from '../packages/recorder/dist/commands/seal.js';
 import { writeRollingSeal } from '../packages/recorder/dist/io/rolling-seal-writer.js';
+import { startPeerWatcher } from '../packages/recorder/dist/wiring/peer-watcher.js';
+import { startGitWiring } from '../packages/recorder/dist/wiring/git-wiring.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -3071,5 +3086,482 @@ describe('the classic seal path is untouched by the orphan guard', () => {
     expect(after.warnings.emptySession).toBe(true);
     expect(after.warnings.orphanedMeta).toBe(true);
     expect(after.warnings.orphanedRollingSeal).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PEER WITNESSING + THE REPOSITORY DISCRIMINATOR — the writer halves
+// ---------------------------------------------------------------------------
+//
+// Both landed as READERS first (program spec §9), and both writer contracts are
+// written down in `docs/superpowers/specs/2026-08-19-program-decision-log.md`.
+// This section is the only place in the repo where the real recorder-side
+// producers meet the real analysis-core consumers:
+//
+//   recorder   startPeerWatcher      -> analysis-core  reconcileWitnesses
+//   recorder   deriveRootCommitSha
+//            + startGitWiring        -> analysis-core  buildObservedDag
+//
+// Every byte is production code, and — for the discriminator — a REAL git
+// repository, so the two plumbing commands and their flags are under test
+// rather than a stub that agrees with whatever was written.
+//
+// The unit suites in `packages/recorder` cannot reach this: they stop at the
+// payload, and the whole history of this programme is defects that every
+// producing repo's own suite asserted were impossible.
+
+const gitExec = promisify(execFile);
+
+async function runGit(cwd: string, ...args: string[]): Promise<string> {
+  const { stdout } = await gitExec('git', args, {
+    cwd,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Conformance',
+      GIT_AUTHOR_EMAIL: 'conformance@example.invalid',
+      GIT_COMMITTER_NAME: 'Conformance',
+      GIT_COMMITTER_EMAIL: 'conformance@example.invalid',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_SYSTEM: '/dev/null',
+    },
+  });
+  return stdout;
+}
+
+/** A real repository with one commit. Returns its real root-commit sha. */
+async function initRepoWithOneCommit(dir: string, file: string): Promise<string> {
+  await runGit(dir, 'init', '-q', '-b', 'main');
+  await fsPromises.writeFile(path.join(dir, file), 'seed\n', 'utf8');
+  await runGit(dir, 'add', file);
+  await runGit(dir, 'commit', '-q', '--no-gpg-sign', '-m', 'seed');
+  return (await runGit(dir, 'rev-parse', 'HEAD')).trim();
+}
+
+/** The seam onto vscode.git, which is not available in this process. */
+function fakeGitRepo(rootFsPath: string, commit: string) {
+  let handler: (() => void) | undefined;
+  return {
+    repo: {
+      rootUri: { fsPath: rootFsPath },
+      state: {
+        HEAD: { commit, name: 'main' },
+        onDidChange: (h: () => void) => {
+          handler = h;
+          return { dispose() {} };
+        },
+      },
+      getCommit: (ref: string) => Promise.resolve({ hash: ref, parents: [] }),
+    },
+    fire: () => handler?.(),
+  };
+}
+
+function fakeGitExtension(repos: unknown[]): unknown {
+  return {
+    exports: {
+      getAPI: () => ({ repositories: repos, onDidOpenRepository: () => ({ dispose() {} }) }),
+    },
+  };
+}
+
+/** The seam onto vscode.workspace.createFileSystemWatcher. */
+function manualDirWatcher() {
+  const created: Array<(p: string) => void> = [];
+  return {
+    watcher: {
+      onDidCreate: (h: (p: string) => void) => {
+        created.push(h);
+        return { dispose() {} };
+      },
+      onDidChange: () => ({ dispose() {} }),
+      onDidDelete: () => ({ dispose() {} }),
+      dispose() {},
+    },
+    fireCreate: (p: string) => created.forEach((h) => h(p)),
+  };
+}
+
+type WitnessScenario = {
+  root: string;
+  provenanceDir: string;
+  /** The partner whose log is witnessed. Recorded and CLOSED first. */
+  partner: RecordedSession;
+  /** The session that does the witnessing. */
+  mine: RecordedSession;
+  rootCommitSha: string;
+  submoduleRootCommitSha: string;
+  headSha: string;
+  bundlePath: string;
+  /** The partner's `.slog` bytes as they were before we ever looked at them. */
+  partnerBytesBefore: Buffer;
+  partnerEntriesBefore: string[];
+};
+
+/**
+ * A shared repository: a partner's log already in `.provenance/`, and a session
+ * of ours that witnesses it and observes the repository.
+ */
+async function buildWitnessScenario(): Promise<WitnessScenario> {
+  const root = await makeRoot('witness');
+  const provenanceDir = path.join(root, '.provenance');
+  await fsPromises.mkdir(provenanceDir, { recursive: true });
+
+  // A REAL repository, plus a REAL nested one standing in for a submodule.
+  const rootCommitSha = await initRepoWithOneCommit(root, 'seed.txt');
+  const headSha = (await runGit(root, 'rev-parse', 'HEAD')).trim();
+  const submodule = path.join(root, 'vendor', 'lib');
+  await fsPromises.mkdir(submodule, { recursive: true });
+  const submoduleRootCommitSha = await initRepoWithOneCommit(submodule, 'lib.txt');
+  const submoduleHead = (await runGit(submodule, 'rev-parse', 'HEAD')).trim();
+  expect(rootCommitSha).not.toBe(submoduleRootCommitSha);
+
+  // --- The partner records first, and finishes. Their log is then final, which
+  // is what makes the witness's chain commitment checkable.
+  const partner = await recordSession({
+    provenanceDir,
+    sessionId: uuid(1),
+    prevSessionId: null,
+    files: [{ path: 'partner.py', initial: 'def a():\n    pass\n', append: 'a()\n' }],
+  });
+  const partnerBytesBefore = await fsPromises.readFile(partner.slogPath);
+  const partnerEntriesBefore = (await fsPromises.readdir(provenanceDir)).sort();
+
+  // --- Our session. Same production stack as recordSession, plus the two
+  // wirings under test.
+  const sessionId = uuid(2);
+  const fileUuid = logFileUuid(2);
+  const keypair = await generateSessionKeypair();
+  const encryptedPrivkey = await encryptSessionPrivkey(keypair.privateKey, MANIFEST_SIG, sessionId);
+  const slogPath = path.join(provenanceDir, `session-${fileUuid}.slog`);
+  const clock = new FixedClock(0, new Date('2026-05-19T15:00:00.000Z'));
+  const writer = await SessionWriter.open({ slogPath, clock });
+  const meta = await MetaWriter.create({
+    metaPath: `${slogPath}.meta`,
+    sessionId,
+    sessionPubkeyHex: keypair.publicKeyHex,
+    encryptedPrivkey,
+  });
+  const host = createSessionHost({ sessionId, clock, onEntry: (e) => writer.append(e) });
+
+  host.emit('session.start', {
+    format_version: '1.0',
+    session_id: sessionId,
+    prev_session_id: null,
+    assignment: { id: ASSIGNMENT_ID, semester: SEMESTER },
+    manifest_sig: MANIFEST_SIG,
+    machine_id: 'c'.repeat(64),
+    vscode: { version: '1.100.0', commit: '', platform: 'darwin-arm64' },
+    recorder: { version: '1.2.0', extension_id: 'itsgeagle.provenance-recorder' },
+    session_pubkey: keypair.publicKeyHex,
+  });
+
+  // --- THE REAL PEER WATCHER, with the real filesystem behind it.
+  const dirWatcher = manualDirWatcher();
+  const peer = startPeerWatcher({
+    provenanceDir,
+    // Our own files, by basename — exactly what session-registry.ts passes.
+    isOwnFile: (name: string) =>
+      name === path.basename(slogPath) || name === `${path.basename(slogPath)}.meta`,
+    emit: (data: unknown) => host.emit('peer.observed', data),
+    readFile: async (p: string) => {
+      try {
+        return { ok: true as const, bytes: await fsPromises.readFile(p) };
+      } catch {
+        return { ok: false as const, reason: 'gone' as const };
+      }
+    },
+    createWatcher: () => dirWatcher.watcher,
+  });
+
+  // A `git pull` landing the partner's log — and our own, which must be ignored.
+  dirWatcher.fireCreate(partner.slogPath);
+  dirWatcher.fireCreate(slogPath);
+  await peer.drain();
+
+  clock.advance(1000);
+
+  // --- THE REAL GIT WIRING, with the REAL deriveRootCommitSha (no override), so
+  // the discriminator in the log comes out of the real repository above.
+  const outer = fakeGitRepo(root, headSha);
+  const inner = fakeGitRepo(submodule, submoduleHead);
+  const gitW = startGitWiring({
+    emit: (d: unknown) => host.emit('git.event', d),
+    getGitExtension: () => fakeGitExtension([outer.repo, inner.repo]),
+  });
+  outer.repo.state.HEAD = { commit: headSha, name: 'main' };
+  outer.fire();
+  inner.repo.state.HEAD = { commit: submoduleHead, name: 'main' };
+  inner.fire();
+  await gitW.settled();
+  gitW.dispose();
+  peer.dispose();
+
+  // Our own file, so the bundle has real work from both contributors and
+  // checks 7 and 8 have something of ours to verify.
+  const myInitial = 'def b():\n    pass\n';
+  const myAppend = 'b()\n';
+  const myFinal = myInitial + myAppend;
+  clock.advance(1000);
+  host.emit('doc.open', {
+    path: 'mine.py',
+    sha256: sha256OfString(myInitial),
+    line_count: myInitial.split('\n').length,
+    content: myInitial,
+  });
+  const myLines = myInitial.split('\n');
+  const endLine = myLines.length - 1;
+  const endChar = myLines[endLine]!.length;
+  clock.advance(1000);
+  host.emit('doc.change', {
+    path: 'mine.py',
+    deltas: [
+      {
+        range: {
+          start: { line: endLine, character: endChar },
+          end: { line: endLine, character: endChar },
+        },
+        text: myAppend,
+      },
+    ],
+    source: 'typed',
+  });
+  clock.advance(1000);
+  const saved = host.emit('doc.save', { path: 'mine.py', sha256: sha256OfString(myFinal) });
+  if (saved !== null) {
+    await meta.appendCheckpoint(await signCheckpoint(saved.seq, saved.hash, keypair.privateKey));
+  }
+  clock.advance(1000);
+  host.emit('session.end', { reason: 'deactivate' });
+  await writer.flush();
+  await writer.dispose();
+  await meta.dispose();
+
+  const mine: RecordedSession = {
+    sessionId,
+    fileUuid,
+    slogPath,
+    keypair,
+    finalContent: new Map([['mine.py', myFinal]]),
+  };
+
+  // Roll a seal for each session, through the real writer, so the bundle is a
+  // valid git-submitted shape.
+  const content = new Map([...partner.finalContent, ...mine.finalContent]);
+  await writeWorkspaceFiles(root, content);
+  for (const s of [partner, mine]) {
+    const result = await writeRollingSeal({
+      provenanceDir,
+      sessionId: s.sessionId,
+      prevSessionId: null,
+      slogPath: s.slogPath,
+      assignmentRoot: root,
+      assignmentId: ASSIGNMENT_ID,
+      semester: SEMESTER,
+      filesUnderReview: [...content.keys()],
+      sessionPrivkey: s.keypair.privateKey,
+      extensionHash: EXTENSION_HASH,
+      final: true,
+    });
+    if (result.kind !== 'written') {
+      throw new Error(`writeRollingSeal did not succeed: ${JSON.stringify(result)}`);
+    }
+  }
+
+  const bundlePath = await zipRepo({
+    root,
+    provenanceDir,
+    submissionFiles: content,
+    outputPath: path.join(root, 'shared-repo.zip'),
+  });
+
+  return {
+    root,
+    provenanceDir,
+    partner,
+    mine,
+    rootCommitSha,
+    submoduleRootCommitSha,
+    headSha,
+    bundlePath,
+    partnerBytesBefore,
+    partnerEntriesBefore,
+  };
+}
+
+describe('peer witnessing + repository discriminator → the real readers', () => {
+  let scenario: WitnessScenario;
+  let verified: Verified;
+
+  beforeAll(async () => {
+    scenario = await buildWitnessScenario();
+    verified = await loadAndValidate(scenario.bundlePath);
+  }, 60_000);
+
+  it('a bundle carrying both new writers still passes all 8 validation checks', () => {
+    // Forward compatibility runs both ways: a new event KIND and a new payload
+    // FIELD must not disturb the chain, the seal, or any of the eight.
+    expectAllChecksPass(verified.report);
+    expect(detectionStatusOf(verified.report, 'log_bytes_match')).toBe('pass');
+    expect(detectionStatusOf(verified.report, 'checkpoint_chain_valid')).toBe('pass');
+  });
+
+  it('THE PARTNER’S LOG WAS NEVER TOUCHED — not renamed, not rewritten, not deleted', () => {
+    // Decision-log bug 2 destroyed a partner's evidence and let git blame the
+    // victim. Watching a directory full of other students' logs is the second
+    // place that mistake could be made. Byte-for-byte, and the directory listing
+    // gained only OUR OWN files.
+    const after = fsSync.readFileSync(scenario.partner.slogPath);
+    expect(after.equals(scenario.partnerBytesBefore)).toBe(true);
+
+    // Nothing the partner wrote was removed or renamed away...
+    const names = fsSync.readdirSync(scenario.provenanceDir).sort();
+    for (const before of scenario.partnerEntriesBefore) expect(names).toContain(before);
+    // ...and nothing was quarantined. `.corrupt-<ISO>` is the exact signature
+    // the startup recovery used when it renamed a log it could not validate,
+    // which in a shared repo destroys the victim's evidence. The peer watcher
+    // holds no write capability at all, so it cannot produce one.
+    expect(names.filter((n) => n.includes('.corrupt-'))).toEqual([]);
+  });
+
+  it('the REAL reconcileWitnesses reads our witness as CORROBORATED', () => {
+    const result = reconcileWitnesses(verified.bundle);
+
+    expect(result.malformed).toEqual([]);
+    expect(result.witnesses).toHaveLength(1);
+    const w = result.witnesses[0]!;
+    expect(w.verdict).toBe('corroborated');
+    expect(w.witness.witnessSessionId).toBe(scenario.mine.sessionId);
+    expect(w.witness.payload.session_id).toBe(scenario.partner.sessionId);
+    expect(w.witness.payload.file).toBe(path.basename(scenario.partner.slogPath));
+    expect(w.matchedSessionId).toBe(scenario.partner.sessionId);
+    expect(result.counts.corroborated).toBe(1);
+
+    // Corroboration is NOT evidence of anything, and the gate says so.
+    expect(isWitnessAlterationEvidence(w)).toBe(false);
+  });
+
+  it('never witnesses itself, and the witnessed session is the only one witnessed', () => {
+    const result = reconcileWitnesses(verified.bundle);
+    // Our own `.slog` was fired at the watcher alongside the partner's. The
+    // reader excludes a self-witness anyway; the WRITER must not produce one, so
+    // there is nothing here for it to exclude.
+    expect(result.excluded).toEqual([]);
+    const coverage = new Map(result.sessions.map((s) => [s.sessionId, s]));
+    expect(coverage.get(scenario.partner.sessionId)!.state).toBe('witnessed');
+    // Our own session is unwitnessed, which is ORDINARY and blameless.
+    expect(coverage.get(scenario.mine.sessionId)!.state).toBe('unwitnessed');
+    expect(result.counts.unwitnessedSessions).toBe(1);
+  });
+
+  it('the witness carries a FILE and a CHAIN POSITION, and no identity', () => {
+    const result = reconcileWitnesses(verified.bundle);
+    const payload = result.witnesses[0]!.witness.payload;
+    expect(Object.keys(payload).sort()).toEqual([
+      'bytes',
+      'file',
+      'last_hash',
+      'seq_high',
+      'session_id',
+      'sha256',
+      'state',
+    ]);
+    expect(payload.file).not.toContain('/');
+    expect(payload.state).toBe('appeared');
+    // The digest is corroborating detail; the commitment is the chain position.
+    expect(payload.sha256).toBe(
+      createHash('sha256').update(scenario.partnerBytesBefore).digest('hex'),
+    );
+    expect(payload.bytes).toBe(scenario.partnerBytesBefore.byteLength);
+  });
+
+  it('the REAL observed DAG keys the commit by the repository the recorder named', () => {
+    const dag = buildObservedDag({ sessions: verified.bundle.sessions });
+
+    expect(dag.repositoryScope.discriminatorRecorded).toBe(true);
+    expect(dag.repositoryScope.kind).toBe('discriminated');
+    // MUTATION GUARD: labelling a submodule event with the outer repository's
+    // root — or deriving one value for the whole session — collapses these to a
+    // single repository, which is exactly the sha-space merge D12 exists to
+    // prevent.
+    expect([...dag.repositoryScope.repositories].sort()).toEqual(
+      [
+        repositoryKeyForRootCommit(scenario.rootCommitSha),
+        repositoryKeyForRootCommit(scenario.submoduleRootCommitSha),
+      ].sort(),
+    );
+    expect(dag.repositoryScope.repositories).not.toContain(ASSUMED_SINGLE_REPOSITORY);
+
+    const outer = getCommitNode(
+      dag,
+      scenario.headSha,
+      repositoryKeyForRootCommit(scenario.rootCommitSha),
+    );
+    expect(outer).toBeDefined();
+    // And it is NOT reachable under the submodule's key.
+    expect(
+      getCommitNode(dag, scenario.headSha, repositoryKeyForRootCommit(scenario.submoduleRootCommitSha)),
+    ).toBeUndefined();
+  });
+
+  it('the discriminator in the log is the repository’s REAL root commit', () => {
+    const events = verified.bundle.sessions
+      .flatMap((s) => s.events)
+      .filter((e) => e.kind === 'git.event');
+    expect(events.length).toBe(2);
+    const values = events.map(
+      (e) => (e.data as Record<string, unknown>)['root_commit_sha'] as string,
+    );
+    expect(values).toContain(scenario.rootCommitSha);
+    expect(values).toContain(scenario.submoduleRootCommitSha);
+    for (const v of values) {
+      expect(readRepositoryDiscriminator({ root_commit_sha: v }).kind).toBe('recorded');
+      expect(v).toMatch(/^[0-9a-f]{40}$/);
+      // S14(b): never a path, never a remote URL.
+      expect(v).not.toContain('/');
+      expect(v).not.toContain(scenario.root);
+    }
+  });
+
+  it('a partner who simply has not pushed reads as ABSENT, and absent is NOT evidence', async () => {
+    // The innocent case the whole feature is calibrated around. The partner's
+    // log — and their seal, so this is a clean partial push rather than a
+    // no_session_log defect — is missing from the archive.
+    const partnerSlog = path.basename(scenario.partner.slogPath);
+    const buf = await mutateZip(scenario.bundlePath, (zip) => {
+      zip.remove(partnerSlog);
+      zip.remove(`${partnerSlog}.meta`);
+      zip.remove(`manifest-${scenario.partner.sessionId}.json`);
+      zip.remove(`manifest-${scenario.partner.sessionId}.sig`);
+    });
+    const loaded = await loadBundle(buf, 'no-push.zip', () => '2026-05-19T16:00:00.000Z');
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+
+    const result = reconcileWitnesses(loaded.value);
+    expect(result.witnesses).toHaveLength(1);
+    expect(result.witnesses[0]!.verdict).toBe('absent');
+    // THE BAR THE WHOLE PROGRAMME IS JUDGED AGAINST: this must not be evidence.
+    expect(isWitnessAlterationEvidence(result.witnesses[0]!)).toBe(false);
+  });
+
+  it('a TRUNCATED partner log is caught as SHORT — the chain commitment is real', () => {
+    // The payoff. `seq_high` + `last_hash` are what a truncated log cannot
+    // reproduce; a digest comparison would have called the honest case above a
+    // tamper and this one a tamper equally.
+    const text = scenario.partnerBytesBefore.toString('utf8');
+    const kept = text.split('\n').filter((l) => l.length > 0).slice(0, 2).join('\n') + '\n';
+    expect(kept.length).toBeLessThan(text.length);
+    return mutateZip(scenario.bundlePath, (zip) => {
+      zip.file(path.basename(scenario.partner.slogPath), kept);
+    })
+      .then((buf) => loadBundle(buf, 'truncated.zip', () => '2026-05-19T16:00:00.000Z'))
+      .then((loaded) => {
+        expect(loaded.ok).toBe(true);
+        if (!loaded.ok) return;
+        const result = reconcileWitnesses(loaded.value);
+        expect(result.witnesses).toHaveLength(1);
+        expect(result.witnesses[0]!.verdict).toBe('short');
+        expect(isWitnessAlterationEvidence(result.witnesses[0]!)).toBe(true);
+      });
   });
 });
