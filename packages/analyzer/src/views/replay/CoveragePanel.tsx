@@ -68,8 +68,14 @@ export function CoveragePanel({ bundle, index }: CoveragePanelProps) {
 
   if (facts === null || !hasCoverageFacts(facts)) return null;
 
-  const { identity, concurrentRecording, droppedArtifacts, unattestedTails, dagDefects, dagCoverage } =
-    facts;
+  const {
+    identity,
+    concurrentRecording,
+    droppedArtifacts,
+    unattestedTails,
+    dagDefects,
+    dagCoverage,
+  } = facts;
 
   return (
     <div

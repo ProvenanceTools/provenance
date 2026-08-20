@@ -227,9 +227,9 @@ describe('choosing a contributor', () => {
         onSeek={vi.fn()}
       />,
     );
-    expect(
-      (screen.getByTestId('replay-contributor-select') as HTMLSelectElement).value,
-    ).toBe('attributed:2.1:institution:inst1:alice');
+    expect((screen.getByTestId('replay-contributor-select') as HTMLSelectElement).value).toBe(
+      'attributed:2.1:institution:inst1:alice',
+    );
 
     rerender(
       <ContributorSelect
@@ -239,9 +239,9 @@ describe('choosing a contributor', () => {
         onSeek={vi.fn()}
       />,
     );
-    expect(
-      (screen.getByTestId('replay-contributor-select') as HTMLSelectElement).value,
-    ).toBe('attributed:2.1:institution:inst1:bob');
+    expect((screen.getByTestId('replay-contributor-select') as HTMLSelectElement).value).toBe(
+      'attributed:2.1:institution:inst1:bob',
+    );
   });
 
   it('does not silently name a contributor when the playhead is in an uncovered session', () => {

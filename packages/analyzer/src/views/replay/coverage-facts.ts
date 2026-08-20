@@ -314,8 +314,7 @@ export function coverageFacts(bundle: Bundle, index: EventIndex): CoverageFacts 
     unattestedTails: unattestedTails(bundle),
     dagDefects: dag.defects,
     dagCoverage: dag.coverage,
-    repositoryAssumedSingle:
-      dag.coverage.commits > 0 && !dag.repositoryScope.discriminatorRecorded,
+    repositoryAssumedSingle: dag.coverage.commits > 0 && !dag.repositoryScope.discriminatorRecorded,
   };
 }
 

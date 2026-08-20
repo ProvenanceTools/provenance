@@ -285,9 +285,12 @@ describe('sessionRanges mirrors the heuristic', () => {
 
 describe('a deployment with no root key', () => {
   it('reports rootKeyConfigured false, and that is a deployment fact', async () => {
-    const { bundle } = await buildScope([{ who: { studentRef: 'alice' }, startMin: 0, endMin: 60 }], {
-      rootKey: '',
-    });
+    const { bundle } = await buildScope(
+      [{ who: { studentRef: 'alice' }, startMin: 0, endMin: 60 }],
+      {
+        rootKey: '',
+      },
+    );
     const cov = identityCoverage(bundle.contributors ?? null);
     expect(cov.resolved).toBe(true);
     expect(cov.rootKeyConfigured).toBe(false);
@@ -298,16 +301,21 @@ describe('a deployment with no root key', () => {
   });
 
   it('distinguishes "resolution never ran" from "ran with no root key"', async () => {
-    const { bundle } = await buildScope([{ who: { studentRef: 'alice' }, startMin: 0, endMin: 60 }], {
-      stamp: false,
-    });
+    const { bundle } = await buildScope(
+      [{ who: { studentRef: 'alice' }, startMin: 0, endMin: 60 }],
+      {
+        stamp: false,
+      },
+    );
     const cov = identityCoverage(bundle.contributors ?? null);
     // Unstamped: we cannot say anything about the deployment's key at all.
     expect(cov.resolved).toBe(false);
   });
 
   it('attributes normally when the root key IS configured', async () => {
-    const { bundle } = await buildScope([{ who: { studentRef: 'alice' }, startMin: 0, endMin: 60 }]);
+    const { bundle } = await buildScope([
+      { who: { studentRef: 'alice' }, startMin: 0, endMin: 60 },
+    ]);
     const cov = identityCoverage(bundle.contributors ?? null);
     expect(cov.rootKeyConfigured).toBe(true);
     expect(cov.attributed).toBe(1);

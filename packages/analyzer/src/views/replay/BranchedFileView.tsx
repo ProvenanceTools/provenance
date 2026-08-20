@@ -127,16 +127,16 @@ export function BranchedFileView({ filePath, ambiguity }: BranchedFileViewProps)
       data-ambiguity-kind="concurrent"
     >
       <div className="shrink-0 border-b px-6 py-4">
-        <p className="mb-2 text-sm font-medium text-foreground" data-testid="replay-ambiguous-title">
+        <p
+          className="mb-2 text-sm font-medium text-foreground"
+          data-testid="replay-ambiguous-title"
+        >
           {copy.title}
         </p>
         <p className="text-sm text-muted-foreground" data-testid="replay-ambiguous-body">
           {copy.body}
         </p>
-        <p
-          className="mt-3 text-xs text-muted-foreground"
-          data-testid="replay-divergence-detail"
-        >
+        <p className="mt-3 text-xs text-muted-foreground" data-testid="replay-divergence-detail">
           {ambiguity.divergence.detail}
         </p>
       </div>

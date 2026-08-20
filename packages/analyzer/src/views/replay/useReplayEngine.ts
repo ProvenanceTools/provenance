@@ -127,9 +127,9 @@ export function useReplayEngine(
   const [ambiguousFiles, setAmbiguousFiles] = useState<
     ReadonlyMap<string, 'concurrent' | 'unknown'>
   >(new Map());
-  const [fileAmbiguity, setFileAmbiguity] = useState<
-    ReadonlyMap<string, AmbiguousReconstruction>
-  >(new Map());
+  const [fileAmbiguity, setFileAmbiguity] = useState<ReadonlyMap<string, AmbiguousReconstruction>>(
+    new Map(),
+  );
   const [files, setFiles] = useState<string[]>([]);
   const [seams, setSeams] = useState<readonly Seam[]>([]);
 
