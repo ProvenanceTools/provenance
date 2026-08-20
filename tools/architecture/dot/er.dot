@@ -29,11 +29,16 @@ digraph er {
   }
 
   subgraph cluster_enroll {
-    label="  STUDENT IDENTITY (S2)  " fontsize=9.5 fontcolor="#9d7bf5" color="#2e2450"
+    label="  STUDENT IDENTITY — 2.1 live · 2.0 archived  " fontsize=9.5
+    fontcolor="#9d7bf5" color="#2e2450"
     penwidth=1.5 style=rounded bgcolor="#0e0b18" labeljust="l"
     node [fillcolor="#1e1830" color="#9d7bf5"]
-    srefs  [label="student_refs\nopaque uuid ← (semester, sid)"]
-    senr   [label="student_enrollments\nPUBLIC keys only"]
+    students [label="students — 2.1\nglobal student_ref ← (institution_id, sso_subject)\nNO semester, NO course" penwidth=1.9]
+    scred    [label="student_credentials — 2.1\nappend-only, one row per issuance"]
+    srefs  [label="student_refs — 2.0, archived\nopaque uuid ← (semester, sid)"
+            fillcolor="#15171d" color="#5d677d" fontcolor="#98a2b6"]
+    senr   [label="student_enrollments — 2.0, archived\nPUBLIC keys only"
+            fillcolor="#15171d" color="#5d677d" fontcolor="#98a2b6"]
   }
 
   subgraph cluster_sub {
@@ -90,6 +95,8 @@ digraph er {
   semesters -> srefs
   roster -> srefs [label="soft link\nSET NULL" style=dashed]
   srefs -> senr
+  students -> scred [label="one row per\nissuance · RESTRICT" color="#9d7bf5"]
+  students -> roster [label="soft link\nSET NULL" style=dashed color="#9d7bf5"]
   submissions -> stats
   submissions -> valres  [label="1:1"]
   submissions -> flags
