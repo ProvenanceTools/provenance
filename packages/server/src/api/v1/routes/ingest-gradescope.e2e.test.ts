@@ -440,4 +440,191 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
       expect(subByStudent.get(rosterBySid.get('111')!)).not.toBe(pairBlobs[0]);
     });
   });
+
+  /** Admin + session + semester + config, shared by the override cases below. */
+  async function seedForOverride(
+    client: { bucketUrl: string },
+    bucketName: string,
+  ): Promise<{ semester: { id: string }; sessionToken: string }> {
+    _setConfigForTest(
+      parseEnv({
+        NODE_ENV: 'test',
+        PUBLIC_BASE_URL: 'http://localhost:3000',
+        DATABASE_URL: pgContainer.getConnectionUri(),
+        OBJECT_STORAGE_ENDPOINT: client.bucketUrl.replace(`/${bucketName}`, ''),
+        OBJECT_STORAGE_BUCKET: bucketName,
+        OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
+        OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+        OBJECT_STORAGE_REGION: 'us-east-1',
+        GOOGLE_OAUTH_CLIENT_ID: 'client-id',
+        GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
+        AUTH_ALLOWED_HOSTED_DOMAINS: '["berkeley.edu"]',
+        AUTH_SUPERADMIN_EMAILS: '["admin@berkeley.edu"]',
+        AUTH_COOKIE_SIGNING_SECRET: 'test-signing-secret-for-e2e-tests-123456789',
+        SESSION_TTL_DAYS: '14',
+        INGEST_MAX_BUNDLE_BYTES: '52428800',
+        INGEST_MAX_BATCH_BYTES: '5368709120',
+        INGEST_MAX_BATCH_FILES: '10000',
+      }),
+    );
+
+    const userId = crypto.randomUUID();
+    await db.insert(users).values({
+      id: userId,
+      google_subject: `sub-${userId}`,
+      email: `admin-${userId}@berkeley.edu`,
+      display_name: 'Admin',
+    });
+    const sessionToken = `sess-${crypto.randomUUID().replace(/-/g, '')}`
+      .padEnd(43, 'x')
+      .slice(0, 43);
+    await db.insert(sessions).values({
+      id: sessionToken,
+      user_id: userId,
+      expires_at: new Date(Date.now() + 14 * 86400_000),
+    });
+    const [course] = await db
+      .insert(courses)
+      .values({ name: 'CS 61A', slug: `cs61a-${crypto.randomUUID().slice(0, 8)}` })
+      .returning();
+    const [semester] = await db
+      .insert(semesters)
+      .values({
+        course_id: course!.id,
+        term: 'fa',
+        year: 2026,
+        slug: `fa2026-${crypto.randomUUID().slice(0, 8)}`,
+        display_name: 'Fall 2026',
+        filename_convention: '^(?<assignment_id>[a-z0-9_-]+)[-_](?<sid>\\d{6,12})\\.zip$',
+      })
+      .returning();
+    await db.insert(memberships).values({
+      user_id: userId,
+      semester_id: semester!.id,
+      role: 'admin',
+      granted_by: userId,
+    });
+    return { semester: { id: semester!.id }, sessionToken };
+  }
+
+  // -------------------------------------------------------------------------
+  // Per-request override via the scope_* query params
+  //
+  // This route's body is multipart/form-data reserved for the archive, so the
+  // override cannot ride a JSON field — it travels as three flat query params
+  // that `ingestScopeFromQuery` folds into the same IngestScopeConfig the JSON
+  // routes take. These cover that folding AND the HTTP wiring; the resolution
+  // semantics themselves are covered in repo-scopes.test.ts.
+  // -------------------------------------------------------------------------
+
+  it('scope_* query params override the assignment defaults for the batch', async () => {
+    await withTestMinio(async ({ client, bucketName }) => {
+      const { semester, sessionToken } = await seedForOverride(client, bucketName);
+      workerStop = await startWorker();
+
+      const formData = new FormData();
+      formData.append(
+        'archive',
+        new Blob([(await buildExportZip()).buffer as ArrayBuffer], { type: 'application/zip' }),
+        'assignment_8046601_export.zip',
+      );
+
+      // Every folder in this export is a classic flat bundle at the root, so
+      // declaring bundle_zip must change nothing — the point is that a VALID
+      // override is accepted and threaded, not that it alters this export.
+      const res = await createV1App().fetch(
+        new Request(
+          `http://localhost/semesters/${semester.id}` +
+            `/ingest:gradescope?scope_mode=bundle_zip&scope_on_multiple=error`,
+          {
+            method: 'POST',
+            headers: { Cookie: `__Host-prov_sess=${sessionToken}` },
+            body: formData,
+          },
+        ),
+      );
+
+      expect(res.status).toBe(202);
+      const body = (await res.json()) as {
+        bundles_processed: number;
+        skipped: Array<{ reason: string }>;
+      };
+      expect(body.bundles_processed).toBe(2);
+      expect(body.skipped.map((s) => s.reason)).toEqual(['no_manifest']);
+    });
+  });
+
+  it('a repo_scoped override whose glob matches nothing fails every folder, legibly', async () => {
+    await withTestMinio(async ({ client, bucketName }) => {
+      const { semester, sessionToken } = await seedForOverride(client, bucketName);
+
+      const formData = new FormData();
+      formData.append(
+        'archive',
+        new Blob([(await buildExportZip()).buffer as ArrayBuffer], { type: 'application/zip' }),
+        'assignment_8046601_export.zip',
+      );
+
+      const res = await createV1App().fetch(
+        new Request(
+          `http://localhost/semesters/${semester.id}` +
+            `/ingest:gradescope?scope_mode=repo_scoped&scope_path_glob=${encodeURIComponent('nope/**')}`,
+          {
+            method: 'POST',
+            headers: { Cookie: `__Host-prov_sess=${sessionToken}` },
+            body: formData,
+          },
+        ),
+      );
+
+      // 200, not 202: nothing was stageable, so there is no job — the roster
+      // is still upserted. Every bundle folder reports the mismatch.
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        job_id: string | null;
+        bundles_processed: number;
+        skipped: Array<{ folder_key: string; reason: string }>;
+      };
+      expect(body.job_id).toBeNull();
+      expect(body.bundles_processed).toBe(0);
+      expect(body.skipped.filter((s) => s.reason === 'submission_type_mismatch')).toHaveLength(2);
+    });
+  });
+
+  it('rejects a malformed scope override with 400, before reading the body', async () => {
+    await withTestMinio(async ({ client, bucketName }) => {
+      const { semester, sessionToken } = await seedForOverride(client, bucketName);
+      const app = createV1App();
+
+      const cases = [
+        // repo_scoped with no glob selects nothing — a typo that would silently
+        // drop a cohort, so it is refused rather than degraded here.
+        'scope_mode=repo_scoped',
+        // a glob is meaningless for the other modes
+        `scope_mode=repo_whole&scope_path_glob=${encodeURIComponent('x/**')}`,
+        // the pre-0026 spelling is not part of the API
+        'scope_mode=path&scope_path_glob=x',
+        'scope_mode=nonsense',
+        // a scope_* param with no scope_mode would otherwise be ignored outright
+        `scope_path_glob=${encodeURIComponent('proj2/**')}`,
+      ];
+
+      for (const query of cases) {
+        const formData = new FormData();
+        formData.append(
+          'archive',
+          new Blob([new Uint8Array([1, 2, 3])], { type: 'application/zip' }),
+          'x.zip',
+        );
+        const res = await app.fetch(
+          new Request(`http://localhost/semesters/${semester.id}/ingest:gradescope?${query}`, {
+            method: 'POST',
+            headers: { Cookie: `__Host-prov_sess=${sessionToken}` },
+            body: formData,
+          }),
+        );
+        expect(res.status, `query: ${query}`).toBe(400);
+      }
+    });
+  });
 });
