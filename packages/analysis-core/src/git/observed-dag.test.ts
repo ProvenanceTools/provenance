@@ -21,6 +21,7 @@ import {
   getCommitNode,
   isCommitAncestor,
   observedCommits,
+  repositoryKeyForRootCommit,
   sessionsObservingCommit,
   witnessedOnlyCommits,
   type ObservedDagSource,
@@ -48,6 +49,13 @@ type GitSpec = {
   operation?: string;
   /** Deliberately malformed payloads for the defensive-read tests. */
   rawParents?: unknown;
+  /**
+   * The repository discriminator (D12). Omit the key entirely to model the
+   * ABSENT field, which is what every recorder emits today.
+   */
+  rootCommitSha?: string;
+  /** Deliberately malformed discriminators for the defensive-read tests. */
+  rawRootCommitSha?: unknown;
   /** Wall clock. Deliberately hostile in several tests: it must change nothing. */
   wall?: string;
 };
@@ -59,6 +67,8 @@ function gitEvent(spec: GitSpec): HashedEnvelope {
   if (spec.parents !== undefined) data['parents'] = [...spec.parents];
   if ('rawParents' in spec) data['parents'] = spec.rawParents;
   if (spec.branch !== undefined) data['branch'] = spec.branch;
+  if (spec.rootCommitSha !== undefined) data['root_commit_sha'] = spec.rootCommitSha;
+  if ('rawRootCommitSha' in spec) data['root_commit_sha'] = spec.rawRootCommitSha;
   return {
     seq: spec.seq,
     t: spec.seq,
@@ -671,7 +681,7 @@ describe('observation provenance', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Repository scoping — the stated, tested limitation
+// Repository scoping — an UNLABELLED scope, which is every bundle in existence
 // ---------------------------------------------------------------------------
 
 describe('the single-repository assumption', () => {
@@ -681,9 +691,10 @@ describe('the single-repository assumption', () => {
     expect(dag.repositoryScope.kind).toBe('assumed_single');
   });
 
-  it('reports that no discriminator was recorded, because the format has none yet', () => {
-    // §8.6: root-commit sha is the chosen discriminator; it is not emitted yet.
-    // This flag is the single bit that flips when it lands.
+  it('reports that no discriminator was recorded, because this recorder emitted none', () => {
+    // D12: the discriminator is the root-commit sha. The format carries it and
+    // no recorder emits it yet (the writer half is deliberately outstanding), so
+    // this is the state of every bundle recorded to date.
     expect(dag.repositoryScope.discriminatorRecorded).toBe(false);
   });
 
@@ -705,12 +716,19 @@ describe('the single-repository assumption', () => {
     expect(compareCommits(dag, A, A, 'root:other')).toBe('unknown');
   });
 
-  it('KNOWN LIMITATION: two repositories in one scope are merged into one sha space', () => {
-    // Today an outer repo and a submodule both emit git.events with no
-    // discriminator, so their unrelated sha spaces fold together. This test
-    // pins the unsound behaviour deliberately: when §8.6 lands and
-    // readRepositoryDiscriminator starts returning a root-commit sha, THIS test
-    // must be rewritten to assert two repositories and no cross-repo ordering.
+  it('reports an unlabelled scope as counting no unreadable discriminator either', () => {
+    // Absence is not a problem and is never counted as one. This distinguishes
+    // "the recorder said nothing" from "the recorder said something wrong".
+    expect(dag.coverage.gitEventsWithUnreadableRepository).toBe(0);
+  });
+
+  it('was the KNOWN LIMITATION: two UNLABELLED repositories still merge, and say so', () => {
+    // This is what the KNOWN LIMITATION test pinned before the discriminator
+    // landed, and it is still the honest answer for a scope where nothing names
+    // a repository — the recorders emit no discriminator yet, so it is also
+    // still the answer for every bundle in existence. What has changed is that
+    // it is no longer the ONLY answer available: see the discriminated-scope
+    // tests below, where the same two lineages stay apart.
     const twoRepos = buildObservedDag(
       source({
         // Outer repo lineage.
@@ -719,10 +737,282 @@ describe('the single-repository assumption', () => {
         s2: [gitEvent({ seq: 1, sha: D, parents: [B] })],
       }),
     );
+    expect(twoRepos.repositoryScope.kind).toBe('assumed_single');
     expect(twoRepos.repositoryScope.repositories).toEqual([ASSUMED_SINGLE_REPOSITORY]);
-    // The unsound consequence, stated out loud: an ordering across two
-    // repositories that the evidence does not actually support.
     expect(compareCommits(twoRepos, A, D)).toBe('before');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Repository scoping — a DISCRIMINATED scope. This is what the KNOWN LIMITATION
+// test was waiting for: two repositories in one scope, kept apart.
+// ---------------------------------------------------------------------------
+
+/** Two root-commit shas: an outer repository and a submodule. */
+const OUTER_ROOT = '1'.repeat(40);
+const INNER_ROOT = '2'.repeat(40);
+const OUTER = repositoryKeyForRootCommit(OUTER_ROOT);
+const INNER = repositoryKeyForRootCommit(INNER_ROOT);
+
+describe('two repositories in one scope', () => {
+  // The exact shape the KNOWN LIMITATION test drove: an outer repo lineage
+  // A → B, and a submodule lineage that names B as a parent. In git those two
+  // Bs are unrelated values in unrelated sha spaces; only the discriminator can
+  // tell a reader that.
+  const dag = buildObservedDag(
+    source({
+      s1: [
+        gitEvent({ seq: 1, sha: A, parents: [], rootCommitSha: OUTER_ROOT }),
+        gitEvent({ seq: 2, sha: B, parents: [A], rootCommitSha: OUTER_ROOT }),
+      ],
+      s2: [gitEvent({ seq: 1, sha: D, parents: [B], rootCommitSha: INNER_ROOT })],
+    }),
+  );
+
+  it('keeps them in separate sha spaces rather than merging them', () => {
+    expect(dag.repositoryScope.kind).toBe('discriminated');
+    expect(dag.repositoryScope.discriminatorRecorded).toBe(true);
+    expect(dag.repositoryScope.repositories).toEqual([OUTER, INNER]);
+    expect(dag.repositoryScope.repositories).not.toContain(ASSUMED_SINGLE_REPOSITORY);
+  });
+
+  it('gives one sha in two repositories two DISTINCT nodes', () => {
+    // B is observed in the outer repo and witnessed as a parent in the inner
+    // one. Two nodes, because they are two commits.
+    const outerB = getCommitNode(dag, B, OUTER)!;
+    const innerB = getCommitNode(dag, B, INNER)!;
+    expect(outerB.presence).toBe('observed');
+    expect(innerB.presence).toBe('witnessed_only');
+    expect(outerB).not.toBe(innerB);
+    expect(dag.nodes.size).toBe(4);
+  });
+
+  it('reports a cross-repository comparison as unknown, never as a relationship', () => {
+    // The heart of it: A ≺ D was the fabricated ordering the old test pinned.
+    // Neither sha is in the other's repository, so there is no basis for any
+    // statement — and "unknown" is the answer for "not in this DAG", which is
+    // deliberately NOT "unordered".
+    expect(compareCommits(dag, A, D, OUTER)).toBe('unknown');
+    expect(compareCommits(dag, A, D, INNER)).toBe('unknown');
+    expect(compareCommits(dag, D, A, INNER)).toBe('unknown');
+  });
+
+  it('asserts no cross-repository ancestry, so no ≺ can be derived from one', () => {
+    expect(isCommitAncestor(dag, A, D, OUTER)).toBe(false);
+    expect(isCommitAncestor(dag, A, D, INNER)).toBe(false);
+    expect([...ancestorsOfCommit(dag, D, INNER)]).toEqual([B]);
+    expect([...ancestorsOfCommit(dag, D, OUTER)]).toEqual([]);
+    // The inner B is a bare witnessed parent: it does NOT drag in the outer A.
+    expect(ancestorsOfCommit(dag, D, INNER).has(A)).toBe(false);
+  });
+
+  it('still orders WITHIN a repository', () => {
+    // Discrimination must not cost the ordering that does exist.
+    expect(compareCommits(dag, A, B, OUTER)).toBe('before');
+    expect(compareCommits(dag, B, A, OUTER)).toBe('after');
+  });
+
+  it('never lets a repository key be confused with a commit sha', () => {
+    // Same shape, different id spaces — the confusion behind two live defects
+    // in this system's history. The namespace prefix is what keeps them apart.
+    expect(OUTER).not.toBe(OUTER_ROOT);
+    expect(OUTER).toBe(`repository:${OUTER_ROOT}`);
+    expect(OUTER).not.toBe(ASSUMED_SINGLE_REPOSITORY);
+    expect(commitNodeKey(OUTER, B)).not.toBe(commitNodeKey(INNER, B));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Repository scoping — degradation. None of these may become a finding.
+// ---------------------------------------------------------------------------
+
+describe('a bundle that records no discriminator', () => {
+  // The compatibility guarantee, asserted as an equality rather than described:
+  // every bundle in existence is in this state, and it must behave EXACTLY as it
+  // did before the field existed.
+  const events = [
+    gitEvent({ seq: 1, sha: A, parents: [] }),
+    gitEvent({ seq: 2, sha: B, parents: [A] }),
+    gitEvent({ seq: 3, sha: M, parents: [B, C] }),
+  ];
+  const dag = buildObservedDag(source({ s1: events }));
+
+  it('produces one sentinel repository, exactly as it always did', () => {
+    expect(dag.repositoryScope.kind).toBe('assumed_single');
+    expect(dag.repositoryScope.discriminatorRecorded).toBe(false);
+    expect(dag.repositoryScope.repositories).toEqual([ASSUMED_SINGLE_REPOSITORY]);
+    expect([...dag.nodes.keys()].every((k) => k.startsWith(ASSUMED_SINGLE_REPOSITORY))).toBe(true);
+  });
+
+  it('answers every query through the default repository, with no defect', () => {
+    expect(compareCommits(dag, A, M)).toBe('before');
+    expect([...ancestorsOfCommit(dag, M)].sort()).toEqual([A, B, C].sort());
+    expect(dag.defects).toEqual([]);
+    expect(dag.coverage.gitEventsWithUnreadableRepository).toBe(0);
+  });
+});
+
+describe('a shallow clone, whose root commit is not reachable', () => {
+  // A shallow clone cannot name its root: the boundary commit it reports has no
+  // parents but is not a root. The writer contract says OMIT the field, so a
+  // shallow clone is simply an unlabelled scope.
+  const dag = buildObservedDag(
+    source({
+      // The grafted boundary commit: parents recorded as empty, which is what
+      // git reports, and NOT proof that history begins here (S15).
+      s1: [gitEvent({ seq: 1, sha: A, parents: [] }), gitEvent({ seq: 2, sha: B, parents: [A] })],
+    }),
+  );
+
+  it('degrades to the unlabelled repository with no defect and no finding', () => {
+    expect(dag.repositoryScope.kind).toBe('assumed_single');
+    expect(dag.defects).toEqual([]);
+    expect(dag.coverage.gitEventsWithUnreadableRepository).toBe(0);
+  });
+
+  it('still orders the history it does have', () => {
+    expect(compareCommits(dag, A, B)).toBe('before');
+  });
+
+  it('does not let recordedRoot become a claim about the repository', () => {
+    // recordedRoot means root-or-truncated-lineage. A shallow clone is the
+    // truncated case, and nothing here distinguishes them or needs to.
+    expect(getCommitNode(dag, A)!.recordedRoot).toBe(true);
+    expect(dag.coverage.recordedRoots).toBe(1);
+  });
+});
+
+describe('a repository with several root commits', () => {
+  // Orphan branches and squashed imports both produce more than one parentless
+  // commit. Which one a recorder names is the WRITER's problem, pinned in the
+  // writer contract; the reader's obligation is that neither answer, and neither
+  // partner disagreeing about it, becomes a finding.
+  const dag = buildObservedDag(
+    source({
+      s1: [
+        gitEvent({ seq: 1, sha: A, parents: [], rootCommitSha: OUTER_ROOT }),
+        gitEvent({ seq: 2, sha: C, parents: [], rootCommitSha: OUTER_ROOT }),
+        gitEvent({ seq: 3, sha: M, parents: [A, C], rootCommitSha: OUTER_ROOT }),
+      ],
+    }),
+  );
+
+  it('accepts two recorded roots in one repository without a defect', () => {
+    expect(dag.coverage.recordedRoots).toBe(2);
+    expect(dag.defects).toEqual([]);
+    expect(dag.repositoryScope.repositories).toEqual([OUTER]);
+  });
+
+  it('orders the merge that joined them', () => {
+    expect(compareCommits(dag, A, M, OUTER)).toBe('before');
+    expect(compareCommits(dag, C, M, OUTER)).toBe('before');
+    expect(compareCommits(dag, A, C, OUTER)).toBe('unordered');
+  });
+
+  it('does not become a finding when two partners name DIFFERENT roots for it', () => {
+    // The worst case for the writer rule: one partner's history reaches a second
+    // root the other's does not, so the two label the SAME repository
+    // differently. Both partners observed B; under one labelling that is
+    // corroboration, under two it is two nodes.
+    const disagreeing = buildObservedDag(
+      source({
+        s1: [
+          gitEvent({ seq: 1, sha: A, parents: [], rootCommitSha: OUTER_ROOT }),
+          gitEvent({ seq: 2, sha: B, parents: [A], rootCommitSha: OUTER_ROOT }),
+        ],
+        s2: [
+          gitEvent({ seq: 1, sha: B, parents: [A], rootCommitSha: INNER_ROOT }),
+          gitEvent({ seq: 2, sha: D, parents: [B], rootCommitSha: INNER_ROOT }),
+        ],
+      }),
+    );
+
+    // Not a defect and not counted as unreadable: both values are well formed.
+    expect(disagreeing.defects).toEqual([]);
+    expect(disagreeing.coverage.gitEventsWithUnreadableRepository).toBe(0);
+
+    // The whole cost, and it is a LOSS of evidence, never a manufactured one:
+    // the shared commit is two nodes, so the corroboration is not visible.
+    expect(sessionsObservingCommit(getCommitNode(disagreeing, B, OUTER)!)).toEqual(['s1']);
+    expect(sessionsObservingCommit(getCommitNode(disagreeing, B, INNER)!)).toEqual(['s2']);
+
+    // Nothing is ordered across the two labellings.
+    expect(compareCommits(disagreeing, A, D, OUTER)).toBe('unknown');
+    expect(getCommitNode(disagreeing, D, OUTER)).toBeUndefined();
+
+    // And each partner's own claims still order within their own labelling.
+    expect(compareCommits(disagreeing, A, B, OUTER)).toBe('before');
+    expect(compareCommits(disagreeing, B, D, INNER)).toBe('before');
+  });
+});
+
+describe('a scope where only some observations name a repository', () => {
+  // One partner on a newer recorder, or one on a shallow clone. The unlabelled
+  // observations must NOT be assumed to belong to the named repository: that
+  // assumption is the merge the discriminator exists to prevent.
+  const dag = buildObservedDag(
+    source({
+      s1: [
+        gitEvent({ seq: 1, sha: A, parents: [], rootCommitSha: OUTER_ROOT }),
+        gitEvent({ seq: 2, sha: B, parents: [A], rootCommitSha: OUTER_ROOT }),
+      ],
+      s2: [gitEvent({ seq: 1, sha: D, parents: [B] })],
+    }),
+  );
+
+  it('reports the scope as mixed rather than rounding it to either neighbour', () => {
+    expect(dag.repositoryScope.kind).toBe('mixed');
+    expect(dag.repositoryScope.discriminatorRecorded).toBe(true);
+    expect(dag.repositoryScope.repositories).toEqual([OUTER, ASSUMED_SINGLE_REPOSITORY]);
+  });
+
+  it('does not correlate the unlabelled observations with the named repository', () => {
+    expect(compareCommits(dag, A, D, OUTER)).toBe('unknown');
+    expect(compareCommits(dag, A, D, ASSUMED_SINGLE_REPOSITORY)).toBe('unknown');
+    expect(getCommitNode(dag, D, OUTER)).toBeUndefined();
+  });
+
+  it('is not a defect: an older recorder is not evidence of anything', () => {
+    expect(dag.defects).toEqual([]);
+    expect(dag.coverage.gitEventsWithUnreadableRepository).toBe(0);
+  });
+});
+
+describe('a discriminator that is present and unusable', () => {
+  // A nonconforming writer: a repository path, a remote URL, an empty string.
+  // The value must never become a key — it would partition the graph on garbage
+  // and would flow an identifier the format forbids into a staff-facing UI.
+  const dag = buildObservedDag(
+    source({
+      s1: [
+        gitEvent({ seq: 1, sha: A, parents: [], rawRootCommitSha: '/Users/student/cs61b' }),
+        gitEvent({ seq: 2, sha: B, parents: [A], rawRootCommitSha: '' }),
+        gitEvent({ seq: 3, sha: C, parents: [B], rawRootCommitSha: 42 }),
+      ],
+    }),
+  );
+
+  it('folds the observations in with the unlabelled ones', () => {
+    expect(dag.repositoryScope.kind).toBe('assumed_single');
+    expect(dag.repositoryScope.discriminatorRecorded).toBe(false);
+    expect(dag.repositoryScope.repositories).toEqual([ASSUMED_SINGLE_REPOSITORY]);
+  });
+
+  it('counts what it could not read, so a nonconforming recorder stays visible', () => {
+    expect(dag.coverage.gitEventsWithUnreadableRepository).toBe(3);
+  });
+
+  it('is not a defect and does not disturb the graph', () => {
+    // A recorder that wrote something wrong is a fact about that recorder. It is
+    // never a fact about the student it recorded.
+    expect(dag.defects).toEqual([]);
+    expect(compareCommits(dag, A, C)).toBe('before');
+  });
+
+  it('never lets the unusable value appear as a repository key', () => {
+    expect([...dag.nodes.keys()].every((k) => k.startsWith(ASSUMED_SINGLE_REPOSITORY))).toBe(true);
+    expect(dag.observations.every((o) => o.repository === ASSUMED_SINGLE_REPOSITORY)).toBe(true);
+    expect(JSON.stringify(dag.repositoryScope)).not.toContain('cs61b');
   });
 });
 

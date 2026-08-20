@@ -55,27 +55,39 @@
  * `observation.sessionId` → `contributorOf(bundle, sessionId)` →
  * `session.start.identity.student_ref`, and nowhere else.
  *
- * ## Single-repository assumption — stated, not hidden
+ * ## Repository scoping — no longer an assumption when the recorder says so
  *
- * Node identity is `(repository, sha)`, exactly as spec §5.2 requires. The
- * repository discriminator is a signed-format decision that has NOT landed
- * (§8.6 / S14(b)): the chosen value is the repository's root-commit sha — both
- * partners derive it identically and offline, which is what makes
- * cross-contributor correlation possible, and a submodule has a different root
- * commit so it discriminates correctly — but no recorder emits it yet. So today
- * every observation is folded into the single sentinel repository
- * {@link ASSUMED_SINGLE_REPOSITORY}, and {@link ObservedDag.repositoryScope}
- * says exactly that, in the API, so a caller cannot mistake the assumption for a
- * finding.
+ * Node identity is `(repository, sha)`, exactly as spec §5.2 requires, and the
+ * repository is read from the observation: `git.event.root_commit_sha`, the
+ * repository's root-commit sha (decision D12 / S14(b)). Both partners on one
+ * repository derive that value identically and offline, which is what makes
+ * cross-contributor correlation possible at all, and a submodule has a different
+ * root commit, so it discriminates correctly.
  *
- * **A scope that really observed more than one repository (a submodule, a nested
- * repo) is UNSOUND today** — two unrelated sha spaces would be merged into one
- * graph. That is a stated, tested limitation, not a silent wrong answer. When
- * the discriminator lands, only {@link readRepositoryDiscriminator} changes:
- * every node, edge, traversal and public function here is already keyed on
- * `(repository, sha)`, so nothing else is redesigned.
+ * An observation that carries no discriminator is folded into the sentinel
+ * {@link ASSUMED_SINGLE_REPOSITORY} — which is what every observation in every
+ * bundle recorded to date does, since no recorder emits the field yet (readers
+ * before writers, program spec §9). **Absence is the ordinary case and never a
+ * finding**: a recorder that predates the field, and a shallow clone whose root
+ * commit is not reachable, both produce it.
+ *
+ * Absence is emphatically NOT "some other repository". Folding unlabelled
+ * observations together is what keeps a legacy bundle behaving exactly as it did
+ * before this landed; treating each as distinct would fragment every graph in
+ * existence. And a present discriminator is never assumed to describe the
+ * unlabelled observations either — a scope where only one partner's recorder
+ * labels its commits is reported as `'mixed'` and the two groups are NOT
+ * correlated, because assuming they are the same repository is precisely the
+ * merge this field exists to prevent.
+ *
+ * {@link ObservedDag.repositoryScope} states which of the three situations holds,
+ * in the API, so a caller cannot mistake an assumption for a fact. What a caller
+ * must never do is turn any of it into a finding: how many repositories a student
+ * observed, and whether their recorder could name them, says nothing about that
+ * student's conduct.
  */
 
+import { readRepositoryDiscriminator as readDiscriminatorField } from '@provenance/log-core';
 import type { HashedEnvelope } from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
@@ -85,59 +97,121 @@ import type { HashedEnvelope } from '@provenance/log-core';
 /**
  * A repository discriminator. Opaque; compared only for equality.
  *
- * Today the only value in circulation is {@link ASSUMED_SINGLE_REPOSITORY}.
- * When §8.6 lands this becomes the repository's root-commit sha.
+ * Two values are in circulation: {@link ASSUMED_SINGLE_REPOSITORY} for
+ * observations that named no repository, and
+ * {@link repositoryKeyForRootCommit}`(rootCommitSha)` for those that did.
  */
 export type RepositoryKey = string;
 
 /**
- * The sentinel repository every observation is folded into while `git.event`
- * carries no discriminator. Deliberately not a plausible sha, so a value that
- * leaks into a UI or a log reads as an assumption rather than as data.
+ * The sentinel repository every UNLABELLED observation is folded into.
+ *
+ * Deliberately not a plausible sha, so a value that leaks into a UI or a log
+ * reads as an assumption rather than as data — and so it can never collide with
+ * a real key, which is always `repository:` followed by hex.
+ *
+ * Every observation in every bundle recorded to date lands here, and must keep
+ * doing so: this is what makes a bundle with no discriminator behave exactly as
+ * it did before the field existed.
  */
 export const ASSUMED_SINGLE_REPOSITORY: RepositoryKey = 'repository:assumed-single';
 
 /**
+ * The key for a repository the recorder identified by its root-commit sha.
+ *
+ * Namespaced rather than bare so a repository key is never mistaken for a commit
+ * sha — they are the same shape, and this module holds both in scope at once,
+ * which is exactly the id-space confusion that has already produced two live
+ * defects in this system.
+ *
+ * The sha is used verbatim. Normalizing it here would be the same mistake
+ * `readSha` refuses to make; `@provenance/log-core`'s
+ * `readRepositoryDiscriminator` has already established that the value is
+ * lowercase hex of a legal object-name length, and anything else never reaches
+ * this function.
+ */
+export function repositoryKeyForRootCommit(rootCommitSha: string): RepositoryKey {
+  return `repository:${rootCommitSha}`;
+}
+
+/**
  * How this DAG's node keys were scoped, and therefore how far its answers can be
  * trusted.
+ *
+ * **None of these is a finding.** Which one holds is a fact about the recorders
+ * that produced the scope, never about the student they recorded.
  */
 export type RepositoryScope = {
   /**
-   * `'assumed_single'` is the only value today. It means: no observation carried
-   * a repository discriminator, so every sha was folded into one repository.
-   * Sound for a scope that observed exactly one repository — which is every
-   * scope the recorders currently produce, since git wiring watches the one
-   * repository owning the assignment root — and UNSOUND for a scope that
-   * observed a submodule or a nested repo alongside it (S14(b)).
+   * - `'assumed_single'` — no observation carried a usable discriminator, so
+   *   every sha was folded into {@link ASSUMED_SINGLE_REPOSITORY}. This is every
+   *   bundle recorded to date. Sound for a scope that observed exactly one
+   *   repository, and unsound for one that observed a submodule alongside it —
+   *   which is why the field exists.
+   * - `'discriminated'` — every observation named its repository. Commits in
+   *   different repositories are in different sha spaces and are never ordered
+   *   against each other.
+   * - `'mixed'` — some observations named a repository and some did not. The
+   *   unlabelled ones stay in the sentinel and are NOT assumed to belong to the
+   *   named repository: one partner on an older recorder, or on a shallow clone,
+   *   produces exactly this, and quietly merging the two groups would be the
+   *   fabricated correlation the discriminator exists to prevent. The cost is
+   *   that the two groups do not correlate, which surfaces as `'unordered'` or
+   *   `'unknown'` — never as evidence.
    */
-  kind: 'assumed_single';
+  kind: 'assumed_single' | 'discriminated' | 'mixed';
   /**
-   * Whether any observation carried a repository discriminator. Always `false`
-   * today; it is the single bit that flips when §8.6 lands.
+   * Whether any observation carried a usable repository discriminator. `false`
+   * for every bundle recorded to date, and equivalent to
+   * `kind !== 'assumed_single'`.
    */
   discriminatorRecorded: boolean;
   /**
    * Every repository key present in the graph, in first-observation order. Empty
-   * when nothing was observed at all.
+   * when nothing was observed at all. Contains {@link ASSUMED_SINGLE_REPOSITORY}
+   * iff some observation was unlabelled.
    */
   repositories: readonly RepositoryKey[];
 };
 
+type DiscriminatorRead = { repository: RepositoryKey; labelled: boolean; unreadable: boolean };
+
 /**
- * Reads the repository discriminator off a `git.event` payload.
+ * Reads the repository discriminator off a `git.event` payload and turns it into
+ * a node key.
  *
- * Returns `null` today, unconditionally: the field does not exist in the signed
- * format yet (§8.6). This is the ONE function that changes when it does — it
- * starts returning the recorded root-commit sha, {@link RepositoryScope} gains a
- * discriminated variant, and every keyed structure below keeps working because
- * it already keys on `(repository, sha)`.
+ * The narrowing itself lives in `@provenance/log-core`, because it is a
+ * cross-language format contract that the two sibling recorder repos have to
+ * implement identically; this function only maps its three answers onto a key.
  *
- * It deliberately does not guess. Deriving a discriminator here — from the
- * branch name, from the shape of the graph, from anything — would invent the
- * very correlation the format decision exists to make trustworthy.
+ * - recorded → that repository;
+ * - absent → the sentinel, which is the ordinary case and not a defect;
+ * - malformed → the sentinel too, but COUNTED. A value that is not a commit sha
+ *   must never become a key: it would partition the graph on garbage, and it is
+ *   the shape a nonconforming writer's repository path or remote URL would
+ *   arrive in. Counting rather than silently dropping is what keeps a
+ *   nonconforming recorder visible without inventing an accusation against the
+ *   student it recorded.
+ *
+ * It deliberately does not guess. Deriving a discriminator — from the branch
+ * name, from the shape of the graph, from the one repository some other session
+ * happened to name — would invent the very correlation the format decision
+ * exists to make trustworthy.
  */
-function readRepositoryDiscriminator(_payload: Record<string, unknown>): RepositoryKey | null {
-  return null;
+function readRepositoryOf(payload: Record<string, unknown>): DiscriminatorRead {
+  const read = readDiscriminatorField(payload);
+  if (read.kind === 'recorded') {
+    return {
+      repository: repositoryKeyForRootCommit(read.rootCommitSha),
+      labelled: true,
+      unreadable: false,
+    };
+  }
+  return {
+    repository: ASSUMED_SINGLE_REPOSITORY,
+    labelled: false,
+    unreadable: read.kind === 'malformed',
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +231,12 @@ export type ObservationRef = {
 
 /** One `git.event` that named a commit sha. */
 export type CommitObservation = {
+  /**
+   * The repository this observation named, or {@link ASSUMED_SINGLE_REPOSITORY}
+   * when it named none. Callers that hold an observation should pass THIS to the
+   * query functions rather than relying on their default, which is only right
+   * for a scope where nothing is labelled.
+   */
   repository: RepositoryKey;
   /** The sha this event named, verbatim. Never normalized — see `readSha`. */
   sha: string;
@@ -327,6 +407,16 @@ export type ObservedDagCoverage = {
    * without naming a commit.
    */
   gitEventsWithoutSha: number;
+  /**
+   * Observations whose repository discriminator was PRESENT and could not be
+   * used — not a commit sha, so it was folded in with the unlabelled ones.
+   *
+   * Ordinary absence is not counted here and is not counted anywhere: it is the
+   * state of every bundle recorded to date. This counts only a recorder that
+   * wrote something wrong, which is a fact about that recorder and never about
+   * the student. Nothing may turn it into a finding.
+   */
+  gitEventsWithUnreadableRepository: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -457,7 +547,9 @@ export function buildObservedDag(source: ObservedDagSource): ObservedDag {
   const defects: ObservedDagDefect[] = [];
   const observingSessions = new Set<string>();
   let gitEventsWithoutSha = 0;
-  let discriminatorRecorded = false;
+  let gitEventsWithUnreadableRepository = 0;
+  let labelledObservations = 0;
+  let unlabelledObservations = 0;
 
   for (const session of source.sessions) {
     for (const envelope of session.events) {
@@ -475,9 +567,11 @@ export function buildObservedDag(source: ObservedDagSource): ObservedDag {
         continue;
       }
 
-      const discriminator = readRepositoryDiscriminator(payload);
-      if (discriminator !== null) discriminatorRecorded = true;
-      const repository = discriminator ?? ASSUMED_SINGLE_REPOSITORY;
+      const discriminator = readRepositoryOf(payload);
+      const repository = discriminator.repository;
+      if (discriminator.labelled) labelledObservations += 1;
+      else unlabelledObservations += 1;
+      if (discriminator.unreadable) gitEventsWithUnreadableRepository += 1;
 
       const parentsRead = readParents(payload);
       if (!parentsRead.ok) {
@@ -601,6 +695,7 @@ export function buildObservedDag(source: ObservedDagSource): ObservedDag {
     commitsWithConflictingParents: 0,
     recordedRoots: 0,
     gitEventsWithoutSha,
+    gitEventsWithUnreadableRepository,
   };
   for (const node of nodes.values()) {
     if (node.presence === 'observed') coverage.observedCommits += 1;
@@ -610,8 +705,22 @@ export function buildObservedDag(source: ObservedDagSource): ObservedDag {
     if (node.recordedRoot) coverage.recordedRoots += 1;
   }
 
+  // A scope is `assumed_single` when nothing named a repository — the state of
+  // every bundle recorded to date, and the one that must behave exactly as it
+  // did before the field existed. `mixed` is deliberately its own answer rather
+  // than being rounded to either neighbour: rounding down to `assumed_single`
+  // would deny that a repository was named, and rounding up to `discriminated`
+  // would imply the unlabelled observations had been placed, which they have
+  // not.
+  const kind: RepositoryScope['kind'] =
+    labelledObservations === 0
+      ? 'assumed_single'
+      : unlabelledObservations === 0
+        ? 'discriminated'
+        : 'mixed';
+
   return {
-    repositoryScope: { kind: 'assumed_single', discriminatorRecorded, repositories },
+    repositoryScope: { kind, discriminatorRecorded: labelledObservations > 0, repositories },
     nodes,
     observations,
     defects,
@@ -695,7 +804,16 @@ function rotateToSmallest(shas: readonly string[]): string[] {
 // Queries
 // ---------------------------------------------------------------------------
 
-/** The node for a sha, or `undefined` if nothing in the scope mentioned it. */
+/**
+ * The node for a sha, or `undefined` if nothing in the scope mentioned it.
+ *
+ * The `repository` default is {@link ASSUMED_SINGLE_REPOSITORY}, which is right
+ * for an undiscriminated scope — every bundle recorded to date — and wrong for a
+ * labelled one, where it finds nothing. That is the intended failure: a query
+ * that does not say which repository it means gets `undefined`, never a commit
+ * from whichever repository happened to match. Pass `node.repository` or
+ * `observation.repository`.
+ */
 export function getCommitNode(
   dag: ObservedDag,
   sha: string,
