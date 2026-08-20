@@ -158,7 +158,7 @@ describe('parseBundlePhase', () => {
 
 describe('errorDetail id spaces', () => {
   it.each(['orphaned_meta', 'orphaned_slog'] as const)(
-    'names %s\'s id as a log FILE, not a sessionId',
+    "names %s's id as a log FILE, not a sessionId",
     (kind) => {
       const detail = errorDetail({ kind, sessionId: 'abc-123' })!;
 
