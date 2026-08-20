@@ -155,7 +155,12 @@ export const ingestPaths = {
       tags: ['Ingest'],
       summary: 'Start an ingest job (semester admin)',
       description:
-        'Upload one or more .zip bundles (or a single zip-of-zips). Returns 202 immediately; processing is async.',
+        'Upload one or more .zip bundles, a single zip-of-zips, or a GIT REPO zip. ' +
+        'A repo zip (an archive carrying one or more `.provenance/` directories) is walked ' +
+        'for every assignment scope and fanned out into one submission per ACCEPTED scope, ' +
+        'using the same discovery and the same declared-submission-type rules as ' +
+        '`ingest:gradescope`. A flat sealed bundle and a zip-of-bundles are staged with their ' +
+        'original bytes, exactly as before. Returns 202 immediately; processing is async.',
       security: [{ BearerAuth: [] }, { SessionCookie: [] }],
       parameters: [
         {
@@ -163,6 +168,38 @@ export const ingestPaths = {
           in: 'path',
           required: true,
           schema: { $ref: '#/components/schemas/UUID' },
+        },
+        {
+          name: 'scope_mode',
+          in: 'query',
+          required: false,
+          description:
+            "PER-REQUEST ingest-scope override. When given it replaces every assignment's " +
+            'persisted `ingest_scope` default for this batch — a one-off re-ingest or fixup ' +
+            'without mutating the assignment row. This request body is multipart/form-data ' +
+            '(reserved for the uploaded files), so the override travels as these three flat ' +
+            'query params rather than a nested object — the identical shape ' +
+            '`ingest:gradescope` takes. Omit all three to use the persisted defaults.',
+          schema: {
+            type: 'string',
+            enum: ['self_identifying', 'bundle_zip', 'repo_whole', 'repo_scoped'],
+          },
+        },
+        {
+          name: 'scope_path_glob',
+          in: 'query',
+          required: false,
+          description:
+            'Override `path_glob`. Required when scope_mode=repo_scoped, rejected otherwise. ' +
+            'e.g. `proj2/**`.',
+          schema: { type: 'string' },
+        },
+        {
+          name: 'scope_on_multiple',
+          in: 'query',
+          required: false,
+          description: 'Override `on_multiple`. Defaults to `ingest_all` when omitted.',
+          schema: { type: 'string', enum: ['error', 'ingest_all'] },
         },
       ],
       requestBody: {
@@ -181,15 +218,33 @@ export const ingestPaths = {
       },
       responses: {
         '202': {
-          description: 'Job accepted',
+          description:
+            'Job accepted. `skipped` lists every scope that did NOT become a submission, ' +
+            'with the same reasons `ingest:gradescope` reports. It is never null on this ' +
+            'route — scope resolution completes inside the request — so `[]` is a positive ' +
+            'statement that nothing was skipped. The identical array is also written to the ' +
+            'job and served by GET /ingest/jobs/{jobId}. A job returned here whose status is ' +
+            'already `failed` with a non-empty `skipped` is the "every scope was rejected" ' +
+            'outcome: the upload produced no submissions and the array says why.',
           content: {
             'application/json': {
               schema: {
                 type: 'object',
-                properties: { job_id: { $ref: '#/components/schemas/UUID' } },
+                required: ['job_id', 'skipped'],
+                properties: {
+                  job_id: { $ref: '#/components/schemas/UUID' },
+                  skipped: {
+                    type: 'array',
+                    items: { $ref: '#/components/schemas/IngestSkippedEntry' },
+                  },
+                },
               },
             },
           },
+        },
+        '400': {
+          description:
+            'VALIDATION (no files provided, or a scope_* override that names no scope_mode)',
         },
         '413': { description: 'INGEST_BATCH_TOO_LARGE or INGEST_FILE_TOO_LARGE' },
         '422': { description: 'ROSTER_REQUIRED (no roster uploaded yet)' },
