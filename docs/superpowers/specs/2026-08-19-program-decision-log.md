@@ -278,6 +278,32 @@ completion contract, not a wish list.
   _mentions_ the Node-side `loadBundle + runValidation` in a comment — it is run separately, by
   hand. That is the same asymmetry that left the VS Code recorder's written output unvalidated
   until this session, and it is the test class that has caught the most. **Automate it.**
+- **Four staff-visible strings name an id that no file in the bundle carries** — found by the
+  id-space audit that followed bug 10, all behaviourally correct, none fixed (out of scope for that
+  change). They matter because each one appears on a FAILURE path, where a staff member who greps
+  the archive for the id we printed finds nothing — the tool's own report is unverifiable by
+  inspection:
+  1. `loader/rolling-seal.ts` `no_session_log`: `"…but no session-<LOGICAL id>.slog is present"`.
+     No file is ever named that. Reaches staff through check 1's `detail`
+     (`verify-manifest-sig.ts` maps every defect detail into `problems`) and is persisted to
+     `check_1_detail`. Suggested: name the fact, not a fabricated filename — "no `.slog` in the
+     bundle records session `<id>`".
+  2. `analyzer/views/load/ErrorPanel.tsx` renders `orphaned_slog` / `orphaned_meta` as
+     `"Session <id> …"`, but that id is the `.slog` FILENAME uuid. Render it as the filename.
+  3. `server/services/ingest/parse-bundle-phase.ts` labels the same value `sessionId:` in the
+     stored ingest-failure detail.
+  4. The sibling `unsealed_session` defect and every `manifest-<id>.json` mention are correct —
+     those filenames genuinely are named after the logical id.
+     One real incident hits 1–3 at once: after a crash recovery quarantines a `.slog`, the
+     git-native path has no equivalent of `seal.ts`'s orphan guard, so the stranded `.slog.meta`
+     is packed and the whole submission fails to load with exactly these messages as the only clue.
+- **Four fixture generators still spell both session ids identically**, so anything verified
+  against them is structurally incapable of reproducing an id-space crossing — the property that
+  hid bug 10: `server/scripts/seed/build-example-export.ts` (so the demo database contains
+  A === B bundles), `gen-large-fixture.ts`, `bench-stages.ts`, `profile-large-bundle.ts`. Align
+  them with `fakeLogFileUuid`. `tools/export-conformance-vectors.ts` also publishes an A === B
+  filename to the two sibling recorder repos as a negative-match string — harmless, but it teaches
+  the wrong shape.
 
 ### Known gaps, deliberately accepted
 
