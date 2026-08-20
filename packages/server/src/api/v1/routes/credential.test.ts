@@ -17,7 +17,12 @@
  *  4. the roster link is order-independent, case-insensitive, write-once, and
  *     cannot destroy an identity an archived bundle still needs;
  *  5. API tokens and view-as cannot issue, because a credential IS the
- *     attribution claim.
+ *     attribution claim;
+ *  6. MULTIPLE MACHINES PER STUDENT is supported and REMEMBERED. Two machines
+ *     mean two keys and one ref, every key issued is recorded permanently, and
+ *     the adjudication question — "was this key ever issued to this student?" —
+ *     answers yes for BOTH of them, months after the second machine overwrote
+ *     `students.student_pubkey` with its own.
  */
 
 import { vi, describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
@@ -44,8 +49,13 @@ import {
   semesters,
   roster_entries,
   students,
+  student_credentials,
   api_tokens,
 } from '../../../db/schema.js';
+import {
+  wasKeyEverIssuedToStudent,
+  listStudentKeys,
+} from '../../../services/enrollment/credential-history.js';
 import type { DrizzleDb } from '../../../db/client.js';
 
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
@@ -66,6 +76,8 @@ const INSTITUTION_ID = 'berkeley';
 /** A student's single long-lived public key. One per student, forever. */
 const STUDENT_PUBKEY = 'a'.repeat(64);
 const OTHER_STUDENT_PUBKEY = 'b'.repeat(64);
+/** A key this server never issued to anyone. The negative case for adjudication. */
+const NEVER_ISSUED_PUBKEY = 'e'.repeat(64);
 
 type Chain = {
   rootPubHex: string;
@@ -780,6 +792,212 @@ describe('POST /identity/credential', () => {
         .from(students)
         .where(eq(students.sso_subject, victim.googleSubject));
       expect(rows).toHaveLength(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Multiple machines — supported, and remembered
+  // -------------------------------------------------------------------------
+
+  describe('two machines, one student', () => {
+    it('records BOTH keys against ONE student_ref', async () => {
+      // Each machine derives its own master secret, so a student legitimately
+      // presents a different public key from each. `students` holds only the
+      // most recent one; the history is what keeps the rest.
+      await withDb(async (db) => {
+        const chain = await buildChain();
+        setEnv({ private_key_hex: chain.institutionPrivHex, cert: chain.cert });
+        const { user, sessionId } = await seedUser(db, uniqueEmail());
+
+        // Machine A — the laptop.
+        const laptop = await (
+          await createV1App().fetch(credentialRequest(sessionId, STUDENT_PUBKEY))
+        ).json();
+
+        // Machine B — the desktop, months later, same account.
+        const s2 = await seedSecondSession(db, user.id);
+        const desktop = await (
+          await createV1App().fetch(credentialRequest(s2, OTHER_STUDENT_PUBKEY))
+        ).json();
+
+        // ONE ref. This is what makes contributor resolution — which groups on
+        // student_ref — see one person rather than two.
+        expect(desktop.student_ref).toBe(laptop.student_ref);
+
+        // TWO recorded keys, oldest first.
+        const keys = await listStudentKeys(db, laptop.student_ref);
+        expect(keys.map((k) => k.student_pubkey)).toEqual([STUDENT_PUBKEY, OTHER_STUDENT_PUBKEY]);
+
+        // And `students` still holds exactly one row, carrying the newest key —
+        // the identity anchor is unchanged, the history is purely additive.
+        const anchor = await db
+          .select()
+          .from(students)
+          .where(eq(students.student_ref, laptop.student_ref));
+        expect(anchor).toHaveLength(1);
+        expect(anchor[0]!.student_pubkey).toBe(OTHER_STUDENT_PUBKEY);
+      });
+    });
+
+    it('answers "was this key ever issued to this student?" yes for BOTH machines', async () => {
+      // THE adjudication question. Answering it from `students.student_pubkey`
+      // would report the laptop key — the one an October bundle carries — as
+      // never issued, purely because the desktop enrolled in November.
+      await withDb(async (db) => {
+        const chain = await buildChain();
+        setEnv({ private_key_hex: chain.institutionPrivHex, cert: chain.cert });
+        const { user, sessionId } = await seedUser(db, uniqueEmail());
+
+        const laptop = await (
+          await createV1App().fetch(credentialRequest(sessionId, STUDENT_PUBKEY))
+        ).json();
+        const s2 = await seedSecondSession(db, user.id);
+        await createV1App().fetch(credentialRequest(s2, OTHER_STUDENT_PUBKEY));
+
+        const ref: string = laptop.student_ref;
+        await expect(
+          wasKeyEverIssuedToStudent(db, { studentRef: ref, studentPubkey: STUDENT_PUBKEY }),
+        ).resolves.toBe(true);
+        await expect(
+          wasKeyEverIssuedToStudent(db, { studentRef: ref, studentPubkey: OTHER_STUDENT_PUBKEY }),
+        ).resolves.toBe(true);
+
+        // A key this student never presented is not theirs, and the history
+        // says so rather than shrugging.
+        await expect(
+          wasKeyEverIssuedToStudent(db, { studentRef: ref, studentPubkey: NEVER_ISSUED_PUBKEY }),
+        ).resolves.toBe(false);
+      });
+    });
+
+    it("does not attribute one student's key to another student", async () => {
+      await withDb(async (db) => {
+        const chain = await buildChain();
+        setEnv({ private_key_hex: chain.institutionPrivHex, cert: chain.cert });
+        const mine = await seedUser(db, uniqueEmail());
+        const theirs = await seedUser(db, uniqueEmail());
+
+        const a = await (
+          await createV1App().fetch(credentialRequest(mine.sessionId, STUDENT_PUBKEY))
+        ).json();
+        const b = await (
+          await createV1App().fetch(credentialRequest(theirs.sessionId, OTHER_STUDENT_PUBKEY))
+        ).json();
+
+        expect(b.student_ref).not.toBe(a.student_ref);
+        await expect(
+          wasKeyEverIssuedToStudent(db, {
+            studentRef: a.student_ref,
+            studentPubkey: OTHER_STUDENT_PUBKEY,
+          }),
+        ).resolves.toBe(false);
+      });
+    });
+
+    it("machine A's credential still verifies after machine B enrols", async () => {
+      // The property the whole design rests on: a credential is a signed
+      // artifact, so nothing the server later writes can reach it.
+      await withDb(async (db) => {
+        const chain = await buildChain();
+        setEnv({ private_key_hex: chain.institutionPrivHex, cert: chain.cert });
+        const { user, sessionId } = await seedUser(db, uniqueEmail());
+
+        const laptop = await (
+          await createV1App().fetch(credentialRequest(sessionId, STUDENT_PUBKEY))
+        ).json();
+
+        const s2 = await seedSecondSession(db, user.id);
+        await createV1App().fetch(credentialRequest(s2, OTHER_STUDENT_PUBKEY));
+
+        const stillValid = await verifyStudentCredential(
+          laptop.credential,
+          laptop.institution_cert.institution_pubkey,
+        );
+        expect(stillValid.ok).toBe(true);
+        // ...and the server can now also say it was one of theirs, which is the
+        // part that used to be lost.
+        await expect(
+          wasKeyEverIssuedToStudent(db, {
+            studentRef: laptop.student_ref,
+            studentPubkey: laptop.credential.student_pubkey,
+          }),
+        ).resolves.toBe(true);
+      });
+    });
+
+    it('APPENDS rather than overwriting when the same machine re-enrols', async () => {
+      // Two issuances of one key are two facts with different issued_at. An
+      // adjudicator asking which credential was live when a bundle was recorded
+      // needs both, so nothing collapses them into a counter.
+      await withDb(async (db) => {
+        const chain = await buildChain();
+        setEnv({ private_key_hex: chain.institutionPrivHex, cert: chain.cert });
+        const { user, sessionId } = await seedUser(db, uniqueEmail());
+
+        const first = await (
+          await createV1App().fetch(credentialRequest(sessionId, STUDENT_PUBKEY))
+        ).json();
+        const s2 = await seedSecondSession(db, user.id);
+        await createV1App().fetch(credentialRequest(s2, STUDENT_PUBKEY));
+
+        const rows = await db
+          .select()
+          .from(student_credentials)
+          .where(eq(student_credentials.student_ref, first.student_ref));
+        expect(rows).toHaveLength(2);
+        expect(rows.every((r) => r.student_pubkey === STUDENT_PUBKEY)).toBe(true);
+      });
+    });
+
+    it('reports machine_count and key_first_issued so the page can read as normal', async () => {
+      await withDb(async (db) => {
+        const chain = await buildChain();
+        setEnv({ private_key_hex: chain.institutionPrivHex, cert: chain.cert });
+        const { user, sessionId } = await seedUser(db, uniqueEmail());
+
+        const first = await (
+          await createV1App().fetch(credentialRequest(sessionId, STUDENT_PUBKEY))
+        ).json();
+        expect(first.machine_count).toBe(1);
+        expect(first.key_first_issued).toBe(true);
+        expect(first.reissued).toBe(false);
+
+        // Same machine again: a fresh credential, NOT a new machine.
+        const s2 = await seedSecondSession(db, user.id);
+        const again = await (
+          await createV1App().fetch(credentialRequest(s2, STUDENT_PUBKEY))
+        ).json();
+        expect(again.machine_count).toBe(1);
+        expect(again.key_first_issued).toBe(false);
+
+        // A genuinely second machine.
+        const s3 = await seedSecondSession(db, user.id);
+        const second = await (
+          await createV1App().fetch(credentialRequest(s3, OTHER_STUDENT_PUBKEY))
+        ).json();
+        expect(second.machine_count).toBe(2);
+        expect(second.key_first_issued).toBe(true);
+      });
+    });
+
+    it('records nothing when the institution refuses to issue', async () => {
+      // A deployment whose private key does not match its certificate must not
+      // leave a history row for a credential no student ever received.
+      await withDb(async (db) => {
+        const chain = await buildChain();
+        const wrong = await deriveCourseKeypair(seed(0x99), 'wrong-institution');
+        setEnv({ private_key_hex: toHex(wrong.privateKey), cert: chain.cert });
+        const { sessionId } = await seedUser(db, uniqueEmail());
+
+        const res = await createV1App().fetch(credentialRequest(sessionId, STUDENT_PUBKEY));
+        expect(res.status).toBe(503);
+
+        const rows = await db
+          .select()
+          .from(student_credentials)
+          .where(eq(student_credentials.student_pubkey, STUDENT_PUBKEY));
+        expect(rows).toHaveLength(0);
+      });
     });
   });
 

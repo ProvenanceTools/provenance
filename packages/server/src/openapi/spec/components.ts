@@ -994,7 +994,15 @@ export const components = {
     },
     StudentCredentialResponse: {
       type: 'object',
-      required: ['credential', 'institution_cert', 'institution_id', 'student_ref', 'reissued'],
+      required: [
+        'credential',
+        'institution_cert',
+        'institution_id',
+        'student_ref',
+        'reissued',
+        'machine_count',
+        'key_first_issued',
+      ],
       properties: {
         credential: { $ref: '#/components/schemas/StudentCredential' },
         institution_cert: { $ref: '#/components/schemas/InstitutionCert' },
@@ -1005,7 +1013,25 @@ export const components = {
           description:
             'True when this account had already been issued a credential and the server ' +
             're-issued for it. The previously issued credential is NOT invalidated — it stays ' +
-            'valid until its own signed expires_at, so archived bundles keep verifying.',
+            'valid until its own signed expires_at, so archived bundles keep verifying. On its ' +
+            'own this is not a warning: enrolling again is how a second machine is set up. ' +
+            'Prefer machine_count and key_first_issued for anything shown to a student.',
+        },
+        machine_count: {
+          type: 'integer',
+          minimum: 1,
+          description:
+            'How many distinct public keys have ever been issued to this student, counting ' +
+            'the one just issued. Each machine derives its own keypair from its own master ' +
+            'secret, so this is the number of machines the student has enrolled. Counts only ' +
+            'keys the server recorded; keys overwritten before migration 0026 are not known.',
+        },
+        key_first_issued: {
+          type: 'boolean',
+          description:
+            'True when the key just issued had never been issued to this student before — a ' +
+            'new machine — rather than a machine that already had a credential asking for a ' +
+            'fresh one.',
         },
       },
     },

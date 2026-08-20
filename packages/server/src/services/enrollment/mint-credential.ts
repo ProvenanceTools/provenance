@@ -34,7 +34,7 @@
  * ambiguity, and keying identity on a mutable attribute is how one person ends
  * up with two refs and their sessions split into two apparent contributors.
  *
- * ## Idempotency
+ * ## Idempotency, and the second machine
  *
  * A student who enrolls twice gets the SAME `student_ref`, guaranteed by the
  * unique key on (`institution_id`, `sso_subject`) and an upsert that never
@@ -44,6 +44,18 @@
  * credential already in a student's hands stays cryptographically valid until
  * its own signed `expires_at`, which is precisely what lets an archived bundle
  * verify years later during an adjudication.
+ *
+ * Enrolling twice is therefore NORMAL AND EXPECTED: it is how a student sets up
+ * a second machine. Each machine generates its own master secret and its own
+ * keypair, and each gets its own credential over the one shared ref, so
+ * contributor resolution (which groups on `student_ref`) still sees ONE person.
+ *
+ * What the upsert cannot do is remember. It holds the most recent key only, so
+ * every earlier key would be lost — and with it the server's ability to answer
+ * "was this the student's key?" about a bundle recorded on their other machine.
+ * That is why every issuance is also appended to `student_credentials`; see
+ * `credential-history.ts`. The upsert's overwriting behaviour is deliberately
+ * unchanged — `students` is the identity anchor, the history is additive.
  *
  * ## What is NOT enforced
  *
@@ -68,6 +80,7 @@ import type { StudentCredentialResponse } from '@provenance/shared/api-schemas';
 import { roster_entries, students } from '../../db/schema.js';
 import { type DrizzleDb } from '../../db/client.js';
 import { institutionKey, hex64ToBytes } from '../../config/institution-keys.js';
+import { recordIssuedCredential } from './credential-history.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -263,7 +276,27 @@ export async function issueStudentCredential(
   }
 
   // -------------------------------------------------------------------------
-  // 4. Backfill the roster link for the "submitted before enrolling" case.
+  // 4. Append the issuance to the permanent history.
+  //
+  // After the self-check, for the same reason as the roster link below: a
+  // deployment with a mismatched secret must not leave a record of a credential
+  // it refused to hand over.
+  //
+  // This is the ONLY place that remembers a key the `students` upsert above has
+  // overwritten, which is what lets an adjudicator later be told the truth
+  // about a bundle recorded on a student's other machine — "yes, that was one
+  // of theirs". Nothing prunes it; see `credential-history.ts`.
+  // -------------------------------------------------------------------------
+  const standing = await recordIssuedCredential(db, {
+    student_ref: studentRef,
+    institution_id: material.institution_id,
+    student_pubkey: studentPubkey,
+    issued_at: now,
+    expires_at: expiresAtDate,
+  });
+
+  // -------------------------------------------------------------------------
+  // 5. Backfill the roster link for the "submitted before enrolling" case.
   //
   // After the self-check, so a deployment with a mismatched secret does not
   // leave links behind for a credential it refused to issue.
@@ -279,6 +312,8 @@ export async function issueStudentCredential(
       institution_id: material.institution_id,
       student_ref: studentRef,
       reissued,
+      machine_count: standing.machineCount,
+      key_first_issued: standing.keyFirstIssued,
     },
   };
 }
