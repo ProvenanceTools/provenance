@@ -130,7 +130,7 @@ const STAGING_LEFTOVER_RE = /\.tmp$/;
  * describes does not. That is what makes a stranded sidecar informative rather
  * than merely a nuisance: it names exactly which recording went missing, so the
  * seal for that recording can be dropped alongside it instead of surfacing as a
- * `no_session_log` defect that fails check 1 and reads as an accusation.
+ * `no_session_log` defect that fails check 1 for the whole bundle.
  *
  * Returns `null` on anything unparseable. A sidecar we cannot read is still
  * dropped and still reported; we simply cannot name its session.
@@ -391,8 +391,7 @@ export async function unzipBundle(
       // The sidecar names the recording even when the log is gone. Carried so
       // `parse-bundle.ts` can drop this session's rolling seal WITH it, instead
       // of letting the seal surface as a `no_session_log` defect — which fails
-      // check 1 and offers "the log was deleted or the seal was planted" as the
-      // reading of a crash.
+      // check 1 for the whole bundle over a crash this loader can explain.
       ...(metaText !== undefined
         ? (() => {
             const logicalSessionId = logicalSessionIdFromMeta(metaText);

@@ -603,6 +603,54 @@ describe('edge case: a rolling manifest with no .slog, and a .slog with no rolli
     expect(ghost.detail).toMatch(/LOGICAL session id/);
   });
 
+  it('asserts nothing it cannot establish about WHY the log is absent', async () => {
+    // This text reaches staff as check 1's `detail` — which `integrity-flags.ts`
+    // uses verbatim as the Flag description — and is persisted to
+    // `check_1_detail`. It used to offer "either the log was deleted or the seal
+    // was planted". Both are inferences about how the archive came to look this
+    // way, and NOTHING IN THE ARCHIVE SUPPORTS EITHER: on the git path a partner
+    // who committed `.provenance/manifest-<id>.json` before their `.slog` landed
+    // — or whose `.slog` is caught by a `.gitignore` — produces this exact
+    // bundle. An innocent partial push was being described to a grader as
+    // deletion or planting.
+    //
+    // The finding stays (a missing log IS a gap in the record, and hiding it
+    // would be failing toward fewer findings). What it may not do is name a
+    // cause the evidence does not reach — the same discipline D16 applied to
+    // `git_unrecorded_in`.
+    const ghostId = 'deadbeef-0000-4000-8000-000000000000';
+    const built = await buildTestBundle({
+      rollingSeal: { tamper: { extraSealForSessionId: ghostId } },
+      sessions: [{ eventCount: 3 }],
+    });
+
+    const result = await loadBundle(built.blob, 'repo.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const ghost = result.value.rollingSeal!.defects.find((d) => d.kind === 'no_session_log')!;
+
+    // The accusation is gone.
+    expect(ghost.detail).not.toMatch(/planted/);
+    expect(ghost.detail).not.toMatch(/deleted or the seal/);
+
+    // What is known is separated from what is not.
+    expect(ghost.detail).toContain('What is established');
+    expect(ghost.detail).toContain('NOT established');
+    expect(ghost.detail).toContain('Nothing in this bundle tells those apart');
+    // The innocent reading is named alongside the guilty one, not omitted.
+    expect(ghost.detail).toMatch(/\.gitignore/);
+    // And what would actually settle it is stated, including the mechanism that
+    // does not exist yet, so nobody mistakes the gap for something the system
+    // could close today.
+    expect(ghost.detail).toContain('peer.observed');
+
+    // Still surfaced. Softening the wording must not soften the finding.
+    const check = await verifyManifestSig(result.value);
+    expect(check.status).toBe('fail');
+    expect(check.detail).toContain(ghostId);
+  });
+
   it('reports unsealed_session for a .slog no rolling manifest covers', async () => {
     const built = await buildTestBundle({
       rollingSeal: { tamper: { omitSealFor: [1] } },
