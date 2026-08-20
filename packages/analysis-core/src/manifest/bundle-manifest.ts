@@ -331,6 +331,38 @@ export function isSignalCaptured(bundle: Bundle, signal: CaptureSignal): boolean
 }
 
 /**
+ * The course-signed `collaboration` field, or `null`.
+ *
+ * Tier 1.4 of the git-collaboration spec: the signed switch that lets a
+ * collaboration-aware heuristic know it is looking at group work, without any
+ * student-controllable input.
+ *
+ * `null` unless a 2.0 manifest says otherwise **and the trust chain verified** —
+ * the same discipline {@link isSignalCaptured} applies to the capture policy,
+ * and for the same reason. `collaboration` is absent from the signed payload
+ * below 2.0 (`parseManifestValue` strips it), so a student cannot staple it on;
+ * requiring verification closes the remaining hole, where an unverified 2.0
+ * manifest claims `group` in order to reach a code path that suppresses
+ * findings.
+ *
+ * Where sessions disagree, `'group'` wins: a scope containing any session the
+ * course marked as group work is group work, and reading it as solo would apply
+ * the single-contributor assumptions the spec's four structural failures all
+ * come from.
+ */
+export function bundleCollaboration(bundle: Bundle): 'solo' | 'group' | null {
+  if (bundleCapturePolicyTrust(bundle) !== 'verified') return null;
+  let seen: 'solo' | 'group' | null = null;
+  for (const binding of readSessionManifests(bundle)) {
+    if (!isManifest2Binding(binding)) continue;
+    const value = binding.manifest.collaboration;
+    if (value === 'group') return 'group';
+    if (value === 'solo') seen = 'solo';
+  }
+  return seen;
+}
+
+/**
  * The heartbeat cadence this bundle was recorded at, in milliseconds.
  *
  * `heartbeat_interval_ms` is tunable per course (clamped to [5s, 120s]), so any
