@@ -49,6 +49,7 @@ import {
   SemesterListResponseSchema,
   AuditListResponseSchema,
   GradescopeIngestResponseSchema,
+  IngestStartResponseSchema,
   StudentCredentialResponseSchema,
 } from '@provenance/shared/api-schemas';
 import type {
@@ -58,6 +59,7 @@ import type {
   CreateCourseRequest,
   CreateSemesterRequest,
   GradescopeIngestResponse,
+  IngestStartResponse,
 } from '@provenance/shared/api-schemas';
 
 // ---------------------------------------------------------------------------
@@ -406,6 +408,12 @@ export function useIngestJobFiles(jobId: string, semesterId: string, cursor?: st
 /**
  * Mutation: POST /semesters/:semesterId/ingest (multipart upload).
  * Uses XMLHttpRequest to support upload progress callbacks.
+ *
+ * The response now carries `skipped` alongside `job_id`: this route runs the
+ * same scope discovery the Gradescope path does, so a git repo zip fans out
+ * into one submission per accepted scope and every scope that did not become
+ * one is named here. `[]` — the answer for every upload with no repo zip — is a
+ * positive statement that resolution ran and skipped nothing.
  */
 export function useStartIngest(semesterId: string) {
   const queryClient = useQueryClient();
@@ -416,7 +424,7 @@ export function useStartIngest(semesterId: string) {
     }: {
       files: File[];
       onProgress?: (pct: number) => void;
-    }): Promise<{ job_id: string }> =>
+    }): Promise<IngestStartResponse> =>
       new Promise((resolve, reject) => {
         const formData = new FormData();
         for (const file of files) {
@@ -431,8 +439,11 @@ export function useStartIngest(semesterId: string) {
         };
         xhr.onload = () => {
           if (xhr.status === 202) {
-            const data = JSON.parse(xhr.responseText) as { job_id: string };
-            resolve(data);
+            try {
+              resolve(IngestStartResponseSchema.parse(JSON.parse(xhr.responseText)));
+            } catch (e) {
+              reject(e instanceof Error ? e : new Error('Invalid server response'));
+            }
           } else {
             try {
               const err = JSON.parse(xhr.responseText) as {

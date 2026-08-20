@@ -448,6 +448,36 @@ export const GradescopeSkippedEntrySchema = z.object({
 });
 export type GradescopeSkippedEntry = z.infer<typeof GradescopeSkippedEntrySchema>;
 
+/**
+ * Response from `POST /semesters/:semesterId/ingest` — the plain multipart
+ * upload route.
+ *
+ * ADDITIVE (2026-08): `skipped` is new. The route previously answered
+ * `{ job_id }` alone, because it had no scope handling at all and therefore
+ * nothing to skip. It now runs the same `repo-scopes.ts` discovery and
+ * resolution the Gradescope entry points do (via `repo-zip.ts`), so a git repo
+ * zip fans out into one submission per accepted scope and every scope that does
+ * NOT become one is reported here — through the existing
+ * `GradescopeSkippedEntry` vocabulary, not a new channel.
+ *
+ * Unlike the Gradescope routes' shared response this field is NOT nullable.
+ * This route resolves every scope inside the request, before it answers, so it
+ * always knows: `[]` is the positive statement "resolution ran and skipped
+ * nothing", and it is what every upload carrying no repo zip returns. There is
+ * no instant at which the honest answer is "unknown", so there is no null to
+ * spend. `ingest_jobs.skipped` is written with the identical array, so
+ * `GET /ingest/jobs/:jobId` serves the same entries for the same upload.
+ *
+ * A `job_id` whose job is already `failed` with `skipped` non-empty is the
+ * "every scope was rejected" outcome: the upload was accepted, resolved, and
+ * produced no submissions, and the reasons are the array.
+ */
+export const IngestStartResponseSchema = z.object({
+  job_id: z.string().uuid(),
+  skipped: z.array(GradescopeSkippedEntrySchema),
+});
+export type IngestStartResponse = z.infer<typeof IngestStartResponseSchema>;
+
 export const IngestJobSummarySchema = z.object({
   total: z.number().int(),
   matched: z.number().int(),
@@ -596,9 +626,14 @@ export const FinalizeUploadRequestSchema = z.object({
 export type FinalizeUploadRequest = z.infer<typeof FinalizeUploadRequestSchema>;
 
 /**
- * Per-request ingest-scope override for `POST /ingest:gradescope`, whose body
- * is `multipart/form-data` reserved for the export archive — so the override
+ * Per-request ingest-scope override for the two MULTIPART upload routes,
+ * `POST /ingest:gradescope` and `POST /ingest`. Both bodies are
+ * `multipart/form-data` reserved for the archive/files — so the override
  * travels as flat QUERY PARAMETERS instead of a nested JSON object.
+ *
+ * The third entry point, `POST /ingest/uploads/:uploadId/complete`, has a JSON
+ * body and therefore takes the nested `ingest_scope` object directly (see
+ * `FinalizeUploadRequestSchema`). Two shapes, one per body type — not three.
  *
  * The three params map one-to-one onto `IngestScopeConfigSchema`:
  *   ?scope_mode=repo_scoped&scope_path_glob=proj2/**&scope_on_multiple=error
