@@ -71,6 +71,8 @@ import {
   buildCourseCertSignedPayload,
   parseIsoInstantMs,
   resolveCapturePolicy,
+  validatePeerObservedPayload,
+  PEER_OBSERVED_STATES,
   DEFAULT_CAPTURE_POLICY,
   FLOOR_EVENT_KINDS,
   POLICY_GATED_EVENT_KINDS,
@@ -862,6 +864,297 @@ function buildGitEventVectors(): unknown {
         'octopus_merge',
         'Three parents. Length is the structure: 0 = root, 1 = ordinary, 2+ = merge.',
         { operation: 'commit', commit_sha: C, sha: C, parents: [A, B, C], branch: 'main' },
+      ),
+    ],
+  };
+}
+
+/**
+ * Vectors for `peer.observed` — peer witnessing (program spec §7 mechanism 2,
+ * collaboration spec §5.5).
+ *
+ * A witness is one contributor's signed record of ANOTHER contributor's
+ * `.provenance/` log: the filename, the byte digest, and the foreign chain's
+ * `seq_high` + final `hash`. Deleting a partner's log then leaves your own chain
+ * testifying that it existed.
+ *
+ * Three things a port is likely to get wrong, each pinned by a case below:
+ *
+ *  - **`sha256` IS NOT THE CORROBORATION TEST.** A foreign log is append-only
+ *    and its owner keeps recording, so the bytes a witness saw are normally a
+ *    PREFIX of the bytes finally committed: digest inequality is the NORMAL
+ *    case, not evidence. `seq_high` + `last_hash` are the verifiable
+ *    commitment — a shorter or rewritten chain cannot reproduce the hash at that
+ *    position. An implementation that compares digests reports every honest pair
+ *    as tampered.
+ *  - **Explicit `null` is not an absent field.** `null` means "the recorder
+ *    could not read this out of the foreign file". A port that OMITS null fields
+ *    produces different canonical bytes and therefore a different chain hash.
+ *  - **Parsed-ness is all-or-nothing.** `session_id`, `seq_high` and `last_hash`
+ *    are read together or not at all. A payload with some of them names a
+ *    session while committing to nothing checkable — the shape most likely to be
+ *    read as stronger than it is — and is REJECTED.
+ *
+ * There is deliberately no student ref, no key, no git author and no path
+ * outside `.provenance/` in any case here, and a port MUST NOT add one. This
+ * payload describes somebody ELSE's artifact, so the CPHS constraint that keeps
+ * author identity out of `git.event` applies with more force. Attribution runs
+ * through `student_ref` inside `session.start.identity`, and nowhere else.
+ *
+ * READER HALF ONLY, at the time these vectors were written: no recorder emits
+ * this kind yet (program spec §9, readers before writers). A port should
+ * implement the narrowing and the canonical form first, and the directory
+ * watcher only once the writer contract lands.
+ */
+function buildPeerObservedVectors(): unknown {
+  const peerCase = (name: string, note: string, data: Record<string, unknown>): unknown => {
+    const envelope = {
+      seq: 0,
+      t: 0,
+      wall: '2026-01-01T00:00:00.000Z',
+      kind: 'peer.observed',
+      data,
+    };
+    const validated = validatePeerObservedPayload(data);
+    return {
+      name,
+      note,
+      data,
+      canonical_json: canonicalize(data),
+      envelope,
+      prev_hash: GENESIS_PREV_HASH,
+      hash: chainEntry(GENESIS_PREV_HASH, envelope).hash,
+      accepted: validated.ok,
+      ...(validated.ok ? { value: validated.value } : { error: validated.error }),
+    };
+  };
+
+  const FILE = 'session-7f3a1c22-9b0e-4d51-8a77-2c6e5d0b41af.slog';
+  const SEEN = 'a'.repeat(64);
+  const TIP = 'b'.repeat(64);
+  const SESSION = '4e2d9c10-55af-4b3e-9d21-8f0c7a6b3e55';
+
+  return {
+    note:
+      'peer.observed — peer witnessing (program spec §7 mechanism 2, collaboration spec §5.5). ' +
+      "One contributor's signed record of ANOTHER contributor's .provenance/ log: filename, byte " +
+      "digest, and the foreign chain's seq_high + final hash. Deleting a partner's log then " +
+      'leaves your own chain testifying that it existed, so hiding a deletion means destroying ' +
+      'both chains — which yields a submission with no provenance at all, the loudest possible ' +
+      'signal.',
+    sha256_is_not_the_test_note:
+      'The obvious implementation compares sha256 against the archived file and calls inequality ' +
+      'tampering. It is WRONG. A foreign log is append-only and its owner keeps recording, so the ' +
+      'bytes witnessed are normally a PREFIX of the bytes finally committed: inequality is the ' +
+      'NORMAL case. The verifiable commitment is seq_high + last_hash — an archived log that ' +
+      'stops before that seq, or reaches it with a different hash, cannot reproduce it. seq_high ' +
+      'alone would make truncation detectable only by LENGTH, which a forger can match. sha256 is ' +
+      'corroborating detail for display and nothing more.',
+    null_is_not_absent_note:
+      'null means "the recorder could not read this out of the foreign file", which is a ' +
+      'different fact from a field being absent. The nulls MUST be emitted explicitly: a port ' +
+      'that omits them produces different canonical bytes and therefore a different chain hash. ' +
+      'See the unparseable_file case.',
+    all_or_nothing_note:
+      'session_id, seq_high and last_hash are the three values read out of the foreign chain. ' +
+      'Either the recorder parsed it or it did not, so they are all non-null together or all ' +
+      'null together. A payload with only some of them is self-contradictory and is REJECTED — ' +
+      'it would name a session while committing to nothing any later archive could contradict.',
+    no_identity_note:
+      'NO student ref, NO key, NO git author, and no path outside .provenance/. A witness names a ' +
+      'FILE and a CHAIN POSITION. This payload is about somebody ELSE, so the CPHS constraint ' +
+      'that keeps author identity out of git.event applies with more force here. Attribution runs ' +
+      'through student_ref inside session.start.identity, and nowhere else. A port that adds an ' +
+      'identifier here is out of protocol.',
+    floor_note:
+      'peer.observed is a FLOOR event kind: it has no key in policy.capture, so "off" is not ' +
+      'expressible. The collaboration spec §5.6 assigns "was witnessing AVAILABLE?" to a ' +
+      'session.start capability report rather than to a capture knob, so there is no knob for it ' +
+      'to be gated on. NOTE this is provisional: the CPHS question in collaboration spec §8 item ' +
+      '5 is open and gates the WRITER half. See capture-policy.json.',
+    reader_half_only_note:
+      'No recorder emits this kind yet. Readers before writers (program spec §9): implement the ' +
+      'narrowing and the canonical form now; the directory watcher lands with the writer contract.',
+    states: [...PEER_OBSERVED_STATES],
+    cases: [
+      peerCase(
+        'appeared_parsed',
+        "The ordinary witness: a git pull dropped a partner's log into the tree, the recorder " +
+          'hashed it and read its chain. This is what corroboration is checked against.',
+        {
+          file: FILE,
+          sha256: SEEN,
+          bytes: 8192,
+          session_id: SESSION,
+          seq_high: 412,
+          last_hash: TIP,
+          state: 'appeared',
+        },
+      ),
+      peerCase(
+        'grew',
+        'The same file, later and longer. Distinct from appeared: a reader must be able to see ' +
+          'the foreign chain advancing inside this chain.',
+        {
+          file: FILE,
+          sha256: 'c'.repeat(64),
+          bytes: 12288,
+          session_id: SESSION,
+          seq_high: 601,
+          last_hash: 'd'.repeat(64),
+          state: 'grew',
+        },
+      ),
+      peerCase(
+        'shrank',
+        'The file got SHORTER. Append-only logs do not shrink, so this is the observation that ' +
+          'catches a truncation while it happens — but it is still only an observation, and not ' +
+          'by itself misconduct.',
+        {
+          file: FILE,
+          sha256: 'e'.repeat(64),
+          bytes: 2048,
+          session_id: SESSION,
+          seq_high: 90,
+          last_hash: 'f'.repeat(64),
+          state: 'shrank',
+        },
+      ),
+      peerCase(
+        'disappeared',
+        'The file is gone from the working tree. NOT evidence of misconduct: checking out a ' +
+          "branch that does not contain a partner's .slog removes it, and so does a stash. The " +
+          'digest and chain fields describe the LAST state the recorder saw, which is what makes ' +
+          'the observation evidentiary at all.',
+        {
+          file: FILE,
+          sha256: SEEN,
+          bytes: 8192,
+          session_id: SESSION,
+          seq_high: 412,
+          last_hash: TIP,
+          state: 'disappeared',
+        },
+      ),
+      peerCase(
+        'unparseable_file',
+        'The foreign file could not be read — mid-write, conflict-marked, or truncated. All three ' +
+          'chain fields are explicitly null. The recorder does NOT rename, rewrite or delete it: ' +
+          'recording this state is the entire response. Note the nulls are present in the ' +
+          'canonical bytes; omitting them changes the hash.',
+        {
+          file: FILE,
+          sha256: SEEN,
+          bytes: 41,
+          session_id: null,
+          seq_high: null,
+          last_hash: null,
+          state: 'unparseable',
+        },
+      ),
+      peerCase(
+        'seq_high_zero',
+        'A foreign log holding only its session.start. 0 is a real seq: a truthiness check here ' +
+          'rejects the shortest possible honest witness and reads it as unparsed.',
+        {
+          file: FILE,
+          sha256: SEEN,
+          bytes: 512,
+          session_id: SESSION,
+          seq_high: 0,
+          last_hash: TIP,
+          state: 'appeared',
+        },
+      ),
+      peerCase(
+        'rejected_named_session_without_tip',
+        'REJECTED (partially_parsed). Names a session, commits to no tip. It reads as ' +
+          'authoritative while being unfalsifiable by any archive — the single most dangerous ' +
+          'shape this payload can take.',
+        {
+          file: FILE,
+          sha256: SEEN,
+          bytes: 8192,
+          session_id: SESSION,
+          seq_high: null,
+          last_hash: null,
+          state: 'appeared',
+        },
+      ),
+      peerCase(
+        'rejected_seq_without_hash',
+        'REJECTED (partially_parsed). seq_high alone is a SIZE claim; a forger can match a ' +
+          'length. last_hash is what makes it a commitment to an exact prefix.',
+        {
+          file: FILE,
+          sha256: SEEN,
+          bytes: 8192,
+          session_id: SESSION,
+          seq_high: 412,
+          last_hash: null,
+          state: 'appeared',
+        },
+      ),
+      peerCase(
+        'rejected_unparseable_with_chain_values',
+        'REJECTED (unparseable_with_chain_values). Self-contradictory: the recorder cannot both ' +
+          'have failed to parse the file and have read its chain out.',
+        {
+          file: FILE,
+          sha256: SEEN,
+          bytes: 41,
+          session_id: SESSION,
+          seq_high: 412,
+          last_hash: TIP,
+          state: 'unparseable',
+        },
+      ),
+      peerCase(
+        'rejected_unknown_state',
+        'REJECTED (unknown_state). Unlike an unknown event KIND — forward compatibility, must ' +
+          'pass — an unknown state inside a payload we DO understand would have to be given a ' +
+          'meaning, and inventing one is how an unfamiliar observation becomes an accusation.',
+        {
+          file: FILE,
+          sha256: SEEN,
+          bytes: 8192,
+          session_id: SESSION,
+          seq_high: 412,
+          last_hash: TIP,
+          state: 'vanished',
+        },
+      ),
+      peerCase(
+        'rejected_uppercase_sha256',
+        'REJECTED (bad_field: sha256). Hex is lowercase everywhere in this format. A port that ' +
+          'upper-cases produces a value that will never match any digest computed here.',
+        {
+          file: FILE,
+          sha256: SEEN.toUpperCase(),
+          bytes: 8192,
+          session_id: SESSION,
+          seq_high: 412,
+          last_hash: TIP,
+          state: 'appeared',
+        },
+      ),
+      peerCase(
+        'accepted_unknown_extra_key',
+        'ACCEPTED. Forward compatibility, the same rule resolveCapturePolicy applies to unknown ' +
+          "capture keys: a newer recorder's extra field must not make a reader discard the whole " +
+          'witness. It is ignored, never carried onto the narrowed value. NOTE the extra key DOES ' +
+          'change the canonical bytes and therefore the chain hash — narrowing is not ' +
+          'canonicalization.',
+        {
+          file: FILE,
+          sha256: SEEN,
+          bytes: 8192,
+          session_id: SESSION,
+          seq_high: 412,
+          last_hash: TIP,
+          state: 'appeared',
+          future_signal: true,
+        },
       ),
     ],
   };
@@ -2228,6 +2521,9 @@ async function main(): Promise<void> {
 
   // --- 13. S5 git.event commit graph: sha / parents / branch ---
   writeJson(outDir, 'git-event.json', buildGitEventVectors());
+
+  // --- 13b. Tier 4.1 peer.observed: peer witnessing (reader half) ---
+  writeJson(outDir, 'peer-observed.json', buildPeerObservedVectors());
 
   // --- 14. S3 rolling seal: manifest-<session_id>.json at format_version 1.2 ---
   writeJson(outDir, 'rolling-manifest.json', await buildRollingManifestVectors());

@@ -316,7 +316,7 @@ manifest shape and every read path in `analyzer` and `server`.
 
 ## 4. Traps — these will bite again
 
-- **Worktrees are created from `main`, not the feature branch. 20 of 20 times.** Every agent must
+- **Worktrees are created from `main`, not the feature branch. 22 of 22 times.** Every agent must
   verify branch + ancestor and hard-reset before touching anything.
 - **Worktrees have no `node_modules`**, and `@provenance/*` symlinks resolve to the MAIN checkout —
   so a worktree agent's tests can silently run against a different tree and report green. Run
@@ -433,7 +433,9 @@ completion contract, not a wish list.
   fact** — today a proven-different overlap yields _no flag and no fact_, which is weaker than the
   spec intends.
 - `submission_contributors` cut-over (D9), per-contributor heuristic scoping, `Flag.contributor_id`.
-- Peer witnessing (`peer.observed`) — tri-repo format change.
+- Peer witnessing (`peer.observed`) — **reader half DONE 2026-08-20** (see below). The
+  **writer half is deliberately not built**: the directory watcher in the three recorders, and
+  the `session.start` witnessing-availability capability report §5.6 item 3 calls for.
 - The repository discriminator (D12) as a signed-format change, with vectors.
 - ~~provjet has no automated cross-implementation gate.~~ **DONE 2026-08-20.**
   `provjet/scripts/e2e/run_e2e.sh` + `verify-bundle-with-analyzer.mjs` now drive real
@@ -470,6 +472,125 @@ either orphan shape, `LoaderError.orphaned_meta` / `orphaned_slog` are no longer
 variants and their renderers are kept: `LoaderError` is the declared vocabulary of loader failures
 and the server persists these `cause` values in `ingest_files` rows that outlive the change. Whether
 to delete them outright is a separate call.
+
+### Landed 2026-08-20 — peer witnessing, reader half (Tier 4.1 + 4.3)
+
+Readers before writers, exactly as Manifest 2.0 and the rolling seal did. **No recorder emits
+`peer.observed`, and none should until the writer contract below is taken.**
+
+**The event kind.** `peer.observed`, in `EventKindMap`, with the shape §5.5 pins:
+`{ file, sha256, bytes, session_id, seq_high, last_hash, state }` where `state` is
+`appeared | grew | shrank | disappeared | unparseable`. The three foreign-chain reads —
+`session_id`, `seq_high`, `last_hash` — are nullable **permanently**: `null` means "the recorder
+could not read this", which is not a value. There is no student ref, no key, no git author and no
+path outside `.provenance/`; the payload names a FILE and a CHAIN POSITION, and a test pins the key
+set so it cannot widen by accident.
+
+**Compatibility, both directions.** An older reader is unaffected — `parseEntries` does not reject
+unknown `kind` values (PRD §5.1) and the chain is computed over the envelope without interpreting
+`data`, so the entry parses, chains and validates. A newer reader meeting a bundle with none is
+unaffected, which is every bundle in existence.
+
+**The five verdicts.** Reconciled against the logs actually present, one witness yields five
+DIFFERENT facts, and collapsing any two is a wrongful accusation:
+
+| verdict         | means                                            | may it be evidence?                                                                 |
+| --------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `corroborated`  | present, reaches the witnessed seq, hash matches | no — it is the clean case                                                           |
+| `absent`        | witnessed, no log for that session in the bundle | **no.** Suspicious only in combination — a partner who has not pushed produces this |
+| `short`         | the log stops before the witnessed seq           | yes, subject to authority                                                           |
+| `tip_mismatch`  | reaches the witnessed seq with a different hash  | yes, subject to authority — the strongest signal here                               |
+| `indeterminate` | we cannot check                                  | no                                                                                  |
+
+Plus `unwitnessed`, tracked per SESSION rather than as a verdict so it cannot acquire one by
+accident: a present log no witness names. **This is the ordinary case** — no recorder emits the
+kind — and it is entirely blameless.
+
+**`sha256` is deliberately NOT the corroboration test.** A foreign log is append-only and its owner
+keeps recording, so the bytes a witness saw are normally a PREFIX of the bytes finally committed:
+digest inequality is the NORMAL case. Comparing digests instead of chain positions is the
+prefix-versus-whole-file error behind bugs 5, 10 and 12, and a test drives exactly that shape and
+requires `corroborated`. `seq_high` + `last_hash` are the commitment; `seq_high` alone would make
+truncation detectable only by LENGTH, which a forger can match.
+
+**Trustworthiness follows the witnessing session's identity**, because a witness is a claim about
+somebody else's artifact and is worth exactly what the chain carrying it is worth: `attributed` →
+`established`, `unattributed` → `inferred`, `unverifiable` → `unknown`. `unattributed` is graded as
+real evidence on purpose — that chain still verifies, and downgrading it would discard honest
+evidence from every unenrolled student, the majority case today. `isWitnessAlterationEvidence` is
+the single gate, and it excludes both `absent` and any `unverifiable` witness. **Nothing here ever
+names a person**: a witness establishes that a LOG was altered, never who altered it (§5, S26).
+
+Two witnesses that prove nothing are excluded rather than counted — a **self-witness** (a chain
+cannot corroborate itself) and one about another session of a **proven same contributor** (not
+independent). The latter fires only on `compareContributors === 'same'`, so an unproven
+relationship can never discard evidence.
+
+Two `.slog` files claiming one logical id resolve on what they **agree** about, with genuine
+disagreement going to `indeterminate` — the answer `resolveAmbiguousCoverage` already settled for
+bug 12, rather than falling through to the harsher branch.
+
+**This is what finally distinguishes a partner's-seal-without-log from a deletion.** Bug 13 fixed
+`no_session_log`'s wording and said explicitly that nothing in an archive can tell a log that was
+never pushed from one that was removed, and that only peer witnessing could. That evidence now has
+a reader. An `absent` verdict names the log the seal names; combined with the seal it is the pair
+that separates the two readings — and, correctly, `absent` on its own still is not a finding.
+
+**No `Flag`, no ninth check, no severity, no score.** Facts only. What a grader is shown, and in
+what wording, is a §6 presentation decision that belongs with the contributor schema.
+
+**Floor placement — flagged, not settled.** `peer.observed` is on `FLOOR_EVENT_KINDS`. The stated
+floor test points the other way (it is the most privacy-sensitive signal in the protocol, being the
+only one describing a DIFFERENT student's artifact, and sensitivity argues FOR a knob), and §8 item
+5 — is one student's recorder hashing another's log inside the approved protocol? — is **open**.
+It is floor because §5.6 item 3 already assigns the disambiguation elsewhere: whether witnessing was
+AVAILABLE is a `session.start` capability report, alongside `git_capture`, not a capture knob. A
+capability report says "I could not"; a knob says "I was told not to". Adding a `policy.capture` key
+now would publish a course-SIGNED manifest field to two sibling repos ahead of the decision that
+gives it meaning — the readers-before-writers inversion §9 forbids. **If §8 item 5 comes back
+requiring a per-course off switch, move the entry to `POLICY_GATED_EVENT_KINDS` with a
+`peer_observation` key, in the same change as the recorders' watcher.** Nothing emits the kind, so
+today the placement governs nothing.
+
+**Vector drift**, verified by regenerating before and after: `peer-observed.json` is new;
+`capture-policy.json` gains **one line** (`floor_event_kinds` appends `peer.observed`);
+`golden-bundle.{json,zip}` differ for the known pre-existing reason and were confirmed to differ
+across two runs with NO change at all; every other vector is byte-identical. Adding an event kind
+**necessarily** perturbs `capture-policy.json`, because that vector publishes the complete kind
+partition — floor was the minimal spelling, since a knob would also have moved `defaults`,
+`policy_gated_event_kinds` and every `expected` object. Nothing was written into the sibling repos.
+
+### The writer contract — what the three recorders must emit
+
+Written down here so the ports are mechanical rather than re-derived three times.
+
+1. **One `FileSystemWatcher` on the `.provenance/` directory**, not one per file, and distinct from
+   the `files_under_review` watchers.
+2. **Callbacks enqueue a filename and return.** No I/O, no hashing, no parsing on the callback —
+   the `<1 ms` p99 budget dies otherwise.
+3. **Drain on the checkpoint cadence** (every 100 entries) or a timer, whichever is later, rate
+   limited to at most one observation per file per interval. Same drain point as the rolling seal.
+4. **Exclude the recorder's own files by path.** A self-witness is circular; the reader excludes it
+   anyway, but a recorder must not produce it.
+5. **Never rename, rewrite, or delete a foreign file.** `state: 'unparseable'` is the entire
+   response to one that cannot be read. This was a live defect once (bug 2).
+6. **Emit `null` fields explicitly.** Omitting them changes the canonical bytes and therefore the
+   chain hash. `session_id` / `seq_high` / `last_hash` are all-null or all-non-null; a payload with
+   some of them is rejected by every reader.
+7. **`seq_high: 0` is legal** — a foreign log holding only its `session.start`. A truthiness check
+   turns the shortest honest witness into a malformed one.
+8. **`sha256` is lowercase hex** over the file's exact bytes at observation time, and `bytes` is
+   that file's length. Both are corroborating detail; the chain fields are the commitment.
+9. **`state` is descriptive, never a verdict.** `disappeared` is not misconduct — a checkout or a
+   stash removes a partner's `.slog` from the working tree — and its digest and chain fields carry
+   the LAST state seen, which is what makes the observation evidentiary.
+10. **Also owed, and not part of this kind:** the `session.start` witnessing-availability capability
+    report (§5.6 item 3), without which "no witnesses" cannot be told from "witnessing was
+    impossible". The reader treats `unwitnessed` as blameless either way, so shipping the watcher
+    first is safe, but the pair is what makes the absence-vs-disabled rule hold.
+
+Conformance: `peer-observed.json`, thirteen cases, each publishing the narrowing verdict alongside
+the canonical bytes and chain hash so a port asserts **accept and reject**, not only the happy path.
 
 ### Known gaps, deliberately accepted
 
