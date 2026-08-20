@@ -20,6 +20,13 @@
  *   - meta files are optional: if a .slog.meta doesn't exist, meta_sha256 is the sha256 of
  *     an empty byte sequence (caller is responsible for always writing the meta in Phase 9;
  *     this is a defensive fallback, not a design choice).
+ *   - NEVER seals a bundle the analyzer cannot open. `.provenance/` legitimately
+ *     accumulates artifacts that the loader treats as fatal to the WHOLE bundle:
+ *     a zero-byte log from a session that never flushed, a `.slog.meta` whose
+ *     `.slog` was quarantined away, and a rolling seal naming a session that is
+ *     not here. Those are excluded from the ZIP and reported in `warnings` —
+ *     never deleted from disk, since a git-submitted `.provenance/` is read off
+ *     disk and may hold a partner's evidence. See step 1b.
  *   - The ZIP includes ALL files in provenanceDir (slog + meta + manifest + sig), plus the
  *     raw on-disk bytes of every file in filesUnderReview (placed at the workspace-relative
  *     path in the zip root). Missing files are recorded in manifest.submission_files with
@@ -33,7 +40,13 @@ import { createHash } from 'node:crypto';
 import JSZip from 'jszip';
 import * as ed from '@noble/ed25519';
 import { hexToBytes } from '@noble/hashes/utils.js';
-import { parseEntries, validateChain, sha256Hex, signBundleManifest } from '@provenance/log-core';
+import {
+  parseEntries,
+  validateChain,
+  sha256Hex,
+  signBundleManifest,
+  parseRollingManifestFilename,
+} from '@provenance/log-core';
 import type { BundleManifest, SignedBundleManifest } from '@provenance/log-core';
 import { atomicWriteFile } from '../io/atomic-write.js';
 
@@ -46,7 +59,18 @@ export type SealWarnings = {
   chainBroken: boolean;
   /** True if any .slog could not be parsed / had no readable session.start. */
   unreadableSession: boolean;
+  /** True if a `.slog.meta` was dropped because its `.slog` is not on disk (quarantined, deleted). */
+  orphanedMeta: boolean;
+  /** True if a zero-byte `.slog` — a session that started and never flushed — was dropped with its meta. */
+  emptySession: boolean;
+  /** True if a rolling seal was dropped because the session it seals is not in the bundle. */
+  orphanedRollingSeal: boolean;
 };
+
+/** Did the orphan guard leave anything out of the zip? */
+export function sealDroppedArtifacts(warnings: SealWarnings): boolean {
+  return warnings.orphanedMeta || warnings.emptySession || warnings.orphanedRollingSeal;
+}
 
 export type SealResult =
   | { kind: 'ok'; bundlePath: string; manifestSha256: string; warnings: SealWarnings }
@@ -92,6 +116,22 @@ async function sha256OfFile(filePath: string): Promise<string> {
   } catch {
     // File doesn't exist or can't be read — return sha256('') as a stable fallback.
     return sha256Hex('');
+  }
+}
+
+/**
+ * Size in bytes of the file at `filePath`, or 0 if it cannot be stat'ed.
+ *
+ * A file that `readdir` just listed but `stat` cannot see is gone; treating it
+ * as contentless drops it through the same reported path as a genuinely empty
+ * one, rather than failing the whole seal over a file with nothing in it.
+ */
+async function fileSize(filePath: string): Promise<number> {
+  try {
+    const st = await fsPromises.stat(filePath);
+    return st.size;
+  } catch {
+    return 0;
   }
 }
 
@@ -158,7 +198,11 @@ function filenameTimestamp(date: Date): string {
  *
  * Step-by-step:
  *   1. List .slog files. None → no_sessions.
- *   2. For each .slog: parse entries + validate chain. NEVER aborts on a broken or
+ *   1b. Orphan guard: drop from the bundle any artifact that would make the analyzer
+ *      refuse to open it — an unpaired .slog or .slog.meta, a zero-byte .slog, and
+ *      (at step 6) a rolling seal naming a session the bundle does not carry. Dropped
+ *      from the ZIP only; nothing on disk is touched. Reported in `warnings`.
+ *   2. For each surviving .slog: parse entries + validate chain. NEVER aborts on a broken or
  *      unparseable chain — accumulates warnings instead. For parse failures the
  *      session entry gets session_id: null. For chain breaks, chainBroken is set true.
  *      Collect: session_id (or null), prev_session_id, slog_sha256, meta_sha256.
@@ -191,14 +235,126 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
     return { kind: 'no_sessions' };
   }
 
-  const slogFiles = allEntries.filter((f) => f.endsWith('.slog') && !f.endsWith('.slog.meta'));
+  const warnings: SealWarnings = {
+    chainBroken: false,
+    unreadableSession: false,
+    orphanedMeta: false,
+    emptySession: false,
+    orphanedRollingSeal: false,
+  };
+
+  // ---------------------------------------------------------------------------
+  // Step 1b: THE ORPHAN GUARD.
+  //
+  // `analysis-core`'s loader refuses to open a bundle whose per-session
+  // artifacts do not line up, and it refuses BEFORE a single validation check
+  // runs. Three shapes are fatal to THE WHOLE BUNDLE, not to the one session
+  // that is malformed:
+  //
+  //   * a `.slog.meta` with no `.slog`          → `orphaned_meta`
+  //   * a zero-byte `.slog`                     → `first_event_not_session_start`
+  //                                               (actualKind "none")
+  //
+  // and one more, handled at the zip step below:
+  //
+  //   * `manifest-<id>.json` naming a session that is not here → `no_session_log`,
+  //     which fails check 1 (`manifest_sig`) for the whole bundle.
+  //
+  // NOT handled here: a `.slog` with no `.slog.meta` (`orphaned_slog`). That is
+  // the same family, but dropping it would contradict this module's documented
+  // meta-optional fallback (`meta_sha256` = sha256 of empty), which
+  // `seal.test.ts` pins as a requirement — a product decision, not a packaging
+  // one. It is also the one shape the recorder does not produce: `MetaWriter.
+  // create` writes the `.meta` eagerly, in the same breath as the `.slog`.
+  //
+  // So one stray file costs a student every session they recorded. That blast
+  // radius is the whole reason this guard exists.
+  //
+  // None of these are hypothetical. A session that starts and is torn down
+  // before its first flush leaves ALL THREE artifacts behind: the buffer policy
+  // is {256 KiB, 1000 ms} but `SessionWriter.open` creates the `.slog` eagerly,
+  // `MetaWriter.create` writes the `.meta` eagerly, and the session-start roll
+  // (`session-registry.ts`, step 6c) signs a rolling seal eagerly — so the log
+  // is 0 bytes at the instant its seal is written. Separately,
+  // `chain-recovery.ts` quarantines a damaged `.slog` to `.corrupt-<ts>` and
+  // leaves the `.slog.meta` under its original name, so the salvage path turns
+  // the first hazard into the second by itself.
+  //
+  // THE RULE: an artifact that would make the bundle unopenable is DROPPED FROM
+  // THE ZIP and reported in `warnings`.
+  //
+  //   * Dropped from the zip ONLY. Nothing on disk is deleted or renamed. A
+  //     git-submitted `.provenance/` is read directly off disk and must keep the
+  //     seal that the session-start roll exists to provide, and in a shared repo
+  //     these may be a partner's files. A partner's live session is packed WITH
+  //     its seal — their `.slog`, `.slog.meta` and `manifest-<id>.json` all pair
+  //     up, so nothing of theirs is dropped.
+  //   * Never an abort. Seal must always produce something submittable; a
+  //     student cannot fix this at 11pm, and the analyzer still sees every
+  //     session that IS there.
+  //   * Never silent. The warnings surface at the seal command's call site
+  //     exactly like `chainBroken`, so a dropped session is something a student
+  //     can tell staff about rather than discover in an integrity meeting.
+  //
+  // A dropped `.slog` is dropped from the MANIFEST as well as the zip: the two
+  // must agree, since a manifest naming a session whose file is absent is just
+  // another way to make the bundle unopenable.
+  // ---------------------------------------------------------------------------
+  const present = new Set(allEntries);
+
+  const slogFiles: string[] = [];
+  for (const name of allEntries) {
+    // `.slog.meta` ends with `.meta`, so it never matches here.
+    if (!name.endsWith('.slog')) continue;
+
+    // A CONTENTLESS `.slog`. Zero bytes means the session recorded literally
+    // nothing, so dropping it discards no evidence — whereas keeping it
+    // discards all of it, by making the bundle unopenable.
+    if ((await fileSize(path.join(provenanceDir, name))) === 0) {
+      warnings.emptySession = true;
+      continue;
+    }
+    slogFiles.push(name);
+  }
+
+  // A `.slog.meta` whose `.slog` is not on disk at all — deleted, or renamed
+  // away by the quarantine path. (The meta of a slog dropped just above is not
+  // reported here: it is not orphaned, it is part of a pair this guard chose to
+  // drop, and it is already covered by that pair's own warning. It still leaves
+  // the zip — see `packable` at the zip step.)
+  for (const name of allEntries) {
+    if (name.endsWith('.slog.meta') && !present.has(name.slice(0, -'.meta'.length))) {
+      warnings.orphanedMeta = true;
+    }
+  }
+
+  // Everything the zip is allowed to carry from the `.slog` family: the kept
+  // logs and their metas, and nothing else.
+  const packable = new Set<string>();
+  for (const name of slogFiles) {
+    packable.add(name);
+    packable.add(`${name}.meta`);
+  }
+
   if (slogFiles.length === 0) {
     return { kind: 'no_sessions' };
   }
 
   // Step 2: Parse and validate each .slog. Warnings accumulate; never abort.
-  const warnings: SealWarnings = { chainBroken: false, unreadableSession: false };
   const sessionEntries: BundleManifest['sessions'][number][] = [];
+
+  // LOGICAL session ids of the sessions this bundle will actually carry, for
+  // the rolling-seal half of the guard at the zip step.
+  //
+  // TWO-UUID RULE: this is `session.start.data.session_id`, NOT the `.slog`
+  // FILENAME uuid. In production those are two different values — the writer
+  // names the file `session-${randomUUID()}.slog` (`session-registry.ts`) while
+  // the rolling seal is named after `recorderContext.session_id`. The analyzer
+  // reconciles seals against the ids it reads out of `session.start`
+  // (`parse-bundle.ts` passes `parsedSessions.map(s => s.sessionId)`), so the
+  // logical id is the only correct key here; using the filename uuid would drop
+  // every rolling seal in the directory, including the good ones.
+  const packedSessionIds = new Set<string>();
 
   for (const filename of slogFiles.sort()) {
     const slogPath = path.join(provenanceDir, filename);
@@ -240,6 +396,8 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
     const ids = extractSessionIds(entries);
     if (ids === null) {
       warnings.unreadableSession = true;
+    } else {
+      packedSessionIds.add(ids.session_id);
     }
 
     // Compute file hashes.
@@ -336,6 +494,50 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
     if (filename.includes('.corrupt-') || filename.endsWith('.tmp')) {
       continue;
     }
+
+    // PACKING HALF OF THE ORPHAN GUARD (step 1b). A `.slog` / `.slog.meta` is
+    // packed only as part of a complete, non-empty pair that step 2 also wrote
+    // into the manifest. Everything else in `.provenance/` is packed as before:
+    // manifest.json, manifest.sig, and anything a future step drops in here.
+    if (
+      (filename.endsWith('.slog') || filename.endsWith('.slog.meta')) &&
+      !packable.has(filename)
+    ) {
+      continue;
+    }
+
+    // ROLLING-SEAL HALF OF THE ORPHAN GUARD.
+    //
+    // The rolling seal (`manifest-<session_id>.json` + `.sig`) is a THIRD
+    // per-session artifact, written eagerly at session start — before the
+    // `.slog` has been flushed even once — and rewritten at every checkpoint
+    // and at dispose(). It therefore outlives every reason step 1b has for
+    // dropping a session, including the quarantine path, which has no unflushed
+    // session involved at all.
+    //
+    // A seal whose session is not in the bundle is `no_session_log`: it names a
+    // recording that is not here, and its signature can never be checked,
+    // because the verifying pubkey lives in that session's own session.start.
+    //
+    // Dropping it cannot itself manufacture a finding. `unsealed_session` is
+    // reported only for a bundle with NO classic seal (`reconcileRollingSeals
+    // WithSessions` takes `hasClassicSeal`, which `parse-bundle.ts` passes as
+    // `classicManifest !== null`), and every bundle this function produces
+    // carries `manifest.json` covering every session it packs. Inside a classic
+    // bundle a rolling seal is redundant, and a stale one is pure liability.
+    //
+    // Both halves go together: a `.sig` without its `.json` vouches for nothing,
+    // and a `.json` without its `.sig` is an unsigned claim (`missing_sig`).
+    // `parseRollingManifestFilename` matches each half independently — and
+    // returns null for the classic `manifest.json` / `manifest.sig`, which are
+    // always packed — so each half is dropped on its own pass and the pair stays
+    // consistent.
+    const rollingSeal = parseRollingManifestFilename(filename);
+    if (rollingSeal !== null && !packedSessionIds.has(rollingSeal.sessionId)) {
+      warnings.orphanedRollingSeal = true;
+      continue;
+    }
+
     const filePath = path.join(provenanceDir, filename);
     try {
       const fileBytes = await fsPromises.readFile(filePath);
