@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { verifySubmittedCode } from './verify-submitted-code.js';
 import type { Bundle, ParsedSession } from '../loader/types.js';
+import type { SessionContributor } from '../identity/types.js';
 import type { HashedEnvelope, SlogMeta, BundleManifest } from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
@@ -292,5 +293,208 @@ describe('verifySubmittedCode (Check 8)', () => {
     });
     const check = verifySubmittedCode(bundle, { chainIntact: true });
     expect(check.id).toBe('submitted_code_match');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Concurrency (Tier 2.2 / spec Tier 2.4)
+// ---------------------------------------------------------------------------
+
+/**
+ * "The last recorded hash" was a WALL-CLOCK claim: `bundle.sessions` is sorted
+ * by `firstEvent.wall` and the scan is last-write-wins over that order. With two
+ * partners on divergent branches that hands a HIGH-severity "File was changed
+ * outside the recording" to whichever student's laptop clock ran slow.
+ */
+describe('Check 8 — two contributors with concurrent recorded states', () => {
+  function contributor(sessionId: string, studentRef: string): SessionContributor {
+    return {
+      kind: 'attributed',
+      sessionId,
+      contributorKey: `attributed:2.0:course:c1:${studentRef}`,
+      studentRef,
+      identityVersion: '2.0',
+      scope: 'course',
+      scopeId: 'c1',
+      studentPubkey: 'pk',
+      certWindow: { in_window: true },
+      credentialWindow: { in_window: true },
+    };
+  }
+
+  function twoContributorBundle(opts: {
+    submittedSha: string;
+    aliceSha: string;
+    bobSha: string;
+    /** Give Bob's tip Alice's tip as a git parent, making Bob strictly later. */
+    bobDescendsFromAlice?: boolean;
+    /** Resolve both sessions to the SAME student. */
+    sameStudent?: boolean;
+  }): Bundle {
+    const ALICE_TIP = 'a'.repeat(40);
+    const BOB_TIP = 'b'.repeat(40);
+
+    const mk = (
+      sessionId: string,
+      sha: string,
+      commit: string,
+      parents: readonly string[],
+      wallBase: number,
+      /**
+       * Observe the commit BEFORE saving. This is what makes the save provably
+       * later than everything the commit descends from: a save that precedes its
+       * own session's only observation is genuinely unordered against another
+       * contributor, because the student could have saved before pulling.
+       */
+      observeFirst = false,
+    ): ParsedSession => {
+      const at = (seq: number, kind: string, data: Record<string, unknown>) => ({
+        seq,
+        t: seq,
+        wall: new Date(Date.UTC(2026, 0, 1, wallBase, seq)).toISOString(),
+        kind,
+        data,
+        prev_hash: '0'.repeat(64),
+        hash: '1'.repeat(64),
+      });
+      const save = { path: 'a.py', sha256: sha };
+      const git = { operation: 'commit', sha: commit, parents: [...parents] };
+      const events = [
+        at(0, 'session.start', {
+          format_version: '1.0',
+          session_id: sessionId,
+          prev_session_id: null,
+          assignment: { id: 'hw1', semester: 'sp26' },
+        }),
+        observeFirst ? at(1, 'git.event', git) : at(1, 'doc.save', save),
+        observeFirst ? at(2, 'doc.save', save) : at(2, 'git.event', git),
+      ] as unknown as HashedEnvelope[];
+      return {
+        sessionId,
+        events,
+        meta: {} as ParsedSession['meta'],
+        slogSha256: 'c'.repeat(64),
+        metaSha256: 'd'.repeat(64),
+        firstEvent: events[0] as ParsedSession['firstEvent'],
+      };
+    };
+
+    // Wall order puts Alice first, so wall-ordered last-write-wins picks BOB.
+    const sessions = [
+      mk('s-alice', opts.aliceSha, ALICE_TIP, [], 1),
+      mk(
+        's-bob',
+        opts.bobSha,
+        BOB_TIP,
+        opts.bobDescendsFromAlice === true ? [ALICE_TIP] : [],
+        2,
+        opts.bobDescendsFromAlice === true,
+      ),
+    ];
+
+    const bySession = new Map<string, SessionContributor>([
+      ['s-alice', contributor('s-alice', 'alice')],
+      ['s-bob', contributor('s-bob', opts.sameStudent === true ? 'alice' : 'bob')],
+    ]);
+
+    return {
+      id: 'bundle-1',
+      manifest: { format_version: '1.1' } as BundleManifest,
+      manifestSigHex: null,
+      sessions,
+      sourceFilename: 'b.zip',
+      loadedAt: '2026-01-01T00:00:00.000Z',
+      submissionFiles: new Map([
+        ['a.py', { status: 'present' as const, sha256: opts.submittedSha, hashOk: true }],
+      ]),
+      contributors: {
+        bySession,
+        contributors: [],
+        rootKeyConfigured: true,
+        counts: { attributed: 2, unverifiable: 0, unattributed: 0 },
+      },
+    };
+  }
+
+  /**
+   * The false accusation this removes. Wall order says Bob's save is "last", so
+   * the old rule reported Alice's genuinely-submitted file as changed outside
+   * the recording.
+   */
+  it('matching ANY concurrent recorded state passes', () => {
+    const bundle = twoContributorBundle({
+      submittedSha: 'ALICE_SHA',
+      aliceSha: 'ALICE_SHA',
+      bobSha: 'BOB_SHA',
+    });
+    const check = verifySubmittedCode(bundle, { chainIntact: true });
+    expect(check.status).toBe('pass');
+    expect(check.detail).toContain('match');
+  });
+
+  it('matching the wall-clock-last state also passes', () => {
+    const bundle = twoContributorBundle({
+      submittedSha: 'BOB_SHA',
+      aliceSha: 'ALICE_SHA',
+      bobSha: 'BOB_SHA',
+    });
+    expect(verifySubmittedCode(bundle, { chainIntact: true }).status).toBe('pass');
+  });
+
+  /**
+   * THE CONSERVATIVE CHOICE. Matching neither branch is exactly what a merge
+   * result no session observed on disk looks like — normal group work. Asserting
+   * "changed outside the recording" there is a fabricated high-severity finding.
+   */
+  it('matching NEITHER branch is skipped, never failed', () => {
+    const bundle = twoContributorBundle({
+      submittedSha: 'MERGED_SHA',
+      aliceSha: 'ALICE_SHA',
+      bobSha: 'BOB_SHA',
+    });
+    const check = verifySubmittedCode(bundle, { chainIntact: true });
+    expect(check.status).toBe('skipped');
+    expect(check.status).not.toBe('fail');
+    expect(verifySubmittedCode(bundle, { chainIntact: true }).detail).toContain('merge');
+  });
+
+  /**
+   * The gate. `≺` DOES order these two, so there is a single established last
+   * recorded state and the ordinary comparison applies — including a real
+   * mismatch. Concurrency handling must not become a blanket amnesty.
+   */
+  it('a DAG-ordered pair still reports a real mismatch', () => {
+    const bundle = twoContributorBundle({
+      submittedSha: 'SOMETHING_ELSE',
+      aliceSha: 'ALICE_SHA',
+      bobSha: 'BOB_SHA',
+      bobDescendsFromAlice: true,
+    });
+    expect(verifySubmittedCode(bundle, { chainIntact: true }).status).toBe('fail');
+  });
+
+  /**
+   * The solo guarantee for check 8: two sessions of ONE student are not a
+   * cross-contributor divergence, so the unchanged wall-ordered rule applies and
+   * a genuine mismatch is still reported.
+   */
+  it('two sessions of one student still report a mismatch', () => {
+    const bundle = twoContributorBundle({
+      submittedSha: 'SOMETHING_ELSE',
+      aliceSha: 'ALICE_SHA',
+      bobSha: 'BOB_SHA',
+      sameStudent: true,
+    });
+    expect(verifySubmittedCode(bundle, { chainIntact: true }).status).toBe('fail');
+  });
+
+  it('an unstamped bundle keeps the unchanged wall-ordered rule', () => {
+    const bundle = twoContributorBundle({
+      submittedSha: 'SOMETHING_ELSE',
+      aliceSha: 'ALICE_SHA',
+      bobSha: 'BOB_SHA',
+    });
+    delete bundle.contributors;
+    expect(verifySubmittedCode(bundle, { chainIntact: true }).status).toBe('fail');
   });
 });
