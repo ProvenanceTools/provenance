@@ -54,6 +54,57 @@ overtaken by evidence (each such case is called out below with the reason).
 
 ---
 
+### D10 as built — all three ingest entry points are scope-aware (2026-08-20)
+
+The declared submission type is now offered by **every** upload route, not two of three. The
+override's SHAPE follows the route's BODY, not the route:
+
+| route                                 | body        | override shape                                                          |
+| ------------------------------------- | ----------- | ----------------------------------------------------------------------- |
+| `POST /…/ingest`                      | `multipart` | flat `?scope_mode=…&scope_path_glob=…&scope_on_multiple=…` query params |
+| `POST /…/ingest:gradescope`           | `multipart` | the same flat `scope_*` query params                                    |
+| `POST /…/ingest/uploads/:id/complete` | JSON        | nested `ingest_scope` object in the body                                |
+
+Two spellings, one per body type — `IngestScopeOverrideQuerySchema` + `ingestScopeFromQuery` fold
+the flat form into the same object `FinalizeUploadRequestSchema` takes, and both are re-narrowed
+through `parseIngestScopeConfig`, so nothing downstream can tell an override from a persisted
+`assignments.ingest_scope` default. All three fall back to that default when no override is given.
+
+`POST /…/ingest` was the outlier and it was an oversight, not a decision: it had **zero** scope
+handling, so `tryExpandZipBundle` understood only "a bundle" and "a zip of bundles" and a git repo
+zip matched neither. It fell through to `single-zip` and staged the whole repo as one malformed
+bundle — **and did not error**, on the one path staff use for a manual re-ingest or a fixup.
+`services/ingest/repo-zip.ts` closes it by ADAPTING, not reimplementing: discovery, resolution,
+entry selection, entry order and the ZIP rebuild are all `repo-scopes.ts` / `build-bundle-zip.ts`,
+called with the same arguments in the same order as `stream-export.ts` calls them. A test drives
+the same repo tree through `openLocalExport` and through `expandRepoZip` and requires identical
+scopes, identical reasons and **byte-identical** rebuilt bundles, so a divergent second copy fails.
+
+The guard that keeps the pre-existing shapes untouched is decided from entry **names alone**: an
+archive is a repo iff some non-junk entry sits under a `.provenance/` directory. A sealed bundle is
+flat by construction, so it can never satisfy the predicate, is never rebuilt, and stages the exact
+bytes uploaded — its `blob_sha256`, the dedup key, is unchanged **by construction**. The cost,
+accepted deliberately: the declared type is asserted only on the repo-shaped branch, so a
+`repo_scoped` batch handed a flat bundle ingests it rather than rejecting it. Asserting there would
+mean rebuilding a flat bundle to read its declared assignment id, which changes the staged bytes of
+the exact shape this change was required to leave alone.
+
+Skips report through the existing channel only: `POST /…/ingest` resolves inside the request, so it
+inlines the array in its 202 **and** writes it to `ingest_jobs.skipped` before the first enqueue.
+Its inline field is **not** nullable — unlike the Gradescope routes' shared response, there is no
+instant at which this route's honest answer is "unknown", so there is no `null` to spend and `[]`
+is a positive statement. When every scope is rejected the job is marked `failed` rather than left
+`queued` (nothing will be enqueued, so nothing would ever finalize it) and the reasons survive,
+because `failIngestJob` does not name the `skipped` column.
+
+**Known gap, unfixed:** a fanned-out non-root scope is staged as `<stem>/<scope>.zip`, which the
+semester's filename convention cannot match, so it lands in the unmatched tray. That is inherent —
+one upload became N submissions and a filename encodes one identity — and the Gradescope path only
+avoids it by having `match_sid` from the export metadata, which this route has no equivalent of. A
+root scope keeps the uploaded filename verbatim, so `repo_whole` still matches as before.
+
+---
+
 ## 2. What was built
 
 **Git-native submission, end to end.** Rolling seal at `format_version: '1.2'`
