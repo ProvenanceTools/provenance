@@ -6,7 +6,7 @@
  *
  *   "Was THIS public key ever issued to THIS student?"
  *
- * That is the adjudication question, and until migration 0026 the server could
+ * That is the adjudication question, and until migration 0027 the server could
  * not answer it. `students` keeps ONE `student_pubkey` per human and the
  * enrolment upsert overwrites it, so a bundle recorded on a laptop in October
  * was checked against whatever key the student's desktop enrolled in November.
@@ -130,7 +130,7 @@ export async function recordIssuedCredential(
  *
  * An empty array means the server has no record of ever issuing that key to
  * that student. Note what that is NOT: it is not proof the key is forged. A
- * deployment that upgraded through migration 0026 only backfilled the key
+ * deployment that upgraded through migration 0027 only backfilled the key
  * `students` still held, so keys issued and overwritten BEFORE that migration
  * are unrecoverable and read as unknown here. `students.issue_count` exceeding
  * the number of rows for a student is the honest signal that this is the case.

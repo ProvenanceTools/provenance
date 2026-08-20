@@ -1092,7 +1092,7 @@ export const students = pgTable(
 /**
  * Every 2.1 credential this server has ever issued. APPEND-ONLY.
  *
- * See migration 0026 for the full rationale. The load-bearing points:
+ * See migration 0027 for the full rationale. The load-bearing points:
  *
  *  - MULTIPLE MACHINES PER STUDENT IS THE SUPPORTED FLOW. Each machine derives
  *    its own master secret and therefore its own keypair, signs in with the
