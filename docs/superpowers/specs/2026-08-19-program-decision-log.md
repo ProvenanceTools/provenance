@@ -130,7 +130,13 @@ Every one of these was live on the branch and none was on any worklist.
     submission whose last seal was non-final — a crash, a power cut, a full disk, or simply an
     archive taken mid-session. Bug 5's fix was correct and was never reaching production data.
     **This is the second id-space confusion** (bug 3 was the first: a containment predicate
-    written for files, handed a git repo root).
+    written for files, handed a git repo root). **And correcting the keying did not close the
+    line.** The guard read `if (files === undefined || files === 'ambiguous') continue`, and only
+    the `undefined` branch was the id-space miss. The `'ambiguous'` branch — set when two `.slog`
+    files carry one logical session id — reached the **identical** empty-coverage,
+    whole-file-equality, high-severity outcome by a second route, and stayed live for another
+    three weeks. See bug 12. The lesson worth keeping: **fixing one branch of a conditional does
+    not fix the conditional.** Ask what else reaches the same `continue`.
 
 11. **A leftover file failed a whole git submission, and the git path had no guard at all.**
     All three recorders guard the ZIP path: `sealBundle` drops an artifact the analyzer could not
@@ -154,6 +160,51 @@ Every one of these was live on the branch and none was on any worklist.
     `no_session_log` defect, which fails check 1 at high severity with text offering "either the
     log was deleted or the seal was planted" — so degrading gracefully would have converted the
     crash into an accusation, strictly worse than the load failure it replaced.
+
+12. **The ambiguous rolling seal: silent, and accusatory, through the same line as bug 10.**
+    `parse-bundle.ts`'s coverage guard dropped a seal whose logical session id was claimed by two
+    `.slog` files — reachable by duplicating a log under a second filename: a hand copy of
+    `.provenance/`, a backup taken before a push, an odd merge. The `continue` recorded **no
+    defect**, so a genuine ambiguity the loader had detected was reported to nobody; and it
+    recorded **no coverage entry**, which is not inert — `verify-log-bytes.ts` reads absent
+    coverage as "classic seal" and applies **whole-file** equality to a non-final rolling digest
+    that only ever committed to a prefix. `log_bytes_match` therefore failed at **high severity,
+    confidence 1.0** with text asserting the log was modified after sealing, against a student
+    whose only act was keeping a copy of their own directory. Bug 5, bug 10 and this are the same
+    accusation reached three ways.
+    Fixed by answering the seal rather than abandoning it. The loader keeps **every** `.slog`
+    claiming an id and resolves the seal on what they **agree** about (`resolveAmbiguousCoverage`).
+    Unanimity is an answer whichever file the seal was written over — and that deliberately
+    includes a unanimous `no_match`, because "no file in this bundle claiming this session
+    reproduces the sealed digest" is established regardless. Over-correcting was the real hazard
+    here: if ambiguity always suppressed the verdict, appending to a `.slog` and copying it under a
+    second filename would **switch `log_bytes_match` off**. Only genuine disagreement yields the
+    new `indeterminate` coverage, which is read as **"we cannot check"** — the distinction
+    `isIdentityCheckFailure` and `classify-external-changes.ts`'s `unclassified` already draw —
+    never as a fallback to whole-file equality, and never silently: the digests it could not check
+    are named in the check's own verdict text, and the ambiguity itself is a new
+    `ambiguous_session_log` defect naming both files.
+
+13. **`no_session_log` asserted a cause the evidence cannot reach.** A rolling seal whose `.slog`
+    is not in the bundle failed check 1 with text offering _"either the log was deleted or the seal
+    was planted"_. On the git path that is not established and is not even the likeliest reading: a
+    partner who committed `.provenance/manifest-<id>.json` before their `.slog` landed, or whose
+    `.slog` is caught by a `.gitignore`, produces the **identical** archive. An innocent partial
+    push was being described to a grader as deletion or planting, at high severity, in a string
+    persisted to `check_1_detail`.
+    The finding is **kept**, and the severity is **kept** — a signed claim that can never be
+    verified is a real hole in the record, hiding it would fail toward fewer findings, and the only
+    lever available for lowering it is check 1's `manifest_sig` mapping, which is shared with
+    genuine signature forgery. Lowering that to soften one defect would weaken the strongest
+    detection in the check. What is wrong is not the severity of the gap but the **confidence of
+    the interpretation**, and that is fixed in the text, exactly as D16 did for `git_unrecorded_in`:
+    it now separates what is established (the seal is here, the log it names is not, so its
+    signature can never be checked against any session key) from what is not (which of several
+    readings applies), names the innocent reading alongside the others, and says what would settle
+    it. **It is not fully resolvable here.** Nothing in an archive can distinguish a log that was
+    never pushed from one that was removed. Only peer witnessing (`peer.observed`, Tier 4, a
+    tri-repo format change, not built) can prove a log existed, and the text says so rather than
+    implying the system could close the gap today.
 
 ### Why no test caught bug 10 — and the fixture rule that stops the next one
 
@@ -186,6 +237,22 @@ its filename uuid. `tools/export-conformance-vectors.ts` is deliberately NOT cha
 filename is published to provjet and provnvim as a negative-match string, and perturbing a vector's
 bytes is a breaking tri-repo change, not a refactor. It teaches the wrong shape and should be
 corrected the next time those vectors are legitimately regenerated.
+
+### Why no test caught bug 12 — a test that pinned the bug as the requirement
+
+Here the fixture rule would not have helped, and nor would another assertion. A test **existed**
+for the ambiguous branch — `parse-bundle.test.ts`, _"refuses to guess when two .slog files carry
+the SAME logical session id"_ — and it asserted `coverage` came out `[]`. That is the exact shape
+`verify-log-bytes.ts` reads as a classic whole-file commitment, so the test pinned the false
+accusation **as the requirement**, complete with a comment explaining that refusing "leaves
+whole-file equality in place — the same reading a classic bundle gets", which was written as a
+safe fallback and is in fact the strictest possible reading of a prefix commitment.
+
+**A test can be green, deliberate, well-commented and still be the bug.** The tell is available
+without leaving the file: an assertion about an ABSENT value is only meaningful if you know what
+the consumer does with absence. `coverage` is optional, and optional-means-classic was documented
+three modules away. Any assertion of the form "we correctly record nothing" should be read as a
+question — nothing is read by whom, as what?
 
 The fix goes further than correcting the lookup: the filename id space is now a branded
 `LogFileId` and `SessionFiles.sessionId` is renamed `logFileId`, so the original line is a
@@ -266,11 +333,13 @@ sessions across a partner's commit because that manufactures the accusation the 
 ## 6. State and what is owed
 
 Suites:
-**log-core 541 · analysis-core 988 · recorder 583 · analyzer 1223 · tools 174 ·
+**log-core 541 · analysis-core 1001 · recorder 583 · analyzer 1223 · tools 174 ·
 server 1488/1490 (2 testcontainers flakes) · provjet 589 · provnvim 1007.**
 The first five re-measured 2026-08-20 after the read-side orphan guard (bug 11);
 analysis-core 973 → 988 and analyzer 1221 → 1223 are the guard's own tests plus
-the id-space regressions.
+the id-space regressions. analysis-core 988 → 1001 is bugs 12 and 13: the
+ambiguous-seal coverage tests, the duplicated-log verdict tests (including the
+over-correction guard), and the `no_session_log` wording regression.
 provjet and provnvim are carried forward and not re-measured since.
 Server was re-measured too: the carried-forward `1420/1422` was stale (the real
 total had grown to 1490). Both failures in the full run were
