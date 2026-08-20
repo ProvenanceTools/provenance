@@ -63,6 +63,7 @@ import { createSubmission } from '../services/ingest/create-submission.js';
 import { computeAndStoreStats } from '../services/ingest/stats.js';
 import { runAndStoreValidation } from '../services/ingest/validation.js';
 import { runAndStoreHeuristics } from '../services/heuristics/run-per-submission.js';
+import { finalizeContributors } from '../services/contributors/finalize.js';
 import { withTransaction } from '../db/client.js';
 import { isTransientDbError } from '../db/transient-error.js';
 import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
@@ -465,6 +466,24 @@ export async function startWorker(): Promise<() => Promise<void>> {
             } catch (e) {
               const cause = e instanceof Error ? e.message : String(e);
               throw Object.assign(new Error(cause), { phase: 'run_heuristics' as const });
+            }
+            // Contributor stage (D9/D14). AFTER heuristics, deliberately — it
+            // stamps the bundle with `establishBundleContributors`, which
+            // several heuristics read, so stamping earlier would change which
+            // flags ingest produces. See services/contributors/finalize.ts.
+            try {
+              await timePhase('store_contributors', () =>
+                finalizeContributors(
+                  tx,
+                  submissionResult.submissionId,
+                  semesterId,
+                  bundle,
+                  studentId === null ? [] : [studentId],
+                ),
+              );
+            } catch (e) {
+              const cause = e instanceof Error ? e.message : String(e);
+              throw Object.assign(new Error(cause), { phase: 'store_contributors' as const });
             }
             await tx
               .update(ingest_files)

@@ -4,26 +4,29 @@
  * Responsibilities:
  *   1. Upsert the `assignments` row for (semester, assignment_id_str).
  *   2. Allocate `version_index` = max existing + 1 for this (semester,
- *      assignment, student) tuple, using a row lock (`FOR UPDATE`) to prevent
- *      races when multiple workers process concurrent uploads for the same
- *      student-assignment.
+ *      assignment, version_owner_key) LINEAGE, using a row lock (`FOR UPDATE`)
+ *      to prevent races when multiple workers process concurrent uploads for
+ *      the same lineage-assignment.
  *   3. Move the blob from `ingest-staging/{jobId}/{fileId}` to
  *      `semesters/{semesterId}/submissions/{submissionId}/bundle.zip`.
  *   4. Insert the `submissions` row.
  *   5. Update `superseded_by_submission_id` on all older versions for this
- *      (semester, assignment, student) tuple to point to the new row.
+ *      (semester, assignment, version_owner_key) lineage to point to the new row.
  *
  * The blob move is: putBlob(final key) then deleteBlob(staging key).
  * If deleteBlob fails, the staging key becomes an orphan for the retention
  * sweep — the submission row already exists so the pipeline is not broken.
  *
  * PRD §9.4: version_index allocation uses `FOR UPDATE` on existing rows
- * for this (semester_id, assignment_id, student_id) cohort to prevent
- * concurrent allocation of the same index.
+ * for this (semester_id, assignment_id, version_owner_key) cohort to prevent
+ * concurrent allocation of the same index. It was keyed on `student_id` until
+ * migration 0029 — see `version-owner-key.ts` for why a nullable column cannot
+ * carry a version sequence.
  */
 
 import { sql, and, eq, inArray } from 'drizzle-orm';
 import { assignments, submissions } from '../../db/schema.js';
+import { versionOwnerKey } from './version-owner-key.js';
 import type { DrizzleDb } from '../../db/client.js';
 import { putBlob, deleteBlob, getBlob } from '../storage/blobs.js';
 import { bundleKey } from '../storage/keys.js';
@@ -43,7 +46,17 @@ export interface CreateSubmissionDeps {
 export interface CreateSubmissionArgs {
   semesterId: string;
   assignmentIdStr: string;
-  studentId: string;
+  /**
+   * The SUBMITTER of record, or `null` for a submission with no single owning
+   * roster entry. Nullable since migration 0029 (D9) — but note it is NOT what
+   * the version sequence is keyed on. See {@link versionOwnerKey}.
+   */
+  studentId: string | null;
+  /**
+   * Stable lineage identifier for a group with no submitter. Required exactly
+   * when `studentId` is null; ignored otherwise.
+   */
+  groupKey?: string | null;
   blobSha256: string;
   stagingKey: string;
   originalFilename: string;
@@ -86,6 +99,7 @@ export async function createSubmission(
     semesterId,
     assignmentIdStr,
     studentId,
+    groupKey = null,
     blobSha256,
     stagingKey,
     originalFilename,
@@ -138,20 +152,30 @@ export async function createSubmission(
     }
 
     // -----------------------------------------------------------------------
-    // Step 2: Lock existing submissions for this cohort and compute max version.
+    // Step 2: Lock this LINEAGE's existing submissions and compute max version.
     //
     // PRD §9.4: use FOR UPDATE on the existing rows to prevent concurrent
     // workers from allocating the same version_index.
     //
+    // Migration 0029: scoped by `version_owner_key`, NOT `student_id`. Since
+    // D9 made `student_id` nullable, `AND student_id = ${studentId}` would bind
+    // to `= NULL` for a group submission — never true — so this SELECT would
+    // return ZERO rows, silently. maxVersion would stay 0, every resubmission
+    // of that group would be allocated version_index 1 forever, and
+    // `supersededIds` would always be empty, so the supersede chain would never
+    // form. `version_owner_key` is NOT NULL, so the predicate is total.
+    //
     // Drizzle does not have a typed .forUpdate() on select, so we use
     // db.execute(sql`...`) to issue the raw FOR UPDATE query.
     // -----------------------------------------------------------------------
+    const ownerKey = versionOwnerKey({ studentId, groupKey });
+
     const lockResult = await tx.execute(sql`
       SELECT id, version_index
       FROM submissions
       WHERE semester_id = ${semesterId}
         AND assignment_id = ${assignmentId}
-        AND student_id = ${studentId}
+        AND version_owner_key = ${ownerKey}
       FOR UPDATE
     `);
 
@@ -236,6 +260,10 @@ export async function createSubmission(
       semester_id: semesterId,
       assignment_id: assignmentId,
       student_id: studentId,
+      // `version_owner_key` is GENERATED — Postgres derives it from
+      // (student_id, group_key) and REFUSES an explicit value. We write only
+      // the input.
+      group_key: studentId === null ? groupKey : null,
       blob_object_key: finalBlobKey,
       // sha256 of the ORIGINAL (full, pre-strip) bundle. This is the dedup key
       // (dedup.ts matches on semester_id + blob_sha256) and the stable identity
