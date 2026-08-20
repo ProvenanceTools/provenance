@@ -490,6 +490,19 @@ async function buildBundleFiles(
   const rng = mulberry32((Number(student.sid) ^ strHash(assignmentId)) >>> 0);
   const keypair = await generateSessionKeypair();
   const sessionId = deterministicUuid(`${assignmentId}:${student.sid}`);
+  // The uuid in the `.slog` FILENAME — a DIFFERENT value from the logical
+  // `session_id` above, exactly as production mints them (the writer names the
+  // file `session-${randomUUID()}.slog` in `session-registry.ts`, while the
+  // logical id is `recorderContext.session_id`).
+  //
+  // This one matters most of the four generators: it seeds the DEMO DATABASE, so
+  // spelling both ids with one value made every bundle a reader could reach by
+  // hand an A === B bundle. Anything checked against the demo data — by a person
+  // or by a test — was therefore structurally incapable of reproducing an
+  // id-space crossing, which is the exact property that hid a maximum-severity
+  // false accusation (`log_bytes_match` firing on every honest git submission)
+  // from 972 passing tests. See `analysis-core`'s `fakeLogFileUuid`.
+  const logFileUuid = deterministicUuid(`logfile:${assignmentId}:${student.sid}`);
   const machineId = sha256Hex(`seed-machine:${student.sid}:${sessionId}`);
   const platform = PLATFORMS[Number(student.sid) % PLATFORMS.length]!;
 
@@ -589,8 +602,9 @@ async function buildBundleFiles(
   return {
     'manifest.json': signed.canonicalJson,
     'manifest.sig': signed.signatureHex,
-    [`session-${sessionId}.slog`]: slogText,
-    [`session-${sessionId}.slog.meta`]: metaJson,
+    // Filenames take the FILE uuid; the manifest above takes the LOGICAL id.
+    [`session-${logFileUuid}.slog`]: slogText,
+    [`session-${logFileUuid}.slog.meta`]: metaJson,
     [submittedPath]: submittedContent,
   };
 }
