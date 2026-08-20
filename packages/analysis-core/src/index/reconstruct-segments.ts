@@ -363,11 +363,17 @@ function resolve<T>(
   // allocates a segment.
   const fileEvents = index.byFile.get(filePath) ?? [];
   const cutEvents = cutBefore(fileEvents, upToGlobalIdx);
-  if (ordering === null || !spansTwoContributors(cutEvents, contributorBySession)) {
+  // One allocation-free pass answering both questions. Worth the slightly
+  // awkward shape: this runs for EVERY file of EVERY bundle, including the solo
+  // ones that must not pay for a feature they cannot use, and the obvious
+  // `new Set(events.map(e => e.sessionId))` allocates a second array the size of
+  // the event stream to do it.
+  const survey = surveySessions(cutEvents, contributorBySession);
+  if (ordering === null || !survey.spansTwoContributors) {
     return {
       kind: 'determinate',
       value: replayLinear(index, filePath, upToGlobalIdx, replay),
-      basis: distinctSessionCount(cutEvents) <= 1 ? 'single_session' : 'single_contributor',
+      basis: survey.multipleSessions ? 'single_contributor' : 'single_session',
     };
   }
 
@@ -491,22 +497,45 @@ function cutBefore(
   return events.filter((e) => e.globalIdx < upToGlobalIdx);
 }
 
-function distinctSessionCount(events: readonly IndexedEvent[]): number {
-  return new Set(events.map((e) => e.sessionId)).size;
-}
+type SessionSurvey = {
+  /** Does the file's event stream touch more than one session? */
+  multipleSessions: boolean;
+  /** Do two of those sessions belong to provably different contributors? */
+  spansTwoContributors: boolean;
+};
 
-function spansTwoContributors(
+/**
+ * One pass, no allocation until a second session actually appears, and an early
+ * exit the moment the answer can no longer change.
+ *
+ * The single-session case — the overwhelming majority of files in every bundle —
+ * costs one string compare per event and allocates nothing at all.
+ */
+function surveySessions(
   events: readonly IndexedEvent[],
   contributorBySession: ReadonlyMap<string, SessionContributor>,
-): boolean {
-  const seen = new Set<string>();
-  for (const sessionId of new Set(events.map((e) => e.sessionId))) {
+): SessionSurvey {
+  let firstSession: string | undefined;
+  let sessions: Set<string> | undefined;
+  for (const event of events) {
+    if (firstSession === undefined) {
+      firstSession = event.sessionId;
+      continue;
+    }
+    if (event.sessionId === firstSession) continue;
+    if (sessions === undefined) sessions = new Set([firstSession]);
+    sessions.add(event.sessionId);
+  }
+  if (sessions === undefined) return { multipleSessions: false, spansTwoContributors: false };
+
+  const keys = new Set<string>();
+  for (const sessionId of sessions) {
     const contributor = contributorBySession.get(sessionId);
     if (contributor === undefined || contributor.kind !== 'attributed') continue;
-    seen.add(contributor.contributorKey);
-    if (seen.size > 1) return true;
+    keys.add(contributor.contributorKey);
+    if (keys.size > 1) return { multipleSessions: true, spansTwoContributors: true };
   }
-  return false;
+  return { multipleSessions: true, spansTwoContributors: false };
 }
 
 function contributorFor(
