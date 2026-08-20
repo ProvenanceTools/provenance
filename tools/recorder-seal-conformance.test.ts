@@ -1975,6 +1975,61 @@ describe('a both-shapes bundle keeps WHOLE-FILE semantics', () => {
       'modified after sealing',
     );
   });
+
+  // The variant that worried me, written down because the reasoning is subtle
+  // and nothing pinned it.
+  //
+  // `seal.ts` zips EVERY file in `.provenance/`, skipping only `.corrupt-` and
+  // `.tmp`. So a student who runs the seal command while a session is still
+  // live packs a NON-FINAL rolling seal — whose digests were taken at the last
+  // checkpoint and are already stale — alongside a freshly-computed classic
+  // `manifest.json`.
+  //
+  // A both-shapes bundle takes whole-file semantics. If `log_bytes_match` were
+  // to read the stale ROLLING digests under that rule, every such bundle would
+  // fail at high severity, confidence 1.0, against a student who did nothing
+  // but seal early. It does not: `bundle.manifest` is the classic manifest in a
+  // both-shapes bundle, so the rolling digests are never consulted for bytes —
+  // only their signatures are, by check 1, and a stale seal is still validly
+  // signed over its own older content.
+  //
+  // That is a correctness property of which manifest wins, not of the seal
+  // being fresh, so it deserves a test that would fail if the precedence ever
+  // flipped.
+  it('a STALE non-final rolling seal inside a classic bundle accuses nobody', async () => {
+    const root = await makeRoot('both-shapes-stale-rolling');
+    const scenario = await buildRollingSealedBundle({
+      root,
+      sessionCount: 1,
+      files: [{ path: 'main.py', initial: 'a = 1\n', append: 'b = 2\n' }],
+      // The whole point: the rolling seal on disk is mid-session, so its
+      // slog/meta digests do NOT cover the log's final bytes.
+      final: false,
+    });
+
+    const sealed = await sealBundle({
+      assignmentRoot: root,
+      provenanceDir: scenario.provenanceDir,
+      assignmentId: ASSIGNMENT_ID,
+      semester: SEMESTER,
+      filesUnderReview: [...scenario.finalContent.keys()],
+      sessionPrivkey: scenario.sessions[0]!.keypair.privateKey,
+      sessionPubkeyHex: scenario.sessions[0]!.keypair.publicKeyHex,
+      computeExtensionHash: async () => EXTENSION_HASH,
+      outputDir: root,
+      now: () => new Date('2026-05-19T14:30:00.000Z'),
+    });
+    if (sealed.kind !== 'ok') throw new Error('sealBundle failed');
+
+    const verified = await loadAndValidate(sealed.bundlePath);
+
+    // The stale seal is present and its signature verifies...
+    expect(verified.bundle.rollingSeal!.seals).toHaveLength(1);
+    expect(verified.bundle.manifest.format_version).toBe('1.1');
+    // ...and it produces no finding of any kind.
+    expectNoBundleDetections(verified.report);
+    expectAllChecksPass(verified.report);
+  });
 });
 
 // ===========================================================================
