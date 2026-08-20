@@ -68,7 +68,9 @@ describe('IngestStartView', () => {
     mswServer.use(
       http.post(`/api/v1/semesters/${DEFAULT_SEMESTER_ID}/ingest`, () => {
         postCalled = true;
-        return HttpResponse.json({ job_id: DEFAULT_JOB_ID }, { status: 202 });
+        // `skipped` is part of the 202 body: this route resolves scopes inside
+        // the request, so `[]` is its answer whenever nothing was skipped.
+        return HttpResponse.json({ job_id: DEFAULT_JOB_ID, skipped: [] }, { status: 202 });
       }),
     );
 

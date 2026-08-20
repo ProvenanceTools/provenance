@@ -6,6 +6,17 @@
  * GET    /semesters/:semesterId/ingest/jobs             — paginated job list
  * POST   /semesters/:semesterId/ingest/jobs/:jobId/cancel — cancel a job
  *
+ * All three upload entry points — `POST /ingest`, `POST /ingest:gradescope` and
+ * `POST /ingest/uploads/:uploadId/complete` — are scope-aware (program
+ * architecture §6, decision D10). Each accepts a per-request declared-
+ * submission-type override and falls back to the per-assignment persisted
+ * default (`assignments.ingest_scope`) when none is given. The override's SHAPE
+ * follows the route's body: the two multipart routes take flat `scope_*` query
+ * params (their bodies are reserved for the archive), the JSON route takes a
+ * nested `ingest_scope` object. `POST /ingest` was the odd one out until
+ * 2026-08 — it had no scope handling at all, so a git repo zip fell through to
+ * the "one bundle" branch and was staged whole, silently. See `repo-zip.ts`.
+ *
  * The ingest:gradescope route is the primary upload path: it accepts the ZIP
  * Gradescope produces from "Download Submissions" (a submission_metadata.yml
  * plus one already-unzipped folder per submission), upserts the roster from the
@@ -45,6 +56,7 @@ import {
   enqueueIngestJob,
   cancelIngestJob,
   failIngestJob,
+  recordIngestJobSkipped,
 } from '../../../services/ingest/job-control.js';
 import { stageBlob } from '../../../services/ingest/stage-blob.js';
 import { chunk } from '../../../services/ingest/chunk.js';
@@ -52,7 +64,16 @@ import { createStorageClient, storageConfigFromEnv } from '../../../services/sto
 import { getBoss, JOB_KINDS } from '../../../jobs/pg-boss.js';
 import { recordPhase } from '../../../jobs/ingest-profile.js';
 import { streamUploadToTempFile } from '../../../services/ingest/stream-upload.js';
-import { ingestLocalPath, toSkippedWire } from '../../../services/ingest/local-path.js';
+import {
+  ingestLocalPath,
+  toSkippedWire,
+  type IngestLocalPathSkipped,
+} from '../../../services/ingest/local-path.js';
+import { expandRepoZip } from '../../../services/ingest/repo-zip.js';
+import {
+  loadIngestScopeConfigs,
+  scopeConfigResolver,
+} from '../../../services/ingest/gradescope/scope-config.js';
 import {
   createResumableUpload,
   putResumablePart,
@@ -61,7 +82,10 @@ import {
   resolveChunkBytes,
 } from '../../../services/ingest/resumable-upload.js';
 import type { IngestStageUploadPayload } from '../../../services/ingest/stage-upload-job.js';
-import { parseIngestScopeConfig } from '../../../services/ingest/gradescope/repo-scopes.js';
+import {
+  parseIngestScopeConfig,
+  type IngestScopeConfigResolver,
+} from '../../../services/ingest/gradescope/repo-scopes.js';
 import { z, ZodError } from 'zod';
 import {
   CreateUploadRequestSchema,
@@ -348,6 +372,38 @@ export function createIngestRouter(): Hono {
       const principal = c.var.principal!;
 
       // -----------------------------------------------------------------------
+      // Per-request declared-submission-type override (§6, decision D10).
+      //
+      // Same flat `scope_*` query shape as `POST /ingest:gradescope`, parsed by
+      // the same schema and folded by the same function. This body is
+      // multipart/form-data reserved for the uploaded files, so a nested JSON
+      // object has nowhere to live — and inventing a third spelling for one
+      // meaning is how a contract rots. Parsed FIRST so a bad override costs
+      // nothing: no body read, no roster query.
+      // -----------------------------------------------------------------------
+      const parsedScope = IngestScopeOverrideQuerySchema.safeParse(c.req.query());
+      if (!parsedScope.success) {
+        return c.json(Errors.validation(parsedScope.error.issues).toBody(), 400);
+      }
+      let scopeOverride;
+      try {
+        const fromQuery = ingestScopeFromQuery(parsedScope.data);
+        // Re-narrow through the SAME function every storage read uses, so an
+        // override and a persisted default are indistinguishable downstream
+        // (and so the optional `path_glob` lands with exact-optional typing).
+        scopeOverride = fromQuery === undefined ? undefined : parseIngestScopeConfig(fromQuery);
+      } catch (err) {
+        // The cross-field rules (repo_scoped needs a glob; nothing else may
+        // carry one) live on IngestScopeConfigSchema, so they surface here.
+        return c.json(
+          Errors.validation(
+            err instanceof ZodError ? err.issues : [{ error: 'Invalid scope override' }],
+          ).toBody(),
+          400,
+        );
+      }
+
+      // -----------------------------------------------------------------------
       // Content-Length pre-check (V20 lesson: reject before buffering).
       // -----------------------------------------------------------------------
       const contentLengthHeader = c.req.header('content-length');
@@ -369,6 +425,20 @@ export function createIngestRouter(): Hono {
       if ((rosterCount[0]?.count ?? 0) === 0) {
         return c.json(Errors.rosterRequired().toBody(), 422);
       }
+
+      // -----------------------------------------------------------------------
+      // Resolve the scope-resolution config exactly as `local-path.ts` does.
+      //
+      // A per-request override applies to the WHOLE batch, so it short-circuits
+      // the DB read entirely — there is nothing per-assignment left to look up,
+      // and the resolver simply ignores its assignment-id key. Without one, the
+      // config is per assignment and keyed by the id each scope declares, so
+      // the whole semester's map is read once (a handful of rows).
+      // -----------------------------------------------------------------------
+      const scopeConfigFor: IngestScopeConfigResolver =
+        scopeOverride !== undefined
+          ? () => scopeOverride
+          : scopeConfigResolver(await loadIngestScopeConfigs(db, semesterId));
 
       // -----------------------------------------------------------------------
       // Parse multipart body.
@@ -424,6 +494,49 @@ export function createIngestRouter(): Hono {
       // -----------------------------------------------------------------------
       const filesToStage: FileToStage[] = [];
 
+      // Scopes that exist but will not become submissions. Reported through the
+      // SAME channel as the Gradescope path — `ingest_jobs.skipped` plus the
+      // inline array on this response — never a new one. Stays `[]` for every
+      // upload that carries no repo zip, which is a positive statement that
+      // resolution ran and skipped nothing.
+      const scopeSkips: IngestLocalPathSkipped[] = [];
+
+      /**
+       * Stage one candidate archive.
+       *
+       * A git repo zip fans out into one flat bundle per ACCEPTED scope, using
+       * the same `repo-scopes.ts` discovery + resolution the Gradescope path
+       * runs. Everything else — a single sealed bundle, an inner bundle from a
+       * zip-of-zips, a non-zip — is staged with its original bytes untouched,
+       * which is exactly what this route did before repo zips were understood.
+       * `expandRepoZip` returns null for all of those (it decides from entry
+       * NAMES, without inflating anything), so their staged blob_sha256 — the
+       * dedup key — is unchanged by construction, not by argument.
+       */
+      const addCandidate = async (filename: string, body: ArrayBuffer): Promise<void> => {
+        const repo = await expandRepoZip(filename, body, scopeConfigFor);
+        if (repo === null) {
+          filesToStage.push({ filename, body });
+          return;
+        }
+        for (const bundle of repo.bundles) {
+          // The per-bundle cap applies to the REBUILT scope bundle, which a
+          // well-compressed repo can push over the line even though the upload
+          // was under it. Skip the scope rather than failing the whole upload —
+          // same call the streaming stager makes, same reason string.
+          if (bundle.data.byteLength > cfg.INGEST_MAX_BUNDLE_BYTES) {
+            scopeSkips.push({
+              folderKey: repo.folderKey,
+              scopePath: bundle.scopePath,
+              reason: 'bundle_too_large',
+            });
+            continue;
+          }
+          filesToStage.push({ filename: bundle.filename, body: bundle.data });
+        }
+        scopeSkips.push(...repo.skipped);
+      };
+
       for (const raw of rawFiles) {
         // Per-file size check (before reading, to fail fast on obvious over-size).
         if (raw.size > cfg.INGEST_MAX_BUNDLE_BYTES) {
@@ -453,11 +566,11 @@ export function createIngestRouter(): Hono {
 
         if (expandResult.kind === 'zip-of-zips') {
           for (const inner of expandResult.entries) {
-            filesToStage.push({ filename: inner.filename, body: inner.data });
+            await addCandidate(inner.filename, inner.data);
           }
         } else {
           // 'not-zip' or 'single-zip': reuse the already-read buffer.
-          filesToStage.push({ filename: raw.name, body: expandResult.rawBuffer });
+          await addCandidate(raw.name, expandResult.rawBuffer);
         }
       }
 
@@ -479,6 +592,43 @@ export function createIngestRouter(): Hono {
       // Create the ingest_jobs row.
       // -----------------------------------------------------------------------
       const { jobId } = await enqueueIngestJob(db, semesterId, principal.user.id);
+
+      // -----------------------------------------------------------------------
+      // Publish the COMPLETE scope-resolution skip list before anything is
+      // enqueued.
+      //
+      // Unlike the streaming stager this route resolves every scope up front,
+      // so the list is already final here — writing it before the first
+      // `boss.insert` means no worker can settle the job while a poller would
+      // still read `null` (unknown). `finalizeIngestJob` never touches the
+      // column, so the write survives the job's whole lifecycle.
+      //
+      // Writing `[]` is a real statement — "resolution ran and skipped nothing"
+      // — not a round trip to optimize away. Replacement, not append, is what
+      // keeps a re-ingest idempotent: the same upload recomputes the same list
+      // and overwrites.
+      // -----------------------------------------------------------------------
+      const skippedWire = toSkippedWire(scopeSkips);
+      await recordIngestJobSkipped(db, jobId, skippedWire);
+
+      // Every scope was rejected, so this upload produces no submissions at
+      // all. Settle the job now: nothing will be enqueued, so no worker would
+      // ever reach `maybeEnqueueFinalize` and it would sit in 'queued' forever.
+      // 'failed' rather than a vacuous 'succeeded' with zero files — the upload
+      // did not do what was asked, and `skipped` above says exactly why.
+      if (filesToStage.length === 0) {
+        const byReason = new Map<string, number>();
+        for (const s of scopeSkips) byReason.set(s.reason, (byReason.get(s.reason) ?? 0) + 1);
+        const detail =
+          byReason.size === 0
+            ? 'no ingestable bundle in the upload'
+            : `no ingestable scope: ${[...byReason].map(([r, n]) => `${r} x${n}`).join(', ')}`;
+        await failIngestJob(db, jobId, detail);
+        // The skip list is written above and `failIngestJob` does not name the
+        // column, so it survives.
+        c.set('auditDetail', { job_id: jobId, file_count: 0, scopes_skipped: scopeSkips.length });
+        return c.json({ job_id: jobId, skipped: skippedWire }, 202);
+      }
 
       // -----------------------------------------------------------------------
       // Stage each file, then bulk-insert the ingest_files rows and bulk-enqueue
@@ -550,9 +700,17 @@ export function createIngestRouter(): Hono {
       }
 
       // Set auditDetail so the audit middleware can log job_id as target_id.
-      c.set('auditDetail', { job_id: jobId, file_count: filesToStage.length });
+      c.set('auditDetail', {
+        job_id: jobId,
+        file_count: filesToStage.length,
+        scopes_skipped: scopeSkips.length,
+      });
 
-      return c.json({ job_id: jobId }, 202);
+      // `skipped` is inlined here AND persisted above, deliberately: this route
+      // resolves synchronously so it can answer now, and `GET /ingest/jobs/:id`
+      // serves the identical array for the same upload. Never `null` from here
+      // — resolution demonstrably finished.
+      return c.json({ job_id: jobId, skipped: skippedWire }, 202);
     },
   );
 
