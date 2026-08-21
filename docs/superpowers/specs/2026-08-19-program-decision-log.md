@@ -308,13 +308,35 @@ DESC)`, `LIMIT 51`: row-value 10 buffers / 0.054 ms vs. old 1016 buffers / 3.003
     on values that survive the ORM read intact and were left alone. The per-student list
     (`cohort/students.ts`) has no timestamp key and slices in memory; also untouched.
 
-### Two things noticed alongside bug 14 and deliberately not changed
+### Migration 0030 — the indexes bug 14's fix unlocked
 
-- **None of `cross_flags`, `submissions`, or `ingest_files` carries an index on its timestamp
-  keyset.** `submissions_cohort_idx` is `(semester_id, score_total DESC, severity_rank, id)` — it
-  serves `score_desc`, not `ingested_desc`. So all three of these plans are a sort over a scan
-  today, and the row-value form is the one that _would_ benefit from such an index. Adding one is a
-  migration, not a read-path fix, so it was left out of scope.
+**None of `cross_flags`, `submissions`, or `ingest_files` carried an index on its timestamp
+keyset.** `submissions_cohort_idx` is `(semester_id, score_total DESC, severity_rank, id)` — it
+serves `sort=score_desc`, not `sort=ingested_desc`. So all three paginations were a sort over a
+scan, on the most-hit query in the product. That was invisible before, because the old OR-of-AND
+bucket predicate could not have used such an index anyway; only the row-value form can. **Migration
+number 0030, taken explicitly** (highest existing was 0029), and the journal was asserted for
+unique + contiguous `idx`, monotonic `when`, and unique tags, then the **whole chain was applied to
+a fresh database** — 29 migrations, clean — because a renumber that leaves ordering broken passes
+every unit test.
+
+Measured on that fresh database, 100k rows per table, `LIMIT 51`:
+
+| query                  | before                            | after                               |
+| ---------------------- | --------------------------------- | ----------------------------------- |
+| cross-flags            | 1335 buffers, Seq Scan + sort     | 6 buffers, Index Only Scan          |
+| cohort `ingested_desc` | 3865 buffers, Parallel Seq + sort | 7 buffers, Index Only Scan          |
+| unmatched tray         | 1604 buffers, Parallel Seq + sort | 6 buffers, Nested Loop + Index Scan |
+
+All three show the row-value comparison as an `Index Cond`. The indexes are additive and
+index-only — no column added or dropped, no row rewritten, no existing index replaced, each safe to
+roll back with a `DROP INDEX`. `submissions` and `ingest_files` are **partial**, matching their
+queries' default predicates and mirroring the existing partial indexes; `include_superseded=true`
+does not use the new index and plans exactly as it does today. `ingest_files` cannot lead with
+`semester_id` because the semester filter lives on the joined `ingest_jobs`.
+
+### Noticed alongside bug 14 and deliberately not changed
+
 - **A cursor whose `kind` does not match the requested `sort` is silently ignored**, not rejected:
   `buildCursorCondition` returns `null` and the page is served from the top while the client
   believes it is paging forward. Same silent-mis-pagination family as bug 14, reachable by changing
