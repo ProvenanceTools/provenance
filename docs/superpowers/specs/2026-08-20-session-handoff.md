@@ -118,20 +118,35 @@ git -C ../provenance-jetbrains-recorder status --porcelain
 
 ## Still owed
 
-- **Sibling writer halves** (the two above, if they did not finish). Contracts are in the decision
-  log **with seven corrections** from the VS Code implementation — a port that ignores them will
-  describe the same event differently, which is the divergence the shared vectors exist to prevent.
-- **Server parity for `CoverageFacts`.** `packages/shared` has zero occurrences of "contributor"
-  while `load-index.ts` already stamps them; the exact three steps are in the decision log.
-  Gotcha recorded there: `BundleContributors.bySession` is a `ReadonlyMap` and will not serialize —
-  the wire shape must be the `CoverageFacts` aggregate.
-- **`/architecture` consolidated diagram pass** — ~13 nodes owed (`extclass`, `witness`, `coverage`,
-  `submission_contributors`, and others; the log lists them). **No `.dot`/`.svg` has been touched
-  all session, deliberately**, so agents could not collide over them. Node _detail_ cannot be
-  authored before its node exists — `nodes.coverage.test.ts` fails on orphan metadata.
-- **End-to-end rehearsal of the real student path**: install → enrol → work → push → ingest →
-  review. Every gate so far tests a slice; nobody has walked the whole thing. This is where I
-  expect the remaining surprises.
+Ordered by what I would do first.
+
+1. **Close the 0029 server gate** (see above). Blocked only on Docker. Everything else on the
+   branch is verified; this is the single unverified change, and it is the riskiest one.
+2. **Server parity for `CoverageFacts`.** `packages/shared` has zero occurrences of "contributor"
+   while `load-index.ts` already stamps them; the exact three steps are in the decision log.
+   Gotcha recorded there: `BundleContributors.bySession` is a `ReadonlyMap` and will not serialize —
+   the wire shape must be the `CoverageFacts` aggregate.
+3. **`/architecture` consolidated diagram pass** — ~15 nodes owed (`extclass`, `witness`, `coverage`,
+   `submission_contributors`, and others; the log lists them). **No `.dot`/`.svg` has been touched
+   all session, deliberately**, so agents could not collide over them. Node _detail_ cannot be
+   authored before its node exists — `nodes.coverage.test.ts` fails on orphan metadata.
+4. **End-to-end rehearsal of the real student path**: install → enrol → work → push → ingest →
+   review. Every gate so far tests a slice; nobody has walked the whole thing. **This is where I
+   expect the remaining surprises**, and I would not call the system ready without it.
+5. **Run the recorder suites on a real Windows and Linux machine.** All testing to date is macOS.
+   The git-path work is pinned through an injectable seam against inputs _believed_ to be
+   Windows-shaped — that is not the same as Windows. The user raised this directly and it is the
+   least-covered risk on the branch.
+
+### Two known gaps that are documented, not bugs
+
+- **Two unenrolled partners in one repo cannot be told apart.** No signal exists. Both the
+  quarantine and `prev_session_id` defects remain reachable in exactly that configuration; it is
+  stated in provnvim's module docstrings and pinned by a test asserting the _old_ behaviour, so
+  closing it later reads as a deliberate change. Needs enrollment or peer witnessing.
+- **The `session.start` witnessing-availability capability report** (collaboration spec §5.6 item 3)
+  is unbuilt, so "no witnesses" cannot be told from "witnessing was impossible". Safe — the reader
+  treats `unwitnessed` as blameless either way — but incomplete now that all three recorders emit.
 
 ---
 
@@ -186,6 +201,30 @@ Non-negotiable in every brief:
   is not the thing being waited on.
 - Analyzer suite intermittently exits non-zero with all tests passing (a deliberate uncaught error
   in `BundleContext.test.tsx`). Re-run before believing it.
+
+---
+
+## What the last wave established, worth carrying forward
+
+**Two independent ports corrected the same contract flaw.** Rule 1 of the peer-witnessing contract
+specified a _mechanism_ (a filesystem watcher) where it should have specified a _property_. Both
+provnvim and provjet found, separately, that a watcher-only implementation misses the commonest
+case — provnvim because a `.slog` already present at session start fires no event and "pull, then
+open the editor" is the ordinary order; provjet because IntelliJ's VFS is a cached layer and an
+external-terminal `git pull` fires nothing until a refresh. Both added a drain-time directory
+sweep. Two implementations reaching the same correction is evidence the contract was wrong.
+
+**Reading the host beat following the reference.** I told provjet to use the IntelliJ VCS API if it
+could, else copy VS Code's spawn. It used `git4idea`, which made five of the seven git-path
+corrections moot — `GitExecutable` already _is_ the resolved-path ladder they prescribe, so it
+works off-`PATH` and on WSL/remote/IJent for free. The generalisable lesson is in the decision log.
+
+**One correction was load-bearing on Windows.** Per-line CRLF trimming: `"false\r" != "false"` would
+have made **every Windows repository look shallow** and silently omit the discriminator. That only
+existed as a correction because the VS Code writer was hardened for platforms first.
+
+**Both ports' async-in-drain mutation initially escaped**, in both repos, because the ordering test
+that catches it did not exist. Each wrote it and re-ran. Assume a new port has the same hole.
 
 ---
 
