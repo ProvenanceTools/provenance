@@ -104,10 +104,16 @@ write-once; retention still deletes only blobs, never DB rows.
 ### 2.3 Run database migrations
 
 ```bash
-node packages/server/dist/index.js --mode=migrate
+npm run db:migrate --workspace=packages/server
 ```
 
-Or use `npm run db:migrate --workspace=packages/server` (requires dev deps installed).
+There is **no `--mode=migrate`**. `node dist/index.js` accepts only `--mode=api`,
+`--mode=worker`, or `--mode=all` (`packages/server/src/run-mode.ts`) and throws on
+anything else. Migrations are applied by a separate entry point,
+`packages/server/src/db/migrate.ts`, which the `db:migrate` script runs under `tsx`
+— so this step needs the workspace's dev dependencies installed. It reads
+`DATABASE_URL` directly from the environment (the script passes `--env-file=.env`),
+independently of the server's own config schema.
 
 ### 2.4 Start the server
 
