@@ -39,6 +39,7 @@ import {
   coverageFacts,
   hasCoverageFacts,
   identityCoverage,
+  multiMachineRecordingFacts,
   unattestedTails,
 } from './coverage-facts.js';
 import { ASSUMED_SINGLE_REPOSITORY, buildObservedDag } from '../git/observed-dag.js';
@@ -88,7 +89,18 @@ async function keys(): Promise<IdentityTestKeys> {
   return cachedKeys;
 }
 
-type Who = { studentRef: string } | 'anonymous';
+/**
+ * A SECOND enrolled machine for the same deployment (D5). Same root, same
+ * institution — only the student keypair differs, which is exactly what a
+ * second independent enrolment produces.
+ */
+let cachedSecondMachine: IdentityTestKeys | null = null;
+async function secondMachine(): Promise<IdentityTestKeys> {
+  cachedSecondMachine ??= await buildIdentityKeys({ studentSeedByte: 0x56 });
+  return cachedSecondMachine;
+}
+
+type Who = { studentRef: string; machine?: IdentityTestKeys } | 'anonymous';
 
 /**
  * A bundle whose sessions carry real verifiable identities AND explicit wall
@@ -116,7 +128,7 @@ async function buildScope(
           ? {}
           : {
               identity: await buildInstitutionIdentity({
-                keys: k,
+                keys: spec.who.machine ?? k,
                 sessionPubkeyHex: sk.pubkeyHex,
                 studentRef: spec.who.studentRef,
               }),
@@ -166,36 +178,51 @@ describe('partitionSessionOverlaps is a partition', () => {
       { who: { studentRef: 'alice' }, startMin: 0, endMin: 180 },
       { who: { studentRef: 'bob' }, startMin: 60, endMin: 240 },
       { who: { studentRef: 'alice' }, startMin: 90, endMin: 300 },
+      // Alice's SECOND enrolled machine, overlapping both of her own sessions
+      // and Bob's — so all three arms of the partition are populated and none
+      // of the assertions below is vacuous.
+      {
+        who: { studentRef: 'alice', machine: await secondMachine() },
+        startMin: 120,
+        endMin: 360,
+      },
     ]);
   }
 
-  it('splits the overlapping pairs into two disjoint, exhaustive halves', async () => {
+  it('splits the overlapping pairs into three disjoint, exhaustive parts', async () => {
     const { bundle, index } = await mixedScope();
-    const { judged, collaboration } = partitionSessionOverlaps(bundle, index);
+    const { judged, collaboration, multiMachine } = partitionSessionOverlaps(bundle, index);
 
     const judgedKeys = new Set(judged.map((p) => pairKey(p.a.sessionId, p.b.sessionId)));
     const collabKeys = new Set(collaboration.map((p) => pairKey(p.a.sessionId, p.b.sessionId)));
+    const machineKeys = new Set(multiMachine.map((p) => pairKey(p.a.sessionId, p.b.sessionId)));
 
-    // Disjoint.
+    // Pairwise disjoint.
     for (const k of judgedKeys) expect(collabKeys.has(k)).toBe(false);
+    for (const k of judgedKeys) expect(machineKeys.has(k)).toBe(false);
+    for (const k of collabKeys) expect(machineKeys.has(k)).toBe(false);
     // Exhaustive over the overlapping pairs, and nothing invented.
-    expect(new Set([...judgedKeys, ...collabKeys])).toEqual(allOverlappingPairs(index));
-    // Both sides exercised, or the assertions above prove nothing.
+    expect(new Set([...judgedKeys, ...collabKeys, ...machineKeys])).toEqual(
+      allOverlappingPairs(index),
+    );
+    // Every arm exercised, or the assertions above prove nothing.
     expect(judgedKeys.size).toBeGreaterThan(0);
     expect(collabKeys.size).toBeGreaterThan(0);
-    // No pair counted twice within a half.
+    expect(machineKeys.size).toBeGreaterThan(0);
+    // No pair counted twice within an arm.
     expect(judgedKeys.size).toBe(judged.length);
     expect(collabKeys.size).toBe(collaboration.length);
+    expect(machineKeys.size).toBe(multiMachine.length);
   });
 
   it('a suppressed pair is not representable as judged — both sides are attributed', async () => {
     const { bundle, index } = await mixedScope();
-    const { judged, collaboration } = partitionSessionOverlaps(bundle, index);
+    const { judged, collaboration, multiMachine } = partitionSessionOverlaps(bundle, index);
 
     // The compiler already forbids `comparison: 'different'` on JudgedOverlap.
     // This pins the runtime value too, so a future widening of the type is a
     // failing test rather than a silent re-admission.
-    for (const p of judged) expect(['same', 'unknown']).toContain(p.comparison);
+    for (const p of judged) expect(['same_machine', 'unknown']).toContain(p.comparison);
     for (const p of collaboration) {
       expect(p.contributorA.kind).toBe('attributed');
       expect(p.contributorB.kind).toBe('attributed');
@@ -203,9 +230,46 @@ describe('partitionSessionOverlaps is a partition', () => {
     }
   });
 
-  it('the heuristic flags the judged half and nothing else', async () => {
+  it('the two-machine arm is one person on proven-distinct machines — never two people', async () => {
     const { bundle, index } = await mixedScope();
-    const { judged, collaboration } = partitionSessionOverlaps(bundle, index);
+    const { multiMachine } = partitionSessionOverlaps(bundle, index);
+
+    expect(multiMachine.length).toBeGreaterThan(0);
+    for (const p of multiMachine) {
+      // Both sides verified — the suppression rests on PROOF, never on an
+      // unproven relationship.
+      expect(p.contributorA.kind).toBe('attributed');
+      expect(p.contributorB.kind).toBe('attributed');
+      // One person...
+      expect(p.contributorA.contributorKey).toBe(p.contributorB.contributorKey);
+      expect(p.studentRef).toBe('alice');
+      // ...two machines.
+      expect(p.studentPubkeyA).not.toBe(p.studentPubkeyB);
+      expect(p.contributorA.studentPubkey).not.toBe(p.contributorB.studentPubkey);
+    }
+  });
+
+  it('a same-machine overlap and a two-machine overlap are DIFFERENT facts', async () => {
+    // Alice's two sessions on ONE machine are judged; Alice's session against
+    // her SECOND machine is not. Collapsing the two either loses the clock
+    // manipulation signal or accuses a supported flow.
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, startMin: 0, endMin: 180 },
+      { who: { studentRef: 'alice' }, startMin: 30, endMin: 120 },
+      { who: { studentRef: 'alice', machine: await secondMachine() }, startMin: 60, endMin: 240 },
+    ]);
+    const { judged, multiMachine } = partitionSessionOverlaps(bundle, index);
+
+    // Sessions 0 and 1 are one machine — judged, at full strength.
+    expect(judged).toHaveLength(1);
+    expect(judged[0]!.comparison).toBe('same_machine');
+    // Sessions 0-2 and 1-2 cross the machine boundary — suppressed.
+    expect(multiMachine).toHaveLength(2);
+  });
+
+  it('the heuristic flags the judged part and nothing else', async () => {
+    const { bundle, index } = await mixedScope();
+    const { judged, collaboration, multiMachine } = partitionSessionOverlaps(bundle, index);
 
     const fired = new Set(
       multipleSessionsOverlapHeuristic
@@ -214,29 +278,82 @@ describe('partitionSessionOverlaps is a partition', () => {
     );
     expect(fired).toEqual(new Set(judged.map((p) => pairKey(p.a.sessionId, p.b.sessionId))));
 
-    // And the coverage stage states exactly the other half.
+    // And the coverage stage states exactly the other two parts — every
+    // suppressed pair is a stated fact, never silence.
     const surfaced = new Set(
       concurrentRecordingFacts(bundle, index).map((f) => pairKey(f.sessionA, f.sessionB)),
     );
     expect(surfaced).toEqual(
       new Set(collaboration.map((p) => pairKey(p.a.sessionId, p.b.sessionId))),
     );
+    const machineSurfaced = new Set(
+      multiMachineRecordingFacts(bundle, index).map((f) => pairKey(f.sessionA, f.sessionB)),
+    );
+    expect(machineSurfaced).toEqual(
+      new Set(multiMachine.map((p) => pairKey(p.a.sessionId, p.b.sessionId))),
+    );
     // Which together is still the whole overlap set, stated end to end.
-    expect(new Set([...fired, ...surfaced])).toEqual(allOverlappingPairs(index));
-    for (const k of fired) expect(surfaced.has(k)).toBe(false);
+    expect(new Set([...fired, ...surfaced, ...machineSurfaced])).toEqual(
+      allOverlappingPairs(index),
+    );
+    for (const k of fired) {
+      expect(surfaced.has(k)).toBe(false);
+      expect(machineSurfaced.has(k)).toBe(false);
+    }
   });
 
-  it('returns empty halves for a bundle with fewer than two sessions', async () => {
+  it('returns empty parts for a bundle with fewer than two sessions', async () => {
     const { bundle, index } = await buildScope([
       { who: { studentRef: 'alice' }, startMin: 0, endMin: 60 },
     ]);
-    expect(partitionSessionOverlaps(bundle, index)).toEqual({ judged: [], collaboration: [] });
+    expect(partitionSessionOverlaps(bundle, index)).toEqual({
+      judged: [],
+      collaboration: [],
+      multiMachine: [],
+    });
   });
 });
 
 // ---------------------------------------------------------------------------
 // The suppressed overlap is now a fact
 // ---------------------------------------------------------------------------
+
+describe('a suppressed two-machine overlap is surfaced as a fact', () => {
+  it('reports one verified student recording on two enrolled machines', async () => {
+    // Alice's machine 1 runs 0..180min, her machine 2 runs 60..240min → 120
+    // minutes of genuine overlap. Suppressed as a finding, STATED as a fact —
+    // the whole reason the coverage stage exists is that a suppressed pair
+    // used to produce no flag and no fact at all.
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, startMin: 0, endMin: 180 },
+      { who: { studentRef: 'alice', machine: await secondMachine() }, startMin: 60, endMin: 240 },
+    ]);
+
+    const facts = multiMachineRecordingFacts(bundle, index);
+    expect(facts).toHaveLength(1);
+    expect(facts[0]!.studentRef).toBe('alice');
+    expect(facts[0]!.overlapMs).toBe(120 * 60_000);
+    expect(facts[0]!.crashBounded).toBe(false);
+
+    // And the heuristic says nothing about it.
+    expect(multipleSessionsOverlapHeuristic.run(index, bundle, mergeConfig())).toEqual([]);
+
+    // It is a separate fact from concurrent PARTNER recording. Collapsing the
+    // two would tell a grader that two different people were working together
+    // when one person was moving between their own machines.
+    expect(concurrentRecordingFacts(bundle, index)).toEqual([]);
+  });
+
+  it('is included in the aggregate, so a bundle carrying only this fact is not "nothing to note"', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, startMin: 0, endMin: 180 },
+      { who: { studentRef: 'alice', machine: await secondMachine() }, startMin: 60, endMin: 240 },
+    ]);
+    const facts = coverageFacts(bundle, index);
+    expect(facts.multiMachineRecording).toHaveLength(1);
+    expect(hasCoverageFacts(facts)).toBe(true);
+  });
+});
 
 describe('a suppressed concurrent overlap is surfaced as a fact', () => {
   it('reports two verified partners recording at the same time', async () => {

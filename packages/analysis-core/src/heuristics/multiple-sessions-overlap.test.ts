@@ -474,7 +474,28 @@ describe('multiple_sessions_overlap — contributor keying', () => {
     return cachedKeys;
   }
 
-  type Who = { studentRef: string } | 'anonymous';
+  /**
+   * A SECOND enrolled machine belonging to the same deployment.
+   *
+   * D5: "each machine enrols independently, generating its own keypair; the
+   * shared `student_ref` groups them into one contributor". So the root and the
+   * institution keys are identical — it is the same institution issuing the
+   * second credential — and ONLY the student keypair differs. That is the whole
+   * difference a second enrolment produces, and it is what
+   * `mint-credential.ts` counts as `machine_count`.
+   */
+  let cachedSecondMachine: IdentityTestKeys | null = null;
+  async function secondMachine(): Promise<IdentityTestKeys> {
+    cachedSecondMachine ??= await buildIdentityKeys({ studentSeedByte: 0x56 });
+    return cachedSecondMachine;
+  }
+
+  /**
+   * `machine` selects WHICH enrolled keypair countersigns the session key.
+   * Omitted means the default (first) machine, so every pre-existing caller
+   * keeps describing one person on one machine.
+   */
+  type Who = { studentRef: string; machine?: IdentityTestKeys } | 'anonymous';
 
   /**
    * Two sessions that overlap in wall time (0..30 and 10..30), each optionally
@@ -497,7 +518,7 @@ describe('multiple_sessions_overlap — contributor keying', () => {
             ? {}
             : {
                 identity: await buildInstitutionIdentity({
-                  keys: k,
+                  keys: who.machine ?? k,
                   sessionPubkeyHex: sk.pubkeyHex,
                   studentRef: who.studentRef,
                 }),
@@ -527,7 +548,11 @@ describe('multiple_sessions_overlap — contributor keying', () => {
     expect(flags).toHaveLength(0);
   });
 
-  it('STILL flags one contributor whose own two sessions overlap', async () => {
+  it('STILL flags one contributor whose own two sessions overlap ON ONE MACHINE', async () => {
+    // The NEGATIVE CONTROL for the two-machine suppression below. Both sessions
+    // countersigned under the SAME enrolled student key, so "they used two
+    // machines" is excluded by the evidence and clock manipulation is what is
+    // left. Full strength, unchanged.
     const { index, bundle, resolved } = await overlappingPair(
       { studentRef: ALICE },
       { studentRef: ALICE },
@@ -541,9 +566,72 @@ describe('multiple_sessions_overlap — contributor keying', () => {
     // The original signal, at its original strength.
     expect(f.severity).toBe('high');
     expect(f.confidence).toBeCloseTo(0.95);
-    expect(f.detail!['contributorComparison']).toBe('same');
+    expect(f.detail!['contributorComparison']).toBe('same_machine');
     expect(f.description).toContain('same verified contributor');
     expect(f.description).toContain(ALICE);
+  });
+
+  // -------------------------------------------------------------------------
+  // D5 — multiple machines per student is a first-class flow
+  //
+  // "Each machine enrols independently, generating its own keypair; the shared
+  // `student_ref` groups them into one contributor." The flag used to accuse
+  // that flow of log forgery in its first clause and concede it in its last.
+  // The evidence that tells the two apart was already in the bundle: the
+  // long-lived `student_pubkey` the chain walk returns is per-MACHINE, while
+  // `student_ref` is per-PERSON.
+  // -------------------------------------------------------------------------
+  describe('two enrolled machines, one student (D5)', () => {
+    it('does NOT flag one student recording on two independently enrolled machines', async () => {
+      const { index, bundle, resolved } = await overlappingPair(
+        { studentRef: ALICE },
+        { studentRef: ALICE, machine: await secondMachine() },
+      );
+      // Guard the premise on BOTH axes, or the suppression below could be an
+      // accidental resolution failure rather than the two-machine branch.
+      expect(resolved.counts).toEqual({ attributed: 2, unverifiable: 0, unattributed: 0 });
+
+      const [ca, cb] = [...resolved.bySession.values()];
+      if (ca?.kind !== 'attributed' || cb?.kind !== 'attributed') {
+        throw new Error('premise: both sessions must resolve attributed');
+      }
+      // ONE person...
+      expect(ca.studentRef).toBe(ALICE);
+      expect(cb.studentRef).toBe(ALICE);
+      // ...on two PROVEN-distinct enrolled machines.
+      expect(ca.studentPubkey).not.toBe(cb.studentPubkey);
+
+      const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
+      expect(flags).toEqual([]);
+    });
+
+    it('keeps ONE contributor — the machine is visible to the overlap judgement, not to attribution', async () => {
+      // D14's per-contributor scoring and migration 0029 both depend on one key
+      // per person. Splitting a student into two contributors would split their
+      // score across two apparent people, which is the exact failure 0029
+      // exists to prevent. So the two machines must NOT become two
+      // contributors.
+      const { resolved } = await overlappingPair(
+        { studentRef: ALICE },
+        { studentRef: ALICE, machine: await secondMachine() },
+      );
+      expect(resolved.contributors).toHaveLength(1);
+      expect(resolved.contributors[0]!.studentRef).toBe(ALICE);
+      expect(resolved.contributors[0]!.sessionIds).toHaveLength(2);
+    });
+
+    it('does not let a second machine launder an overlap between two DIFFERENT students', async () => {
+      // The suppression must key on the ref being the SAME and the machine
+      // being different — never on the machine alone. Two different people
+      // always have different machine keys, and that pair is suppressed for a
+      // different reason (proven collaboration), which must stay distinct.
+      const { index, bundle } = await overlappingPair(
+        { studentRef: ALICE },
+        { studentRef: BOB, machine: await secondMachine() },
+      );
+      const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
+      expect(flags).toEqual([]);
+    });
   });
 
   it('STILL flags when session A is unattributed and session B is attributed', async () => {
@@ -553,7 +641,9 @@ describe('multiple_sessions_overlap — contributor keying', () => {
     const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
     expect(flags).toHaveLength(1);
     expect(flags[0]!.detail!['contributorComparison']).toBe('unknown');
-    expect(flags[0]!.severity).toBe('high');
+    // Kept as a finding, but NOT as a high-severity accusation: which of the
+    // two readings applies is exactly what the evidence does not establish.
+    expect(flags[0]!.severity).toBe('low');
   });
 
   it('STILL flags when session B is unattributed and session A is attributed', async () => {
@@ -644,6 +734,143 @@ describe('multiple_sessions_overlap — contributor keying', () => {
     const flags = multipleSessionsOverlapHeuristic.run(buildIndex(bundle), bundle, defaultConfig);
     expect(flags).toHaveLength(1);
     expect(flags[0]!.detail!['contributorComparison']).toBe('unknown');
+  });
+
+  // -------------------------------------------------------------------------
+  // The undecidable majority
+  //
+  // `compareContributors` needs BOTH sides attributed, so `'unknown'` is the
+  // answer for the ordinary cases: one partner unenrolled, neither enrolled,
+  // any 1.x bundle (no identity block exists below Manifest 2.0), and any
+  // deployment with no root key configured. This flag emits N*(N-1)/2 of them
+  // per bundle. §6 Rule 2 — a finding names a person only when the evidence is
+  // `established` — and Rule 1's third state is `unknown`, STATED, with what
+  // would have resolved it. A high-severity accusation is not that statement.
+  //
+  // The finding is KEPT, at every one of those states. What changes is the
+  // weight it carries into a grader's triage, and the lever is available here
+  // in a way bug 13's was not: the partition separates the decidable
+  // single-machine case cleanly, so lowering the undecidable one costs the
+  // genuine detection nothing.
+  // -------------------------------------------------------------------------
+  describe('an undecidable overlap is stated, not accused', () => {
+    it('states the case rather than asserting it, when neither side is attributed', async () => {
+      const { index, bundle } = await overlappingPair('anonymous', 'anonymous');
+      const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
+
+      expect(flags).toHaveLength(1);
+      const f = flags[0]!;
+      // Not dropped — the overlap itself is established and stays visible.
+      expect(f.heuristic).toBe('multiple_sessions_overlap');
+      expect(f.severity).toBe('low');
+      expect(f.confidence).toBeLessThan(0.95);
+      // Rule 1: what would have resolved it, named.
+      expect(f.description).toContain('not established');
+      expect(f.description).toMatch(/enrol/i);
+      expect(f.detail!['unresolvedBy']).toBe('no_identity_block');
+    });
+
+    it('does NOT turn a deployment with no root key into a class-wide accusation', async () => {
+      // `resolve-contributors.ts` answers `unverifiable / no_root_key` for
+      // EVERY identified session when the deployment has no root public key.
+      // That is one unset environment variable. It previously made every
+      // partner overlap in every bundle a HIGH flag.
+      const k = await keys();
+      const sessions = [];
+      for (let i = 0; i < 2; i++) {
+        const sk = await seededKeypair(0x60 + i);
+        sessions.push({
+          events: [endsAt(30)],
+          walls: [wallAt(i * 10)],
+          sessionStart: {
+            session_pubkey: sk.pubkeyHex,
+            identity: await buildInstitutionIdentity({
+              keys: k,
+              sessionPubkeyHex: sk.pubkeyHex,
+              studentRef: i === 0 ? ALICE : BOB,
+            }),
+          },
+        });
+      }
+      const { zipBuffer } = await buildTestBundle({ sessions });
+      const result = await loadBundle(new Blob([zipBuffer]), 'test.zip');
+      if (!result.ok) throw new Error(`Bundle load failed: ${JSON.stringify(result.error)}`);
+      const bundle = result.value;
+      // No root key. Both blocks are perfectly good; nothing can check them.
+      const resolved = await establishBundleContributors(bundle);
+      expect(resolved.rootKeyConfigured).toBe(false);
+      expect(resolved.counts).toEqual({ attributed: 0, unverifiable: 2, unattributed: 0 });
+
+      const flags = multipleSessionsOverlapHeuristic.run(buildIndex(bundle), bundle, defaultConfig);
+      // Still stated — a deployment must not be able to switch a heuristic OFF
+      // by unsetting a variable, which is the over-correction hazard bug 12
+      // warns about.
+      expect(flags).toHaveLength(1);
+      const f = flags[0]!;
+      expect(f.severity).not.toBe('high');
+      expect(f.severity).toBe('low');
+      // And it must say WHOSE problem this is. A grader reading this must not
+      // think a student did something.
+      expect(f.detail!['unresolvedBy']).toBe('no_root_key');
+      expect(f.description).toContain('root public key');
+      expect(f.description).toMatch(/deployment/i);
+    });
+
+    it('separates "we could not check" from "we checked and it failed"', async () => {
+      // An identity block that IS present and does NOT verify on a deployment
+      // whose root key IS configured. Still `unknown` for THIS flag — a failed
+      // block establishes nothing about who recorded either session — but the
+      // resolution sentence is a different one, and that block is a finding in
+      // its own right elsewhere.
+      const k = await keys();
+      const wrongRoot = await seededKeypair(0x77);
+      const sessions = [];
+      for (let i = 0; i < 2; i++) {
+        const sk = await seededKeypair(0x60 + i);
+        sessions.push({
+          events: [endsAt(30)],
+          walls: [wallAt(i * 10)],
+          sessionStart: {
+            session_pubkey: sk.pubkeyHex,
+            identity: await buildInstitutionIdentity({
+              keys: k,
+              sessionPubkeyHex: sk.pubkeyHex,
+              studentRef: i === 0 ? ALICE : BOB,
+              ...(i === 0 ? { certSignedBy: wrongRoot.privkey } : {}),
+            }),
+          },
+        });
+      }
+      const { zipBuffer } = await buildTestBundle({ sessions });
+      const result = await loadBundle(new Blob([zipBuffer]), 'test.zip');
+      if (!result.ok) throw new Error(`Bundle load failed: ${JSON.stringify(result.error)}`);
+      const bundle = result.value;
+      const resolved = await establishBundleContributors(bundle, k.root.pubkeyHex);
+      expect(resolved.rootKeyConfigured).toBe(true);
+      expect(resolved.counts).toEqual({ attributed: 1, unverifiable: 1, unattributed: 0 });
+
+      const flags = multipleSessionsOverlapHeuristic.run(buildIndex(bundle), bundle, defaultConfig);
+      expect(flags).toHaveLength(1);
+      const f = flags[0]!;
+      expect(f.severity).toBe('low');
+      expect(f.detail!['unresolvedBy']).toBe('identity_did_not_verify');
+      // The no-root-key sentence must NOT appear here — the check DID run.
+      expect(f.description).not.toContain('no root public key');
+    });
+
+    it('never names a person on an undecidable overlap (§6 Rule 2)', async () => {
+      // One side verified as Alice, the other unattributed. The flag may say
+      // what each side resolved to, but must not assert that Alice recorded
+      // both — which is what a high-severity "one person recorded both" reads
+      // as.
+      const { index, bundle } = await overlappingPair({ studentRef: ALICE }, 'anonymous');
+      const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
+      expect(flags).toHaveLength(1);
+      const f = flags[0]!;
+      expect(f.severity).toBe('low');
+      expect(f.description).toContain('not established');
+      expect(f.detail!['unresolvedBy']).toBe('no_identity_block');
+    });
   });
 
   it('no longer claims the overlap is "impossible" on any path', async () => {
