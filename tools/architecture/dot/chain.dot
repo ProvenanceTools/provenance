@@ -60,7 +60,7 @@ digraph chain {
     node [fillcolor="#1e1830" color="#9d7bf5" fontsize=9.5]
 
     gen  [label="GENESIS_PREV_HASH\nseq 0 only" fillcolor="#15171d" color="#5d677d" fontcolor="#98a2b6"]
-    e0   [label="entry 0\nsession.start — carries the FULL manifest:\npayload + sig + course_cert" shape=note]
+    e0   [label="entry 0\nsession.start — manifest (payload + sig +\ncourse_cert) · identity · host, and the three\n§5.6 capability reports beside them:\ngit_capture · witness_capture · file_scope.\nOptional PERMANENTLY — absent ≠ unavailable." shape=note]
     e1   [label="entry 1\ndoc.open" shape=note]
     e2   [label="entry 2\ndoc.change" shape=note]
     edots[label="…" fillcolor="#0e0b18" color="#2e2450" fontcolor="#8b95a8" width=0.35]

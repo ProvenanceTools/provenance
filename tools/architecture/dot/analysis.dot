@@ -73,7 +73,9 @@ digraph analysis {
     node [fillcolor="#2a0f1e" color="#e8559c" fontsize=9]
     c1 [label="paste_shared_across_students\nsha256 exact → high · fuzzy line match → medium"]
     c2 [label="editing_pattern_clone\nJaccard over event-kind 3-grams —\nnot-applicable when either side had a\nkind-stream signal disabled by policy"]
-    cx [label="cross_flags + participants" shape=note]
+    xscope [label="cross-scope partition — S20\nONE enumeration, ONE suppression decision.\nlineageOf is an OPAQUE class id: a heuristic can\nask ‘same scope?’ and cannot re-derive the rule.\nKeyed on OBSERVED commits only — ancestry would\nput a whole cohort's shared skeleton in one lineage.\nAbsence is its own singleton, so it never suppresses."
+            fillcolor="#0d2416" color="#3fbf62" fontsize=9]
+    cx [label="cross_flags + participants\nCOMPARED per assignment. The DELETE-then-INSERT\nstays semester-wide — the rows are semester-scoped." shape=note]
   }
 
   subgraph cluster_collab {
@@ -96,9 +98,12 @@ digraph analysis {
 
     extclass [label="external-change reclassification\ngit_merge_in · git_unrecorded_in ·\nexternal · unclassified.\nOnly git_merge_in suppresses, and only on an\nexact sha256 match against a state a PROVABLY\nDIFFERENT verified contributor recorded on the\nsame path — never on a clock. Reclassified\nevents stay in the index and in the verdict map."]
 
-    split [label="partitionSessionOverlaps\nONE enumeration of overlapping session pairs\nand ONE ‘different’ decision, split two ways.\njudged.comparison is typed same | unknown,\nso a suppressed pair is UNREPRESENTABLE in\nthe heuristic — drift is a compile error."]
+    split [label="partitionSessionOverlaps\nONE enumeration of overlapping session pairs,\nTWO decisions — same person? same machine? —\nand THREE parts: judged · collaboration · multiMachine.\njudged.comparison is typed same_machine | unknown,\nso neither a two-person nor a two-MACHINE pair has\nan arm to arrive in — drift is a compile error."]
 
-    coverage [label="COVERAGE STAGE — facts, never findings\nconcurrent recording · identity counts +\nrootKeyConfigured · commit-graph coverage +\nDAG defects · the single-repository caveat ·\nunattested rolling-seal tails · dropped artifacts.\nAnswers in all three states: not available,\nnothing to note, or the facts."
+    capab [label="capability reader — §5.6\nreads git_capture · witness_capture · file_scope\nback off every session.start. Three answers each:\nabsent · recorded · malformed.\n‘impossible’ needs UNANIMITY; one unreported\nsession takes the bundle answer to ‘unknown’."
+           fillcolor="#0d2416" color="#3fbf62" fontsize=9]
+
+    coverage [label="COVERAGE STAGE — facts, never findings\nconcurrent recording · ONE person's two machines ·\nidentity counts + rootKeyConfigured ·\ncommit-graph coverage + DAG defects ·\nthe single-repository caveat · unattested rolling-seal\ntails · TORN TAILS (truncated and KEPT) ·\ndropped artifacts (left out entirely).\nAnswers in all three states: not available,\nnothing to note, or the facts."
               fillcolor="#0d2416" color="#3fbf62" penwidth=1.8]
 
     witness [label="peer witnessing — READER ONLY\ncorroborated · absent · short ·\ntip_mismatch · indeterminate, plus\nunwitnessed per SESSION.\nFacts only: no Flag, no check, no score,\nand it never names a person.\nNothing in the pipeline calls it yet."
@@ -142,11 +147,18 @@ digraph analysis {
   /* the one enumeration of overlapping sessions, split two ways */
   contrib -> split [color="#9d7bf5" style=dashed constraint=false]
   index -> split [color="#9d7bf5"]
-  split -> hi [label="judged — one person's own two\nsessions, or an unproven pair" color="#9d7bf5"]
-  split -> coverage [label="collaboration — two VERIFIED, DISTINCT people\nrecording at once. Exculpatory, and until this\nstage existed it was computed and thrown away" color="#3fbf62"]
+  split -> hi [label="judged — one person's own two sessions on ONE\nmachine (high · 0.95), or a pair nothing settles\n(low · 0.5, with unresolvedBy naming why)" color="#9d7bf5"]
+  split -> coverage [label="collaboration — two VERIFIED, DISTINCT people recording\nat once; and multiMachine — ONE person's two enrolled\nmachines, kept a SEPARATE fact so it never reads as two\npeople. Both exculpatory, both once thrown away" color="#3fbf62"]
 
-  unzip -> coverage [label="dropped artifacts + unattested seal tails" color="#3fbf62"
+  unzip -> coverage [label="dropped artifacts · unattested seal tails ·\nand the torn trailing lines it TRUNCATED\nrather than dropping" color="#3fbf62"
                      style=dashed constraint=false]
+  unzip -> capab [label="every session.start's\ncapability block" color="#3fbf62"]
+  capab -> witness [label="witnessingCapability at bundle level,\nplus a per-session capability — a DIFFERENT\naxis from state: could this recorder have\nwitnessed anyone, not was it witnessed"
+                    color="#5d677d" style=dashed]
+  dag -> xscope [label="observedCommitKeys — the (repository, sha) keys of\nOBSERVED commits, never witnessed-only ancestors"
+                 color="#9d7bf5"]
+  xscope -> c1 [label="two bundles in one lineage\nare not compared at all" color="#e8559c"]
+  xscope -> c2 [label="same" color="#e8559c" style=dashed]
   index -> v1 [lhead=cluster_val color="#9d7bf5"]
   v1 -> report [ltail=cluster_val color="#9d7bf5"]
   report -> integ
