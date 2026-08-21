@@ -11,6 +11,7 @@
 import { parseEntries, validateMetaShape, ok, err } from '@provenance/log-core';
 import type { HashedEnvelope, SessionStartPayload, Result } from '@provenance/log-core';
 import type { ParsedSession, SessionParseError } from './types.js';
+import { lfNormalizedSha256 } from './line-endings.js';
 
 // ---------------------------------------------------------------------------
 // Type guard helpers
@@ -124,6 +125,10 @@ export function parseSession(
     events,
     meta,
     slogSha256: hashes.slogSha256,
+    // Computed HERE because this is the last point that holds the log text —
+    // `ParsedSession` deliberately keeps only digests. Costs one substring scan
+    // on a normal `.slog` and hashes nothing unless CRLF is actually present.
+    slogSha256Lf: lfNormalizedSha256(slogText, hashes.slogSha256),
     metaSha256: hashes.metaSha256,
     firstEvent,
   });

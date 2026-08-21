@@ -175,6 +175,26 @@ type Mismatch = {
   mode: MismatchMode;
 };
 
+/**
+ * A digest reproduced only after undoing git's LF→CRLF widening.
+ *
+ * NOT a mismatch. The archived bytes are provably the sealed bytes with wider
+ * line terminators and no other difference — see `loader/line-endings.ts` for
+ * why hitting the normalized digest exactly is a proof and not a tolerance.
+ * Every entry parses identically, so the chain, the checkpoints and the
+ * signature were all going to pass anyway; the only thing that ever failed was
+ * the byte digest, which is what made this read as a surgical edit.
+ *
+ * Reported on the passing verdict rather than swallowed, because the archive is
+ * genuinely not byte-identical to what was signed, and staff are entitled to
+ * know the submission passed through a transformation — the actionable fix is
+ * the course's `.gitattributes`, not the student.
+ */
+type Translated = {
+  sessionId: string;
+  file: '.slog' | '.slog.meta';
+};
+
 /** A rolling seal that covered a verified prefix, with more written after it. */
 type PrefixPartial = {
   sessionId: string;
@@ -207,7 +227,12 @@ type Indeterminate = {
  */
 type Verdict =
   | { evaluated: false; indeterminate: Indeterminate | null }
-  | { evaluated: true; mismatch: Mismatch | null; partial: PrefixPartial | null };
+  | {
+      evaluated: true;
+      mismatch: Mismatch | null;
+      partial: PrefixPartial | null;
+      translated: Translated | null;
+    };
 
 /**
  * Compare one committed digest against one computed digest.
@@ -220,14 +245,36 @@ function compare(
   file: '.slog' | '.slog.meta',
   committed: unknown,
   actual: string,
+  /**
+   * The same file's digest with git's LF→CRLF widening undone, or `null` when
+   * that question does not arise — which is the normal case, and always the
+   * answer for `.slog.meta` (canonical JSON carries no line terminator to
+   * widen). See `loader/line-endings.ts`.
+   */
+  actualLf: string | null = null,
 ): Verdict {
   if (typeof committed !== 'string' || !SHA256_RE.test(committed)) {
     return { evaluated: false, indeterminate: null };
   }
-  if (committed === actual) return { evaluated: true, mismatch: null, partial: null };
+  if (committed === actual) {
+    return { evaluated: true, mismatch: null, partial: null, translated: null };
+  }
+  // The bytes differ — but before saying so, ask whether git widened the line
+  // terminators in transit. A hit here is not leniency: it proves the archived
+  // file is the sealed file with wider terminators and nothing else, because a
+  // real modification survives the rewrite and still breaks the digest.
+  if (actualLf !== null && committed === actualLf) {
+    return {
+      evaluated: true,
+      mismatch: null,
+      partial: null,
+      translated: { sessionId, file },
+    };
+  }
   return {
     evaluated: true,
     partial: null,
+    translated: null,
     mismatch: { sessionId, file, expected: committed, actual, mode: 'whole_file' },
   };
 }
@@ -253,7 +300,15 @@ function fromCoverage(
 ): Verdict {
   switch (coverage.kind) {
     case 'exact':
-      return { evaluated: true, mismatch: null, partial: null };
+      return {
+        evaluated: true,
+        mismatch: null,
+        partial: null,
+        // The loader reproduced the digest only after undoing git's widening.
+        // Carried through so the passing verdict can say so; it is never a
+        // finding. See `loader/line-endings.ts`.
+        translated: coverage.lineEndingsTranslated === true ? { sessionId, file } : null,
+      };
     case 'partial':
       // Only a non-final seal can produce this: `wholeFileCoverage` never
       // returns `partial`. Honest growth past a seal that was signed while the
@@ -261,6 +316,7 @@ function fromCoverage(
       return {
         evaluated: true,
         mismatch: null,
+        translated: coverage.lineEndingsTranslated === true ? { sessionId, file } : null,
         partial: {
           sessionId,
           file,
@@ -273,6 +329,7 @@ function fromCoverage(
       return {
         evaluated: true,
         partial: null,
+        translated: null,
         mismatch: {
           sessionId,
           file,
@@ -282,6 +339,10 @@ function fromCoverage(
         },
       };
     case 'unavailable':
+      // No LF digest is passed here on purpose. `unavailable` means the loader
+      // could not run the prefix search over this file — most often because the
+      // decoded text does not re-encode to the archived bytes, which is exactly
+      // the condition under which `lfNormalizedSha256` also refuses to answer.
       return compare(sessionId, file, committed, actual);
     case 'indeterminate':
       // NOT a fallback to whole-file equality. `unavailable` means "I could not
@@ -316,6 +377,7 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
   const mismatches: Mismatch[] = [];
   const partials: PrefixPartial[] = [];
   const indeterminates: Indeterminate[] = [];
+  const translated: Translated[] = [];
   let evaluated = 0;
 
   // Non-empty only on a bundle whose manifest IS the rolling union — see
@@ -347,11 +409,20 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
               session.slogSha256,
               coverage.final,
             )
-          : compare(session.sessionId, '.slog', entry.slog_sha256, session.slogSha256);
+          : compare(
+              session.sessionId,
+              '.slog',
+              entry.slog_sha256,
+              session.slogSha256,
+              // Non-null only when this `.slog` actually carries CRLF, which is
+              // what lets a classic seal tell git's widening from an edit.
+              session.slogSha256Lf,
+            );
       if (slog.evaluated) {
         evaluated++;
         if (slog.mismatch !== null) mismatches.push(slog.mismatch);
         if (slog.partial !== null) partials.push(slog.partial);
+        if (slog.translated !== null) translated.push(slog.translated);
       } else if (slog.indeterminate !== null) {
         indeterminates.push(slog.indeterminate);
       }
@@ -371,6 +442,7 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
         evaluated++;
         if (meta.mismatch !== null) mismatches.push(meta.mismatch);
         if (meta.partial !== null) partials.push(meta.partial);
+        if (meta.translated !== null) translated.push(meta.translated);
       } else if (meta.indeterminate !== null) {
         indeterminates.push(meta.indeterminate);
       }
@@ -393,6 +465,26 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
         `conclusion about those bytes may be drawn from it. Check 1 (manifest_sig) reports the ` +
         `seal defect that explains why.`;
 
+  // Digests that were reproduced only after undoing git's LF→CRLF widening.
+  // Stated on every verdict, pass or fail: the archive is not byte-identical to
+  // what was signed, and that is worth knowing even though it is not a finding
+  // and not the student's doing.
+  const translatedNote =
+    translated.length === 0
+      ? ''
+      : ` ${translated.length} log-file digest(s) matched only after undoing git's LF→CRLF ` +
+        `line-ending translation: ${translated
+          .map((t) => `session ${t.sessionId} ${t.file}`)
+          .join('; ')}. A .slog is newline-delimited JSON and nothing marks it binary, so a ` +
+        `repository carrying \`* text=auto eol=crlf\`, a checkout under \`core.eol=crlf\`, or ` +
+        `\`core.autocrlf=true\` on the machine that materialised the working tree rewrites every ` +
+        `LF to CRLF — and the git path submits that working tree verbatim, with no seal step to ` +
+        `re-hash it. THIS IS NOT A MODIFICATION OF THE LOG. Undoing that one rewrite reproduces ` +
+        `the signed digest exactly, which proves the archived file is the sealed file with wider ` +
+        `line terminators and no other difference: any entry added, removed, reordered or edited ` +
+        `would survive the rewrite and still fail. Nothing here is evidence of misconduct, and ` +
+        `the fix belongs to the repository's .gitattributes, not to the student.`;
+
   if (mismatches.length > 0) {
     const per = mismatches
       .map((m) =>
@@ -414,25 +506,64 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
         `PREFIX that existed when each seal was signed. Growth past that point is expected. ` +
         `What is reported here is different: no prefix of the archived file — and no ` +
         `truncation of the checkpoint list — reproduces the digest the session's own key ` +
-        `signed. The sealed region itself was modified after sealing: edited, reordered, or ` +
-        `truncated below the sealed point.`
+        `signed. The sealed region no longer hashes to what was sealed.`
       : mismatches.some((m) => m.mode === 'rolling_final')
         ? `This session's last rolling seal is marked FINAL: the recorder wrote it at ` +
           `shutdown, after session.end was recorded and both log files were flushed and ` +
           `closed, and signed that claim with the session's own key. A final seal commits to ` +
-          `the WHOLE log, not to a prefix, so there is no honest later growth to excuse — the ` +
-          `file was appended to, truncated, or edited after the session ended.`
+          `the WHOLE log, not to a prefix, so there is no honest later growth to excuse: these ` +
+          `bytes changed after the session ended.`
         : `The manifest is ed25519-signed, so these digests were fixed when the bundle was ` +
-          `sealed and cannot change without the signing key. A differing digest means the log ` +
-          `file was modified after sealing — appended to, truncated, or edited. This is not ` +
-          `recoverable from a benign cause: the recorder writes each log once and seals over ` +
-          `the finished bytes.`;
+          `sealed and cannot change without the signing key. A differing digest means the ` +
+          `log file's bytes were modified after sealing. The archived bytes are not the ` +
+          `bytes that were signed.`;
+
+    // -------------------------------------------------------------------------
+    // WHAT THIS DOES AND DOES NOT ESTABLISH.
+    //
+    // This paragraph replaces the sentence "This is not recoverable from a
+    // benign cause", which was false and was the single most consequential
+    // string this module emitted. It IS recoverable from a benign cause, and
+    // the benign cause is the default behaviour of the tool the entire git path
+    // is built on.
+    //
+    // The reader-side diagnostic above recovers only one direction: sealed LF,
+    // archived CRLF. The reverse — the recorder sealing over bytes git had
+    // already widened, with the archive delivering them back as LF — and a
+    // MIXED file (smudged mid-session, then appended to with LF) are both
+    // reachable and neither is recoverable by hashing, because undoing them
+    // would mean guessing which of n terminators were wide, a 2^n search.
+    //
+    // So a mismatch that lands here is NOT proof of editing. It is proof that
+    // the bytes differ. Naming the innocent reading alongside the others is the
+    // same correction D16 and the `no_session_log` rewrite applied: separate
+    // what is established from what is merely one reading of it, and say what
+    // would settle the difference.
+    // -------------------------------------------------------------------------
+    const cause =
+      ` What that difference MEANS is not established by this check alone. The log may have ` +
+      `been appended to, truncated, or edited after sealing — that is the reading this check ` +
+      `exists to catch. But git's end-of-line filters produce the same symptom without anyone ` +
+      `touching the log: a .slog is newline-delimited JSON, nothing marks it binary, and the ` +
+      `git path submits a working tree that \`text=auto eol=crlf\`, \`core.eol=crlf\` or ` +
+      `\`core.autocrlf=true\` may have rewritten. Where the archive is the widened copy this ` +
+      `check now recognises it and does not report it here; where the SEAL was taken over ` +
+      `already-widened bytes, or the file's terminators are mixed, no amount of re-hashing can ` +
+      `undo it and the mismatch is indistinguishable from an edit. Two things separate the ` +
+      `readings, and neither is in this check: whether the other integrity checks — the hash ` +
+      `chain (check 3) and the signed checkpoints — also fail, since an edit to the log's ` +
+      `CONTENT breaks those and a line-ending translation does not; and whether the repository ` +
+      `carries a .gitattributes marking .provenance/ as non-text. A bundle where ONLY this ` +
+      `check fails, with the chain and checkpoints intact, is the signature of a transport ` +
+      `problem, not of tampering.`;
 
     return {
       id: ID,
       label: LABEL,
       status: 'fail',
-      detail: `Session log bytes do not match the signed manifest: ${per}. ${why}${unchecked}`,
+      detail:
+        `Session log bytes do not match the signed manifest: ${per}. ${why}${cause}` +
+        `${translatedNote}${unchecked}`,
       // Seq 0 is the session.start of the affected session — the stable anchor
       // for a finding about the file as a whole rather than any one entry.
       supportingSeqs: mismatches.map((m) => ({ sessionId: m.sessionId, seq: 0 })),
@@ -449,7 +580,9 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
           ? 'No session carried a usable manifest commitment to its log bytes (no matching ' +
             'manifest entry, or the recorded digests are absent or malformed), so there is ' +
             'nothing for this check to compare against.'
-          : 'No session log could be compared against the signed manifest.') + unchecked,
+          : 'No session log could be compared against the signed manifest.') +
+        translatedNote +
+        unchecked,
     };
   }
 
@@ -466,8 +599,15 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
       label: LABEL,
       status: 'pass',
       detail:
-        `${evaluated} log-file digest(s) matched the signed manifest exactly. The bytes of ` +
-        `every checked .slog and .slog.meta are the bytes that were sealed.` +
+        // "exactly" and "are the bytes that were sealed" are only true when
+        // nothing needed undoing. With a line-ending translation in play the
+        // content is what was sealed but the BYTES are not, and claiming
+        // otherwise would bury the one fact this note exists to surface.
+        (translated.length === 0
+          ? `${evaluated} log-file digest(s) matched the signed manifest exactly. The bytes of ` +
+            `every checked .slog and .slog.meta are the bytes that were sealed.`
+          : `${evaluated} log-file digest(s) agree with the signed manifest. The recorded ` +
+            `content of every checked .slog and .slog.meta is what was sealed.`) +
         (rollingCoverage.length === 0
           ? ''
           : ` ${finalSeals} of ${rollingCoverage.length} rolling seal(s) are marked FINAL ` +
@@ -476,8 +616,8 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
             (nonFinalSeals === 0
               ? ''
               : ` The other ${nonFinalSeals} were signed while their session was still ` +
-                `running, and happen to match the archived bytes exactly, so nothing was ` +
-                `written after them either.`)) +
+                `running, and nothing was written after them either.`)) +
+        translatedNote +
         unchecked,
     };
   }
@@ -525,6 +665,7 @@ export function verifyLogBytes(bundle: Bundle): ValidationCheck {
       `expected for work archived mid-session and is not by itself evidence of anything — but ` +
       `it does mean the bytes after each sealed point carry no bundle-level signature, so an ` +
       `append there could not be detected.` +
+      translatedNote +
       unchecked,
   };
 }
