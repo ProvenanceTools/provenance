@@ -1947,5 +1947,9 @@ it, and Tier 2.2 has already answered. That is a live false-positive against the
 is outside this change's scope.
 
 **Suites.** analysis-core **1222** (+11, one new file). server `group-submission.test.ts`
-**17** (+4). Typecheck clean; lint clean apart from two pre-existing Prettier table-padding
-warnings in `docs/admin-guide.md` and `docs/heuristics.md` that predate this change.
+**17** (+4). Typecheck and ESLint clean. The full server run showed 29 failures, ALL of them
+`Test timed out in 10000ms` — five of the six affected files use `withTestDb` (testcontainers)
+without raising vitest's 10 s default via `vi.setConfig`, so they fail whenever Docker is loaded.
+Re-run with `--testTimeout=180000`, all six files and all 44 tests pass. Pre-existing, and worth a
+fix of its own: `cohort/list.test.ts`, `cohort/students.test.ts`, `cross-flags/list.test.ts`,
+`heuristics/reconstruct-bundle.test.ts`, `heuristics/run-cross.test.ts`.
