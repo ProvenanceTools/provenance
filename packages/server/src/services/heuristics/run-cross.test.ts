@@ -977,6 +977,8 @@ describe('runAndStoreCrossHeuristics — the exclusion register', () => {
 
         const result = await runAndStoreCrossHeuristics(db, client, semesterId);
 
+        // Zero, not "no paste flag": editing_pattern_clone consumes the SAME
+        // partition and must be suppressed by the same exclusion.
         expect(result.flag_count, 'the partner pair must not be accused').toBe(0);
         expect(result.exclusion_count).toBe(1);
 
@@ -1058,8 +1060,15 @@ describe('runAndStoreCrossHeuristics — the exclusion register', () => {
 
         const result = await runAndStoreCrossHeuristics(db, client, semesterId);
 
-        expect(result.flag_count).toBe(1);
+        // The pair really was compared. Both cross-heuristics fire here, and
+        // that is the point: the fixture's two bundles are byte-similar, so a
+        // false exclusion would silence BOTH of them at once.
         expect(result.exclusion_count).toBe(0);
+        const flagRows = await db
+          .select()
+          .from(cross_flags)
+          .where(eq(cross_flags.semester_id, semesterId));
+        expect(flagRows.map((f) => f.heuristic_id)).toContain('paste_shared_across_students');
 
         const rows = await db
           .select()
@@ -1138,8 +1147,12 @@ describe('runAndStoreCrossHeuristics — the exclusion register', () => {
         const result = await runAndStoreCrossHeuristics(db, client, semesterId);
 
         expect(result.exclusion_count).toBe(0);
-        // And the finding they genuinely earn is reported.
-        expect(result.flag_count).toBe(1);
+        // And the finding they genuinely earn is still reported.
+        const flagRows = await db
+          .select()
+          .from(cross_flags)
+          .where(eq(cross_flags.semester_id, semesterId));
+        expect(flagRows.map((f) => f.heuristic_id)).toContain('paste_shared_across_students');
 
         const rows = await db
           .select()
