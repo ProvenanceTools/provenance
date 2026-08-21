@@ -827,13 +827,45 @@ attributes the whole submission, a partner's flags included, to a single named p
 rendering is unchanged by construction, since a solo submission has exactly one contributor who is
 the same person as `student`.
 
-**Mutation testing, seven mutations, each with its catching test:** unique key left on the nullable
+**The fan-out was not actually removed until the second attempt — and the test
+that proved it was one that PASSED.** `ingest-gradescope.e2e.test.ts` asserts
+the old shape (three submissions for two co-submitters sharing one blob, every
+file `matched`), and it kept passing after the dedup cut-over. A green test
+asserting the behaviour you just removed is a report that your change is inert.
+
+Cause: phase 2 (dedup) and phase 5 (createSubmission) are separate
+transactions, and the worker drains its pg-boss batch with `Promise.all`, up to
+`INGEST_CONCURRENCY` files at once. Two co-submitters carry byte-identical
+bundles, so both cleared dedup before either committed, and both created a
+submission. **Serial execution looked perfect; only concurrency reinstated the
+fan-out.** Every unit test was serial.
+
+Fixed by taking a transaction-scoped `pg_advisory_xact_lock` on
+(semester_id, blob_sha256) — the same key dedup uses, so it serialises only the
+writers that genuinely collide on one artifact — and RE-CHECKING dedup inside
+that transaction. `createSubmission` now returns a discriminated outcome, and
+`'duplicate'` is handled exactly as a phase-2 hit.
+
+That fix then exposed a second one: `storeContributors` pruned "any row not in
+my set", which DELETED the partner who had just attached concurrently. It now
+prunes only `attributed` rows — those are derived wholly from the bundle and it
+is their sole author, whereas a `roster` row is a fact asserted by the roster
+side and is not its to remove. **Two silent, concurrency-only student-losing
+defects behind one green test.**
+
+**Generalisable:** when a change is meant to alter behaviour, find the test that
+asserts the OLD behaviour and make sure it FAILS. If nothing fails, the change
+is either untested or inert, and those are indistinguishable from the outside.
+
+**Mutation testing, ten mutations, each with its catching test:** unique key left on the nullable
 `student_id` (the group-submission version tests + the migration test); every contributor charged
 every flag (5 tests, including Bob charged 12 instead of 1); sole-contributor rule removed (3
 tests); summary join back to INNER (the 404 test — `expected null not to be null`); cohort list join
 back to INNER (2 tests); rollup summing the submission score per partner (`expected 12 to be 8`);
-`unverifiable` allowed to name the student it claims to be (2 tests). One mutation was NOT caught —
-the targeted `ON CONFLICT` above — and a regression test was added for it.
+`unverifiable` allowed to name the student it claims to be (2 tests); the roster join dropped from
+the rollup's recompute-status query (every test in `students.test.ts`); and the over-aggressive
+contributor prune (the two new concurrency regressions). Two mutations were NOT caught when first
+tried — the targeted `ON CONFLICT`, and the prune rule — and both got regression tests.
 
 ---
 
