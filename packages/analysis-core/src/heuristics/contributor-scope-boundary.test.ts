@@ -69,6 +69,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildIndex } from '../index/build-index.js';
 import { partitionSessionOverlaps } from '../coverage/session-overlap.js';
+import { reconstructionAmbiguityOf } from './reconstruction-gate.js';
 import type { Bundle } from '../loader/types.js';
 import type { EventIndex } from '../index/event-index.js';
 import {
@@ -315,6 +316,24 @@ async function stampedAndUnstamped(specs: Specs): Promise<{ pair: Scope; unstamp
 /** Alice's session is index 1 in every two-session fixture. */
 const ALICE_ONLY = [1];
 
+/**
+ * Assert the mode-A fixture reaches the gate through the arm it is supposed to.
+ *
+ * `establishedContent` returns `null` for BOTH `concurrent` and `unknown`, so
+ * without this a fixture that had merely fallen out of the ordering's scope — a
+ * broken index, an event the relation cannot see — would satisfy every "no flags
+ * whole-scope" assertion below while testing nothing about collaboration.
+ * `reconstruction-gate.test.ts` pins the same distinction for the same reason.
+ */
+function expectConcurrentFile(scope: Scope): void {
+  expect(
+    reconstructionAmbiguityOf(scope.index, scope.bundle, COLLAB_FILE),
+    `${COLLAB_FILE} must reach the gate as 'concurrent' — two contributors' edits genuinely ` +
+      `unordered. 'unknown' would skip the file too, and would make every assertion in this ` +
+      `case pass without a second contributor being involved at all.`,
+  ).toBe('concurrent');
+}
+
 // ---------------------------------------------------------------------------
 // Failure mode A — slicing defeats the Tier 2.2 reconstruction gate
 // ---------------------------------------------------------------------------
@@ -326,6 +345,8 @@ describe('failure mode A — a one-contributor scope makes `concurrent` files re
         after: [typed(COLLAB_FILE, '# note\n'), collabDocSave('# note\n' + IMPLEMENTATION)],
       }),
     );
+
+    expectConcurrentFile(pair);
 
     const whole = flagsOf(lowTypingHighOutputHeuristic, pair);
     expect(whole, wholeScopeAccused(lowTypingHighOutputHeuristic, whole)).toHaveLength(0);
@@ -359,6 +380,8 @@ describe('failure mode A — a one-contributor scope makes `concurrent` files re
       },
     ]);
 
+    expectConcurrentFile(pair);
+
     const whole = flagsOf(pasteIsSolutionHeuristic, pair);
     expect(whole, wholeScopeAccused(pasteIsSolutionHeuristic, whole)).toHaveLength(0);
     expect(
@@ -375,6 +398,8 @@ describe('failure mode A — a one-contributor scope makes `concurrent` files re
     const { pair, unstamped } = await stampedAndUnstamped(
       pullIntoAnOpenFile({ after: [collabDocSave(IMPLEMENTATION)] }),
     );
+
+    expectConcurrentFile(pair);
 
     const whole = flagsOf(timeToFirstSaveAnomalyHeuristic, pair);
     expect(whole, wholeScopeAccused(timeToFirstSaveAnomalyHeuristic, whole)).toHaveLength(0);
@@ -406,6 +431,8 @@ describe('failure mode A — a one-contributor scope makes `concurrent` files re
       },
     ]);
 
+    expectConcurrentFile(pair);
+
     const whole = flagsOf(idleThenCompleteHeuristic, pair);
     expect(whole, wholeScopeAccused(idleThenCompleteHeuristic, whole)).toHaveLength(0);
     expect(
@@ -422,6 +449,8 @@ describe('failure mode A — a one-contributor scope makes `concurrent` files re
     const { pair, unstamped } = await stampedAndUnstamped(
       pullIntoAnOpenFile({ after: [collabDocSave(IMPLEMENTATION)] }),
     );
+
+    expectConcurrentFile(pair);
 
     const whole = flagsOf(massExternalReplacementHeuristic, pair);
     expect(whole, wholeScopeAccused(massExternalReplacementHeuristic, whole)).toHaveLength(0);
