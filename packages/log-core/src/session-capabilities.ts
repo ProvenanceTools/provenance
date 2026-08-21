@@ -121,6 +121,37 @@ export const FILE_SCOPE_FIELD = 'file_scope' satisfies keyof SessionStartPayload
  * grader reading a `git_unrecorded_in` flag needs to know which, and a reader
  * that reports one as the other is describing a different situation than the one
  * that occurred.
+ *
+ * ## Which values each recorder can produce
+ *
+ * All three values are legal on the wire and a reader must accept any of them
+ * from any recorder. In practice, the three recorders differ in which of the
+ * three they are able to emit:
+ *
+ *  - **VS Code recorder** — can produce all three. `vscode.git` enumerates
+ *    repositories across a multi-root workspace and the recorder routes by
+ *    ownership, so "git worked, but every repository it could see was outside
+ *    this assignment's scope" is a state it can actually observe and report.
+ *  - **provjet (JetBrains)** — produces only `'available'` / `'unavailable'`,
+ *    never `'not_owned'`. Referencing Git4Idea types from always-loaded plugin
+ *    code risks `NoClassDefFoundError` if the VCS plugin is absent, and its two
+ *    startup activities have no ordering guarantee relative to each other, so
+ *    it reports capability via a race-free reflective classloadability probe.
+ *    That probe can only answer "is git observation reachable at all", not
+ *    "and if so, does it see a repository outside this scope" — a platform
+ *    constraint, not a design choice.
+ *  - **provnvim (Neovim)** — produces only `'available'` / `'unavailable'`,
+ *    never `'not_owned'`. It watches exactly one repository — the activated
+ *    workspace, with no cross-repo enumeration — so there is no "git worked
+ *    but pointed elsewhere" state for it to be in: ownership routing is what
+ *    `'not_owned'` exists to report, and this recorder has nothing to route.
+ *
+ * A recorder that never emits `'not_owned'` is not under-reporting: every
+ * value it DOES emit is still an accurate, independent fact about that
+ * session, and every consumer here reads per-session values rather than
+ * inferring anything from which values are absent across a bundle. See
+ * `packages/analysis-core/src/capability/session-capabilities.ts` for the
+ * bundle-level summaries built on top of these reads.
  */
 export const GIT_CAPTURE_VALUES = ['available', 'unavailable', 'not_owned'] as const;
 
