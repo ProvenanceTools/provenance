@@ -280,8 +280,12 @@ curl -s -X POST \
 
 Upload the ZIP from Gradescope's "Download Submissions" directly. The roster is
 populated from the export's `submission_metadata.yml` (no separate roster upload
-needed) and every student bundle is processed in one job. Group submissions
-produce one submission per co-submitter.
+needed) and every student bundle is processed in one job. A group submission
+produces **one** submission with **N contributors** — not one submission per
+co-submitter. (The old fan-out, which ingested the same bundle once per
+co-submitter into N independent rows, was removed in migration 0029; it could not
+carry which partner a finding belonged to. Rows created by the old fan-out are
+deliberately left as they are and are not merged retroactively.)
 
 ```bash
 curl -s -X POST \

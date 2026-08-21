@@ -142,8 +142,14 @@ The default `PORT` is 3000. Override with `PORT=8080`.
 The SPA (`packages/analyzer/dist/`) can be served by any static file host:
 
 - **Nginx:** configure `try_files $uri /index.html` for client-side routing.
-- **Same server:** the Hono server can serve static files if you configure
-  `STATIC_DIR=<path-to-dist>` (not yet wired in v3.0 — use a CDN or Nginx).
+- **Same server:** the Hono server serves the SPA itself. Point **`PUBLIC_DIR`**
+  at the built `packages/analyzer/dist/` (default `./public`, relative to the
+  server's cwd; the production Dockerfile bakes the build into
+  `/app/packages/server/public`). `src/api/static.ts` mounts an asset middleware
+  plus an SPA `index.html` fallback for client-side routing. If the directory does
+  not exist, static serving is silently disabled and the server logs
+  `SPA static serving disabled: PUBLIC_DIR not found` — which is the normal state
+  in dev. There is no `STATIC_DIR`.
 - **Vite preview** (dev only): `npm run preview --workspace=packages/analyzer`
 
 Point the frontend's `VITE_API_BASE_URL` build-time variable at your API origin:
@@ -281,7 +287,11 @@ Expected: `"is_superadmin": true`.
 
 ## 5. Creating courses and semesters
 
-Via the API (or, in a future release, via the UI):
+Superadmins can do this in the UI at **`/admin/courses`** (create/archive a course)
+and **`/admin/courses/:courseId/semesters`** (create/archive a semester). Both routes
+sit behind `RequireAuth` + `RequireSuperadmin`.
+
+The equivalent API calls, for scripting:
 
 ```bash
 # Create a course
@@ -414,11 +424,15 @@ recovery.
 Cron jobs are managed by pg-boss and run automatically when the worker process is
 running. They are registered on every worker startup (idempotent).
 
-| Job name                 | Schedule (UTC) | Description                                       |
-| ------------------------ | -------------- | ------------------------------------------------- |
-| `retention_sweep`        | 2:00 daily     | Delete blobs past retention window (PRD §16)      |
-| `purge_expired_sessions` | Every hour     | Delete `sessions` rows where `expires_at < now()` |
-| `purge_expired_exports`  | 3:00 daily     | Stub — will purge export artifacts in v3.1        |
+| Job name                 | Cron (UTC)  | Schedule   | Description                                                     |
+| ------------------------ | ----------- | ---------- | --------------------------------------------------------------- |
+| `retention_sweep`        | `0 2 * * *` | 2:00 daily | Delete blobs past retention window (PRD §16)                    |
+| `purge_expired_sessions` | `0 * * * *` | Every hour | Delete `sessions` rows where `expires_at < now()`               |
+| `purge_expired_exports`  | `0 3 * * *` | 3:00 daily | Stub — will purge export artifacts in v3.1                      |
+| `reap_stale_uploads`     | `0 4 * * *` | 4:00 daily | Reclaim multipart staging dirs older than                       |
+|                          |             |            | `BLOB_STORAGE_FS_STAGING_TTL_SECONDS` (fs backend; no-op on s3) |
+| `storage_quota_check`    | `0 * * * *` | Every hour | Measure used bytes against `STORAGE_QUOTA_BYTES`, set the       |
+|                          |             |            | `provenance_storage_*` gauges, alert at the warn/critical pcts  |
 
 To verify cron jobs are registered:
 
@@ -428,7 +442,7 @@ FROM pgboss.schedule
 ORDER BY name;
 ```
 
-Expected output shows all three job names with their cron expressions.
+Expected output shows all five job names with their cron expressions.
 
 To manually trigger a cron job (e.g. for testing):
 
