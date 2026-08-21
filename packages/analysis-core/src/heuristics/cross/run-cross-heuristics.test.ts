@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { runCrossHeuristics } from './run-cross-heuristics.js';
+import { runCrossAnalysis, runCrossHeuristics } from './run-cross-heuristics.js';
 import { extractCrossFeatures } from './features.js';
 import type { Bundle } from '../../loader/types.js';
 import type { EventIndex, IndexedEvent } from '../../index/event-index.js';
@@ -234,5 +234,74 @@ describe('runCrossHeuristics', () => {
       (f) => f.heuristic === 'paste_shared_across_students',
     );
     expect(pasteOverrideFlags.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runCrossAnalysis — both halves of one pass (spec S20 / §6 Rule 3)
+// ---------------------------------------------------------------------------
+
+describe('runCrossAnalysis', () => {
+  const A = 'a'.repeat(40);
+
+  it('returns the SAME flags runCrossHeuristics does', () => {
+    // runCrossHeuristics is a projection of this function, not a second code
+    // path. If these two can ever disagree, the register explains an absence
+    // that some other pass produced.
+    const bundleA = makeBundle('bundle-a');
+    const bundleB = makeBundle('bundle-b');
+    const sha = 'x'.repeat(64);
+    const indices = new Map([
+      [bundleA.id, makeIndexWithPaste('sess-a', 1, sha)],
+      [bundleB.id, makeIndexWithPaste('sess-b', 1, sha)],
+    ]);
+
+    const features = toFeatures([bundleA, bundleB], indices);
+    expect(runCrossAnalysis(features).flags).toEqual(runCrossHeuristics(features));
+  });
+
+  it('returns the exclusions that explain a suppressed comparison', () => {
+    const bundleA = makeBundle('bundle-a');
+    const bundleB = makeBundle('bundle-b');
+    const sha = 'x'.repeat(64);
+    const indices = new Map([
+      [bundleA.id, makeIndexWithPaste('sess-a', 1, sha)],
+      [bundleB.id, makeIndexWithPaste('sess-b', 1, sha)],
+    ]);
+
+    const key = `repository:assumed-single ${A}`;
+    const features = toFeatures([bundleA, bundleB], indices).map((f) => ({
+      ...f,
+      observedCommitKeys: [key],
+    }));
+
+    const { flags, exclusions } = runCrossAnalysis(features);
+
+    // Suppressed...
+    expect(flags.filter((f) => f.heuristic === 'paste_shared_across_students')).toEqual([]);
+    // ...and SAID so. An absence with no explanation reads as a clean result.
+    expect(exclusions).toHaveLength(1);
+    expect(exclusions[0]!.reason).toBe('same_repository_lineage');
+    expect(exclusions[0]!.bundleIds).toEqual(['bundle-a', 'bundle-b']);
+    expect(exclusions[0]!.sharedCommits).toEqual([key]);
+  });
+
+  it('returns an empty register when nothing was suppressed', () => {
+    const bundleA = makeBundle('bundle-a');
+    const bundleB = makeBundle('bundle-b');
+    const sha = 'x'.repeat(64);
+    const indices = new Map([
+      [bundleA.id, makeIndexWithPaste('sess-a', 1, sha)],
+      [bundleB.id, makeIndexWithPaste('sess-b', 1, sha)],
+    ]);
+
+    const { flags, exclusions } = runCrossAnalysis(toFeatures([bundleA, bundleB], indices));
+
+    expect(flags.length).toBeGreaterThan(0);
+    expect(exclusions).toEqual([]);
+  });
+
+  it('returns both halves empty below two submissions', () => {
+    expect(runCrossAnalysis([])).toEqual({ flags: [], exclusions: [] });
   });
 });
