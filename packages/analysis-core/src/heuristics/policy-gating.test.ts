@@ -31,7 +31,23 @@ import { noIntermediateErrorsHeuristic } from './no-intermediate-errors.js';
 import { shellIntegrationDisabledHeuristic } from './shell-integration-disabled.js';
 import { terminalActiveDuringExternalChangeHeuristic } from './terminal-active-during-external-change.js';
 import { gapInHeartbeatsHeuristic, effectiveGapThresholdMs } from './gap-in-heartbeats.js';
-import { editingPatternCloneHeuristic } from './cross/editing-pattern-clone.js';
+import { editingPatternCloneHeuristic as realEditingPatternCloneHeuristic } from './cross/editing-pattern-clone.js';
+import { partitionCrossScopes } from '../coverage/cross-scope.js';
+
+/**
+ * The heuristic under test, driven with the repository-lineage partition of its
+ * own features — what `runCrossHeuristics` hands it in production (spec S20).
+ * None of the fixtures below records a `git.event`, so every submission is its
+ * own lineage and nothing here is suppressed; the suppression path itself is
+ * covered in `heuristics/cross/same-scope-exclusion.test.ts`.
+ */
+const editingPatternCloneHeuristic = {
+  ...realEditingPatternCloneHeuristic,
+  run: (
+    features: Parameters<typeof realEditingPatternCloneHeuristic.run>[0],
+    config: Parameters<typeof realEditingPatternCloneHeuristic.run>[1],
+  ) => realEditingPatternCloneHeuristic.run(features, config, partitionCrossScopes(features)),
+};
 import { classifyInternalMoves } from './internal-move.js';
 import { iterateCandidatePastes } from './candidate-pastes.js';
 import { resolveBundleCapturePolicy, establishBundleTrust } from '../manifest/bundle-manifest.js';

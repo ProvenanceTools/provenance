@@ -41,6 +41,33 @@
  * the DB (extract-cross-features-from-db.ts). This avoids holding full Bundles +
  * EventIndices for the whole semester in memory at once, which OOM'd the worker.
  *
+ * ## The candidate pool is scoped per ASSIGNMENT, not per semester
+ *
+ * `cross_flags` rows are semester-scoped and are still replaced semester-wide,
+ * but the COMPARISON is run once per assignment. Until 2026-08 the pool was
+ * `semester_id` + `isNull(superseded_by)` and nothing else, so a student's own
+ * hw1 and hw2 were compared against each other, as was every pair of unrelated
+ * assignments in the semester. Both cross heuristics then behave exactly as they
+ * do on a genuine match:
+ *
+ *   - `paste_shared_across_students` fires at high / 0.95 whenever a student
+ *     carries their own helper into their next assignment, naming them twice;
+ *   - `editing_pattern_clone` fingerprints the event-KIND stream, which is
+ *     essentially the same shape for one person across two assignments, so it
+ *     fires at medium / 0.7 on nearly every same-student pair.
+ *
+ * A cross-assignment finding is not a weaker version of a real one — it answers
+ * a question nobody asked. "Did two students share this?" only has meaning
+ * inside one assignment.
+ *
+ * The case worth stating rather than assuming away: a course that deliberately
+ * reuses a starter across assignments. Partitioning is right there too, and more
+ * so — the reuse is course-issued, so every pair in the cohort would match on
+ * it, and pooling would turn a staff decision into a semester-wide flag storm.
+ * A genuine repeat offender across two assignments is not lost either: each
+ * assignment is still searched in full, so the same student is flagged inside
+ * each one, which is where a grader looks.
+ *
  * ## Bundle ID mapping (V32)
  *
  * Each submission is tagged with a fresh crypto.randomUUID() bundleId (the
@@ -234,15 +261,31 @@ export async function runAndStoreCrossHeuristics(
   // Step 2: SELECT all non-superseded submissions in the semester.
   // -------------------------------------------------------------------------
   const submissionRows = await db
-    .select({ id: submissions.id })
+    .select({ id: submissions.id, assignmentId: submissions.assignment_id })
     .from(submissions)
     .where(
       and(eq(submissions.semester_id, semesterId), isNull(submissions.superseded_by_submission_id)),
     );
 
-  if (submissionRows.length < 2) {
-    // Cross-heuristics require at least 2 bundles. If there's 0 or 1, still
-    // run the replace to clear stale cross_flags from prior runs (idempotency).
+  // Partition the pool by assignment. Sorted so the emitted flag order — and
+  // therefore the DELETE-then-INSERT it feeds — is deterministic across runs;
+  // a Map preserves insertion order, which a DB row order does not guarantee.
+  const byAssignment = new Map<string, string[]>();
+  for (const row of submissionRows) {
+    const list = byAssignment.get(row.assignmentId);
+    if (list === undefined) byAssignment.set(row.assignmentId, [row.id]);
+    else list.push(row.id);
+  }
+  const comparableGroups = [...byAssignment.entries()]
+    .filter(([, ids]) => ids.length >= 2)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, ids]) => [...ids].sort());
+
+  if (comparableGroups.length === 0) {
+    // Cross-heuristics require at least 2 bundles IN ONE ASSIGNMENT. When no
+    // assignment has two, nothing can be compared — but still run the replace to
+    // clear stale cross_flags from prior runs (idempotency), and do it without
+    // loading a single bundle.
     await withTransaction(db, async (tx) => {
       // Acquire semester-scoped advisory lock (transaction-scoped; auto-released
       // at COMMIT/ROLLBACK — no pool-connection mismatch risk).
@@ -269,28 +312,39 @@ export async function runAndStoreCrossHeuristics(
   // Map<bundleId, Map<seqKey, globalIdx>> for the supporting-seq translation that
   // formerly used each bundle's EventIndex.bySeq.
   // -------------------------------------------------------------------------
-  const features: CrossSubmissionFeatures[] = [];
   const bundleIdToSubmissionId = new Map<string, string>();
   const globalIdxBySeqKeyByBundle = new Map<string, Map<string, number>>();
+  const featuresByGroup: CrossSubmissionFeatures[][] = [];
 
-  for (const subRow of submissionRows) {
-    const bundleId = crypto.randomUUID();
-    const { bundle, index } = await loadSubmissionIndex(db, storage, subRow.id);
-    const { features: f, globalIdxBySeqKey } = extractCrossFeaturesFromIndex(
-      index,
-      subRow.id,
-      bundleId,
-      bundle,
-    );
-    features.push(f);
-    bundleIdToSubmissionId.set(bundleId, subRow.id);
-    globalIdxBySeqKeyByBundle.set(bundleId, globalIdxBySeqKey);
+  for (const submissionIds of comparableGroups) {
+    const features: CrossSubmissionFeatures[] = [];
+    for (const submissionId of submissionIds) {
+      const bundleId = crypto.randomUUID();
+      const { bundle, index } = await loadSubmissionIndex(db, storage, submissionId);
+      const { features: f, globalIdxBySeqKey } = extractCrossFeaturesFromIndex(
+        index,
+        submissionId,
+        bundleId,
+        bundle,
+      );
+      features.push(f);
+      bundleIdToSubmissionId.set(bundleId, submissionId);
+      globalIdxBySeqKeyByBundle.set(bundleId, globalIdxBySeqKey);
+    }
+    featuresByGroup.push(features);
   }
 
   // -------------------------------------------------------------------------
-  // Step 4: Run cross-heuristics.
+  // Step 4: Run cross-heuristics, once per assignment.
+  //
+  // Each call is independent: a bundle in assignment A is never in the same
+  // `features` array as one in assignment B, so no heuristic can pair them and
+  // no repository-lineage partition spans the two.
   // -------------------------------------------------------------------------
-  const crossFlags = runCrossHeuristics(features, undefined);
+  const crossFlags: CrossFlag[] = [];
+  for (const features of featuresByGroup) {
+    for (const f of runCrossHeuristics(features, undefined)) crossFlags.push(f);
+  }
 
   // -------------------------------------------------------------------------
   // Step 5: Translate CrossFlag[] → DB rows.

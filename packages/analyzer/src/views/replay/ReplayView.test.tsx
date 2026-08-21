@@ -145,6 +145,7 @@ vi.mock('../../context/BundleContext.js', async (importOriginal) => {
       validationReport: null,
       flags: [],
       crossFlags: [],
+      crossScopeExclusions: [],
       status: mockIndex.current !== null ? ('loaded' as const) : ('idle' as const),
       loadingStage: null,
       loadError: null,

@@ -36,6 +36,7 @@ import type {
   CrossHeuristicConfig,
   CrossSubmissionFeatures,
 } from './types.js';
+import type { CrossScopePartition } from '../../coverage/cross-scope.js';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -119,7 +120,41 @@ function addToGroup(paste: PasteRecord, group: PasteGroup): void {
 // Cross-heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(features: CrossSubmissionFeatures[], config: CrossHeuristicConfig): CrossFlag[] {
+/**
+ * Do the bundles in this paste group span more than one repository lineage?
+ *
+ * A group confined to ONE lineage is not evidence of sharing between students:
+ * it is one student's paste, inside one shared `.provenance/`, seen once per
+ * partner archive (spec S20). Every such group used to emit a
+ * high-severity / 0.95 "may indicate content sharing" flag naming both partners.
+ *
+ * A group that spans two lineages stays a finding and is emitted unchanged,
+ * including the partners it also contains — they really do hold the content, and
+ * the exclusion register states which of the named bundles are one repository.
+ * Splitting the group into per-lineage pairs would fragment one shared paste
+ * into several findings about the same bytes.
+ */
+function spansMoreThanOneLineage(
+  bundleIds: readonly string[],
+  scopes: CrossScopePartition,
+): boolean {
+  const lineages = new Set<number>();
+  for (const id of bundleIds) {
+    const lineage = scopes.lineageOf.get(id);
+    // An unknown bundle is not proved to share a repository with anything, so it
+    // counts as its own lineage. Fail toward reporting the finding.
+    if (lineage === undefined) return true;
+    lineages.add(lineage);
+    if (lineages.size > 1) return true;
+  }
+  return false;
+}
+
+function run(
+  features: CrossSubmissionFeatures[],
+  config: CrossHeuristicConfig,
+  scopes: CrossScopePartition,
+): CrossFlag[] {
   const { pasteSharedMinLength: minLength, pasteSharedFuzzyThreshold: fuzzyThreshold } = config;
 
   // Collect all qualifying paste events across all submissions.
@@ -173,6 +208,11 @@ function run(features: CrossSubmissionFeatures[], config: CrossHeuristicConfig):
     if (bundleIdSet.size < 2) continue;
 
     const bundleIds = [...bundleIdSet].sort();
+
+    // Same-scope exclusion (spec S20). Suppressed pairs are NOT silently
+    // dropped: `coverage/cross-scope.ts` states every one of them, with the
+    // commits that proved it, as a coverage fact.
+    if (!spansMoreThanOneLineage(bundleIds, scopes)) continue;
 
     // Build eventsPerBundle.
     const eventsPerBundle: Record<string, string[]> = {};

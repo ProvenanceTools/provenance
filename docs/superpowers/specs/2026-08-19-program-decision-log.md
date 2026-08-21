@@ -1451,3 +1451,116 @@ tried — the targeted `ON CONFLICT`, and the prune rule — and both got regres
   nobody recorded, which is `git_unrecorded_in` by definition. Accepted on the user's decision, and
   handled by text rather than by score: the flag establishes only that the content has no recorded
   authorship _in this scope_ and says so. Enrolment coverage is what actually closes it.
+
+---
+
+### Landed 2026-08-21 — S20 same-scope exclusion, and the pool that had no assignment filter
+
+Two independent defects on the flagship collusion surface, both confirmed exactly as briefed.
+
+**Defect A — `paste_shared_across_students` fired on every honest partner pair, at HIGH / 0.95,
+for every paste.** A git-native group submission shares one committed, add-only `.provenance/`,
+so Alice's signed `.slog` is _physically inside_ Bob's archive and Bob's inside Alice's. In S20's
+"bytes differ" branch — which S20 calls the more likely one — the two archives contain the same
+events, so every paste ≥100 chars either partner ever made grouped across both bundles and emitted
+_"Shared paste detected across 2 bundles … may indicate content sharing"_. `editing_pattern_clone`
+fired alongside it at medium / 0.7 on a Jaccard of 1.0. Reproduced end to end before any fix:
+5 of 7 new tests red, including both heuristics on the partner pair.
+
+**Fix.** S20's prescribed same-scope exclusion, keyed on the observed commit DAG.
+`coverage/cross-scope.ts` owns the ONE enumeration and the ONE suppression decision, mirroring
+`coverage/session-overlap.ts` deliberately: the heuristics consume `lineageOf` (an **opaque** class
+id, so a heuristic can only ask "same class?" and cannot re-derive or reinterpret the rule), and the
+coverage register consumes `exclusions`. Both halves come from one pass, so they cannot disagree
+about what was suppressed. The key threaded into `CrossSubmissionFeatures` is
+`observedCommitKeys?: readonly string[]` — the `commitNodeKey(repository, sha)` node keys of
+`observedCommits(buildObservedDag(bundle))`, derived once in `observedCommitKeysOf` and imported by
+both the browser and the server extractor rather than reimplemented.
+
+**Three narrowings, each because the wide reading is worse than the bug:**
+
+1. **Observed commits only, never witnessed-only.** This is the one that decides whether the fix is
+   a fix or a course-wide outage. A witnessed-only sha appears solely inside another commit's
+   `parents` — exactly where a course-issued skeleton's history lives. Every student who clones the
+   same starter witnesses the same ancestors, so keying on ancestry would put the whole cohort into
+   one lineage and switch cross-submission detection off for the course. An _observed_ commit means
+   a session was recording AT that commit. `STILL fires for two students who cloned the same course
+skeleton` is the control, and it is the test that dies if anyone widens the key.
+2. **The `ASSUMED_SINGLE_REPOSITORY` sentinel never matches on its own.** Two unlabelled scopes
+   share a repository _key_ by construction — that is every bundle recorded to date. Only a shared
+   **commit** excludes.
+3. **Absence is never a match.** No observed commits, and a never-computed list, are each their own
+   singleton lineage. Both read as "no exclusion", so an older construction site behaves exactly as
+   it did before and the failure direction is toward comparing, never toward silence.
+
+**`globalIdx` was NOT touched.** No persisted evidence key changes; `flags.supporting_seqs` and
+`cross_flag_participants.supporting_seqs` mean exactly what they meant before.
+
+**Excluded pairs are VISIBLE, per S20 and §6 Rule 3.** `/compare` gained a "Not cross-compared"
+panel listing each lineage, how many comparisons it withheld, and the commit node keys that
+established it — neutral coverage styling, no severity, no score, a fact about the recording and
+never a finding about anyone. It rescopes when a member is deselected rather than disappearing, and
+renders nothing at all when nothing was excluded, so a solo cohort does not grow an empty frame
+implying something was hidden.
+
+**Defect B — the server's candidate pool had no assignment filter.** `run-cross.ts` selected on
+`semester_id` + `isNull(superseded_by)` **and nothing else**, so a student's own hw1 and hw2 were
+compared against each other, as was every pair of unrelated assignments. A helper carried forward
+into the next assignment is a high-severity "content sharing" finding naming the same student
+twice; the kind-stream fingerprint of one person across two assignments clears the clone threshold
+easily. The comparison now runs once per assignment; the DELETE-then-INSERT stays semester-wide
+because `cross_flags` rows are semester-scoped, and bundles are loaded only for assignments that
+actually have two submissions.
+
+**The reused-starter question, answered rather than assumed away:** partitioning is _more_ right for
+a course that reuses a starter across assignments, not less. The reuse is course-issued, so every
+pair in the cohort would match on it and pooling would turn a staff decision into a semester-wide
+flag storm. A repeat offender across two assignments is still flagged inside each one, which is
+where a grader looks.
+
+**Every positive fixture in `run-cross.test.ts` asserted defect B as the requirement.** All four
+seeded their second submission on a DIFFERENT assignment (hw1 vs hw2 / hw3 / hw9) and passed only
+because no filter existed. This is the third instance of the pattern (bugs 12 and the tools
+both-shapes gate were the first two), and the tell was the same: the fixtures encoded the thing the
+code got wrong, so no assertion could have caught it. The seed helper now **requires** the caller to
+name the assignment (`assignmentId`) or to say `seedNewAssignment` on purpose, so a same-semester /
+different-assignment pair cannot be spelled by accident again.
+
+**Mutation testing: 18 mutants, 18 caught, 5 of them only after new tests.** The five survivors were
+instructive:
+
+| mutant                                                    | why it survived                                                                                                                 | test that now catches it                                                    |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| drop the per-submission dedup                             | cannot change the partition (union is idempotent) but CAN launder a one-sided commit into `sharedCommits` — the _evidence_ half | `never lists a one-sided commit among the commits that proved an exclusion` |
+| `spansMoreThanOneLineage` suppresses on an unknown bundle | unreachable through `runCrossHeuristics`; reachable through a stale/mismatched partition                                        | `STILL fires when the partition does not know either bundle`                |
+| `sameRepositoryLineage` returns true on an unknown bundle | same                                                                                                                            | that test plus `is false for a bundle the partition never saw`              |
+| exclusions unsorted                                       | the determinism test had ONE exclusion                                                                                          | `is deterministic and order-independent`, now two lineages                  |
+| `sharedCommits` unsorted                                  | that one exclusion carried ONE commit                                                                                           | same test, now two commits listed in opposite order by their two holders    |
+
+The general lesson, same shape as bug 12's: **a determinism test over a one-element list proves
+nothing about ordering.** Neither ordering was observable in the fixture, so no assertion against it
+could have been load-bearing.
+
+### Known gaps from this change, stated rather than papered over
+
+- **A `'mixed'` repository scope does not exclude.** One partner on a recorder that emits
+  `root_commit_sha` and one on an older build produce different node keys for the same commit, so
+  the pair is compared and the false accusation survives for them. This is `RepositoryScope`'s own
+  documented `'mixed'` behaviour — the two groups deliberately do not correlate — and it fails
+  toward more findings, which is the standing bias. It closes when the D12 writer half is
+  universal. Matching on the bare sha instead would fix it and re-open the sha-space merge D12
+  exists to prevent; that trade is a product call, not a coding one.
+- **A mid-assignment staff commit pulled by two students while recording is observed by both**, so
+  they are excluded as one lineage. A false exclusion, and the price of the S20 key. The visible
+  register is the mitigation: the suppression is stated, with the commit that caused it, where the
+  grader reading "no findings" will see it.
+- **Two partners who never ran a recorded git command are not excluded.** No observed commits means
+  no key, and the accusation survives for that pair. Inherent to a commit-DAG-keyed fix; S20
+  accepts it.
+- **The exclusion register is browser-side only.** `/compare` renders it under `/local`; the
+  server-backed cross-flags view has no channel for it, because nothing persists it — that needs a
+  column or a table and therefore approval. A grader on the server path sees the suppression but
+  not the explanation, which is the weaker half of S20's requirement.
+- **`extract-cross-features.ts` emits `observedCommitKeys` only when a `Bundle` is passed.** Every
+  live caller passes one; a caller holding an index alone gets `undefined`, which suppresses
+  nothing.

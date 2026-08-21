@@ -16,6 +16,7 @@
  */
 
 import type { Severity } from '../types.js';
+import type { CrossScopePartition } from '../../coverage/cross-scope.js';
 
 /**
  * A single cross-bundle heuristic finding.
@@ -88,6 +89,27 @@ export type CrossSubmissionFeatures = {
    * — and every 1.x submission — behaving exactly as before.
    */
   disabledCaptureSignals?: readonly string[];
+  /**
+   * Every commit this submission's sessions were OBSERVED at, as
+   * `commitNodeKey(repository, sha)` values — the `(repository, sha)` node keys
+   * of `observedCommits(buildObservedDag(bundle))`.
+   *
+   * This is the same-scope exclusion key (spec S20, §5.2 L2). Two submissions
+   * that share one of these are two views of the same repository: a git-native
+   * submission's `.provenance/` is shared and add-only, so both partners' bundles
+   * carry both partners' signed logs, and comparing them against each other
+   * accuses the two people the course assigned to collaborate. See
+   * `coverage/cross-scope.ts` for the decision, including why witnessed-only
+   * commits are deliberately excluded from this list and why the
+   * `ASSUMED_SINGLE_REPOSITORY` sentinel can never match on its own.
+   *
+   * Optional for the same reason `disabledCaptureSignals` is: this shape is
+   * produced in two places and round-trips through plain JSON. **Absent means
+   * "never computed", NOT "no commits"** — both read as no exclusion, so a
+   * construction site that predates the field behaves exactly as it did before,
+   * which fails toward comparing rather than toward silent suppression.
+   */
+  observedCommitKeys?: readonly string[];
 };
 
 /**
@@ -117,5 +139,18 @@ export const DEFAULT_CROSS_HEURISTIC_CONFIG: CrossHeuristicConfig = {
 export type CrossHeuristic = {
   id: string;
   label: string;
-  run(features: CrossSubmissionFeatures[], config: CrossHeuristicConfig): CrossFlag[];
+  /**
+   * @param scopes - the repository-lineage partition, produced ONCE by
+   *   `runCrossHeuristics` from `coverage/cross-scope.ts`. A heuristic may only
+   *   ask it "are these two the same lineage?" — the class id is opaque, so no
+   *   heuristic can re-derive, reinterpret or second-guess the suppression rule.
+   *   Two submissions in one lineage are two views of ONE repository (a shared,
+   *   add-only `.provenance/`), so comparing them against each other accuses the
+   *   two people the course assigned to collaborate. See spec S20.
+   */
+  run(
+    features: CrossSubmissionFeatures[],
+    config: CrossHeuristicConfig,
+    scopes: CrossScopePartition,
+  ): CrossFlag[];
 };

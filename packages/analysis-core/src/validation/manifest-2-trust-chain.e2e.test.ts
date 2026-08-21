@@ -62,7 +62,23 @@ import { runValidation } from './run-validation.js';
 import type { ValidationCheck, ValidationReport } from './check-types.js';
 import { runHeuristics } from '../heuristics/run-heuristics.js';
 import { extractCrossFeatures } from '../heuristics/cross/features.js';
-import { editingPatternCloneHeuristic } from '../heuristics/cross/editing-pattern-clone.js';
+import { editingPatternCloneHeuristic as realEditingPatternCloneHeuristic } from '../heuristics/cross/editing-pattern-clone.js';
+import { partitionCrossScopes } from '../coverage/cross-scope.js';
+
+/**
+ * The heuristic under test, driven with the repository-lineage partition of its
+ * own features — what `runCrossHeuristics` hands it in production (spec S20).
+ * None of the fixtures below records a `git.event`, so every submission is its
+ * own lineage and nothing here is suppressed; the suppression path itself is
+ * covered in `heuristics/cross/same-scope-exclusion.test.ts`.
+ */
+const editingPatternCloneHeuristic = {
+  ...realEditingPatternCloneHeuristic,
+  run: (
+    features: Parameters<typeof realEditingPatternCloneHeuristic.run>[0],
+    config: Parameters<typeof realEditingPatternCloneHeuristic.run>[1],
+  ) => realEditingPatternCloneHeuristic.run(features, config, partitionCrossScopes(features)),
+};
 import { DEFAULT_CROSS_HEURISTIC_CONFIG } from '../heuristics/cross/types.js';
 
 // jsdom's WebCrypto rejects the buffers @noble/ed25519's default async sha512

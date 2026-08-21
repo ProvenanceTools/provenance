@@ -40,6 +40,8 @@ import type {
   CrossHeuristicConfig,
   CrossSubmissionFeatures,
 } from './types.js';
+import type { CrossScopePartition } from '../../coverage/cross-scope.js';
+import { sameRepositoryLineage } from '../../coverage/cross-scope.js';
 import { NGRAM_SIZE } from './features.js';
 
 /**
@@ -100,7 +102,11 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 // Cross-heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(features: CrossSubmissionFeatures[], config: CrossHeuristicConfig): CrossFlag[] {
+function run(
+  features: CrossSubmissionFeatures[],
+  config: CrossHeuristicConfig,
+  scopes: CrossScopePartition,
+): CrossFlag[] {
   const { editingPatternCloneThreshold: threshold } = config;
 
   if (features.length < 2) return [];
@@ -119,6 +125,12 @@ function run(features: CrossSubmissionFeatures[], config: CrossHeuristicConfig):
     for (let j = i + 1; j < eligible.length; j++) {
       const aEntry = eligible[i]!;
       const bEntry = eligible[j]!;
+
+      // Same-scope exclusion (spec S20). Two views of ONE repository share every
+      // event, so the Jaccard is 1.0 by construction and the flag reduces to
+      // "these partners were partners". Excluded pairs are stated as a coverage
+      // fact by `coverage/cross-scope.ts` rather than dropped in silence.
+      if (sameRepositoryLineage(scopes, aEntry.bundleId, bEntry.bundleId)) continue;
 
       // Absence-vs-disabled (program spec §4): one policy-distorted fingerprint
       // is enough to make the comparison meaningless in the false-positive
