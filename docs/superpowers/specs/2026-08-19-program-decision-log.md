@@ -608,16 +608,21 @@ completion contract, not a wish list.
   out-of-scope-by-analysis**, see "the per-contributor scoping boundary" below. Heuristics run ONCE
   over the whole scope and must keep doing so; what D14 means in practice is per-contributor
   ATTRIBUTION and SCORING of the resulting flags, and that is what landed.
-- Peer witnessing (`peer.observed`) — **reader half DONE 2026-08-20** (see below). The
-  **writer half is deliberately not built**: the directory watcher in the three recorders.
+- Peer witnessing (`peer.observed`) — **reader half DONE 2026-08-20**, **writer half DONE
+  2026-08-21 in ALL THREE recorders** (VS Code `peer-watcher.ts`, provjet `PeerWatcher.kt`,
+  provnvim `peer_watcher.lua`), each driving the shared `peer-observed.json` conformance
+  fixture. The reader was surfaced to a grader on 2026-08-21 as a coverage FACT (never a
+  Flag): see "the §5.6 and witnessing coverage facts" below.
   ~~and the `session.start` witnessing-availability capability report §5.6 item 3 calls for.~~
   **That report is DONE 2026-08-21** — see "the three `session.start` capability reports" below.
 - The three `session.start` capability reports (§5.6) — **reader + VS Code writer DONE
   2026-08-21** (see below). The **provjet and provnvim ports are outstanding**, to the writer
   contract recorded below.
-- The repository discriminator (D12) — **reader half DONE 2026-08-20** (see below). The
-  **writer half is deliberately not built**: deriving and emitting `root_commit_sha` in the three
-  recorders, to the writer contract recorded below.
+- The repository discriminator (D12) — **reader half DONE 2026-08-20**, **writer half DONE
+  2026-08-21 in ALL THREE recorders** (`root-commit-sha.ts`, `RootCommitSha.kt`,
+  `root_commit_sha.lua` — all deriving via `rev-list --max-parents=0`, all OMITTING rather than
+  emitting null). The residual 'mixed'-scope gap this left is ALSO closed — see the
+  sentinel-tolerant union below.
 - ~~provjet has no automated cross-implementation gate.~~ **DONE 2026-08-20.**
   `provjet/scripts/e2e/run_e2e.sh` + `verify-bundle-with-analyzer.mjs` now drive real
   JetBrains-produced archives (classic **and** rolling) through the real monorepo
@@ -1953,3 +1958,138 @@ without raising vitest's 10 s default via `vi.setConfig`, so they fail whenever 
 Re-run with `--testTimeout=180000`, all six files and all 44 tests pass. Pre-existing, and worth a
 fix of its own: `cohort/list.test.ts`, `cohort/students.test.ts`, `cross-flags/list.test.ts`,
 `heuristics/reconstruct-bundle.test.ts`, `heuristics/run-cross.test.ts`.
+
+---
+
+## 2026-08-21, second pass — what a completion sweep found
+
+The 2026-08-21 handoff listed nine outstanding items. Auditing them first turned out to matter
+more than working them: **two were already done** (the D12 and peer-witnessing writer halves had
+landed in provjet and provnvim within their previous ~15 commits, while this log still called them
+"deliberately not built"), and **the sweep surfaced more defects than the list contained.**
+
+### Four false accusations, three fixed
+
+`low_typing_high_output`, `time_to_first_save_anomaly` and `idle_then_complete` all counted
+**git-merged-in content as the student's own output**. In the merge shape — Alice runs `git pull`,
+the partner's work lands — each fired at **high severity** on the honest puller.
+`mass_external_replacement` and `external_edits` were protected because they consume the Tier 3.1
+classifier; these three never did. Unavoidable for the student: pull without the file open gives
+`startLength = 0`, `charsTyped = 0`, an infinite ratio.
+
+**Fixed by SUBTRACTION, not suppression** (`heuristics/merged-in-content.ts`). Per-character
+provenance intersected with `classification.gitMergeIn` gives an exact count of characters git
+delivered from a partner's recorded work; those leave the numerator. File-level suppression was
+rejected deliberately: pull once and the rest of the file becomes unexaminable for the whole
+submission. Subtraction is the narrower true statement — _those characters_ are not this student's
+output — and it is self-limiting, because any later write re-attributes provenance to itself.
+
+**D16's hole is not reintroduced.** The discount reads no clock and no tag; its only input is
+`gitMergeIn`, which requires an exact sha256 match against a save recorded by a _provably
+different verified contributor_. To launder a paste a student would need another enrolled
+student's recorder to have recorded those exact bytes — at which point the finding lands on THAT
+student's timeline. The evidence moves; it does not evaporate. Pinned by a test.
+
+The fourth — `paste_is_solution` measuring paste-survival instead of final-file coverage, so any
+small surviving paste scores 1.0 and raises `high` — is **analysed and open**. See
+`2026-08-21-paste-is-solution-sizing.md`. It is **solo-reachable**, which is why every audit
+framed around "honest pair work" missed it.
+
+**The lesson for the "no false accusations" row: it was asserted as met, twice, and was not.**
+The row's own wording — "reachable by honest pair work" — is what hid `paste_is_solution`. Read it
+as "reachable by an honest student" when auditing.
+
+### Two concurrency races, found by wiring one dead setting
+
+Wiring `RECOMPUTE_MAX_PARALLEL` (declared, validated, read by nothing) exposed two hazards that
+were latent only because `batchSize` was pinned at 1:
+
+1. Two `recompute_submission` jobs for the SAME submission (a config-commit auto-recompute racing
+   an explicit `POST /recompute`) could land in one batch, both pass the idempotency check before
+   either writes, then both DELETE-then-INSERT `flags`. Fixed by grouping each batch by
+   `submissionId` and serialising within a group; distinct submissions still run in parallel.
+2. **pg-boss tracks completion per FETCH, not per job** — `throw` fails every job in the batch.
+   Replaced with per-job `boss.fail`.
+
+Connection-pool headroom went from 4 to 1 at shipped defaults (`INGEST_CONCURRENCY` 4 +
+`INGEST_STAGE_CONCURRENCY` 1 + `RECOMPUTE_MAX_PARALLEL` 4 against `DATABASE_POOL_MAX` 10), and
+nothing reserves connections for HTTP handling or the other pg-boss queues. A startup **warning**
+(never a hard failure — the deployment is live) now says so.
+
+### The `cohort.test.ts` "known flake" was never a flake
+
+Two agents measured the full server suite independently and got 29 and 44 failures — **every one a
+`Test timed out in 10000ms`, zero assertion failures.** Six files drove testcontainers on vitest's
+10 s default. Re-run at 180 s: all passed. Fixed centrally in `packages/server/vitest.config.ts`
+so the next testcontainers test file cannot forget it. **Stop recording this as a flake.**
+
+### Conformance vectors were not reproducible
+
+`buildTestBundle` minted a fresh ed25519 keypair per call and JSZip stamps `new Date()` per file,
+so re-running the exporter churned `golden-bundle.json/.zip` on `session_pubkey_hex` and its
+derived digests. Two porting agents hit this independently and both reverted the drift by hand.
+Now pinnable via opt-in `sessionPrivkeyHex` / `zipFileDate`; defaults unchanged for the 80+ callers
+that want distinct keypairs. **The exporter imports `analysis-core/dist/`, so regenerating the
+vectors requires a build first** — a fix verified against `src/` alone will appear not to work.
+
+### provjet's git ownership gate was one-directional
+
+`RecorderSessionManager.sessionOwning` was `normalized.startsWith(root)`, so a repository root
+sitting **ABOVE** the assignment root — one shared class repo with each assignment a subdirectory,
+the standard 61B layout and a primary target of this programme — routed `git.event`s to no session
+at all. Same shape as bug 3, which VS Code fixed and provjet had not. Now bidirectional
+(`sameAncestryLine`), fanning out to every concurrently-recording session below the repo root.
+provnvim was checked and is **structurally immune** — it never discovers a repo path independently,
+delegating to `git -C <workspace> rev-parse --git-dir`, which is git's own upward search. Both
+claims are now regression-tested against real git repositories rather than argued.
+
+`not_owned` is reachable in provjet after all, by a route neither the VS Code multi-root argument
+nor provnvim's single-repo argument predicted: **one recording session per discovered
+`.provenance-manifest`, and the IDE auto-detects every nested `.git` as its own VCS mapping.**
+
+### D14 per-contributor SCOPING: closed as out-of-scope by analysis
+
+Eight of the eighteen per-submission heuristics are ALREADY effectively per-contributor. The other
+ten must stay whole-scope, and for eight of them the reason is structural: **slicing a heuristic's
+input to one contributor defeats `reconstruction-gate.ts`**, which skips whenever a file's events
+span two verified contributors. Slice, and every suppressed `concurrent` verdict becomes a firing
+one. A second group breaks via `classify-external-changes.ts`, where `git_merge_in` is _defined_ as
+matching a different verified contributor's recorded sha.
+
+So slicing would not weaken these heuristics — it would **re-manufacture exactly the false
+accusations this branch spent three sessions removing.** Pinned by
+`heuristics/contributor-scope-boundary.test.ts`, which asserts for each heuristic that the honest
+fixture is silent whole-scope AND would fire sliced. What D14 means in practice is per-contributor
+ATTRIBUTION and SCORING, which shipped.
+
+### Group submissions had no deterministic owner, and never superseded
+
+`submissions.student_id` was whichever co-submitter won a `Promise.all`. Now tie-broken on
+**`roster_entries.sid`** — the institution's identifier, fixed outside this system, stable across a
+roster re-import (the uuid alternatives are `gen_random_uuid()` artifacts that a re-import
+re-mints). Because `version_owner_key` is GENERATED from `student_id`, re-electing the submitter
+moves the row between version lineages, so the reconcile re-allocates `version_index` under a lock.
+That exposed a pre-existing latent bug: **a group's repeated submissions never superseded each
+other** — the lineage key flipped with the race winner, so every version restarted at 1.
+
+### Four more tests that asserted a defect AS the requirement
+
+Bringing the branch total to eight. New this pass:
+
+- `run-heuristics.test.ts:384` asserted `toHaveLength(6)` above a comment enumerating **five** —
+  `expect.arrayContaining` is a SUBSET match, so a duplicate `low_typing_high_output` was invisible.
+- `worker-hint.e2e.test.ts` and `test/helpers/gradescope-group-shape.ts` both pinned "the
+  submission is owned by whichever co-submitter created it" — the race, as the requirement.
+- `GitCapabilityProbeTest.kt` pinned that provjet never reports `not_owned`.
+
+### Still open after this pass
+
+1. **`paste_is_solution` sizing** — analysed, fix reverted mid-flight, written up separately.
+2. **Cohort free-text `q` search matches only the submitter of record**
+   (`cohort/list.ts:288-294`, `:481-487`, `facets.ts:~145`). Searching a partner's name will not
+   find their group submission. Now fails DETERMINISTICALLY for the non-canonical partner.
+3. **`CrossScopeExclusionMemberRow`** renders a bare `student` — same defect shape as the three
+   surfaces fixed this pass.
+4. **`packages/shared` still has no test script and zero tests.**
+5. **`reconstruction-gate.ts`'s docstring** still defers a `not_applicable` flag to "Tier 3.5's
+   per-contributor scoping work", which will now not happen.
