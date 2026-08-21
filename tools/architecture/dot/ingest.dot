@@ -23,8 +23,12 @@ digraph ingest {
     meta   [label="read submission_metadata.yml"]
     hasmeta[label="is this actually a\nGradescope export?" shape=diamond fillcolor="#12161f"
             fontsize=9 height=0.85 width=1.8]
+    scope  [label="declared submission type — one per BATCH\nself_identifying · bundle_zip · repo_whole · repo_scoped.\nThe assignment's persisted default, or a per-request\noverride on ANY of the three upload routes.\nAn archive is REPO-SHAPED iff a non-junk entry sits under\na .provenance/ directory — decided from entry NAMES alone,\nwhich a flat sealed bundle can never satisfy, so its staged\nbytes (and therefore its dedup key) are unchanged\nby construction."
+            fillcolor="#0e2422" color="#17bfae" fontsize=9]
     fanout [label="fan out — one job per scope × submitter\npg-boss, bounded concurrency, cancellable"
             shape=cds margin="0.26,0.10"]
+    skiplist[label="ingest_jobs.skipped\nno_seal · scope_excluded · ambiguous_scope ·\nsubmission_type_mismatch. A skipped scope has NO\ningest_files row — that is what being skipped means —\nso the job summary, which counts rows, cannot report it.\nNullable with NO default: null = resolution unfinished,\n[] = finished and skipped nothing. Collapsing those two\nis how a heterogeneous batch read as clean."
+            fillcolor="#241a0c" color="#F97316" fontsize=9]
     pbun   [label="parse bundle\nmanifest + every .slog"]
     pfail  [label="invalid_manifest / unparseable\nrecorded on the job, not fatal\nto the rest of the export"
             fillcolor="#2a1216" color="#ff6b6b" fontsize=9]
@@ -71,6 +75,10 @@ digraph ingest {
     strip [label="STRIP student source\nthe stored blob becomes provenance-only"
            fillcolor="#241a0c" color="#F97316" penwidth=2.0]
     ins   [label="insert submission, per_file_stats,\nvalidation_results, flags"]
+    contrib[label="finalizeContributors — AFTER heuristics, deliberately\nestablishBundleContributors MUTATES the bundle and several\nheuristics read that stamp, so stamping earlier would change\nwhich flags an ingest produces. Roster side and bundle side\nreconcile onto ONE row per person; unattributed and\nunverifiable sessions get NO row."
+            fillcolor="#1e1830" color="#9d7bf5" fontsize=9]
+    lock  [label="pg_advisory_xact_lock\n(semester_id, blob_sha256)\nTwo co-submitters carry byte-identical bundles, so both\ncleared dedup before either committed and both created a\nsubmission. Serial execution looked perfect; only\nconcurrency reinstated the fan-out."
+            fillcolor="#2a1216" color="#ff6b6b" fontsize=9]
     fail  [label="rollback\nblob orphan left for the retention\nsweep — non-fatal by design"
            fillcolor="#2a1216" color="#ff6b6b" fontsize=9]
   }
@@ -91,7 +99,10 @@ digraph ingest {
   e_gate -> meta
   meta -> hasmeta
   hasmeta -> pfail [label="no — clear error" color="#ff6b6b" style=dashed]
-  hasmeta -> fanout [label="yes" color="#4b90f7"]
+  hasmeta -> scope [label="yes" color="#4b90f7"]
+  scope -> fanout [label="a scope is SEALED by either shape —\nmanifest.json, or the per-session rolling\nmanifest a git submission's only seal" color="#17bfae"]
+  scope -> skiplist [label="a scope the declaration refuses.\nPer SUBMISSION, never per batch: staging is\nincremental with no transaction spanning it,\nso aborting would strand a half-ingested one"
+                     color="#F97316" style=dashed]
   fanout -> pbun
   pbun -> pfail [label="malformed" color="#ff6b6b" style=dashed]
   pbun -> dd    [label="parsed" color="#4b90f7"]
@@ -102,13 +113,15 @@ digraph ingest {
   match -> stats [label="yes" color="#4b90f7"]
   stats -> val
   val -> heur
-  heur -> upa [label="all computation done" color="#4b90f7"]
+  heur -> lock [label="all computation done" color="#4b90f7"]
+  lock -> upa [label="RE-CHECK dedup inside the lock —\na hit here is handled exactly as a\nphase-2 hit: attach, do not create" color="#ff6b6b"]
   upa -> ver
   ver -> mv
   mv -> fail [label="blob write fails" color="#ff6b6b" style=dashed]
   mv -> strip
   strip -> ins
-  ins -> xf [label="commit" color="#3fbf62"]
+  ins -> contrib
+  contrib -> xf [label="commit" color="#3fbf62"]
   xf -> xp
   xp -> done
 }
