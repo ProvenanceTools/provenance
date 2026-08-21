@@ -1,155 +1,155 @@
-<svg width="1285pt" height="1022pt"
- viewBox="0.00 0.00 1285.00 1022.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(21.6 1000.6)">
+<svg width="1457pt" height="1156pt"
+ viewBox="0.00 0.00 1457.00 1156.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(21.6 1134.6)">
 <title>er</title>
 <g id="clust1" class="cluster">
 
-<path stroke-width="1.5" d="M407.84,-779C407.84,-779 863.31,-779 863.31,-779 869.31,-779 875.31,-785 875.31,-791 875.31,-791 875.31,-959 875.31,-959 875.31,-965 869.31,-971 863.31,-971 863.31,-971 407.84,-971 407.84,-971 401.84,-971 395.84,-965 395.84,-959 395.84,-959 395.84,-791 395.84,-791 395.84,-785 401.84,-779 407.84,-779" class="f-hum s-hum"/>
-<text xml:space="preserve" text-anchor="middle" x="455.59" y="-957.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-hum"> &#160;IDENTITY &amp; ACCESS &#160;</text>
+<path stroke-width="1.5" d="M407.84,-913C407.84,-913 924.43,-913 924.43,-913 930.43,-913 936.43,-919 936.43,-925 936.43,-925 936.43,-1093 936.43,-1093 936.43,-1099 930.43,-1105 924.43,-1105 924.43,-1105 407.84,-1105 407.84,-1105 401.84,-1105 395.84,-1099 395.84,-1093 395.84,-1093 395.84,-925 395.84,-925 395.84,-919 401.84,-913 407.84,-913" class="f-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="455.59" y="-1091.97" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-hum"> &#160;IDENTITY &amp; ACCESS &#160;</text>
 </g>
 <g id="clust2" class="cluster">
 
-<path stroke-width="1.5" d="M20,-311C20,-311 497.01,-311 497.01,-311 503.01,-311 509.01,-317 509.01,-323 509.01,-323 509.01,-424 509.01,-424 509.01,-430 503.01,-436 497.01,-436 497.01,-436 20,-436 20,-436 14,-436 8,-430 8,-424 8,-424 8,-323 8,-323 8,-317 14,-311 20,-311" class="f-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="58" y="-422.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-srv"> &#160;ORGANISATION &#160;</text>
+<path stroke-width="1.5" d="M20,-400C20,-400 497.01,-400 497.01,-400 503.01,-400 509.01,-406 509.01,-412 509.01,-412 509.01,-513 509.01,-513 509.01,-519 503.01,-525 497.01,-525 497.01,-525 20,-525 20,-525 14,-525 8,-519 8,-513 8,-513 8,-412 8,-412 8,-406 14,-400 20,-400" class="f-srv s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="58" y="-511.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-srv"> &#160;ORGANISATION &#160;</text>
 </g>
 <g id="clust3" class="cluster">
 
-<path stroke-width="1.5" d="M343.34,-8C343.34,-8 913.93,-8 913.93,-8 919.93,-8 925.93,-14 925.93,-20 925.93,-20 925.93,-158 925.93,-158 925.93,-164 919.93,-170 913.93,-170 913.93,-170 343.34,-170 343.34,-170 337.34,-170 331.34,-164 331.34,-158 331.34,-158 331.34,-20 331.34,-20 331.34,-14 337.34,-8 343.34,-8" class="f-fmt s-fmt"/>
+<path stroke-width="1.5" d="M343.34,-8C343.34,-8 975.06,-8 975.06,-8 981.06,-8 987.06,-14 987.06,-20 987.06,-20 987.06,-158 987.06,-158 987.06,-164 981.06,-170 975.06,-170 975.06,-170 343.34,-170 343.34,-170 337.34,-170 331.34,-164 331.34,-158 331.34,-158 331.34,-20 331.34,-20 331.34,-14 337.34,-8 343.34,-8" class="f-fmt s-fmt"/>
 <text xml:space="preserve" text-anchor="middle" x="443.59" y="-156.97" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-fmt"> &#160;STUDENT IDENTITY — 2.1 live · 2.0 archived &#160;</text>
 </g>
 <g id="clust4" class="cluster">
 
-<path stroke-width="1.5" d="M754.26,-245C754.26,-245 1185.73,-245 1185.73,-245 1191.73,-245 1197.73,-251 1197.73,-257 1197.73,-257 1197.73,-425 1197.73,-425 1197.73,-431 1191.73,-437 1185.73,-437 1185.73,-437 754.26,-437 754.26,-437 748.26,-437 742.26,-431 742.26,-425 742.26,-425 742.26,-257 742.26,-257 742.26,-251 748.26,-245 754.26,-245" class="f-ana s-ana"/>
-<text xml:space="preserve" text-anchor="middle" x="788.89" y="-423.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ana"> &#160;SUBMISSIONS &#160;</text>
+<path stroke-width="1.5" d="M773.76,-399C773.76,-399 1393.85,-399 1393.85,-399 1399.85,-399 1405.85,-405 1405.85,-411 1405.85,-411 1405.85,-692 1405.85,-692 1405.85,-698 1399.85,-704 1393.85,-704 1393.85,-704 773.76,-704 773.76,-704 767.76,-704 761.76,-698 761.76,-692 761.76,-692 761.76,-411 761.76,-411 761.76,-405 767.76,-399 773.76,-399" class="f-ana s-ana"/>
+<text xml:space="preserve" text-anchor="middle" x="808.39" y="-690.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ana"> &#160;SUBMISSIONS &#160;</text>
 </g>
 <g id="clust5" class="cluster">
 
-<path stroke-width="1.5" d="M791.01,-178C791.01,-178 1198.1,-178 1198.1,-178 1204.1,-178 1210.1,-184 1210.1,-190 1210.1,-190 1210.1,-224 1210.1,-224 1210.1,-230 1204.1,-236 1198.1,-236 1198.1,-236 791.01,-236 791.01,-236 785.01,-236 779.01,-230 779.01,-224 779.01,-224 779.01,-190 779.01,-190 779.01,-184 785.01,-178 791.01,-178" class="f-uix s-uix"/>
-<text xml:space="preserve" text-anchor="middle" x="840.64" y="-222.97" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-uix"> &#160;CROSS&#45;SUBMISSION &#160;</text>
+<path stroke-width="1.5" d="M852.14,-194C852.14,-194 1344.73,-194 1344.73,-194 1350.73,-194 1356.73,-200 1356.73,-206 1356.73,-206 1356.73,-240 1356.73,-240 1356.73,-246 1350.73,-252 1344.73,-252 1344.73,-252 852.14,-252 852.14,-252 846.14,-252 840.14,-246 840.14,-240 840.14,-240 840.14,-206 840.14,-206 840.14,-200 846.14,-194 852.14,-194" class="f-uix s-uix"/>
+<text xml:space="preserve" text-anchor="middle" x="901.76" y="-238.97" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-uix"> &#160;CROSS&#45;SUBMISSION &#160;</text>
 </g>
 <g id="clust6" class="cluster">
 
-<path stroke-width="1.5" d="M414.97,-445C414.97,-445 858.81,-445 858.81,-445 864.81,-445 870.81,-451 870.81,-457 870.81,-457 870.81,-558 870.81,-558 870.81,-564 864.81,-570 858.81,-570 858.81,-570 414.97,-570 414.97,-570 408.97,-570 402.97,-564 402.97,-558 402.97,-558 402.97,-457 402.97,-457 402.97,-451 408.97,-445 414.97,-445" class="f-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="434.22" y="-556.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-tra"> &#160;INGEST &#160;</text>
+<path stroke-width="1.5" d="M414.97,-266C414.97,-266 919.93,-266 919.93,-266 925.93,-266 931.93,-272 931.93,-278 931.93,-278 931.93,-379 931.93,-379 931.93,-385 925.93,-391 919.93,-391 919.93,-391 414.97,-391 414.97,-391 408.97,-391 402.97,-385 402.97,-379 402.97,-379 402.97,-278 402.97,-278 402.97,-272 408.97,-266 414.97,-266" class="f-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="434.22" y="-377.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-tra"> &#160;INGEST &#160;</text>
 </g>
 <g id="clust7" class="cluster">
 
-<path stroke-width="1.5" d="M776.39,-578C776.39,-578 873.81,-578 873.81,-578 879.81,-578 885.81,-584 885.81,-590 885.81,-590 885.81,-758 885.81,-758 885.81,-764 879.81,-770 873.81,-770 873.81,-770 776.39,-770 776.39,-770 770.39,-770 764.39,-764 764.39,-758 764.39,-758 764.39,-590 764.39,-590 764.39,-584 770.39,-578 776.39,-578" class="f-road s-road"/>
-<text xml:space="preserve" text-anchor="middle" x="808.76" y="-756.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-road"> &#160;OPERATIONS &#160;</text>
+<path stroke-width="1.5" d="M837.51,-712C837.51,-712 934.93,-712 934.93,-712 940.93,-712 946.93,-718 946.93,-724 946.93,-724 946.93,-892 946.93,-892 946.93,-898 940.93,-904 934.93,-904 934.93,-904 837.51,-904 837.51,-904 831.51,-904 825.51,-898 825.51,-892 825.51,-892 825.51,-724 825.51,-724 825.51,-718 831.51,-712 837.51,-712" class="f-road s-road"/>
+<text xml:space="preserve" text-anchor="middle" x="869.89" y="-890.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-road"> &#160;OPERATIONS &#160;</text>
 </g>
 
 <g id="node1" class="node">
 <title>users</title>
-<polygon stroke-width="1.3" points="485.43,-811.11 431.43,-811.11 431.43,-786.89 485.43,-786.89 485.43,-811.11" class="f-hum s-hum"/>
-<text xml:space="preserve" text-anchor="middle" x="458.43" y="-795.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">users</text>
+<polygon stroke-width="1.3" points="485.43,-945.11 431.43,-945.11 431.43,-920.89 485.43,-920.89 485.43,-945.11" class="f-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="458.43" y="-929.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">users</text>
 </g>
 
 <g id="node2" class="node">
 <title>sessions</title>
-<polygon stroke-width="1.3" points="857.56,-878.11 792.64,-878.11 792.64,-853.89 857.56,-853.89 857.56,-878.11" class="f-hum s-hum"/>
-<text xml:space="preserve" text-anchor="middle" x="825.1" y="-862.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">sessions</text>
+<polygon stroke-width="1.3" points="918.68,-1012.11 853.76,-1012.11 853.76,-987.89 918.68,-987.89 918.68,-1012.11" class="f-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-996.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">sessions</text>
 </g>
 
 <g id="edge1" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M485.94,-803.87C549.84,-815.61 712.48,-845.49 786.45,-859.08" class="s-edge"/>
-<polygon stroke-width="1.1" points="786.27,-859.05 791.23,-862.48 789.34,-859.61 791.32,-859.98 791.32,-859.98 791.32,-859.98 789.34,-859.61 792.13,-857.61 786.27,-859.05" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M486.06,-937.19C559.05,-948.68 762.44,-980.68 847.29,-994.03" class="s-edge"/>
+<polygon stroke-width="1.1" points="847.39,-994.05 852.44,-997.35 850.47,-994.53 852.46,-994.85 852.46,-994.85 852.46,-994.85 850.47,-994.53 853.21,-992.46 847.39,-994.05" class="a-edge s-edge"/>
 </g>
 
 <g id="node3" class="node">
 <title>api_tokens</title>
-<polygon stroke-width="1.3" points="861.68,-945.11 788.51,-945.11 788.51,-920.89 861.68,-920.89 861.68,-945.11" class="f-hum s-hum"/>
-<text xml:space="preserve" text-anchor="middle" x="825.1" y="-929.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">api_tokens</text>
+<polygon stroke-width="1.3" points="922.81,-1079.11 849.64,-1079.11 849.64,-1054.89 922.81,-1054.89 922.81,-1079.11" class="f-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-1063.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">api_tokens</text>
 </g>
 
 <g id="edge2" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M486.02,-805.29C510.18,-811.27 546.64,-820.97 577.51,-832 648.25,-857.28 662.48,-872.17 732.26,-900 748.66,-906.54 766.93,-913.23 782.82,-918.85" class="s-edge"/>
-<polygon stroke-width="1.1" points="782.58,-918.77 786.95,-922.93 785.52,-919.8 787.42,-920.47 787.42,-920.47 787.42,-920.47 785.52,-919.8 788.59,-918.26 782.58,-918.77" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M485.87,-939.73C509.92,-946.01 546.32,-955.91 577.51,-966 660.56,-992.88 678.56,-1007.59 761.76,-1034 788.68,-1042.54 819.35,-1050.75 843.39,-1056.84" class="s-edge"/>
+<polygon stroke-width="1.1" points="843.35,-1056.83 848.08,-1060.58 846.37,-1057.59 848.33,-1058.09 848.33,-1058.09 848.33,-1058.09 846.37,-1057.59 849.29,-1055.78 843.35,-1056.83" class="a-edge s-edge"/>
 </g>
 
 <g id="node4" class="node">
 <title>memberships</title>
-<polygon stroke-width="1.3" points="867.31,-811.11 782.89,-811.11 782.89,-786.89 867.31,-786.89 867.31,-811.11" class="f-hum s-hum"/>
-<text xml:space="preserve" text-anchor="middle" x="825.1" y="-795.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">memberships</text>
+<polygon stroke-width="1.3" points="928.43,-945.11 844.01,-945.11 844.01,-920.89 928.43,-920.89 928.43,-945.11" class="f-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-929.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">memberships</text>
 </g>
 
 <g id="edge3" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M485.94,-799C547.12,-799 698.83,-799 776.55,-799" class="s-edge"/>
-<polygon stroke-width="1.1" points="776.6,-799 782.1,-801.48 779.72,-799 781.73,-799 781.73,-799 781.73,-799 779.72,-799 782.1,-796.53 776.6,-799" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M486.06,-933C556.43,-933 748.03,-933 837.72,-933" class="s-edge"/>
+<polygon stroke-width="1.1" points="837.61,-933 843.11,-935.48 840.73,-933 842.74,-933 842.74,-933 842.74,-933 840.73,-933 843.11,-930.53 837.61,-933" class="a-edge s-edge"/>
 </g>
 
-<g id="node24" class="node">
+<g id="node25" class="node">
 <title>audit</title>
-<polygon stroke-width="1.3" points="857.56,-677.11 792.64,-677.11 792.64,-652.89 857.56,-652.89 857.56,-677.11" class="f-road s-road"/>
-<text xml:space="preserve" text-anchor="middle" x="825.1" y="-661.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">audit_log</text>
+<polygon stroke-width="1.3" points="918.68,-811.11 853.76,-811.11 853.76,-786.89 918.68,-786.89 918.68,-811.11" class="f-road s-road"/>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-795.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">audit_log</text>
 </g>
 
-<g id="edge27" class="edge">
+<g id="edge30" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M485.73,-789.17C534.36,-771.01 641.63,-731.06 732.26,-698 750.13,-691.48 770,-684.33 786.67,-678.36" class="s-edge"/>
-<polygon stroke-width="1.1" points="786.67,-678.36 792.68,-678.83 789.6,-677.31 791.5,-676.63 791.5,-676.63 791.5,-676.63 789.6,-677.31 791.01,-674.17 786.67,-678.36" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M485.94,-923.53C538.33,-904.96 658.94,-862.88 761.76,-832 790.38,-823.4 823.07,-814.72 847.61,-808.41" class="s-edge"/>
+<polygon stroke-width="1.1" points="847.67,-808.4 853.61,-809.44 850.69,-807.63 852.64,-807.13 852.64,-807.13 852.64,-807.13 850.69,-807.63 852.38,-804.64 847.67,-808.4" class="a-edge s-edge"/>
 </g>
 
 <g id="node5" class="node">
 <title>pending</title>
-<polygon stroke-width="1.3" points="513.01,-878.11 403.84,-878.11 403.84,-853.89 513.01,-853.89 513.01,-878.11" class="f-hum s-hum"/>
-<text xml:space="preserve" text-anchor="middle" x="458.43" y="-862.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">pending_invitations</text>
+<polygon stroke-width="1.3" points="513.01,-1012.11 403.84,-1012.11 403.84,-987.89 513.01,-987.89 513.01,-1012.11" class="f-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="458.43" y="-996.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">pending_invitations</text>
 </g>
 
 <g id="node6" class="node">
 <title>courses</title>
-<polygon stroke-width="1.3" points="76.42,-410.11 16,-410.11 16,-385.89 76.42,-385.89 76.42,-410.11" class="f-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="46.21" y="-394.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">courses</text>
+<polygon stroke-width="1.3" points="76.42,-462.11 16,-462.11 16,-437.89 76.42,-437.89 76.42,-462.11" class="f-srv s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="46.21" y="-446.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">courses</text>
 </g>
 
 <g id="node7" class="node">
 <title>semesters</title>
-<polygon stroke-width="1.3" points="225.09,-410.11 153.42,-410.11 153.42,-385.89 225.09,-385.89 225.09,-410.11" class="f-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="189.26" y="-394.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">semesters</text>
+<polygon stroke-width="1.3" points="225.09,-462.11 153.42,-462.11 153.42,-437.89 225.09,-437.89 225.09,-462.11" class="f-srv s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="189.26" y="-446.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">semesters</text>
 </g>
 
 <g id="edge4" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M76.78,-398C97.17,-398 124.55,-398 147.08,-398" class="s-edge"/>
-<polygon stroke-width="1.1" points="147.12,-398 152.62,-400.48 150.24,-398 152.25,-398 152.25,-398 152.25,-398 150.24,-398 152.62,-395.53 147.12,-398" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M76.78,-450C97.17,-450 124.55,-450 147.08,-450" class="s-edge"/>
+<polygon stroke-width="1.1" points="147.12,-450 152.62,-452.48 150.24,-450 152.25,-450 152.25,-450 152.25,-450 150.24,-450 152.62,-447.53 147.12,-450" class="a-edge s-edge"/>
 </g>
 
 <g id="edge5" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M193.24,-410.65C200.91,-441.28 223.53,-520.96 263.09,-576 286.49,-608.56 296.74,-614.73 331.34,-635 481.49,-722.96 685.33,-771.51 776.55,-790.08" class="s-edge"/>
-<polygon stroke-width="1.1" points="776.64,-790.09 781.55,-793.61 779.7,-790.71 781.68,-791.11 781.68,-791.11 781.68,-791.11 779.7,-790.71 782.53,-788.76 776.64,-790.09" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M190.75,-462.53C192.92,-503.97 204.39,-639.09 263.09,-729 284.24,-761.39 297.07,-765.06 331.34,-783 505.05,-873.97 739.07,-913.72 837.97,-927.24" class="s-edge"/>
+<polygon stroke-width="1.1" points="837.9,-927.23 843.02,-930.42 840.99,-927.65 842.99,-927.92 842.99,-927.92 842.99,-927.92 840.99,-927.65 843.68,-925.52 837.9,-927.23" class="a-edge s-edge"/>
 </g>
 
 <g id="edge8" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M191.01,-410.75C194.14,-457.11 208.65,-620.3 263.09,-741 284.02,-787.41 289.16,-804.49 331.34,-833 350.96,-846.26 375.6,-854.19 397.89,-858.93" class="s-edge"/>
-<polygon stroke-width="1.1" points="397.75,-858.91 402.64,-862.43 400.8,-859.53 402.77,-859.93 402.77,-859.93 402.77,-859.93 400.8,-859.53 403.63,-857.58 397.75,-858.91" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M189.99,-462.48C189.32,-516.08 191.47,-730.99 263.09,-886 282.84,-928.73 291.54,-941.86 331.34,-967 351.1,-979.48 375.43,-987.26 397.44,-992.1" class="s-edge"/>
+<polygon stroke-width="1.1" points="397.53,-992.12 402.41,-995.68 400.58,-992.76 402.56,-993.18 402.56,-993.18 402.56,-993.18 400.58,-992.76 403.43,-990.83 397.53,-992.12" class="a-edge s-edge"/>
 </g>
 
 <g id="node8" class="node">
 <title>assignments</title>
-<polygon stroke-width="1.3" points="499.14,-410.11 417.72,-410.11 417.72,-385.89 499.14,-385.89 499.14,-410.11" class="f-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="458.43" y="-394.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">assignments</text>
+<polygon stroke-width="1.3" points="499.14,-432.11 417.72,-432.11 417.72,-407.89 499.14,-407.89 499.14,-432.11" class="f-srv s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="458.43" y="-416.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">assignments</text>
 </g>
 
 <g id="edge6" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M225.73,-398C273.57,-398 358.82,-398 411.5,-398" class="s-edge"/>
-<polygon stroke-width="1.1" points="411.57,-398 417.07,-400.48 414.69,-398 416.7,-398 416.7,-398 416.7,-398 414.69,-398 417.07,-395.53 411.57,-398" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M225.73,-446.02C273.57,-440.64 358.82,-431.07 411.5,-425.16" class="s-edge"/>
+<polygon stroke-width="1.1" points="411.61,-425.14 417.35,-426.99 414.71,-424.8 416.71,-424.57 416.71,-424.57 416.71,-424.57 414.71,-424.8 416.8,-422.07 411.61,-425.14" class="a-edge s-edge"/>
 </g>
 
 <g id="node9" class="node">
 <title>roster</title>
-<polygon stroke-width="1.3" points="501.01,-343.11 415.84,-343.11 415.84,-318.89 501.01,-318.89 501.01,-343.11" class="f-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="458.43" y="-327.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">roster_entries</text>
+<polygon stroke-width="1.3" points="501.01,-499.11 415.84,-499.11 415.84,-474.89 501.01,-474.89 501.01,-499.11" class="f-srv s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="458.43" y="-483.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">roster_entries</text>
 </g>
 
 <g id="edge7" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M225.73,-389.1C273.12,-377.22 357.21,-356.13 410,-342.89" class="s-edge"/>
-<polygon stroke-width="1.1" points="409.95,-342.91 415.89,-343.97 412.97,-342.15 414.93,-341.66 414.93,-341.66 414.93,-341.66 412.97,-342.15 414.68,-339.17 409.95,-342.91" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M225.73,-454.91C273.12,-461.48 357.21,-473.12 410,-480.43" class="s-edge"/>
+<polygon stroke-width="1.1" points="409.83,-480.41 414.94,-483.61 412.92,-480.84 414.91,-481.11 414.91,-481.11 414.91,-481.11 412.92,-480.84 415.62,-478.71 409.83,-480.41" class="a-edge s-edge"/>
 </g>
 
 <g id="node12" class="node">
@@ -159,86 +159,117 @@
 <text xml:space="preserve" text-anchor="middle" x="458.43" y="-117.25" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink2">opaque uuid ← (semester, sid)</text>
 </g>
 
-<g id="edge13" class="edge">
+<g id="edge16" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M189.86,-385.48C189.35,-345.54 193.56,-220.18 263.09,-159 292.84,-132.82 335.44,-123.57 373.18,-121.3" class="s-edge"/>
-<polygon stroke-width="1.1" points="372.85,-121.31 378.47,-123.5 375.97,-121.15 377.98,-121.05 377.98,-121.05 377.98,-121.05 375.97,-121.15 378.22,-118.56 372.85,-121.31" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M191.95,-437.25C198.67,-388.54 224.94,-214.99 263.09,-177 291.95,-148.26 334.91,-135.13 373.1,-129.34" class="s-edge"/>
+<polygon stroke-width="1.1" points="372.89,-129.37 378.69,-131.05 375.98,-128.93 377.97,-128.65 377.97,-128.65 377.97,-128.65 375.98,-128.93 377.98,-126.14 372.89,-129.37" class="a-edge s-edge"/>
 </g>
 
-<g id="node18" class="node">
+<g id="node15" class="node">
+<title>subcontrib</title>
+<polygon stroke-width="1.9" points="1397.85,-677.98 1173.18,-677.98 1173.18,-620.02 1397.85,-620.02 1397.85,-677.98" class="f-ana s-ana"/>
+<text xml:space="preserve" text-anchor="middle" x="1285.52" y="-662" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">submission_contributors — 0029</text>
+<text xml:space="preserve" text-anchor="middle" x="1285.52" y="-650.75" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">one row per PERSON, roster side and bundle</text>
+<text xml:space="preserve" text-anchor="middle" x="1285.52" y="-639.5" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">side reconciled onto ONE row.</text>
+<text xml:space="preserve" text-anchor="middle" x="1285.52" y="-628.25" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">D14 scoring lives here.</text>
+</g>
+
+<g id="edge15" class="edge">
+
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M211.56,-462.65C238.61,-478.26 287.08,-504.71 331.34,-521 516.12,-589.03 566.82,-598.21 761.76,-626 899.68,-645.66 1059.94,-650.02 1166.29,-650.36" class="s-edge"/>
+<polygon stroke-width="1.1" points="1166.4,-650.36 1171.89,-652.84 1169.52,-650.36 1171.53,-650.37 1171.53,-650.37 1171.53,-650.37 1169.52,-650.36 1171.91,-647.89 1166.4,-650.36" class="a-edge s-edge"/>
+<text xml:space="preserve" text-anchor="middle" x="673.64" y="-632.06" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">denormalized, to keep</text>
+<text xml:space="preserve" text-anchor="middle" x="673.64" y="-623.06" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">the rollup off a join</text>
+</g>
+
+<g id="node19" class="node">
 <title>xflags</title>
-<polygon stroke-width="1.3" points="863.18,-210.1 787.01,-210.1 787.01,-185.9 863.18,-185.9 863.18,-210.1" class="f-uix s-uix"/>
-<text xml:space="preserve" text-anchor="middle" x="825.1" y="-194.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">cross_flags</text>
-</g>
-
-<g id="edge23" class="edge">
-
-<path fill="none" stroke-width="1.1" d="M203.46,-385.53C227.11,-363.92 279.12,-319.68 331.34,-297 487.81,-229.03 692.68,-207.14 780.77,-200.59" class="s-edge"/>
-<polygon stroke-width="1.1" points="780.8,-200.58 786.46,-202.65 783.91,-200.36 785.92,-200.21 785.92,-200.21 785.92,-200.21 783.91,-200.36 786.11,-197.72 780.8,-200.58" class="a-edge s-edge"/>
-</g>
-
-<g id="node20" class="node">
-<title>ijobs</title>
-<polygon stroke-width="1.3" points="496.14,-544.11 420.72,-544.11 420.72,-519.89 496.14,-519.89 496.14,-544.11" class="f-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="458.43" y="-528.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">ingest_jobs</text>
-</g>
-
-<g id="edge10" class="edge">
-
-<path fill="none" stroke-width="1.1" d="M202.04,-410.51C215.8,-424.64 239.65,-447.79 263.09,-464 309.7,-496.23 373.11,-514.62 414.64,-523.95" class="s-edge"/>
-<polygon stroke-width="1.1" points="414.62,-523.95 419.46,-527.55 417.67,-524.62 419.63,-525.05 419.63,-525.05 419.63,-525.05 417.67,-524.62 420.52,-522.71 414.62,-523.95" class="a-edge s-edge"/>
-</g>
-
-<g id="node22" class="node">
-<title>rjobs</title>
-<polygon stroke-width="1.3" points="505.89,-477.11 410.97,-477.11 410.97,-452.89 505.89,-452.89 505.89,-477.11" class="f-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="458.43" y="-461.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">recompute_jobs</text>
+<polygon stroke-width="1.3" points="924.31,-226.1 848.14,-226.1 848.14,-201.9 924.31,-201.9 924.31,-226.1" class="f-uix s-uix"/>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-210.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">cross_flags</text>
 </g>
 
 <g id="edge26" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M222.27,-410.72C250.56,-421.52 293.13,-436.7 331.34,-446 355.13,-451.79 381.91,-456.13 404.64,-459.18" class="s-edge"/>
-<polygon stroke-width="1.1" points="404.52,-459.16 409.65,-462.34 407.61,-459.57 409.6,-459.83 409.6,-459.83 409.6,-459.83 407.61,-459.57 410.29,-457.43 404.52,-459.16" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M190.73,-437.59C192.79,-402.81 203.84,-304.05 263.09,-260 354.53,-192.02 715.93,-204.71 841.76,-211.39" class="s-edge"/>
+<polygon stroke-width="1.1" points="841.71,-211.39 847.07,-214.15 844.82,-211.55 846.83,-211.66 846.83,-211.66 846.83,-211.66 844.82,-211.55 847.33,-209.21 841.71,-211.39" class="a-edge s-edge"/>
+</g>
+
+<g id="node21" class="node">
+<title>ijobs</title>
+<polygon stroke-width="1.3" points="496.14,-298.11 420.72,-298.11 420.72,-273.89 496.14,-273.89 496.14,-298.11" class="f-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="458.43" y="-282.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">ingest_jobs</text>
+</g>
+
+<g id="edge10" class="edge">
+
+<path fill="none" stroke-width="1.1" d="M200.09,-437.38C221.19,-411.18 273.62,-350.69 331.34,-319 357.15,-304.82 389.31,-296.53 414.69,-291.81" class="s-edge"/>
+<polygon stroke-width="1.1" points="414.55,-291.83 420.4,-293.3 417.62,-291.28 419.6,-290.92 419.6,-290.92 419.6,-290.92 417.62,-291.28 419.53,-288.42 414.55,-291.83" class="a-edge s-edge"/>
 </g>
 
 <g id="node23" class="node">
+<title>rjobs</title>
+<polygon stroke-width="1.3" points="505.89,-365.11 410.97,-365.11 410.97,-340.89 505.89,-340.89 505.89,-365.11" class="f-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="458.43" y="-349.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">recompute_jobs</text>
+</g>
+
+<g id="edge29" class="edge">
+
+<path fill="none" stroke-width="1.1" d="M217.45,-437.31C245.59,-424.45 290.99,-404.44 331.34,-390 355.2,-381.46 382.09,-373.36 404.9,-366.93" class="s-edge"/>
+<polygon stroke-width="1.1" points="404.95,-366.92 410.91,-367.82 407.95,-366.08 409.89,-365.54 409.89,-365.54 409.89,-365.54 407.95,-366.08 409.58,-363.05 404.95,-366.92" class="a-edge s-edge"/>
+</g>
+
+<g id="node24" class="node">
 <title>hcfg</title>
-<polygon stroke-width="1.3" points="874.81,-610.11 775.39,-610.11 775.39,-585.89 874.81,-585.89 874.81,-610.11" class="f-road s-road"/>
-<text xml:space="preserve" text-anchor="middle" x="825.1" y="-594.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">heuristic_configs</text>
+<polygon stroke-width="1.3" points="935.93,-744.11 836.51,-744.11 836.51,-719.89 935.93,-719.89 935.93,-744.11" class="f-road s-road"/>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-728.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">heuristic_configs</text>
 </g>
 
 <g id="edge9" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M195.1,-410.62C209.43,-445.87 255.43,-545.08 331.34,-580 477.41,-647.19 674.38,-625.48 768.94,-609.15" class="s-edge"/>
-<polygon stroke-width="1.1" points="768.96,-609.14 774.81,-610.63 772.03,-608.61 774.01,-608.26 774.01,-608.26 774.01,-608.26 772.03,-608.61 773.95,-605.76 768.96,-609.14" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M189.74,-462.52C188.85,-502.44 192.06,-627.38 263.09,-684 431.36,-818.14 713.08,-773.01 830.87,-746.05" class="s-edge"/>
+<polygon stroke-width="1.1" points="830.98,-746.03 836.89,-747.2 834.01,-745.32 835.98,-744.87 835.98,-744.87 835.98,-744.87 834.01,-745.32 835.78,-742.37 830.98,-746.03" class="a-edge s-edge"/>
 </g>
 
 <g id="node14" class="node">
 <title>submissions</title>
-<polygon stroke-width="1.9" points="899.93,-391.73 750.26,-391.73 750.26,-356.27 899.93,-356.27 899.93,-391.73" class="f-ana s-ana"/>
-<text xml:space="preserve" text-anchor="middle" x="825.1" y="-375.75" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">submissions</text>
-<text xml:space="preserve" text-anchor="middle" x="825.1" y="-364.5" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">blob_sha256 · version_index</text>
+<polygon stroke-width="1.9" points="1002.68,-464.98 769.76,-464.98 769.76,-407.02 1002.68,-407.02 1002.68,-464.98" class="f-ana s-ana"/>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-449" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">submissions</text>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-437.75" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">blob_sha256 · version_index</text>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-426.5" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">version_owner_key — GENERATED ALWAYS,</text>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-415.25" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">so a row cannot disagree with its own lineage</text>
 </g>
 
 <g id="edge11" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M499.49,-395.36C558.01,-391.51 668.09,-384.27 743.7,-379.29" class="s-edge"/>
-<polygon stroke-width="1.1" points="743.68,-379.29 749.33,-381.4 746.79,-379.09 748.8,-378.96 748.8,-378.96 748.8,-378.96 746.79,-379.09 749.01,-376.46 743.68,-379.29" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M499.48,-421.51C559.24,-423.75 674.23,-428.07 763.17,-431.41" class="s-edge"/>
+<polygon stroke-width="1.1" points="763.13,-431.41 768.53,-434.09 766.25,-431.53 768.26,-431.6 768.26,-431.6 768.26,-431.6 766.25,-431.53 768.72,-429.15 763.13,-431.41" class="a-edge s-edge"/>
 </g>
 
-<g id="edge14" class="edge">
+<g id="edge17" class="edge">
 
-<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M458.43,-318.68C458.43,-285.71 458.43,-195.01 458.43,-150.83" class="s-edge"/>
-<polygon stroke-width="1.1" points="458.43,-150.79 460.9,-145.29 458.43,-147.67 458.43,-145.65 458.43,-145.65 458.43,-145.65 458.43,-147.67 455.95,-145.29 458.43,-150.79" class="a-edge s-edge"/>
-<text xml:space="preserve" text-anchor="middle" x="446.43" y="-233.09" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">soft link</text>
-<text xml:space="preserve" text-anchor="middle" x="446.43" y="-224.09" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">SET NULL</text>
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M415.3,-486.48C387.79,-483.84 353.29,-475.89 331.34,-454 271.48,-394.3 283.33,-318.51 293.79,-293 319.99,-229.11 383.74,-176.58 423.78,-148.39" class="s-edge"/>
+<polygon stroke-width="1.1" points="423.73,-148.43 429.65,-147.32 426.29,-146.65 427.94,-145.5 427.94,-145.5 427.94,-145.5 426.29,-146.65 426.83,-143.26 423.73,-148.43" class="a-edge s-edge"/>
+<text xml:space="preserve" text-anchor="middle" x="282.22" y="-303.4" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">soft link</text>
+<text xml:space="preserve" text-anchor="middle" x="282.22" y="-294.4" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">SET NULL</text>
 </g>
 
 <g id="edge12" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M501.61,-335.97C560.63,-342.93 668.99,-355.71 743.7,-364.52" class="s-edge"/>
-<polygon stroke-width="1.1" points="743.64,-364.51 748.81,-367.61 746.73,-364.88 748.73,-365.11 748.73,-365.11 748.73,-365.11 746.73,-364.88 749.39,-362.7 743.64,-364.51" class="a-edge s-edge"/>
-<text xml:space="preserve" text-anchor="middle" x="654.89" y="-359.02" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">matched to</text>
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M501.42,-481.97C561.67,-474.75 675.09,-461.17 763.07,-450.63" class="s-edge"/>
+<polygon stroke-width="1.1" points="763,-450.64 768.76,-452.44 766.1,-450.27 768.1,-450.03 768.1,-450.03 768.1,-450.03 766.1,-450.27 768.17,-447.53 763,-450.64" class="a-edge s-edge"/>
+<text xml:space="preserve" text-anchor="middle" x="673.64" y="-486.97" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">the SUBMITTER of record —</text>
+<text xml:space="preserve" text-anchor="middle" x="673.64" y="-477.97" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">NULLABLE since 0029, so every</text>
+<text xml:space="preserve" text-anchor="middle" x="673.64" y="-468.97" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">read&#45;path join is LEFT</text>
+</g>
+
+<g id="edge14" class="edge">
+
+<path fill="none" stroke-width="1.1" d="M501.48,-493.77C592.92,-508.66 816.59,-545.95 1002.68,-584 1056.68,-595.04 1116.19,-608.56 1166.56,-620.41" class="s-ana"/>
+<polygon stroke-width="1.1" points="1166.63,-620.43 1171.41,-624.1 1169.66,-621.14 1171.62,-621.6 1171.62,-621.6 1171.62,-621.6 1169.66,-621.14 1172.55,-619.28 1166.63,-620.43" class="a-ana s-ana"/>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-612.4" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">RESTRICT — plus a partial UNIQUE</text>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-603.4" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">(submission_id, roster_entry_id), so a</text>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-594.4" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">co&#45;submitter who ALSO recorded cannot</text>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-585.4" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">split into two apparent people</text>
 </g>
 
 <g id="node10" class="node">
@@ -249,136 +280,145 @@
 <text xml:space="preserve" text-anchor="middle" x="458.43" y="-24.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">NO semester, NO course</text>
 </g>
 
-<g id="edge17" class="edge">
+<g id="edge20" class="edge">
 
-<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M362.72,-65.05C351.33,-70.7 340.51,-77.6 331.34,-86 302.09,-112.81 302.34,-128.25 293.79,-167 283.12,-215.4 296.78,-236.48 331.34,-272 352.72,-293.97 383.85,-308.61 409.95,-317.81" class="s-fmt"/>
-<polygon stroke-width="1.1" points="409.89,-317.79 414.29,-321.91 412.84,-318.8 414.74,-319.45 414.74,-319.45 414.74,-319.45 412.84,-318.8 415.89,-317.23 409.89,-317.79" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="282.22" y="-177.4" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">soft link</text>
-<text xml:space="preserve" text-anchor="middle" x="282.22" y="-168.4" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">SET NULL</text>
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M357.34,-65.05C347.58,-70.68 338.63,-77.57 331.34,-86 276.78,-149.16 302.18,-186.96 293.79,-270 286.38,-343.41 313.07,-435.14 331.34,-454 351.47,-474.78 382.87,-483.06 409.42,-486.14" class="s-fmt"/>
+<polygon stroke-width="1.1" points="409.52,-486.15 414.74,-489.17 412.62,-486.47 414.62,-486.67 414.62,-486.67 414.62,-486.67 412.62,-486.47 415.24,-484.25 409.52,-486.15" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="282.22" y="-280.4" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">soft link</text>
+<text xml:space="preserve" text-anchor="middle" x="282.22" y="-271.4" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">SET NULL</text>
 </g>
 
 <g id="node11" class="node">
 <title>scred</title>
-<polygon stroke-width="1.3" points="913.06,-64.73 737.14,-64.73 737.14,-29.27 913.06,-29.27 913.06,-64.73" class="f-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="825.1" y="-48.75" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">student_credentials — 2.1</text>
-<text xml:space="preserve" text-anchor="middle" x="825.1" y="-37.5" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">append&#45;only, one row per issuance</text>
-</g>
-
-<g id="edge16" class="edge">
-
-<path fill="none" stroke-width="1.1" d="M578.33,-42.28C627.76,-43.23 684.3,-44.32 730.67,-45.21" class="s-fmt"/>
-<polygon stroke-width="1.1" points="730.7,-45.21 736.15,-47.79 733.82,-45.27 735.83,-45.31 735.83,-45.31 735.83,-45.31 733.82,-45.27 736.25,-42.84 730.7,-45.21" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="654.89" y="-54.73" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">one row per</text>
-<text xml:space="preserve" text-anchor="middle" x="654.89" y="-45.73" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">issuance · RESTRICT</text>
-</g>
-
-<g id="node13" class="node">
-<title>senr</title>
-<polygon stroke-width="1.3" points="917.93,-142.73 732.26,-142.73 732.26,-107.27 917.93,-107.27 917.93,-142.73" class="f-hum s-hum"/>
-<text xml:space="preserve" text-anchor="middle" x="825.1" y="-126.75" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink2">student_enrollments — 2.0, archived</text>
-<text xml:space="preserve" text-anchor="middle" x="825.1" y="-115.5" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink2">PUBLIC keys only</text>
-</g>
-
-<g id="edge15" class="edge">
-
-<path fill="none" stroke-width="1.1" d="M538.1,-125.78C593.17,-125.63 667.14,-125.43 726.05,-125.27" class="s-edge"/>
-<polygon stroke-width="1.1" points="725.83,-125.27 731.34,-127.73 728.95,-125.26 730.96,-125.26 730.96,-125.26 730.96,-125.26 728.95,-125.26 731.32,-122.78 725.83,-125.27" class="a-edge s-edge"/>
-</g>
-
-<g id="node15" class="node">
-<title>stats</title>
-<polygon stroke-width="1.3" points="1181.1,-277.11 1096.68,-277.11 1096.68,-252.9 1181.1,-252.9 1181.1,-277.11" class="f-ana s-ana"/>
-<text xml:space="preserve" text-anchor="middle" x="1138.89" y="-261.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">per_file_stats</text>
-</g>
-
-<g id="edge18" class="edge">
-
-<path fill="none" stroke-width="1.1" d="M875.95,-355.39C918.36,-339.7 980.95,-316.85 1035.93,-298 1054.27,-291.71 1074.58,-285.07 1092.21,-279.41" class="s-edge"/>
-<polygon stroke-width="1.1" points="1092,-279.48 1097.99,-280.16 1094.97,-278.53 1096.89,-277.91 1096.89,-277.91 1096.89,-277.91 1094.97,-278.53 1096.48,-275.45 1092,-279.48" class="a-edge s-edge"/>
-</g>
-
-<g id="node16" class="node">
-<title>valres</title>
-<polygon stroke-width="1.3" points="1189.73,-344.11 1088.06,-344.11 1088.06,-319.89 1189.73,-319.89 1189.73,-344.11" class="f-ana s-ana"/>
-<text xml:space="preserve" text-anchor="middle" x="1138.89" y="-328.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">validation_results</text>
+<polygon stroke-width="1.3" points="974.18,-65.73 798.26,-65.73 798.26,-30.27 974.18,-30.27 974.18,-65.73" class="f-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-49.75" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">student_credentials — 2.1</text>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-38.5" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">append&#45;only, one row per issuance</text>
 </g>
 
 <g id="edge19" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M900.78,-363.94C956.46,-356.44 1031.33,-346.35 1081.92,-339.54" class="s-edge"/>
-<polygon stroke-width="1.1" points="1081.85,-339.55 1087.63,-341.27 1084.94,-339.13 1086.93,-338.86 1086.93,-338.86 1086.93,-338.86 1084.94,-339.13 1086.97,-336.36 1081.85,-339.55" class="a-edge s-edge"/>
-<text xml:space="preserve" text-anchor="middle" x="976.93" y="-356.91" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">1:1</text>
+<path fill="none" stroke-width="1.1" d="M578.32,-42.23C645.91,-43.5 729.32,-45.07 792.11,-46.25" class="s-fmt"/>
+<polygon stroke-width="1.1" points="791.88,-46.25 797.33,-48.82 794.99,-46.3 797.01,-46.34 797.01,-46.34 797.01,-46.34 794.99,-46.3 797.42,-43.87 791.88,-46.25" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="673.64" y="-55.35" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">one row per</text>
+<text xml:space="preserve" text-anchor="middle" x="673.64" y="-46.35" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">issuance · RESTRICT</text>
 </g>
 
-<g id="node17" class="node">
-<title>flags</title>
-<polygon stroke-width="1.3" points="1165.89,-411.11 1111.89,-411.11 1111.89,-386.89 1165.89,-386.89 1165.89,-411.11" class="f-ana s-ana"/>
-<text xml:space="preserve" text-anchor="middle" x="1138.89" y="-395.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">flags</text>
+<g id="node13" class="node">
+<title>senr</title>
+<polygon stroke-width="1.3" points="979.06,-143.73 793.39,-143.73 793.39,-108.27 979.06,-108.27 979.06,-143.73" class="f-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-127.75" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink2">student_enrollments — 2.0, archived</text>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-116.5" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink2">PUBLIC keys only</text>
 </g>
 
-<g id="edge20" class="edge">
+<g id="edge18" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M900.78,-379.99C965.91,-385.21 1057.29,-392.54 1105.37,-396.39" class="s-edge"/>
-<polygon stroke-width="1.1" points="1105.45,-396.4 1110.73,-399.31 1108.55,-396.65 1110.56,-396.81 1110.56,-396.81 1110.56,-396.81 1108.55,-396.65 1111.13,-394.37 1105.45,-396.4" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M538.02,-126C608.28,-126 711.52,-126 787.16,-126" class="s-edge"/>
+<polygon stroke-width="1.1" points="787.15,-126 792.65,-128.48 790.26,-126 792.28,-126 792.28,-126 792.28,-126 790.26,-126 792.65,-123.53 787.15,-126" class="a-edge s-edge"/>
 </g>
 
-<g id="node19" class="node">
-<title>xparts</title>
-<polygon stroke-width="1.3" points="1202.1,-210.1 1075.68,-210.1 1075.68,-185.9 1202.1,-185.9 1202.1,-210.1" class="f-uix s-uix"/>
-<text xml:space="preserve" text-anchor="middle" x="1138.89" y="-194.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">cross_flag_participants</text>
+<g id="edge13" class="edge">
+
+<path fill="none" stroke-width="1.1" d="M1003.59,-463.96C1057.7,-478.84 1114.6,-497.79 1135.18,-516 1165.26,-542.62 1144.71,-569.66 1173.18,-598 1180.11,-604.9 1188.14,-610.96 1196.65,-616.27" class="s-edge"/>
+<polygon stroke-width="1.1" points="1196.4,-616.12 1199.84,-621.08 1199.07,-617.73 1200.8,-618.77 1200.8,-618.77 1200.8,-618.77 1199.07,-617.73 1202.39,-616.83 1196.4,-616.12" class="a-edge s-edge"/>
+<text xml:space="preserve" text-anchor="middle" x="1087.93" y="-526.4" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">who the submission is</text>
+<text xml:space="preserve" text-anchor="middle" x="1087.93" y="-517.4" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">attributable to · CASCADE</text>
+</g>
+
+<g id="node16" class="node">
+<title>stats</title>
+<polygon stroke-width="1.3" points="1327.73,-431.11 1243.31,-431.11 1243.31,-406.89 1327.73,-406.89 1327.73,-431.11" class="f-ana s-ana"/>
+<text xml:space="preserve" text-anchor="middle" x="1285.52" y="-415.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">per_file_stats</text>
 </g>
 
 <g id="edge21" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M849.82,-355.55C887.55,-326.85 964.32,-271.07 1035.93,-235 1053.31,-226.25 1073.26,-218.53 1090.89,-212.45" class="s-edge"/>
-<polygon stroke-width="1.1" points="1090.72,-212.5 1096.73,-213.07 1093.67,-211.5 1095.58,-210.85 1095.58,-210.85 1095.58,-210.85 1093.67,-211.5 1095.13,-208.39 1090.72,-212.5" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M1003.48,-416.72C1016.01,-415.2 1028.59,-413.9 1040.68,-413 1082.56,-409.88 1093.19,-412.16 1135.18,-413 1169.23,-413.68 1207.62,-415.24 1236.95,-416.6" class="s-edge"/>
+<polygon stroke-width="1.1" points="1236.83,-416.6 1242.2,-419.32 1239.94,-416.74 1241.95,-416.84 1241.95,-416.84 1241.95,-416.84 1239.94,-416.74 1242.44,-414.38 1236.83,-416.6" class="a-edge s-edge"/>
 </g>
 
-<g id="node26" class="node">
-<title>blobstore</title>
-<path stroke-width="1.9" d="M1241.85,-506.74C1241.85,-509.65 1195.7,-512.02 1138.89,-512.02 1082.08,-512.02 1035.93,-509.65 1035.93,-506.74 1035.93,-506.74 1035.93,-459.26 1035.93,-459.26 1035.93,-456.35 1082.08,-453.98 1138.89,-453.98 1195.7,-453.98 1241.85,-456.35 1241.85,-459.26 1241.85,-459.26 1241.85,-506.74 1241.85,-506.74" class="f-rec s-rec"/>
-<path fill="none" stroke-width="1.9" d="M1241.85,-506.74C1241.85,-503.83 1195.7,-501.47 1138.89,-501.47 1082.08,-501.47 1035.93,-503.83 1035.93,-506.74" class="s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="1138.89" y="-488.6" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">Blob store</text>
-<text xml:space="preserve" text-anchor="middle" x="1138.89" y="-478.85" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">the stored bundle — the ONLY place the</text>
-<text xml:space="preserve" text-anchor="middle" x="1138.89" y="-469.1" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">event stream lives. No events table exists.</text>
-</g>
-
-<g id="edge28" class="edge">
-
-<path fill="none" stroke-width="1.1" d="M879.34,-392.61C924.88,-408.54 991.47,-431.81 1045.66,-450.76" class="s-rec"/>
-<polygon stroke-width="1.1" points="1044.81,-452.5 1050.64,-452.5 1046.08,-448.87 1044.81,-452.5" class="a-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="976.93" y="-434.67" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">blob_key →</text>
+<g id="node17" class="node">
+<title>valres</title>
+<polygon stroke-width="1.3" points="1336.35,-498.11 1234.68,-498.11 1234.68,-473.89 1336.35,-473.89 1336.35,-498.11" class="f-ana s-ana"/>
+<text xml:space="preserve" text-anchor="middle" x="1285.52" y="-482.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">validation_results</text>
 </g>
 
 <g id="edge22" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M863.7,-198C914.57,-198 1006.18,-198 1069.42,-198" class="s-edge"/>
-<polygon stroke-width="1.1" points="1069.2,-198 1074.7,-200.48 1072.32,-198 1074.33,-198 1074.33,-198 1074.33,-198 1072.32,-198 1074.7,-195.53 1069.2,-198" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M1003.54,-443.98C1045.17,-447.45 1092.37,-452.1 1135.18,-458 1166.16,-462.27 1200.48,-468.59 1228.4,-474.15" class="s-edge"/>
+<polygon stroke-width="1.1" points="1228.5,-474.17 1233.41,-477.67 1231.56,-474.78 1233.53,-475.17 1233.53,-475.17 1233.53,-475.17 1231.56,-474.78 1234.38,-472.82 1228.5,-474.17" class="a-edge s-edge"/>
+<text xml:space="preserve" text-anchor="middle" x="1087.93" y="-459.4" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">1:1</text>
 </g>
 
-<g id="edge25" class="edge">
-
-<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M496.74,-523.57C520.28,-517.77 551.12,-509.26 577.51,-499 654.77,-468.96 740.01,-422.56 787.31,-395.55" class="s-edge"/>
-<polygon stroke-width="1.1" points="787.23,-395.59 793.23,-395 789.94,-394.04 791.68,-393.04 791.68,-393.04 791.68,-393.04 789.94,-394.04 790.77,-390.71 787.23,-395.59" class="a-edge s-edge"/>
-<text xml:space="preserve" text-anchor="middle" x="654.89" y="-483.02" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">created by</text>
+<g id="node18" class="node">
+<title>flags</title>
+<polygon stroke-width="1.3" points="1367.85,-576.73 1203.18,-576.73 1203.18,-541.27 1367.85,-541.27 1367.85,-576.73" class="f-ana s-ana"/>
+<text xml:space="preserve" text-anchor="middle" x="1285.52" y="-560.75" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">flags</text>
+<text xml:space="preserve" text-anchor="middle" x="1285.52" y="-549.5" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">contributor_key: &#39;&#39; = scope&#45;level</text>
 </g>
 
-<g id="node21" class="node">
-<title>ifiles</title>
-<polygon stroke-width="1.3" points="862.81,-543.11 787.39,-543.11 787.39,-518.89 862.81,-518.89 862.81,-543.11" class="f-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="825.1" y="-527.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">ingest_files</text>
+<g id="edge23" class="edge">
+
+<path fill="none" stroke-width="1.1" d="M1003.48,-460.68C1016.01,-462.98 1028.59,-465.14 1040.68,-467 1061.55,-470.21 1116.41,-467.32 1135.18,-477 1157.85,-488.69 1152.02,-505.77 1173.18,-520 1184.18,-527.4 1196.74,-533.55 1209.37,-538.61" class="s-edge"/>
+<polygon stroke-width="1.1" points="1209.31,-538.59 1213.54,-542.89 1212.22,-539.72 1214.09,-540.45 1214.09,-540.45 1214.09,-540.45 1212.22,-539.72 1215.33,-538.28 1209.31,-538.59" class="a-edge s-edge"/>
+</g>
+
+<g id="node20" class="node">
+<title>xparts</title>
+<polygon stroke-width="1.3" points="1348.73,-226.1 1222.31,-226.1 1222.31,-201.9 1348.73,-201.9 1348.73,-226.1" class="f-uix s-uix"/>
+<text xml:space="preserve" text-anchor="middle" x="1285.52" y="-210.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">cross_flag_participants</text>
 </g>
 
 <g id="edge24" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M496.74,-531.9C564.8,-531.71 708.74,-531.32 780.92,-531.12" class="s-edge"/>
-<polygon stroke-width="1.1" points="780.97,-531.12 786.47,-533.58 784.09,-531.11 786.1,-531.1 786.1,-531.1 786.1,-531.1 784.09,-531.11 786.46,-528.63 780.97,-531.12" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.1" d="M993.95,-406.17C996.94,-404.53 999.86,-402.81 1002.68,-401 1024.14,-387.22 1021.01,-374.24 1040.68,-358 1109.44,-301.22 1203.18,-252.61 1251.98,-229.1" class="s-edge"/>
+<polygon stroke-width="1.1" points="1251.84,-229.16 1257.87,-229.02 1254.65,-227.81 1256.46,-226.94 1256.46,-226.94 1256.46,-226.94 1254.65,-227.81 1255.73,-224.55 1251.84,-229.16" class="a-edge s-edge"/>
 </g>
 
-<g id="node25" class="node">
+<g id="node27" class="node">
+<title>blobstore</title>
+<path stroke-width="1.9" d="M1388.48,-358.74C1388.48,-361.65 1342.33,-364.02 1285.52,-364.02 1228.7,-364.02 1182.56,-361.65 1182.56,-358.74 1182.56,-358.74 1182.56,-311.26 1182.56,-311.26 1182.56,-308.35 1228.7,-305.98 1285.52,-305.98 1342.33,-305.98 1388.48,-308.35 1388.48,-311.26 1388.48,-311.26 1388.48,-358.74 1388.48,-358.74" class="f-rec s-rec"/>
+<path fill="none" stroke-width="1.9" d="M1388.48,-358.74C1388.48,-355.83 1342.33,-353.47 1285.52,-353.47 1228.7,-353.47 1182.56,-355.83 1182.56,-358.74" class="s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="1285.52" y="-340.6" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">Blob store</text>
+<text xml:space="preserve" text-anchor="middle" x="1285.52" y="-330.85" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">the stored bundle — the ONLY place the</text>
+<text xml:space="preserve" text-anchor="middle" x="1285.52" y="-321.1" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">event stream lives. No events table exists.</text>
+</g>
+
+<g id="edge31" class="edge">
+
+<path fill="none" stroke-width="1.1" d="M986.27,-406.1C1008.74,-399.44 1029.32,-393.47 1040.68,-390.5 1084.34,-379.07 1132.76,-367.77 1174.86,-358.38" class="s-rec"/>
+<polygon stroke-width="1.1" points="1175.26,-360.27 1180.21,-357.19 1174.42,-356.51 1175.26,-360.27" class="a-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="1087.93" y="-393.4" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">blob_key →</text>
+</g>
+
+<g id="edge25" class="edge">
+
+<path fill="none" stroke-width="1.1" d="M924.95,-214C991.73,-214 1131.58,-214 1215.84,-214" class="s-edge"/>
+<polygon stroke-width="1.1" points="1215.94,-214 1221.44,-216.48 1219.06,-214 1221.07,-214 1221.07,-214 1221.07,-214 1219.06,-214 1221.44,-211.53 1215.94,-214" class="a-edge s-edge"/>
+</g>
+
+<g id="edge28" class="edge">
+
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M496.56,-294.89C520.04,-300.88 550.87,-309.41 577.51,-319 661.84,-349.37 677.48,-370.48 761.76,-401 764.77,-402.09 767.83,-403.17 770.93,-404.23" class="s-edge"/>
+<polygon stroke-width="1.1" points="770.99,-404.25 775.4,-408.36 773.94,-405.25 775.85,-405.9 775.85,-405.9 775.85,-405.9 773.94,-405.25 776.99,-403.67 770.99,-404.25" class="a-edge s-edge"/>
+<text xml:space="preserve" text-anchor="middle" x="673.64" y="-390.08" font-family="Helvetica,sans-Serif" font-size="8.00" class="t-hum">created by</text>
+</g>
+
+<g id="node22" class="node">
+<title>ifiles</title>
+<polygon stroke-width="1.3" points="923.93,-298.11 848.51,-298.11 848.51,-273.89 923.93,-273.89 923.93,-298.11" class="f-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-282.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">ingest_files</text>
+</g>
+
+<g id="edge27" class="edge">
+
+<path fill="none" stroke-width="1.1" d="M496.47,-286C575.11,-286 758.38,-286 842.11,-286" class="s-edge"/>
+<polygon stroke-width="1.1" points="842.09,-286 847.59,-288.48 845.21,-286 847.22,-286 847.22,-286 847.22,-286 845.21,-286 847.59,-283.53 842.09,-286" class="a-edge s-edge"/>
+</g>
+
+<g id="node26" class="node">
 <title>rate</title>
-<polygon stroke-width="1.3" points="877.81,-744.11 772.39,-744.11 772.39,-719.89 877.81,-719.89 877.81,-744.11" class="f-road s-road"/>
-<text xml:space="preserve" text-anchor="middle" x="825.1" y="-728.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">rate_limit_buckets</text>
+<polygon stroke-width="1.3" points="938.93,-878.11 833.51,-878.11 833.51,-853.89 938.93,-853.89 938.93,-878.11" class="f-road s-road"/>
+<text xml:space="preserve" text-anchor="middle" x="886.22" y="-862.12" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">rate_limit_buckets</text>
 </g>
 </g>
 </svg>
