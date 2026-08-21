@@ -77,7 +77,11 @@ export async function buildCollabScope(
   }
 
   const { zipBuffer } = await buildTestBundle({ sessions });
-  const result = await loadBundle(new Blob([zipBuffer]), 'test.zip');
+  // The raw ArrayBuffer, not a Blob. `loadBundle` accepts either, but jszip
+  // cannot read Node's Blob, so wrapping here would confine this helper to the
+  // jsdom suites — and the server's contributor-attribution tests need the same
+  // two-partner scope under `environment: 'node'`.
+  const result = await loadBundle(zipBuffer, 'test.zip');
   if (!result.ok) throw new Error(`Bundle load failed: ${JSON.stringify(result.error)}`);
   const bundle = result.value;
   if (opts.stamp !== false) await establishBundleContributors(bundle, k.root.pubkeyHex);

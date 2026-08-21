@@ -155,6 +155,66 @@ Only run when staff load multiple bundles into the [`/compare` view](../packages
 | `paste_shared_across_students` | medium / high | Identical pasted text (high, sha256 match) or near-identical text (medium, fuzzy line match) in two or more students' bundles. | [`cross/paste-shared-across-students.ts`](../packages/analysis-core/src/heuristics/cross/paste-shared-across-students.ts) · [tests](../packages/analysis-core/src/heuristics/cross/paste-shared-across-students.test.ts) |
 | `editing_pattern_clone`        | medium        | Two students' event sequences are anomalously similar in timing and file-switch order.                                         | [`cross/editing-pattern-clone.ts`](../packages/analysis-core/src/heuristics/cross/editing-pattern-clone.ts) · [tests](../packages/analysis-core/src/heuristics/cross/editing-pattern-clone.test.ts)                      |
 
+## Group work: which heuristics can name a person
+
+A submission may be GROUP work — two or more students sharing one repository, each identified by
+a verified enrolment chain ([`identity/resolve-contributors.ts`](../packages/analysis-core/src/identity/resolve-contributors.ts)).
+Heuristics still run **once over the whole scope**, and then each resulting flag is charged to a
+contributor — or to nobody — by
+[`attribute-flags.ts`](../packages/server/src/services/contributors/attribute-flags.ts). A flag
+names a person only when ALL of its supporting evidence sits in ONE session AND that session's
+enrolment chain verified; everything else stays scope-level, visible at full severity but with no
+name attached.
+
+Running the heuristics **per contributor** — a separate pass over each partner's events — was
+analysed and closed as out-of-scope (decision D14). The three-way classification below is why,
+and it is pinned as an executable test in
+[`contributor-scope-boundary.test.ts`](../packages/analysis-core/src/heuristics/contributor-scope-boundary.test.ts).
+
+### Already effectively per-contributor (8)
+
+Their evidence never leaves one session, so `flags.session_id` is populated and the flag is
+already charged to the acting student:
+
+`no_intermediate_errors` · `ai_extension_active` · `shell_integration_disabled` ·
+`extension_set_changed_mid_assignment` · `clock_jumps` · `gap_in_heartbeats` ·
+`paste_matches_known_source` · `large_paste` (its OUTPUT — one flag per paste event)
+
+### Must stay whole-scope (10)
+
+Narrowing the event window to one contributor turns honest pair work into a finding against a
+named student. Three distinct mechanisms:
+
+- **The reconstruction gate needs both partners in scope.**
+  [`reconstruction-gate.ts`](../packages/analysis-core/src/heuristics/reconstruction-gate.ts)
+  skips a file whose content cannot be established, which happens exactly when its events span
+  two verified contributors. With one contributor in scope the file reconstructs, and the skip
+  becomes a flag: `low_typing_high_output`, `paste_is_solution`, `time_to_first_save_anomaly`,
+  `idle_then_complete`, `mass_external_replacement`.
+- **The content classification needs the partner's recorded bytes.** `git_merge_in`
+  ([`classify-external-changes.ts`](../packages/analysis-core/src/index/classify-external-changes.ts))
+  is defined as "these bytes are a provably different verified contributor's recorded work", so
+  a `git pull` reads as an out-of-editor edit once that contributor is out of scope:
+  `external_edits`, `terminal_active_during_external_change`. Two more belong here by a
+  different route — `inter_session_external_change` compares CONSECUTIVE sessions and skips a
+  cross-contributor pair, so removing the partner's session makes two of one student's sessions
+  adjacent; and `large_paste`'s INPUT, because
+  [`internal-move.ts`](../packages/analysis-core/src/heuristics/internal-move.ts) reads its
+  deletion ledger off the whole-scope replay, so a partner's typed code is what keeps a
+  cut-and-paste refactor at `info`.
+- **The question is not about one person.** `multiple_sessions_overlap` is defined over PAIRS of
+  sessions, and `extension_hash_mismatch` reads the signed manifest rather than any event. For
+  these two, a per-contributor scope loses a FACT rather than gaining an accusation: the
+  exculpatory "these two partners were working at the same time" statement, and the partner's
+  recorder build going unchecked.
+
+### Not applicable (11)
+
+The nine [bundle-validation flags](#bundle-validation-flags) are an adapter over the validation
+report and have no event input to scope. The two
+[cross-submission heuristics](#cross-submission-heuristics-phase-18) are already pair-level and
+already exclude pairs within one scope.
+
 ## Things to keep in mind for staff communication
 
 - **None of these are verdicts.** Per PRD §7.4: "the score is never the verdict — it's a sort order for staff triage." Every escalation goes to a human reviewer who verifies via the replay UI.
