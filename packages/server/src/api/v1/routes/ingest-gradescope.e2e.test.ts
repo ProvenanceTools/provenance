@@ -450,10 +450,6 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
         .from(ingest_files)
         .where(eq(ingest_files.ingest_job_id, body.job_id));
       expect(fileRows).toHaveLength(3);
-      expect(fileRows.every((f) => f.status === 'matched' || f.status === 'duplicate')).toBe(true);
-      // Every file still names its student and its submission — nobody is lost.
-      expect(fileRows.every((f) => f.matched_student_id !== null)).toBe(true);
-      expect(fileRows.every((f) => f.submission_id !== null)).toBe(true);
 
       const rosterBySid = new Map(
         (
@@ -463,6 +459,30 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
             .where(eq(roster_entries.semester_id, semester!.id))
         ).map((r) => [r.sid, r.id]),
       );
+
+      // The EXACT status multiset, not `every(matched || duplicate)`.
+      //
+      // That predicate is satisfied by three `matched` rows — which is the
+      // pre-0029 fan-out returning. This test is the one the cut-over itself
+      // repaired, and it was repaired into a spelling that stays green against
+      // the very regression it exists to catch. Its siblings were found later
+      // and pinned properly; this brings it up to the same bar.
+      expect([...fileRows.map((f) => f.status)].sort()).toEqual([
+        'duplicate',
+        'matched',
+        'matched',
+      ]);
+
+      // Each row resolves under ITS OWN student, not merely under someone.
+      // `every(matched_student_id !== null)` passes when a duplicate resolves
+      // under the WRONG partner's name, which loses a person just as surely as
+      // a null does — and does it silently, under a plausible-looking name.
+      for (const f of fileRows) {
+        expect(f.submission_id, `submission_id for sid ${f.match_sid}`).not.toBeNull();
+        expect(f.matched_student_id, `matched_student_id for sid ${f.match_sid}`).toBe(
+          rosterBySid.get(f.match_sid!),
+        );
+      }
 
       // TWO submissions, not three: the solo, and ONE for the pair.
       //
