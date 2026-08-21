@@ -144,6 +144,7 @@ async function makeSession(opts: {
     events,
     meta: makeMeta(sessionId, keypair.publicKeyHex, checkpoints),
     slogSha256: 'a'.repeat(64),
+    slogSha256Lf: null,
     metaSha256: 'b'.repeat(64),
     firstEvent: events[0] as ParsedSession['firstEvent'],
   };

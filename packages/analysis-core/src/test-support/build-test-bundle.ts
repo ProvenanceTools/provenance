@@ -166,6 +166,39 @@ export type BuildBundleOpts = {
   assignmentId?: string;
   semester?: string;
   /**
+   * Run git's end-of-line filter over the `.slog` bytes, the way a real
+   * repository does.
+   *
+   * Deliberately NOT under `tamper`. Nothing here is tampering: git rewrites
+   * these bytes on its own, under `core.autocrlf=true`, `core.eol=crlf`, or a
+   * `.gitattributes` carrying `* text=auto eol=crlf` — and the git submission
+   * path has no seal step to re-hash the result, so the analyzer receives the
+   * rewritten file with the pre-rewrite digest still signed beside it. Filing it
+   * under `tamper` would teach exactly the wrong thing about a shape that
+   * belongs to honest students.
+   *
+   * The repo had NO CRLF `.slog` fixture at all, which is why a maximum-severity
+   * false accusation on the flagship git path survived every suite. Both
+   * directions are offered because both are reachable and only one of them is
+   * recoverable — see `loader/line-endings.ts`.
+   */
+  gitLineEndings?: {
+    /**
+     * `archive_crlf` (default) — the recorder sealed over LF and the delivered
+     * working tree carries CRLF. What a checkout under `eol=crlf` produces, and
+     * the direction the loader can undo and prove benign.
+     *
+     * `seal_crlf` — the reverse: the rolling seal was taken over bytes git had
+     * already widened (it re-reads the `.slog` from disk), and git's clean
+     * filter then normalized the committed blob back to LF. NOT recoverable by
+     * hashing, so this direction must still fail — and must still be described
+     * without asserting that a benign cause is impossible.
+     */
+    direction?: 'archive_crlf' | 'seal_crlf';
+    /** Session build indexes to affect. Defaults to every session. */
+    sessionIndexes?: number[];
+  };
+  /**
    * Emit a rolling seal (program spec §8) rather than / as well as the classic
    * `manifest.json`. See {@link RollingSealSpec}.
    */
@@ -357,6 +390,17 @@ function fakeUuid(index: number): string {
 function fakeLogFileUuid(index: number): string {
   const hex = index.toString(16).padStart(8, '0');
   return `${hex}-0000-4000-8000-f11e00000000`;
+}
+
+/**
+ * git's smudge filter, exactly: widen every LF to CRLF, idempotently.
+ *
+ * The first replace collapses any CRLF already present so the second cannot
+ * produce `\r\r\n` — which is what a naive `\n` → `\r\n` does when run over
+ * text that is already widened, and is not a state git ever produces.
+ */
+function toCrlf(text: string): string {
+  return text.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
 }
 
 /** ISO timestamp offset from a base epoch for deterministic walls. */
@@ -566,6 +610,8 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
     metaJson: string;
     slogSha256: string;
     metaSha256: string;
+    /** Write this session's `.slog` into the ZIP with CRLF terminators. */
+    archiveAsCrlf: boolean;
   };
 
   const sessions: SessionData[] = [];
@@ -598,7 +644,32 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
       metaJson,
       slogSha256: sha256Hex(slogText),
       metaSha256: sha256Hex(metaJson),
+      archiveAsCrlf: false,
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // 1b. Apply git's end-of-line filter.
+  //
+  // Ordering matters and mirrors reality. `archive_crlf` leaves the digests over
+  // the LF bytes the recorder actually wrote and widens only what goes into the
+  // archive, because that is what a checkout does to an already-sealed log.
+  // `seal_crlf` moves the DIGEST onto the widened bytes and archives the narrow
+  // ones, because there the recorder re-read a smudged working-tree file and
+  // git's clean filter then normalized the commit back.
+  // ---------------------------------------------------------------------------
+  if (opts?.gitLineEndings !== undefined) {
+    const direction = opts.gitLineEndings.direction ?? 'archive_crlf';
+    const targets = opts.gitLineEndings.sessionIndexes ?? sessions.map((_, i) => i);
+    for (const i of targets) {
+      const session = sessions[i];
+      if (session === undefined) continue;
+      if (direction === 'archive_crlf') {
+        session.archiveAsCrlf = true;
+      } else {
+        session.slogSha256 = sha256Hex(toCrlf(session.slogText));
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -978,7 +1049,7 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
       const skipSlog = tamper.omitOneSlog === true && isLastSession;
 
       if (!skipSlog) {
-        zip.file(slogName, s.slogText);
+        zip.file(slogName, s.archiveAsCrlf ? toCrlf(s.slogText) : s.slogText);
       }
       if (!skipMeta) {
         zip.file(metaName, s.metaJson);

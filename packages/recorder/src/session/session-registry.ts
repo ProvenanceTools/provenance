@@ -40,6 +40,7 @@ import { createSessionHost } from './session-host.js';
 import { SessionWriter } from '../io/session-writer.js';
 import { MetaWriter } from '../io/meta-writer.js';
 import { writeRollingSeal } from '../io/rolling-seal-writer.js';
+import { ensureProvenanceGitAttributes } from '../io/git-attributes-writer.js';
 import { startHeartbeat } from '../events/heartbeat.js';
 import { startClockWatcher } from '../events/clock-watcher.js';
 import { startDocWiring } from '../wiring/doc-wiring.js';
@@ -213,6 +214,25 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   // Step 3a: Determine .provenance/ dir early (needed by chain recovery + session writer).
   const provenanceDir = deps.provenanceDirOverride ?? path.join(assignmentRoot, '.provenance');
   await fsPromises.mkdir(provenanceDir, { recursive: true });
+
+  // Step 3a-bis: stop git rewriting the bytes we are about to sign.
+  //
+  // Every file in this directory is covered by a signature over its exact
+  // sha256, and a `.slog` is newline-delimited JSON that nothing marks as
+  // binary — so git's end-of-line filters will happily widen every LF to CRLF
+  // on checkout. The git submission path has no seal step to re-hash the result,
+  // so the analyzer sees a log that does not match its signed digest and reports
+  // it at the highest severity it has, against a student who did nothing.
+  //
+  // Prevention has to be here because it is the only place the bytes can still
+  // be protected rather than reconstructed: the reader can undo the LF→CRLF
+  // direction after the fact, but not the reverse, and not a mixed file. See
+  // `log-core/git-attributes.ts`.
+  //
+  // Never overwrites, never throws, and its failure is not the session's
+  // failure — `.provenance/` is shared with partners and a read-only checkout
+  // must still record.
+  await ensureProvenanceGitAttributes(provenanceDir);
 
   // Step 3b: Resolve the course's capture policy from the ALREADY-VERIFIED
   // manifest (program spec §4). Resolved exactly once, here, and passed down as

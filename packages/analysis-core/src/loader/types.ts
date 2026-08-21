@@ -432,6 +432,25 @@ export type ParsedSession = {
    * would roughly double that cache's footprint for no analytical gain.
    */
   slogSha256: string;
+  /**
+   * Hex sha256 of this session's `.slog` with git's LF→CRLF widening undone —
+   * or `null`, which is the normal case and means the question does not arise.
+   *
+   * Non-null ONLY when the archived `.slog` actually carries CRLF terminators
+   * AND its decoded text re-encodes to {@link ParsedSession.slogSha256}. It is
+   * computed once here, on the one code path that still holds the log text, so
+   * `verify-log-bytes.ts` can stay a pure comparison that does no hashing.
+   *
+   * Its whole purpose is to let a byte mismatch be EXPLAINED rather than
+   * accused: if this equals the digest the signed manifest commits to, the
+   * archived file is provably the sealed file with some LF terminators widened
+   * by git and nothing else. See `loader/line-endings.ts` for why that is a
+   * proof rather than a tolerance, and for the direction it cannot cover.
+   *
+   * Like {@link ParsedSession.slogSha256}, only the digest is kept — never a
+   * second copy of the normalized text.
+   */
+  slogSha256Lf: string | null;
   /** Hex sha256 of this session's `.slog.meta` bytes as loaded. */
   metaSha256: string;
   /** Narrowed to session.start — guaranteed to be the first event. */

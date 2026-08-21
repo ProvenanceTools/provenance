@@ -45,6 +45,7 @@ function makeTwoSessionBundle(): Bundle {
     events: [],
     meta: {} as never,
     slogSha256: 'a'.repeat(64),
+    slogSha256Lf: null,
     metaSha256: 'b'.repeat(64),
     firstEvent: {
       seq: 0,

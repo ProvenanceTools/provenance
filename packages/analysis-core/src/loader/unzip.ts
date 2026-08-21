@@ -41,7 +41,13 @@
  */
 
 import JSZip from 'jszip';
-import { ok, err, parseRollingManifestFilename, sha256Hex } from '@provenance/log-core';
+import {
+  ok,
+  err,
+  parseRollingManifestFilename,
+  sha256Hex,
+  PROVENANCE_GITATTRIBUTES_FILENAME,
+} from '@provenance/log-core';
 import type { Result } from '@provenance/log-core';
 import { asLogFileId, asLogicalSessionId } from './types.js';
 import type {
@@ -341,6 +347,26 @@ export async function unzipBundle(
           `write-temp-then-rename, so it cannot be analysed and is left out. This ` +
           `records an INCOMPLETE RECORDING, not an integrity problem.`,
       });
+      continue;
+    }
+
+    // The `.gitattributes` every recorder writes into `.provenance/` to stop git
+    // rewriting the signed bytes (see `log-core/git-attributes.ts`). Recognized
+    // and IGNORED — not dropped-and-reported, because a `DroppedArtifact` means
+    // "an INCOMPLETE RECORDING: something analysable was left out", and this is
+    // neither analysable nor missing. It is a git control file with no session
+    // data and no signature over it, in the same category as a file this loader
+    // consumes and says nothing further about.
+    //
+    // Neither producer should send it: `seal.ts` skips it when packing, and the
+    // git path's `selectBundleEntries` drops anything that is not a provenance
+    // or submission file. It is tolerated here anyway because the loader is
+    // where all three consumers converge — including a student hand-zipping
+    // `.provenance/` for the analyzer's `/local` route, which no producer
+    // filters — and because failing a whole submission on a file the recorder
+    // itself wrote is precisely the class of defect the orphan guard above
+    // exists to undo.
+    if (filename === PROVENANCE_GITATTRIBUTES_FILENAME) {
       continue;
     }
 

@@ -214,6 +214,27 @@ describe('unzipBundle', () => {
     expect(result.error.filename).toBe('README.txt');
   });
 
+  it('TOLERATES .gitattributes — the recorder writes it, and it is not evidence', async () => {
+    // All three recorders write `.provenance/.gitattributes` so git cannot
+    // rewrite the signed bytes. Both producers filter it out (seal.ts skips it,
+    // the git path's selectBundleEntries drops it), but the loader is where all
+    // three consumers converge — including a student hand-zipping `.provenance/`
+    // for the analyzer's /local route, which nothing filters. Failing a whole
+    // submission on a file the recorder itself wrote is the defect class the
+    // read-side orphan guard exists to undo.
+    const { blob } = await buildTestBundle({
+      tamper: { addStrayFile: { name: '.gitattributes', content: '* -text\n' } },
+    });
+    const result = await unzipBundle(blob);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Ignored, not reported as a dropped artifact: a DroppedArtifact means an
+    // INCOMPLETE RECORDING, and this is neither analysable nor missing.
+    expect(result.value.droppedArtifacts).toHaveLength(0);
+    expect(result.value.sessions.length).toBeGreaterThan(0);
+  });
+
   // ---------------------------------------------------------------------------
   // 1.1 bundle — submission file whitelisting (Task C1)
   // ---------------------------------------------------------------------------

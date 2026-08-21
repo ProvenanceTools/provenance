@@ -82,6 +82,7 @@
  */
 
 import { canonicalize, sha256Hex, findSha256PrefixLength } from '@provenance/log-core';
+import { lfNormalizedSha256, toLf } from './line-endings.js';
 
 /** A well-formed sha256 commitment. Anything else is not a commitment at all. */
 const SHA256_RE = /^[0-9a-f]{64}$/;
@@ -101,10 +102,24 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
  *                    anything. Never a finding, and — unlike `unavailable` —
  *                    never a fallback to whole-file equality either. See
  *                    {@link resolveAmbiguousCoverage}.
+ *
+ * `lineEndingsTranslated` rides on `exact` and `partial`. It means the digest
+ * was reproduced only after undoing git's LF→CRLF widening, so the archived
+ * file is provably the sealed file with wider line terminators and no other
+ * difference. It is reported, never silent — `verify-log-bytes.ts` names it in
+ * the verdict — because the archive is then not byte-identical to what was
+ * signed even though its content is. See `loader/line-endings.ts` for why the
+ * retry is a proof rather than a tolerance.
  */
 export type SealCoverage =
-  | { kind: 'exact' }
-  | { kind: 'partial'; sealed: number; total: number; unit: 'bytes' | 'checkpoints' }
+  | { kind: 'exact'; lineEndingsTranslated?: true }
+  | {
+      kind: 'partial';
+      sealed: number;
+      total: number;
+      unit: 'bytes' | 'checkpoints';
+      lineEndingsTranslated?: true;
+    }
   | { kind: 'no_match' }
   | { kind: 'unavailable'; reason: string }
   | { kind: 'indeterminate'; reason: string };
@@ -150,11 +165,32 @@ export type RollingSealCoverage = {
  * `exact` when the bytes agree, `no_match` when they do not, `unavailable` when
  * there was no usable commitment (never a finding).
  */
-export function wholeFileCoverage(actual: string, committed: unknown): SealCoverage {
+export function wholeFileCoverage(
+  actual: string,
+  committed: unknown,
+  /**
+   * The `.slog`'s digest with git's LF→CRLF widening undone, when that question
+   * arises at all (`loader/line-endings.ts`). Defaults to `null`, which is both
+   * the normal case and the right answer for `.slog.meta` — `MetaWriter` writes
+   * JCS-canonical JSON, which contains no raw line terminator for git to widen,
+   * so there is nothing there to undo.
+   *
+   * A FINAL seal needs this every bit as much as a growing one: it commits to
+   * the whole file, so a git-widened archive fails it outright with "the file
+   * was appended to, truncated, or edited after the session ended" — the
+   * strongest sentence this system emits, against a student whose repository
+   * merely carried `* text=auto eol=crlf`.
+   */
+  actualLf: string | null = null,
+): SealCoverage {
   if (typeof committed !== 'string' || !SHA256_RE.test(committed)) {
     return { kind: 'unavailable', reason: 'the manifest carries no usable digest' };
   }
-  return committed === actual ? { kind: 'exact' } : { kind: 'no_match' };
+  if (committed === actual) return { kind: 'exact' };
+  if (actualLf !== null && committed === actualLf) {
+    return { kind: 'exact', lineEndingsTranslated: true };
+  }
+  return { kind: 'no_match' };
 }
 
 /**
@@ -189,8 +225,39 @@ export function computeSlogCoverage(
   }
 
   const sealed = findSha256PrefixLength(bytes, committed);
-  if (sealed === null) return { kind: 'no_match' };
-  return { kind: 'partial', sealed, total: bytes.length, unit: 'bytes' };
+  if (sealed !== null) return { kind: 'partial', sealed, total: bytes.length, unit: 'bytes' };
+
+  // No state the ARCHIVED file could have passed through reproduces the seal.
+  // Before reporting that as a contradicted prefix — high severity, confidence
+  // 1.0, "the sealed region itself was modified after sealing" — ask the one
+  // question the git path makes unavoidable: did git widen the line terminators
+  // in transit? A `.slog` is NDJSON and nothing marks it binary, so `text=auto
+  // eol=crlf`, `core.eol=crlf` or `core.autocrlf=true` on the machine that
+  // materializes the working tree all rewrite every LF to CRLF, and the git
+  // path delivers that working tree verbatim.
+  //
+  // The retry is one fixed rewrite that must hit the committed digest exactly.
+  // It cannot launder a modification: anything added, removed, reordered or
+  // edited survives `toLf` and still breaks the digest. See
+  // `loader/line-endings.ts` for the full argument and for the direction this
+  // cannot recover.
+  const lfSha = lfNormalizedSha256(slogText, slogSha256);
+  if (lfSha !== null) {
+    if (lfSha === committed) return { kind: 'exact', lineEndingsTranslated: true };
+    const lfBytes = new TextEncoder().encode(toLf(slogText));
+    const lfSealed = findSha256PrefixLength(lfBytes, committed);
+    if (lfSealed !== null) {
+      return {
+        kind: 'partial',
+        sealed: lfSealed,
+        total: lfBytes.length,
+        unit: 'bytes',
+        lineEndingsTranslated: true,
+      };
+    }
+  }
+
+  return { kind: 'no_match' };
 }
 
 /**
@@ -250,8 +317,22 @@ export function computeMetaCoverage(
 /** Structural equality over a {@link SealCoverage}. */
 function sameCoverage(a: SealCoverage, b: SealCoverage): boolean {
   if (a.kind !== b.kind) return false;
+  // `lineEndingsTranslated` participates in the comparison. Two copies of one
+  // session's log that reproduce the seal by DIFFERENT routes — one as archived,
+  // one only after undoing git's widening — are not the same answer, and the
+  // module's rule is unanimity. This opens no new hole: reaching
+  // `indeterminate` already requires a copy that satisfies the seal to be
+  // present, which is the documented, accepted residual above.
+  if (a.kind === 'exact' && b.kind === 'exact') {
+    return a.lineEndingsTranslated === b.lineEndingsTranslated;
+  }
   if (a.kind === 'partial' && b.kind === 'partial') {
-    return a.sealed === b.sealed && a.total === b.total && a.unit === b.unit;
+    return (
+      a.sealed === b.sealed &&
+      a.total === b.total &&
+      a.unit === b.unit &&
+      a.lineEndingsTranslated === b.lineEndingsTranslated
+    );
   }
   if (a.kind === 'unavailable' && b.kind === 'unavailable') return a.reason === b.reason;
   if (a.kind === 'indeterminate' && b.kind === 'indeterminate') return a.reason === b.reason;

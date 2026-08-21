@@ -47,6 +47,7 @@ import {
   resolveAmbiguousCoverage,
 } from './rolling-coverage.js';
 import type { RollingSealCoverage } from './rolling-coverage.js';
+import { lfNormalizedSha256 } from './line-endings.js';
 import { asLogicalSessionId } from './types.js';
 import type {
   Bundle,
@@ -432,7 +433,23 @@ export async function loadBundle(
         const final = isFinalRollingSeal(seal.manifest);
         const per = claimants.map((files) => ({
           slog: final
-            ? wholeFileCoverage(files.slogSha256, committedSlogSha)
+            ? // The third argument is the git-line-ending escape hatch: a FINAL
+              // seal commits to the whole file, so without it a repository
+              // carrying `text=auto eol=crlf` fails at full strength with "the
+              // file was appended to, truncated, or edited after the session
+              // ended". See loader/line-endings.ts. `.slog.meta` needs no such
+              // argument — canonical JSON has no line terminator to widen.
+              //
+              // The committed digest is `committedSlogSha`, not the seal
+              // entry's own: in a bundle carrying BOTH shapes it comes from the
+              // classic manifest, which may be stale. Reading the seal entry
+              // here would reopen the outer-gate route to the prefix-versus-
+              // whole-file accusation.
+              wholeFileCoverage(
+                files.slogSha256,
+                committedSlogSha,
+                lfNormalizedSha256(files.slogText, files.slogSha256),
+              )
             : computeSlogCoverage(files.slogText, files.slogSha256, committedSlogSha),
           meta: final
             ? wholeFileCoverage(files.metaSha256, committedMetaSha)

@@ -263,6 +263,34 @@ describe('sealBundle', () => {
     expect(result.warnings.unreadableSession).toBe(true);
   });
 
+  it('does NOT pack .provenance/.gitattributes into the bundle', async () => {
+    // The recorder writes a `.gitattributes` into `.provenance/` so git cannot
+    // rewrite the signed bytes (see `log-core/git-attributes.ts`). The bundle's
+    // contents are a CLOSED SET, so packing it would reach `loader/unzip.ts` as
+    // `unexpected_file` and kill the whole submission. This test is the guard on
+    // that interaction — the prevention fix must not break the seal path.
+    const slogContent = buildCompleteSlog(TEST_SESSION_ID);
+    const slogFilename = 'session-00000000.slog';
+    await fsPromises.writeFile(path.join(provenanceDir, slogFilename), slogContent, 'utf8');
+    await fsPromises.writeFile(
+      path.join(provenanceDir, `${slogFilename}.meta`),
+      JSON.stringify({ format_version: '1.0', session_id: TEST_SESSION_ID }),
+      'utf8',
+    );
+    await fsPromises.writeFile(path.join(provenanceDir, '.gitattributes'), '* -text\n', 'utf8');
+
+    const keypair = await generateSessionKeypair();
+    const result = await sealBundle(await buildDeps(provenanceDir, outputDir, keypair));
+
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+
+    const zip = await JSZip.loadAsync(await fsPromises.readFile(result.bundlePath));
+    expect(zip.file('.gitattributes')).toBeNull();
+    // ...and the session itself is still packed, so the exclusion is narrow.
+    expect(zip.file(slogFilename)).not.toBeNull();
+  });
+
   it('produces a valid bundle for a complete session', async () => {
     // Write a valid .slog.
     const slogContent = buildCompleteSlog(TEST_SESSION_ID);

@@ -46,6 +46,7 @@ import {
   sha256Hex,
   signBundleManifest,
   parseRollingManifestFilename,
+  PROVENANCE_GITATTRIBUTES_FILENAME,
 } from '@provenance/log-core';
 import type { BundleManifest, SignedBundleManifest } from '@provenance/log-core';
 import { atomicWriteFile } from '../io/atomic-write.js';
@@ -499,6 +500,17 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
   for (const filename of dirEntries) {
     // Skip quarantine files and temp files.
     if (filename.includes('.corrupt-') || filename.endsWith('.tmp')) {
+      continue;
+    }
+
+    // Skip the `.gitattributes` this recorder writes into `.provenance/` to stop
+    // git rewriting the signed bytes (see `log-core/git-attributes.ts`). It is a
+    // git control file, not provenance evidence: it carries no session data, is
+    // covered by no signature, and the bundle's contents are a CLOSED SET, so
+    // packing it would reach `loader/unzip.ts` as `unexpected_file` and kill the
+    // whole bundle. The git submission path drops it for the same reason, in
+    // `server/services/ingest/gradescope/build-bundle-zip.ts`.
+    if (filename === PROVENANCE_GITATTRIBUTES_FILENAME) {
       continue;
     }
 
