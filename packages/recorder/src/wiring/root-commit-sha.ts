@@ -122,11 +122,7 @@ const GIT_MAX_BUFFER = 1024 * 1024;
  * candidate-fall-through logic can be tested without a git binary and without a
  * process.
  */
-export type GitSpawn = (
-  file: string,
-  args: readonly string[],
-  cwd: string,
-) => Promise<string>;
+export type GitSpawn = (file: string, args: readonly string[], cwd: string) => Promise<string>;
 
 /** The PATH lookup — what shipped before `git.path` was consulted. */
 export const BARE_GIT_COMMAND = 'git';

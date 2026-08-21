@@ -12,7 +12,10 @@
  *   https://github.com/microsoft/vscode/blob/main/extensions/git/src/api/git.d.ts
  *
  * That same API publishes `api.git.path`, the git executable the git extension
- * itself resolved. We use it — together with the `git.path` SETTING — so the
+ * itself resolved. We use it — together with the `git.path` SETTING, which the
+ * CALLER reads, because `vscode` is a type-only import in this file and must
+ * stay one: `tools/`'s seal conformance gate imports the built `dist/` of this
+ * module outside any extension host — so the
  * discriminator's `execFile` finds the same git VS Code is already using, rather
  * than only a git that happens to be on the PATH a GUI-launched editor
  * inherited. On Windows those are routinely not the same thing. The ordering and
@@ -76,10 +79,14 @@
  *    synchronous part of the handler, before anything is awaited.
  */
 
-import * as vscode from 'vscode';
+import type * as vscode from 'vscode';
 import type { GitEventPayload } from '@provenance/log-core';
 import type { ExplanationTagger } from '../events/explanation-tags.js';
-import { createGitRunner, deriveRootCommitSha, resolveGitPathCandidates } from './root-commit-sha.js';
+import {
+  createGitRunner,
+  deriveRootCommitSha,
+  resolveGitPathCandidates,
+} from './root-commit-sha.js';
 import type { GitRunner } from './root-commit-sha.js';
 
 // ---------------------------------------------------------------------------
@@ -175,12 +182,21 @@ export type GitWiringDeps = {
   deriveRepositoryDiscriminator?: (repoRootFsPath: string) => Promise<string | undefined>;
   /**
    * Reads the `git.path` SETTING — a string, an array of candidate paths, or
-   * absent. Only a hint; see {@link resolveGitPathCandidates}.
+   * absent. A BACKSTOP hint only; see {@link resolveGitPathCandidates}.
    *
-   * Defaults to the real `workspace.getConfiguration('git').get('path')`,
-   * consulted lazily and only when `deriveRepositoryDiscriminator` is not
-   * overridden, so a unit test that injects the derivation never touches
-   * configuration at all.
+   * Unlike every other dep here this one does NOT default to the production
+   * read, and the reason is mechanical rather than stylistic: this module is
+   * imported by `tools/`'s recorder→analyzer seal conformance gate, which runs
+   * the BUILT `dist/` outside any extension host, so a runtime `vscode` import
+   * anywhere in this file is an unresolvable module there. `vscode` is
+   * type-only in this file on purpose, and it must stay that way.
+   *
+   * Forgetting it is cheap, which is what makes the omission acceptable: the
+   * PRIMARY hint is `api.git.path`, read directly off the API above, and that
+   * value already accounts for the setting because the git extension resolved
+   * itself with it. This dep only matters for a git extension that is present
+   * and does not publish its path. `session-registry.ts` supplies it, and
+   * `session-registry.git-wiring.test.ts` pins that it does.
    */
   readConfiguredGitPath?: () => unknown;
 };
@@ -197,9 +213,7 @@ function inertWiring(): GitWiring {
 export function startGitWiring(deps: GitWiringDeps): GitWiring {
   const { emit, getGitExtension, explanationTagger } = deps;
   const isRepoOwnedByThisRoot = deps.isRepoOwnedByThisRoot ?? (() => true);
-  const readConfiguredGitPath =
-    deps.readConfiguredGitPath ??
-    (() => vscode.workspace.getConfiguration('git').get<unknown>('path'));
+  const readConfiguredGitPath = deps.readConfiguredGitPath ?? (() => undefined);
 
   const gitExtension = getGitExtension();
   if (gitExtension === undefined) {

@@ -690,6 +690,14 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     getGitExtension: () => vscode.extensions.getExtension('vscode.git'),
     explanationTagger,
     isRepoOwnedByThisRoot,
+    // The `git.path` setting, as a backstop for finding the git binary the
+    // repository discriminator shells out to (writer correction 8). Supplied
+    // HERE rather than defaulted inside git-wiring.ts because `vscode` is a
+    // type-only import there — `tools/`'s seal conformance gate imports that
+    // module's built output outside any extension host, where a runtime
+    // `vscode` import cannot resolve. The primary hint, `api.git.path`, is read
+    // off the git API inside the wiring and needs nothing from here.
+    readConfiguredGitPath: () => vscode.workspace.getConfiguration('git').get<unknown>('path'),
   });
   ownDisposables.push(gitW);
 
