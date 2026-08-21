@@ -28,10 +28,11 @@
  * Always visible means the panel answers even when it has no facts, because
  * silence and "nothing to report" are different claims:
  *
- *  1. **No bundle** — the server-backed Overview has API rows, not a parsed
- *     bundle. It says the facts were NOT FETCHED. It must never render counts:
- *     a panel of zeroes asserts "no commits observed, no contributors, no root
- *     key", which is a stronger and false claim than "not available".
+ *  1. **No facts** — the server did not send them, which today means only one
+ *     thing: a deployment that predates `SubmissionSummary.coverage`. It says
+ *     exactly that. It must never render counts: a panel of zeroes asserts
+ *     "no commits observed, no contributors, no root key", which is a stronger
+ *     and false claim than "not available".
  *  2. **Facts, nothing to note** — a solo, fully attributed, classically sealed
  *     bundle. It says so in one line, in the neutral palette, and nothing about
  *     that line is alarming.
@@ -56,24 +57,26 @@
  * amber/red vocabulary the flag surfaces use.
  */
 
-import { useMemo } from 'react';
-import {
-  coverageFacts,
-  hasCoverageFacts,
-} from '@provenance/analysis-core/coverage/coverage-facts.js';
-import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
-import type { Bundle } from '@provenance/analysis-core/loader/types.js';
+import { hasCoverageFacts } from '@provenance/analysis-core/coverage/coverage-facts.js';
+import type { CoverageFacts } from '@provenance/analysis-core/coverage/coverage-facts.js';
 import { formatDuration } from './duration.js';
 
 export type CoveragePanelProps = {
   /**
-   * The parsed bundle, or `null` when the caller has none (the server-backed
-   * submission route, which reads API rows). `null` renders the "not available"
-   * state — never zeroes. See the header.
+   * The already-computed facts, or `null` when the caller has none.
+   *
+   * The panel takes the AGGREGATE rather than a `Bundle` so that both surfaces
+   * can feed it from the place that actually has the data: `/local` computes
+   * `coverageFacts(bundle, index)` in the browser, and the server-backed route
+   * reads `SubmissionSummary.coverage` off the wire, where the server ran the
+   * identical function on the bundle it had already parsed. One renderer, one
+   * computation, no second implementation to drift.
+   *
+   * `null` therefore no longer means "this view cannot compute them". It means
+   * **the server did not send them** — a deployment older than the `coverage`
+   * field — and renders as "not available", never as zeroes. See the header.
    */
-  bundle: Bundle | null;
-  /** The event index, or `null` when it has not been built for this view. */
-  index: EventIndex | null;
+  facts: CoverageFacts | null;
 };
 
 function Frame({ children }: { children: React.ReactNode }) {
@@ -115,23 +118,19 @@ function Section({
   );
 }
 
-export function CoveragePanel({ bundle, index }: CoveragePanelProps) {
-  const facts = useMemo(
-    () => (bundle === null || index === null ? null : coverageFacts(bundle, index)),
-    [bundle, index],
-  );
-
-  // State 1 — no bundle. Say so. Never render counts here: zeroes would assert
+export function CoveragePanel({ facts }: CoveragePanelProps) {
+  // State 1 — no facts. Say so. Never render counts here: zeroes would assert
   // "no commits observed, no contributors, no root key", none of which was
   // established, and all of which read as a thinner record than the student has.
   if (facts === null) {
     return (
       <Frame>
-        <Section title="Not available on this view" testId="coverage-not-available">
+        <Section title="Not available" testId="coverage-not-available">
           <p data-testid="coverage-not-available-note">
-            These coverage facts are read from the submission&rsquo;s parsed bundle, which this view
-            does not load. Nothing here has been checked and found wanting — the facts simply were
-            not fetched, and no conclusion about this submission follows from their absence.
+            This server did not send the coverage facts for this submission, which happens when it
+            is running a version older than the one that reports them. Nothing here has been checked
+            and found wanting — the facts simply were not fetched, and no conclusion about this
+            submission follows from their absence.
           </p>
         </Section>
       </Frame>
@@ -238,11 +237,29 @@ export function CoveragePanel({ bundle, index }: CoveragePanelProps) {
               not recording produces exactly this.
             </p>
           )}
+          {/*
+            Reworded when D12's writer half landed. The old copy said the signed
+            format "does not yet carry a repository discriminator", which stopped
+            being true: the format carries `root_commit_sha` and all three
+            recorders emit it.
+
+            The case that reaches this paragraph is now broader than "no
+            discriminator at all". It is "at least one observation named no
+            repository", which covers a wholly unlabelled scope AND a mixed one
+            where a partner's recorder did name theirs — so the copy has to be
+            honest about both, and about the fact that a named repository is NOT
+            merged with the unnamed ones. It must also stay a statement about the
+            RECORDING: not naming a repository is what an older recorder and a
+            shallow clone both do, and neither says anything about anybody.
+          */}
           {facts.repositoryAssumedSingle && (
             <p data-testid="coverage-repo-assumed-single">
-              The signed log format does not yet carry a repository discriminator, so every commit
-              here is folded into one assumed repository. If this submission really observed more
-              than one repository, the graph above merges them.
+              One or more commits here name no repository, so those are folded into a single assumed
+              repository. A recorder that predates the repository field, and a shallow clone whose
+              root commit cannot be reached, both produce this. If more than one unnamed repository
+              was really observed, the graph above merges them; commits that did name a repository
+              are kept apart from the unnamed ones rather than assumed to be the same. This is a
+              limit on what the graph can show, and it is not a finding.
             </p>
           )}
           {dagDefects.map((d, i) => (

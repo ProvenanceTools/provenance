@@ -585,3 +585,120 @@ describe('Overview tab — contributors', () => {
     expect(listed[1]).toHaveTextContent(UNNAMED_CONTRIBUTOR_LABEL);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Coverage — §6 Rule 3, and the three states it must keep apart
+// ---------------------------------------------------------------------------
+
+/**
+ * The server-backed Overview used to pass `bundle={null}` unconditionally, so
+ * this surface ALWAYS said "not available" while `/local` showed real facts.
+ * The server now serves the coverage stage's output on the summary, and this
+ * suite pins both halves of what that has to mean here:
+ *
+ *  - `coverage` present → the real sections render;
+ *  - `coverage` absent → "the server did not send them", and NOT a page of
+ *    zeroes and NOT "nothing to note". Absence and emptiness are different
+ *    claims: a zeroed panel asserts "no commits observed, no contributors, no
+ *    root key", which is stronger than, and false where, the truth is that we
+ *    were never told.
+ */
+const COVERAGE_WITH_FACTS: NonNullable<SubmissionSummary['coverage']> = {
+  identity: {
+    resolved: true,
+    rootKeyConfigured: true,
+    attributed: 2,
+    unverifiable: 0,
+    unattributed: 1,
+  },
+  concurrentRecording: [
+    {
+      sessionA: 'session-a',
+      sessionB: 'session-b',
+      contributorA: 'alice',
+      contributorB: 'bob',
+      overlapMs: 3 * 3_600_000 + 12 * 60_000,
+      crashBounded: false,
+    },
+  ],
+  droppedArtifacts: [],
+  unattestedTails: [],
+  dagDefects: [],
+  dagCoverage: {
+    sessionsObserving: 0,
+    observations: 0,
+    commits: 0,
+    observedCommits: 0,
+    witnessedOnlyCommits: 0,
+    commitsWithUnrecordedParents: 0,
+    commitsWithConflictingParents: 0,
+    recordedRoots: 0,
+    gitEventsWithoutSha: 0,
+    gitEventsWithUnreadableRepository: 0,
+  },
+  repositoryAssumedSingle: false,
+};
+
+describe('Overview coverage panel', () => {
+  it('renders the facts the server sent, not "not available"', async () => {
+    const withCoverage: SubmissionSummary = { ...DUMMY_SUMMARY, coverage: COVERAGE_WITH_FACTS };
+    renderOverview(makeProvider(makeQueryResult(withCoverage)));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('submission-coverage-panel')).toBeInTheDocument();
+    });
+    // The fact a suppressed overlap used to lose entirely, now on the
+    // server-backed surface for the first time.
+    expect(screen.getByTestId('coverage-concurrent-row').textContent).toMatch(/alice/);
+    expect(screen.getByTestId('coverage-concurrent-row').textContent).toMatch(/bob/);
+    expect(screen.getByTestId('coverage-identity-counts')).toBeInTheDocument();
+    expect(screen.queryByTestId('coverage-not-available')).toBeNull();
+  });
+
+  it('says the server did not send them when coverage is absent — never zeroes', async () => {
+    // DUMMY_SUMMARY deliberately carries no `coverage`: an older server.
+    expect(DUMMY_SUMMARY.coverage).toBeUndefined();
+    renderOverview(makeProvider(makeQueryResult(DUMMY_SUMMARY)));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('coverage-not-available-note')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('coverage-not-available-note').textContent).toMatch(
+      /did not send the coverage facts/i,
+    );
+    // Not "nothing to note" — that would claim we checked and found nothing.
+    expect(screen.queryByTestId('coverage-nothing-to-note')).toBeNull();
+    // And not a single counting section, which is where zeroes would appear.
+    for (const id of [
+      'coverage-identity-counts',
+      'coverage-no-root-key',
+      'coverage-dag-counts',
+      'coverage-concurrent-recording',
+    ]) {
+      expect(screen.queryByTestId(id)).toBeNull();
+    }
+  });
+
+  it('says "nothing to note" for a submission whose facts are genuinely empty', async () => {
+    // Same shape the server sends for a solo, fully attributed, classically
+    // sealed bundle. This is the third state, and it must not be reachable by
+    // an absent payload — that is the distinction the test above protects.
+    const nothingToNote: NonNullable<SubmissionSummary['coverage']> = {
+      ...COVERAGE_WITH_FACTS,
+      identity: {
+        resolved: true,
+        rootKeyConfigured: true,
+        attributed: 1,
+        unverifiable: 0,
+        unattributed: 0,
+      },
+      concurrentRecording: [],
+    };
+    renderOverview(makeProvider(makeQueryResult({ ...DUMMY_SUMMARY, coverage: nothingToNote })));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('coverage-nothing-to-note')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('coverage-not-available')).toBeNull();
+  });
+});

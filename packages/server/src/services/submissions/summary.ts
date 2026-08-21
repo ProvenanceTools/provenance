@@ -35,6 +35,8 @@ import type { StorageClient } from '../storage/client.js';
 import { loadSubmissionIndex } from '../bundle/load-index.js';
 import { summarizeBundleManifest } from '@provenance/analysis-core/manifest/bundle-manifest.js';
 import type { BundleManifestSummary } from '@provenance/analysis-core/manifest/bundle-manifest.js';
+import { coverageFacts } from '@provenance/analysis-core/coverage/coverage-facts.js';
+import type { CoverageFacts } from '@provenance/analysis-core/coverage/coverage-facts.js';
 import { projectStudent, maskFilename, protectedLabel } from '../protect.js';
 import { fetchContributors } from '../contributors/fetch-contributors.js';
 import type { SubmissionContributor } from '@provenance/shared/api-schemas';
@@ -88,6 +90,29 @@ export type SubmissionSummary = {
    * is absent by course policy rather than by student omission.
    */
   assignment_manifest: BundleManifestSummary;
+  /**
+   * The coverage stage's facts (§6 Rule 3) — concurrent recording, identity
+   * counts, commit-graph coverage, DAG defects, the single-repository caveat,
+   * unattested seal tails, dropped artifacts.
+   *
+   * Same source as `sessions` and `assignment_manifest`: the already-parsed
+   * bundle + index, so it adds no query and no extra blob parse.
+   * `coverageFacts` is pure and isomorphic — nothing new is computed here, it is
+   * the same function `/local` runs in the browser.
+   *
+   * ALWAYS present on this response. Its absence on the wire means exactly one
+   * thing — the client is talking to a server that predates the field — and the
+   * analyzer renders that as "not available", never as a page of zeroes. A
+   * route that shipped an empty-but-present object would destroy that
+   * distinction: zeroes assert "no commits observed, no contributors, no root
+   * key", which is a stronger and FALSE claim than "not available".
+   *
+   * This is the `CoverageFacts` AGGREGATE and must stay so. `BundleContributors`
+   * must never be put on the wire in its place: its `bySession` is a
+   * `ReadonlyMap`, which `JSON.stringify` renders as `{}` — a silent
+   * "no contributors" for every submission.
+   */
+  coverage: CoverageFacts;
   superseded: boolean;
   superseded_by_submission_id: string | null;
   heuristic_config_version: number;
@@ -217,6 +242,10 @@ export async function getSubmissionSummary(
     started_at: s.firstEvent?.wall ?? null,
     event_count: index.bySessionId.get(s.sessionId)?.length ?? 0,
   }));
+  // Same bundle + index, one more pure call. The contributor stamp it reads was
+  // established inside loadSubmissionIndex, so this is server/`/local` parity by
+  // running the identical function, not by reimplementing it.
+  const coverage = coverageFacts(bundle, index);
 
   // Query 4: per_file_stats for files list
   const fileRows = await db
@@ -290,6 +319,7 @@ export async function getSubmissionSummary(
     sessions,
     files,
     assignment_manifest,
+    coverage,
     superseded: row.superseded_by_submission_id !== null,
     superseded_by_submission_id: row.superseded_by_submission_id,
     heuristic_config_version: row.heuristic_config_version,

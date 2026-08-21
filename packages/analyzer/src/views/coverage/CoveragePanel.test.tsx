@@ -17,6 +17,8 @@ import {
 } from '@provenance/analysis-core/test-support/build-identity.js';
 import type { IdentityTestKeys } from '@provenance/analysis-core/test-support/build-identity.js';
 import { establishBundleContributors } from '@provenance/analysis-core/identity/resolve-contributors.js';
+import { coverageFacts } from '@provenance/analysis-core/coverage/coverage-facts.js';
+import { CoverageFactsSchema } from '@provenance/shared/api-schemas';
 import type { Bundle } from '@provenance/analysis-core/loader/types.js';
 import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
 import { CoveragePanel } from './CoveragePanel.js';
@@ -45,8 +47,21 @@ async function keys(): Promise<IdentityTestKeys> {
  */
 type Who = { studentRef: string } | 'anonymous' | 'forged';
 
+/**
+ * A commit observation. `rootCommitSha` OMITTED models a recorder that names no
+ * repository — an older build, or a shallow clone, both of which the D12 writer
+ * contract says must omit the field — and is what lands in the sentinel
+ * repository the single-repository caveat is about.
+ */
+type CommitSpec = { sha: string; rootCommitSha?: string; atMin: number };
+
+const SHA_A = 'a'.repeat(40);
+const SHA_B = 'b'.repeat(40);
+const ROOT_ONE = '1'.repeat(40);
+const ROOT_TWO = '2'.repeat(40);
+
 async function buildScope(
-  specs: Array<{ who: Who; startMin: number; endMin: number }>,
+  specs: Array<{ who: Who; startMin: number; endMin: number; commits?: CommitSpec[] }>,
   opts: { rootKey?: string } = {},
 ): Promise<{ bundle: Bundle; index: EventIndex }> {
   const k = await keys();
@@ -56,6 +71,17 @@ async function buildScope(
     const sk = await seededKeypair(0x90 + i);
     sessions.push({
       events: [
+        ...(spec.commits ?? []).map((c) => ({
+          kind: 'git.event',
+          data: {
+            operation: 'commit',
+            sha: c.sha,
+            parents: [],
+            ...(c.rootCommitSha === undefined ? {} : { root_commit_sha: c.rootCommitSha }),
+          },
+          wall: wallAt(c.atMin),
+          t: c.atMin * 60_000,
+        })),
         {
           kind: 'session.end',
           data: { reason: 'deactivate' },
@@ -91,9 +117,12 @@ async function buildScope(
  * The panel is always visible now (§6 Rule 3), so there is no disclosure button
  * to click first. Kept as a named helper so the intent of each test body is
  * unchanged from when there was one.
+ *
+ * It takes a bundle + index and runs the coverage stage itself, which is what
+ * `/local` does — the panel now takes the computed aggregate, not a `Bundle`.
  */
-function renderOpen(bundle: Bundle | null, index: EventIndex | null) {
-  return render(<CoveragePanel bundle={bundle} index={index} />);
+function renderOpen(bundle: Bundle, index: EventIndex) {
+  return render(<CoveragePanel facts={coverageFacts(bundle, index)} />);
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +161,7 @@ describe('a suppressed concurrent overlap appears as a fact', () => {
       { who: { studentRef: 'alice' }, startMin: 0, endMin: 180 },
       { who: { studentRef: 'bob' }, startMin: 60, endMin: 240 },
     ]);
-    render(<CoveragePanel bundle={bundle} index={index} />);
+    render(<CoveragePanel facts={coverageFacts(bundle, index)} />);
     expect(screen.getByTestId('submission-coverage-panel').getAttribute('role')).toBe('status');
     // Never the flag vocabulary: no alert role anywhere in the panel.
     expect(screen.queryByRole('alert')).toBeNull();
@@ -144,7 +173,7 @@ describe('a suppressed concurrent overlap appears as a fact', () => {
       { who: { studentRef: 'bob' }, startMin: 60, endMin: 240 },
     ]);
     // Rendered, not clicked open: the fact must be on screen immediately.
-    render(<CoveragePanel bundle={bundle} index={index} />);
+    render(<CoveragePanel facts={coverageFacts(bundle, index)} />);
     expect(screen.getByTestId('coverage-concurrent-row')).not.toBeNull();
     // No collapsed-by-default control survives.
     expect(screen.queryByRole('button', { expanded: false })).toBeNull();
@@ -270,26 +299,129 @@ describe('absence is never suspicious', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The single-repository caveat (D12)
+// ---------------------------------------------------------------------------
+
+/**
+ * The old copy said "The signed log format does not yet carry a repository
+ * discriminator". That stopped being true on 2026-08-20: the format carries
+ * `root_commit_sha` and all three recorders emit it, so the sentence told a
+ * grader something false about the tool at the exact moment they were reading
+ * a caveat about the evidence.
+ *
+ * These tests pin the replacement. They assert BOTH halves of what the
+ * paragraph now has to be honest about — the wholly unlabelled scope and the
+ * mixed one — and they assert the false sentence is gone, because a wording fix
+ * nothing can fail on is not a fix.
+ */
+describe('the single-repository caveat', () => {
+  it('no longer claims the format cannot carry a repository discriminator', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        commits: [{ sha: SHA_A, atMin: 10 }],
+      },
+    ]);
+    renderOpen(bundle, index);
+
+    const note = screen.getByTestId('coverage-repo-assumed-single');
+    // The claim that went stale, in every form it could come back in.
+    expect(note.textContent).not.toMatch(/does not yet carry/i);
+    expect(note.textContent).not.toMatch(/format/i);
+    // What is actually true of a commit that reaches this paragraph, and WHY,
+    // so the reader is not left to guess at a cause.
+    expect(note.textContent).toMatch(/name no repository/i);
+    expect(note.textContent).toMatch(/folded into a single assumed repository/i);
+    expect(note.textContent).toMatch(/predates the repository field/i);
+    expect(note.textContent).toMatch(/shallow clone/i);
+    // Facts, never findings — the house rule for this whole panel.
+    expect(note.textContent).toMatch(/not a finding/i);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('is honest about a mixed scope: named repositories are NOT merged in', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        commits: [{ sha: SHA_A, rootCommitSha: ROOT_ONE, atMin: 10 }],
+      },
+      {
+        who: { studentRef: 'bob' },
+        startMin: 120,
+        endMin: 180,
+        commits: [{ sha: SHA_B, atMin: 130 }],
+      },
+    ]);
+    // Guard the premise: this is the MIXED case, which the caveat used to go
+    // silent on entirely. If the paragraph is absent, the fact is unstated and
+    // this is the under-report the analysis-core fix was for.
+    renderOpen(bundle, index);
+
+    const note = screen.getByTestId('coverage-repo-assumed-single');
+    // The copy has to cover "some, not all" — "every commit here is folded"
+    // would be false on this scope.
+    expect(note.textContent).toMatch(/one or more commits/i);
+    expect(note.textContent).not.toMatch(/every commit here is folded/i);
+    // And it must say the labelled half is kept apart, because assuming the
+    // unlabelled commits belong to the named repository is exactly the merge
+    // the discriminator exists to prevent.
+    expect(note.textContent).toMatch(/kept apart from the unnamed ones/i);
+  });
+
+  it('says nothing at all when every commit named its repository', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        commits: [
+          { sha: SHA_A, rootCommitSha: ROOT_ONE, atMin: 10 },
+          { sha: SHA_B, rootCommitSha: ROOT_TWO, atMin: 20 },
+        ],
+      },
+    ]);
+    renderOpen(bundle, index);
+
+    // The commit-graph section is rendered — there are commits — but there is
+    // no caveat, because nothing was merged. Two repositories is not a finding
+    // and gets no paragraph of its own.
+    expect(screen.getByTestId('coverage-dag')).not.toBeNull();
+    expect(screen.queryByTestId('coverage-repo-assumed-single')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // /local vs server-backed
 // ---------------------------------------------------------------------------
 
-describe('without a parsed bundle — the server-backed submission view', () => {
+describe('when the facts were not sent', () => {
   /**
-   * Also CHANGED by the move, in the same direction and for the same reason.
+   * The meaning of this state CHANGED when the server started serving coverage.
+   * It used to mean "this view cannot compute them"; it now means "the server
+   * did not send them", which today has exactly one cause — a deployment older
+   * than `SubmissionSummary.coverage`.
+   *
    * The prohibition it was written to enforce is untouched and is asserted
    * harder below: a panel of zeroes would state "no commits observed, no
    * contributors, no root key" — a stronger and FALSE claim than "not
    * available". Rule 3 wants the panel visible, so the honest visible answer is
-   * that the facts were not fetched.
+   * that the facts were not sent.
    */
-  it('says "not available", and never renders a page of zeroes', async () => {
-    const { index } = await buildScope([{ who: { studentRef: 'alice' }, startMin: 0, endMin: 60 }]);
-    renderOpen(null, index);
+  it('says the server did not send them, and never renders a page of zeroes', () => {
+    render(<CoveragePanel facts={null} />);
 
     const note = screen.getByTestId('coverage-not-available-note');
-    expect(note.textContent).toMatch(/were not fetched/i);
+    expect(note.textContent).toMatch(/did not send the coverage facts/i);
+    expect(note.textContent).toMatch(/running a version older/i);
     expect(note.textContent).toMatch(/nothing here has been checked and found wanting/i);
     expect(note.textContent).toMatch(/no conclusion about this submission follows/i);
+    // The old copy blamed the VIEW ("which this view does not load"), which is
+    // no longer true of any surface: both compute or receive real facts.
+    expect(note.textContent).not.toMatch(/this view does not load/i);
 
     // The zeroes prohibition, stated as structure rather than as copy: not one
     // of the counting sections may appear on this path.
@@ -308,8 +440,98 @@ describe('without a parsed bundle — the server-backed submission view', () => 
     expect(screen.getByTestId('submission-coverage-panel').textContent).not.toMatch(/\b0\b/);
   });
 
-  it('says the same when the index has not been built either', async () => {
-    renderOpen(null, null);
-    expect(screen.getByTestId('coverage-not-available-note')).not.toBeNull();
+  /**
+   * The three states are three DIFFERENT claims, and the one that is easiest to
+   * lose is the difference between the first two: "we were not told" and "we
+   * were told, and there is nothing to report". A consumer that substitutes an
+   * empty aggregate for a missing one silently converts the first into the
+   * second — which is why this asserts they render different sections rather
+   * than merely that each renders something.
+   */
+  it('is a different answer from "nothing to note"', async () => {
+    const empty = render(<CoveragePanel facts={null} />);
+    expect(screen.queryByTestId('coverage-nothing-to-note')).toBeNull();
+    empty.unmount();
+
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, startMin: 0, endMin: 60 },
+    ]);
+    renderOpen(bundle, index);
+    expect(screen.getByTestId('coverage-nothing-to-note')).not.toBeNull();
+    expect(screen.queryByTestId('coverage-not-available')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The wire contract
+// ---------------------------------------------------------------------------
+
+/**
+ * `packages/shared` has no test suite of its own, so the wire schema is pinned
+ * from here — the one place that holds BOTH the computed aggregate and the Zod
+ * schema the server serializes it under.
+ *
+ * The hazard these are written against is specific and recorded in the decision
+ * log: `BundleContributors.bySession` is a `ReadonlyMap`, which
+ * `JSON.stringify` renders as `{}`. A wire shape carrying it would report "no
+ * contributors" for every submission in the deployment, silently, and every
+ * type in sight would still be green. So the assertions below round-trip real
+ * facts through JSON and then through the schema, which is the only thing that
+ * can see a Map that vanished.
+ */
+describe('the CoverageFacts wire shape', () => {
+  it('round-trips real facts through JSON and the shared schema', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, startMin: 0, endMin: 180 },
+      { who: { studentRef: 'bob' }, startMin: 60, endMin: 240 },
+      { who: 'anonymous', startMin: 300, endMin: 360 },
+    ]);
+    const facts = coverageFacts(bundle, index);
+    // Guard the premise: there is something to lose in transit.
+    expect(facts.concurrentRecording.length).toBeGreaterThan(0);
+    expect(facts.identity.attributed).toBeGreaterThan(0);
+    expect(facts.identity.unattributed).toBeGreaterThan(0);
+
+    const overTheWire: unknown = JSON.parse(JSON.stringify(facts));
+    const parsed = CoverageFactsSchema.parse(overTheWire);
+
+    // Nothing was lost or flattened. `toEqual` on the whole aggregate is the
+    // point: a Map that became `{}`, a count that became a string, or a field
+    // the schema forgot all show up here.
+    expect(parsed).toEqual(facts);
+  });
+
+  it('carries no Map, Set or other structure JSON quietly empties', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, startMin: 0, endMin: 180 },
+      { who: { studentRef: 'bob' }, startMin: 60, endMin: 240 },
+    ]);
+    const facts = coverageFacts(bundle, index);
+
+    const walk = (v: unknown, path: string): void => {
+      expect(v instanceof Map, `${path} is a Map — JSON.stringify renders it as {}`).toBe(false);
+      expect(v instanceof Set, `${path} is a Set — JSON.stringify renders it as {}`).toBe(false);
+      if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`));
+      else if (v !== null && typeof v === 'object') {
+        for (const [k, x] of Object.entries(v)) walk(x, `${path}.${k}`);
+      }
+    };
+    walk(facts, 'coverage');
+  });
+
+  /**
+   * A field added to `CoverageFacts` and not to the schema is a fact the server
+   * computes and never sends — the panel would go quiet about it on the
+   * server-backed surface while `/local` kept showing it, which is exactly the
+   * divergence this whole change exists to close. Compared as key SETS so it
+   * fails in both directions.
+   */
+  it('sends every top-level fact the coverage stage computes, and no more', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, startMin: 0, endMin: 60 },
+    ]);
+    expect(Object.keys(coverageFacts(bundle, index)).sort()).toEqual(
+      Object.keys(CoverageFactsSchema.shape).sort(),
+    );
   });
 });

@@ -303,16 +303,17 @@ export function Overview() {
         Coverage — §6 Rule 3, per scope and always visible, above the verdict
         surfaces because it is the context a grader needs in order to READ them.
 
-        `bundle={null}` is deliberate and is the honest answer, not a stub: this
-        route reads server API rows and never parses a bundle, so the coverage
-        facts genuinely were not fetched. The panel says exactly that. Passing a
-        synthesised empty bundle instead would render zeroes — "no commits
-        observed, no contributors, no root key" — which is a stronger and FALSE
-        claim than "not available". If these facts are ever wanted here for real,
-        the fix is for the server to serve them (see the decision log), not for
-        this call site to invent them.
+        The server now computes these facts on the bundle it already parsed for
+        `sessions[]` and serves them on the summary, so this route shows the
+        SAME facts `/local` does, from the same function.
+
+        `?? null` is the honest answer for the one case that remains, and is not
+        a stub: a server older than the `coverage` field sends nothing, and the
+        panel says the facts were not sent. Synthesising an empty object here
+        instead would render zeroes — "no commits observed, no contributors, no
+        root key" — which is a stronger and FALSE claim than "not available".
       */}
-      <CoveragePanel bundle={null} index={null} />
+      <CoveragePanel facts={summary.coverage ?? null} />
 
       {/* Manifest 2.0 metadata — renders nothing for a 1.x bundle with no
           disabled capture signals. */}
