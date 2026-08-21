@@ -130,11 +130,13 @@ const rawEnvSchema = z.object({
   /**
    * Number of ingest_file jobs the worker processes concurrently (pg-boss
    * batchSize for the INGEST_FILE queue). Each in-flight job holds ~1 DB pool
-   * connection during its transaction, so keep INGEST_CONCURRENCY comfortably
-   * below DATABASE_POOL_MAX (leave headroom for pg-boss's own polling
-   * connections). Different files are independent submissions; ordering is only
-   * enforced within a submission, so concurrency is safe. Raise this together
-   * with DATABASE_POOL_MAX for the large semester import.
+   * connection during its transaction, so keep INGEST_CONCURRENCY, together
+   * with INGEST_STAGE_CONCURRENCY and RECOMPUTE_MAX_PARALLEL, comfortably
+   * below DATABASE_POOL_MAX (leave headroom for HTTP request handling, the
+   * other pg-boss queues, and pg-boss's own polling connections — see
+   * config/pool-margin.ts). Different files are independent submissions;
+   * ordering is only enforced within a submission, so concurrency is safe.
+   * Raise this together with DATABASE_POOL_MAX for the large semester import.
    */
   INGEST_CONCURRENCY: intStr(4),
   /**
@@ -148,7 +150,9 @@ const rawEnvSchema = z.object({
    * Default 1 = serial, in-process (unchanged; no threads spawned). Raise it
    * toward the core count to speed big-export staging. Each in-flight stage
    * briefly holds a DB connection for its row insert (the pool threads do not),
-   * so keep INGEST_STAGE_CONCURRENCY + INGEST_CONCURRENCY within DATABASE_POOL_MAX.
+   * so keep INGEST_STAGE_CONCURRENCY + INGEST_CONCURRENCY + RECOMPUTE_MAX_PARALLEL
+   * within DATABASE_POOL_MAX — startWorker() warns at boot (never fails) when
+   * that margin gets thin; see config/pool-margin.ts.
    */
   INGEST_STAGE_CONCURRENCY: intStr(1),
   /**
@@ -164,6 +168,9 @@ const rawEnvSchema = z.object({
    * happen to target the SAME submission id are still run one after another
    * within a batch — only distinct submissions run in parallel — so raising
    * this does not risk two concurrent writers racing on one submission's rows.
+   * Like INGEST_CONCURRENCY, each in-flight recompute holds ~1 DB pool
+   * connection — see the INGEST_STAGE_CONCURRENCY comment above for the
+   * combined DATABASE_POOL_MAX budget across all three concurrency knobs.
    */
   RECOMPUTE_MAX_PARALLEL: intStr(4),
   BLOB_DOWNLOAD_URL_TTL_SECONDS: intStr(300),
