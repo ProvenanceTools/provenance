@@ -23,6 +23,7 @@ import { and, or, eq, isNull, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { submissions, assignments, roster_entries } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
+import { isMicroTimestamp, keysetAfter, microTimestamp } from '../keyset.js';
 import type { Severity } from '@provenance/analysis-core/heuristics/types.js';
 import { SEVERITY_RANK } from '../scoring/denorm.js';
 import { projectStudent } from '../protect.js';
@@ -60,7 +61,11 @@ export type CohortSort =
 // Encoded as base64url JSON for opacity to callers.
 export type CohortCursor =
   | { kind: 'score'; score_total: number; id: string }
-  | { kind: 'wall'; wall: string; id: string }
+  // `wall_us` is a MICROSECOND-precision UTC ISO string, not a
+  // `Date.toISOString()` value. The kind is named apart from the old `wall` so
+  // a pre-fix cursor is refused rather than silently mis-paginated — see
+  // `../keyset.ts`.
+  | { kind: 'wall_us'; wall_us: string; id: string }
   | { kind: 'display_name'; display_name: string; id: string }
   | { kind: 'protected_index'; protected_index: number; id: string }
   | { kind: 'assignment_label'; assignment_label: string; id: string };
@@ -110,8 +115,12 @@ export function decodeCursor(encoded: string): CohortCursor | null {
     if (kind === 'score' && typeof p['score_total'] === 'number') {
       return { kind: 'score', score_total: p['score_total'], id: p['id'] };
     }
-    if (kind === 'wall' && typeof p['wall'] === 'string') {
-      return { kind: 'wall', wall: p['wall'], id: p['id'] };
+    // A pre-fix cursor arrives as `kind: 'wall'` with a millisecond-precision
+    // timestamp. It falls through to `return null` below, which the route turns
+    // into a 400: honouring it would mean treating its timestamp as a bucket
+    // floor and silently dropping the rest of that millisecond.
+    if (kind === 'wall_us' && typeof p['wall_us'] === 'string' && isMicroTimestamp(p['wall_us'])) {
+      return { kind: 'wall_us', wall_us: p['wall_us'], id: p['id'] };
     }
     if (kind === 'display_name' && typeof p['display_name'] === 'string') {
       return { kind: 'display_name', display_name: p['display_name'], id: p['id'] };
@@ -316,6 +325,10 @@ export async function listCohortSubmissions(
       total_idle_ms: submissions.total_idle_ms,
       validation_status: submissions.validation_status,
       ingested_at: submissions.ingested_at,
+      // Cursor-only projection. `ingested_at` above is a JS `Date` and has
+      // already lost the microseconds; this keeps them. The response field
+      // still comes from the `Date`, so the API shape is unchanged.
+      ingested_at_us: microTimestamp(submissions.ingested_at),
       recorder_version: submissions.recorder_version,
       superseded_by_submission_id: submissions.superseded_by_submission_id,
       recompute_status: submissions.recompute_status,
@@ -568,23 +581,26 @@ function buildCursorCondition(
       )!;
     }
     case 'ingested_desc': {
-      if (cursor.kind !== 'wall') return null;
-      const cursorDate = new Date(cursor.wall);
-      if (isNaN(cursorDate.getTime())) return null;
-      // Use the millisecond+1 trick from V33 to handle µs precision
-      const nextMs = new Date(cursorDate.getTime() + 1);
-      // Pass dates as ISO strings — postgres-js cannot serialize Date objects
-      // when they originate from js Date instances in sql`` template params.
-      const cursorDateStr = cursorDate.toISOString();
-      const nextMsStr = nextMs.toISOString();
-      return or(
-        sql`${submissions.ingested_at} < ${cursorDateStr}::timestamptz`,
-        and(
-          sql`${submissions.ingested_at} >= ${cursorDateStr}::timestamptz`,
-          sql`${submissions.ingested_at} < ${nextMsStr}::timestamptz`,
-          sql`${submissions.id} < ${cursor.id}`,
-        ),
-      )!;
+      if (cursor.kind !== 'wall_us') return null;
+      // One row-value comparison, which IS the (ingested_at, id) lexicographic
+      // order `buildOrderBy` uses — so it agrees with it by construction. The
+      // cursor carries full microsecond precision, which is what makes that
+      // possible; `decodeCursor` has already refused anything less.
+      //
+      // The millisecond-bucket branches this replaces covered `[floor,
+      // floor+1ms)` with no gap, so they looked right — but the floor is all a
+      // `Date`-derived cursor can express, so every same-millisecond row was
+      // decided by the random-uuid tiebreak instead of by its true microsecond.
+      // That both DROPPED rows (true ts earlier than the cursor's but larger
+      // id) and DUPLICATED them (true ts later but smaller id). See
+      // `../keyset.ts`.
+      return keysetAfter(
+        submissions.ingested_at,
+        submissions.id,
+        cursor.wall_us,
+        cursor.id,
+        'desc',
+      );
     }
     case 'student_asc': {
       if (protectedMode) {
@@ -645,6 +661,8 @@ function buildCursorFromRow(
     id: string;
     score_total: number;
     ingested_at: Date;
+    /** Microsecond-precision projection of `ingested_at`; see `../keyset.ts`. */
+    ingested_at_us: string;
     /** Nullable since the roster join became LEFT (D9); mirrors STUDENT_SORT_NAME. */
     student_display_name: string | null;
     student_protected_index: number | null;
@@ -657,7 +675,9 @@ function buildCursorFromRow(
     case 'score_asc':
       return { kind: 'score', score_total: row.score_total, id: row.id };
     case 'ingested_desc':
-      return { kind: 'wall', wall: row.ingested_at.toISOString(), id: row.id };
+      // `ingested_at_us`, never `row.ingested_at.toISOString()` — the `Date`
+      // has already lost the microseconds the cursor needs.
+      return { kind: 'wall_us', wall_us: row.ingested_at_us, id: row.id };
     case 'student_asc':
     case 'student_desc':
       return protectedMode

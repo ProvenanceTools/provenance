@@ -1003,6 +1003,218 @@ describe('GET /semesters/:semesterId/submissions', () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // Keyset pagination across a shared millisecond, `sort=ingested_desc`.
+  //
+  // Postgres stores `timestamptz` at MICROSECOND precision; a JS `Date` — which
+  // is what Drizzle's default `mode: 'date'` hands back — carries only
+  // MILLISECONDS. The cursor used to be minted from that Date, so it could not
+  // express the true position of the last row on the page, and every same-ms
+  // row had to be decided by the uuid tiebreak instead. `id` is a random
+  // `gen_random_uuid()`, so that tiebreak contradicts the true microsecond
+  // ordering the query ORDERs BY: rows fall through both branches and vanish,
+  // with `next_cursor` still reporting success.
+  //
+  // Batch ingest writes many submissions in one go, so sharing a millisecond
+  // is the normal case here, not an edge case — and this is the hot path a
+  // grader browses.
+  //
+  // Note this defect is INDEPENDENT of the bucket-coverage one: the branches
+  // below already covered `[floor, floor+1ms)` with no gap. Only the
+  // timestamp's lost precision drops these rows.
+  // -------------------------------------------------------------------------
+  it('sort=ingested_desc does not drop submissions sharing a millisecond with the cursor row', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      _setConfigForTest(parseEnv(makeTestEnv()));
+
+      const user = await seedUser(db);
+      const sessionId = await seedSession(db, user.id);
+      const { semester } = await seedCourseAndSemester(db);
+      await seedMembership(db, user.id, semester.id, 'admin');
+
+      const a = await seedAssignment(db, semester.id);
+      const job = await seedIngestJob(db, semester.id, user.id);
+
+      // Five submissions inside ONE millisecond, each with a distinct non-zero
+      // microsecond remainder. A `Date` cannot express microseconds, so the
+      // value is written as a literal string.
+      const SHARED_MS = '2026-08-20T12:00:00.500';
+      const MICROS = ['123', '456', '789', '012', '345'];
+      for (let i = 0; i < MICROS.length; i++) {
+        const s = await seedStudent(db, semester.id, `stu00${i}`);
+        const id = crypto.randomUUID();
+        await db.insert(submissions).values({
+          id,
+          semester_id: semester.id,
+          assignment_id: a.id,
+          student_id: s.id,
+          blob_object_key: `semesters/${semester.id}/submissions/${id}/bundle.zip`,
+          blob_sha256: `sha256-${id}`,
+          source_filename: 'test.zip',
+          ingest_job_id: job.id,
+          version_index: 1,
+          ingested_at: sql`${`${SHARED_MS}${MICROS[i]}+00`}::timestamptz`,
+          score_total: 0,
+          score_max_severity: 'info',
+          validation_status: 'pass',
+          recorder_version: '1.0.0',
+        });
+      }
+
+      const app = createV1App();
+      const base = `http://localhost/semesters/${semester.id}/submissions`;
+
+      // Walk every page to exhaustion, exactly as a client would.
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; page < 10; page++) {
+        const url: string =
+          cursor === null
+            ? `${base}?limit=2&sort=ingested_desc`
+            : `${base}?limit=2&sort=ingested_desc&cursor=${cursor}`;
+        const res = await app.fetch(
+          new Request(url, { headers: { Cookie: `__Host-prov_sess=${sessionId}` } }),
+        );
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as {
+          items: { id: string }[];
+          next_cursor: string | null;
+        };
+        seen.push(...body.items.map((i) => i.id));
+        cursor = body.next_cursor;
+        if (cursor === null) break;
+      }
+
+      // Every submission is reachable, exactly once. `Set` size guards the
+      // opposite failure: a cursor that re-serves rows is not a fix either.
+      expect(seen).toHaveLength(MICROS.length);
+      expect(new Set(seen).size).toBe(MICROS.length);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The DESC bucket predicate did not only DROP rows — it also RE-SERVED them,
+  // and that is a genuinely separate failure mode from the one above.
+  //
+  // Same cause, opposite direction. Against a cursor that can only express its
+  // millisecond FLOOR, a same-bucket row whose true microsecond is LATER than
+  // the cursor row's (so it was already returned on an earlier page) still
+  // satisfies `ingested_at >= floor AND < floor+1ms AND id < cursor.id`
+  // whenever its random uuid happens to sort below the cursor's. It comes back
+  // a second time.
+  //
+  // Pinned separately because a future refactor could reintroduce one without
+  // the other, and because the assertion order matters: the duplicate check
+  // runs FIRST and names the repeated ids, so a re-serve regression reports as
+  // a re-serve rather than being masked by a length mismatch.
+  // -------------------------------------------------------------------------
+  it('sort=ingested_desc never re-serves a submission sharing a millisecond', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      _setConfigForTest(parseEnv(makeTestEnv()));
+
+      const user = await seedUser(db);
+      const sessionId = await seedSession(db, user.id);
+      const { semester } = await seedCourseAndSemester(db);
+      await seedMembership(db, user.id, semester.id, 'admin');
+
+      const a = await seedAssignment(db, semester.id);
+      const job = await seedIngestJob(db, semester.id, user.id);
+
+      // Eight rows in ONE millisecond. More rows than the drop test, and more
+      // pages, so there are more chances for a re-serve to occur — with random
+      // uuids the effect is probabilistic per row, and 8 rows at limit=2 makes
+      // a surviving bug overwhelmingly likely to show.
+      const SHARED_MS = '2026-08-20T12:00:00.500';
+      const MICROS = ['111', '222', '333', '444', '555', '666', '777', '888'];
+      for (let i = 0; i < MICROS.length; i++) {
+        const s = await seedStudent(db, semester.id, `stu10${i}`);
+        const id = crypto.randomUUID();
+        await db.insert(submissions).values({
+          id,
+          semester_id: semester.id,
+          assignment_id: a.id,
+          student_id: s.id,
+          blob_object_key: `semesters/${semester.id}/submissions/${id}/bundle.zip`,
+          blob_sha256: `sha256-${id}`,
+          source_filename: 'test.zip',
+          ingest_job_id: job.id,
+          version_index: 1,
+          ingested_at: sql`${`${SHARED_MS}${MICROS[i]}+00`}::timestamptz`,
+          score_total: 0,
+          score_max_severity: 'info',
+          validation_status: 'pass',
+          recorder_version: '1.0.0',
+        });
+      }
+
+      const app = createV1App();
+      const base = `http://localhost/semesters/${semester.id}/submissions`;
+
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      // A re-serving cursor can fail to terminate, so the page cap is well
+      // above the 4 pages a correct implementation needs.
+      for (let page = 0; page < 20; page++) {
+        const url: string =
+          cursor === null
+            ? `${base}?limit=2&sort=ingested_desc`
+            : `${base}?limit=2&sort=ingested_desc&cursor=${cursor}`;
+        const res = await app.fetch(
+          new Request(url, { headers: { Cookie: `__Host-prov_sess=${sessionId}` } }),
+        );
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as {
+          items: { id: string }[];
+          next_cursor: string | null;
+        };
+        seen.push(...body.items.map((i) => i.id));
+        cursor = body.next_cursor;
+        if (cursor === null) break;
+      }
+
+      // FIRST: nothing came back twice. This is the assertion this test exists
+      // for, and it fails independently of whether anything was also dropped.
+      const counts = new Map<string, number>();
+      for (const id of seen) counts.set(id, (counts.get(id) ?? 0) + 1);
+      const repeated = [...counts.entries()].filter(([, n]) => n > 1).map(([id]) => id);
+      expect(repeated).toEqual([]);
+
+      // THEN: and nothing was dropped either.
+      expect(seen).toHaveLength(MICROS.length);
+    });
+  });
+
+  // A cursor minted before the microsecond fix carries a millisecond-precision
+  // timestamp under `kind: 'wall'`. Honouring it would silently drop the rest
+  // of its millisecond bucket, so it is rejected and the client restarts.
+  it('sort=ingested_desc rejects a legacy millisecond-precision cursor with 400', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      _setConfigForTest(parseEnv(makeTestEnv()));
+
+      const user = await seedUser(db);
+      const sessionId = await seedSession(db, user.id);
+      const { semester } = await seedCourseAndSemester(db);
+      await seedMembership(db, user.id, semester.id, 'admin');
+
+      // Exactly the shape `encodeCursor` produced before this change.
+      const legacy = Buffer.from(
+        JSON.stringify({ kind: 'wall', wall: '2026-08-20T12:00:00.500Z', id: crypto.randomUUID() }),
+      ).toString('base64url');
+
+      const app = createV1App();
+      const res = await app.fetch(
+        new Request(
+          `http://localhost/semesters/${semester.id}/submissions?limit=2&sort=ingested_desc&cursor=${legacy}`,
+          { headers: { Cookie: `__Host-prov_sess=${sessionId}` } },
+        ),
+      );
+      expect(res.status).toBe(400);
+    });
+  });
+
   it('facets respect filter-minus-dimension semantics', async () => {
     await withTestDb(async (db) => {
       _testDb = db;
@@ -1659,6 +1871,153 @@ describe('GET /semesters/:semesterId/cross-flags', () => {
 
       const allIds = [...body1.items.map((i) => i.id), ...body2.items.map((i) => i.id)];
       expect(new Set(allIds).size).toBe(3);
+    });
+  });
+
+  // Regression: the cursor carries a MILLISECOND-precision timestamp while
+  // Postgres stores `timestamptz` at MICROSECOND precision, so every keyset
+  // comparison has to be written against the cursor's millisecond BUCKET.
+  // The original predicate was not, and it dropped rows in two ways at once:
+  // it bounded the same-ms branch above by `<= floor` (excluding every row
+  // whose microsecond remainder is non-zero) and used `floor - 1ms` as the
+  // lower bound (pulling the previous millisecond's rows into an id tiebreak
+  // they should never have faced).
+  //
+  // This matters in production, not just here: `recompute_cross_flags` writes
+  // a whole batch at once, so cross flags sharing a millisecond is the NORMAL
+  // case. Every dropped row is a collusion finding a grader never sees, and
+  // nothing anywhere reports that the page was short.
+  //
+  // The timestamps are fixed rather than defaulted so this test is
+  // deterministic; the pre-existing sibling above seeds whatever `now()`
+  // returns, which is why the defect read as a flake for weeks.
+  it('does not drop cross-flags that share a millisecond with the cursor row', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      _setConfigForTest(parseEnv(makeTestEnv()));
+
+      const user = await seedUser(db);
+      const sessionId = await seedSession(db, user.id);
+      const { semester } = await seedCourseAndSemester(db);
+      await seedMembership(db, user.id, semester.id, 'admin');
+
+      const s1 = await seedStudent(db, semester.id, 'stu001');
+      const a = await seedAssignment(db, semester.id);
+      const job = await seedIngestJob(db, semester.id, user.id);
+      const sub1 = await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: a.id,
+        studentId: s1.id,
+        ingestJobId: job.id,
+        versionIndex: 1,
+      });
+
+      // Five flags inside ONE millisecond, each with a distinct non-zero
+      // microsecond remainder. A `Date` cannot express microseconds, so the
+      // value is written as a literal string.
+      const SHARED_MS = '2026-08-20T12:00:00.500';
+      const MICROS = ['123', '456', '789', '012', '345'];
+      for (let i = 0; i < MICROS.length; i++) {
+        const [cf] = await db
+          .insert(cross_flags)
+          .values({
+            semester_id: semester.id,
+            heuristic_id: `same_ms_${i}`,
+            severity: 'medium',
+            confidence: 0.7,
+            heuristic_config_version: 1,
+            created_at: sql`${`${SHARED_MS}${MICROS[i]}+00`}::timestamptz`,
+          })
+          .returning();
+        await db
+          .insert(cross_flag_participants)
+          .values([{ cross_flag_id: cf!.id, submission_id: sub1.id }]);
+      }
+
+      const app = createV1App();
+      const base = `http://localhost/semesters/${semester.id}/cross-flags`;
+
+      // Walk every page to exhaustion, exactly as a client would.
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; page < 10; page++) {
+        const url: string =
+          cursor === null ? `${base}?limit=2` : `${base}?limit=2&cursor=${cursor}`;
+        const res = await app.fetch(
+          new Request(url, { headers: { Cookie: `__Host-prov_sess=${sessionId}` } }),
+        );
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as {
+          items: { id: string }[];
+          next_cursor: string | null;
+        };
+        seen.push(...body.items.map((i) => i.id));
+        cursor = body.next_cursor;
+        if (cursor === null) break;
+      }
+
+      // Every flag is reachable, exactly once. Before the fix this returned 2
+      // of 5 — page 1, and then nothing, with `next_cursor` reporting success.
+      expect(seen).toHaveLength(MICROS.length);
+      expect(new Set(seen).size).toBe(MICROS.length);
+    });
+  });
+
+  // Proving the negative: the keyset rewrite must not have made the trivial
+  // cases wrong. An empty result returns no items and a NULL cursor — never a
+  // cursor pointing at nothing, which would make a client page forever.
+  it('returns an empty page and a null cursor when a semester has no cross-flags', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      _setConfigForTest(parseEnv(makeTestEnv()));
+
+      const user = await seedUser(db);
+      const sessionId = await seedSession(db, user.id);
+      const { semester } = await seedCourseAndSemester(db);
+      await seedMembership(db, user.id, semester.id, 'admin');
+
+      const app = createV1App();
+      const res = await app.fetch(
+        new Request(`http://localhost/semesters/${semester.id}/cross-flags?limit=2`, {
+          headers: { Cookie: `__Host-prov_sess=${sessionId}` },
+        }),
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        items: unknown[];
+        next_cursor: string | null;
+      };
+      expect(body.items).toHaveLength(0);
+      expect(body.next_cursor).toBeNull();
+    });
+  });
+
+  // A cursor minted before the microsecond fix carries a millisecond-precision
+  // timestamp. Honouring it would silently drop the rest of its millisecond
+  // bucket, so it is rejected and the client restarts pagination.
+  it('rejects a legacy millisecond-precision cross-flag cursor with 400', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      _setConfigForTest(parseEnv(makeTestEnv()));
+
+      const user = await seedUser(db);
+      const sessionId = await seedSession(db, user.id);
+      const { semester } = await seedCourseAndSemester(db);
+      await seedMembership(db, user.id, semester.id, 'admin');
+
+      // Exactly the shape `encodeCrossFlagCursor` produced before this change.
+      const legacy = Buffer.from(
+        JSON.stringify({ created_at: '2026-08-20T12:00:00.500Z', id: crypto.randomUUID() }),
+      ).toString('base64url');
+
+      const app = createV1App();
+      const res = await app.fetch(
+        new Request(
+          `http://localhost/semesters/${semester.id}/cross-flags?limit=2&cursor=${legacy}`,
+          { headers: { Cookie: `__Host-prov_sess=${sessionId}` } },
+        ),
+      );
+      expect(res.status).toBe(400);
     });
   });
 });

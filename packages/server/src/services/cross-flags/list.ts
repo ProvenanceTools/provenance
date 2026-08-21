@@ -8,14 +8,16 @@
  *   severity_min?       — cross_flags.severity IN (severityMin and above)
  *   submission_id?      — only cross_flags where this submission is a participant
  *
- * Pagination: cursor on (created_at DESC, id DESC).
- * Uses same millisecond-precision trick from V33 for µs-precision timestamps.
+ * Pagination: cursor on (created_at DESC, id DESC), carrying a
+ * microsecond-precision timestamp and compared with a row-value comparison.
+ * See `../keyset.ts` for why anything less drops rows.
  *
  * Response shape: CrossFlagSummary[] with participants[].
  */
 
-import { and, eq, or, sql, inArray } from 'drizzle-orm';
+import { and, eq, sql, inArray } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
+import { KEYSET_CURSOR_VERSION, isMicroTimestamp, keysetAfter, microTimestamp } from '../keyset.js';
 import {
   cross_flags,
   cross_flag_participants,
@@ -60,7 +62,12 @@ export type CrossFlagFilters = {
   submissionId?: string;
 };
 
-// Cursor: (created_at, id) compound — created_at DESC, id DESC
+/**
+ * Cursor: (created_at, id) compound — created_at DESC, id DESC.
+ *
+ * `created_at` is a MICROSECOND-precision UTC ISO string, not a
+ * `Date.toISOString()` value. See `../keyset.ts`.
+ */
 export type CrossFlagCursor = { created_at: string; id: string };
 
 const SEVERITIES_AT_OR_ABOVE: Record<Severity, Severity[]> = {
@@ -75,16 +82,31 @@ const SEVERITIES_AT_OR_ABOVE: Record<Severity, Severity[]> = {
 // ---------------------------------------------------------------------------
 
 export function encodeCrossFlagCursor(cursor: CrossFlagCursor): string {
-  return Buffer.from(JSON.stringify(cursor)).toString('base64url');
+  return Buffer.from(
+    JSON.stringify({ v: KEYSET_CURSOR_VERSION, created_at: cursor.created_at, id: cursor.id }),
+  ).toString('base64url');
 }
 
+/**
+ * Returns `null` for anything this build cannot paginate from correctly — the
+ * route turns that into a 400.
+ *
+ * That deliberately includes a **pre-fix cursor**, which is recognisable both
+ * by its missing version tag and by its millisecond-precision timestamp.
+ * Honouring one would mean treating its timestamp as a bucket floor and
+ * silently dropping the rest of that millisecond — the exact defect this code
+ * exists to fix. A 400 the client recovers from by restarting pagination is the
+ * only honest answer.
+ */
 export function decodeCrossFlagCursor(encoded: string): CrossFlagCursor | null {
   try {
     const raw = Buffer.from(encoded, 'base64url').toString('utf8');
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null) return null;
     const p = parsed as Record<string, unknown>;
+    if (p['v'] !== KEYSET_CURSOR_VERSION) return null;
     if (typeof p['created_at'] !== 'string' || typeof p['id'] !== 'string') return null;
+    if (!isMicroTimestamp(p['created_at'])) return null;
     return { created_at: p['created_at'], id: p['id'] };
   } catch {
     return null;
@@ -131,28 +153,17 @@ export async function listCrossFlags(
     );
   }
 
-  // Cursor: (created_at DESC, id DESC)
+  // Cursor: (created_at DESC, id DESC).
+  //
+  // One row-value comparison, which IS the (created_at, id) lexicographic order
+  // the ORDER BY below uses — so it agrees with it by construction. The cursor
+  // carries full microsecond precision (`created_at_us`), which is what makes
+  // that possible; `decodeCrossFlagCursor` has already refused anything less.
+  // See `../keyset.ts` for what the previous millisecond-bucket branches did.
   if (cursor !== null) {
-    const cursorDate = new Date(cursor.created_at);
-    if (!isNaN(cursorDate.getTime())) {
-      // Same millisecond+1 trick from V33 to handle µs precision on DESC order
-      const prevMs = new Date(cursorDate.getTime() - 1);
-      // Pass dates as ISO strings — postgres-js cannot serialize Date objects
-      // when they originate from js Date instances in sql`` template params.
-      const prevMsStr = prevMs.toISOString();
-      const cursorDateStr = cursorDate.toISOString();
-      // "next page" = rows earlier in time than cursor, OR same ms + smaller id
-      whereConditions.push(
-        or(
-          sql`${cross_flags.created_at} < ${prevMsStr}::timestamptz`,
-          and(
-            sql`${cross_flags.created_at} >= ${prevMsStr}::timestamptz`,
-            sql`${cross_flags.created_at} <= ${cursorDateStr}::timestamptz`,
-            sql`${cross_flags.id} < ${cursor.id}`,
-          ),
-        )!,
-      );
-    }
+    whereConditions.push(
+      keysetAfter(cross_flags.created_at, cross_flags.id, cursor.created_at, cursor.id, 'desc'),
+    );
   }
 
   const rows = await db
@@ -163,6 +174,10 @@ export async function listCrossFlags(
       confidence: cross_flags.confidence,
       detail: cross_flags.detail,
       created_at: cross_flags.created_at,
+      // Cursor-only projection. `created_at` above is a JS `Date` and has
+      // already lost the microseconds; this keeps them. The response field
+      // still comes from the `Date`, so the API shape is unchanged.
+      created_at_us: microTimestamp(cross_flags.created_at),
     })
     .from(cross_flags)
     .where(and(...whereConditions))
@@ -176,7 +191,7 @@ export async function listCrossFlags(
   if (hasMore && pageRows.length > 0) {
     const last = pageRows[pageRows.length - 1]!;
     nextCursor = encodeCrossFlagCursor({
-      created_at: last.created_at.toISOString(),
+      created_at: last.created_at_us,
       id: last.id,
     });
   }
