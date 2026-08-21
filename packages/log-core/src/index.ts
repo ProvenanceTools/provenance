@@ -171,6 +171,32 @@ export type { PeerObservedShapeError } from './peer-observed.js';
 export { readRepositoryDiscriminator, REPOSITORY_DISCRIMINATOR_FIELD } from './git-event.js';
 export type { RepositoryDiscriminatorRead, RepositoryDiscriminatorProblem } from './git-event.js';
 
+// The three session.start capability reports (collaboration spec §5.6)
+export {
+  GIT_CAPTURE_FIELD,
+  WITNESS_CAPTURE_FIELD,
+  FILE_SCOPE_FIELD,
+  GIT_CAPTURE_VALUES,
+  WITNESS_CAPTURE_VALUES,
+  readGitCapture,
+  readWitnessCapture,
+  readFileScope,
+  buildFileScope,
+  describeGitCapture,
+  describeWitnessCapture,
+  describeCapabilityValueProblem,
+  describeFileScopeProblem,
+} from './session-capabilities.js';
+export type {
+  GitCaptureCapability,
+  WitnessCaptureCapability,
+  GitCaptureRead,
+  WitnessCaptureRead,
+  FileScopeRead,
+  CapabilityValueProblem,
+  FileScopeProblem,
+} from './session-capabilities.js';
+
 // Events
 export type {
   EventKindMap,
@@ -183,6 +209,7 @@ export type {
   EnrollmentToken,
   SessionIdentity,
   SessionStartPayload,
+  SessionFileScope,
   SessionHeartbeatPayload,
   SessionResumedPayload,
   SessionEndPayload,

@@ -98,6 +98,8 @@
 
 import { validatePeerObservedPayload, describePeerObservedShapeError } from '@provenance/log-core';
 import type { PeerObservedPayload, PeerObservedShapeError } from '@provenance/log-core';
+import { readBundleCapabilities } from '../capability/session-capabilities.js';
+import type { BundleCapabilitySummary } from '../capability/session-capabilities.js';
 import { contributorOf } from '../identity/resolve-contributors.js';
 import { compareContributors } from '../identity/types.js';
 import type { Bundle, ParsedSession } from '../loader/types.js';
@@ -194,6 +196,21 @@ export type SessionWitnessCoverage = {
   state: 'witnessed' | 'unwitnessed';
   /** Reconciled witnesses naming this session. Excluded ones do not count. */
   witnessCount: number;
+  /**
+   * What THIS session reported about its own ability to witness OTHERS
+   * (collaboration spec §5.6 item 3).
+   *
+   * A DIFFERENT axis from {@link SessionWitnessCoverage.state}, and the two must
+   * not be read together: `state` says whether anyone witnessed this log,
+   * `capability` says whether this log's recorder could have witnessed anyone.
+   * Both live here because both are per-session facts.
+   *
+   * `'unreported'` covers an absent report and a malformed one alike — **it is
+   * the state of every session of every bundle in existence**, because no
+   * recorder emitted the field before it landed. It must never be rendered as
+   * `'unavailable'`.
+   */
+  capability: 'available' | 'unavailable' | 'unreported';
 };
 
 /** The bundle-level result. */
@@ -219,6 +236,26 @@ export type BundleWitnessReconciliation = {
     excluded: number;
     malformed: number;
   };
+  /**
+   * Whether ANY session in this bundle could witness at all (collaboration spec
+   * §5.6 item 3).
+   *
+   * This is what stops `unwitnessedSessions` from being read as an absence of
+   * witnesses when it is really an absence of the CAPACITY to witness:
+   *
+   *  - `'available'` — at least one session was watching `.provenance/`, so an
+   *    unwitnessed log is a fact about what that watcher saw.
+   *  - `'impossible'` — every session reported, none could witness. Every
+   *    `unwitnessed` in this bundle is fully explained, and no combination of
+   *    them means anything.
+   *  - `'unknown'` — at least one session said nothing. **The state of every
+   *    bundle in existence**, and the reason `unwitnessed` has always been
+   *    blameless.
+   *
+   * `unwitnessed` is blameless in all three states. This field does not change
+   * that; it changes what a coverage surface is entitled to SAY about it.
+   */
+  witnessingCapability: BundleCapabilitySummary;
 };
 
 // ---------------------------------------------------------------------------
@@ -490,12 +527,24 @@ export function reconcileWitnesses(bundle: Bundle): BundleWitnessReconciliation 
     }
   }
 
+  // §5.6 item 3 — whether each session could witness AT ALL. Read through the
+  // same log-core narrowing every other consumer uses, so a nonconforming value
+  // cannot arrive here as if it meant something.
+  const capabilities = readBundleCapabilities(bundle);
+  const capabilityBySession = new Map(capabilities.sessions.map((s) => [s.sessionId, s.witness]));
+
   const sessions: SessionWitnessCoverage[] = bundle.sessions.map((s) => {
     const count = witnessCounts.get(s.sessionId) ?? 0;
+    const read = capabilityBySession.get(s.sessionId);
     return {
       sessionId: s.sessionId,
       state: count > 0 ? 'witnessed' : 'unwitnessed',
       witnessCount: count,
+      // `'unreported'` for absent AND for malformed: both leave us with no
+      // usable claim, and neither may be rendered as `'unavailable'` — that
+      // would make every bundle recorded to date assert its own witnessing was
+      // broken.
+      capability: read !== undefined && read.kind === 'recorded' ? read.capture : 'unreported',
     };
   });
 
@@ -516,5 +565,12 @@ export function reconcileWitnesses(bundle: Bundle): BundleWitnessReconciliation 
     else counts.unwitnessedSessions += 1;
   }
 
-  return { witnesses, sessions, excluded, malformed, counts };
+  return {
+    witnesses,
+    sessions,
+    excluded,
+    malformed,
+    counts,
+    witnessingCapability: capabilities.witnessing,
+  };
 }

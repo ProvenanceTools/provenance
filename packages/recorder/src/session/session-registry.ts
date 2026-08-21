@@ -24,7 +24,14 @@ import {
   encryptSessionPrivkey,
   signCheckpoint,
 } from '@provenance/log-core';
-import type { HashedEnvelope, Clock, Manifest, SessionIdentity } from '@provenance/log-core';
+import type {
+  HashedEnvelope,
+  Clock,
+  GitCaptureCapability,
+  Manifest,
+  SessionIdentity,
+  WitnessCaptureCapability,
+} from '@provenance/log-core';
 import { buildRecorderContext } from './recorder-context.js';
 import { buildSessionIdentity } from '../identity/session-identity.js';
 import { ROOT_PUBLIC_KEY_HEX } from '../activation/course-keys.js';
@@ -44,7 +51,7 @@ import { ExpectedContentRegistry } from '../state/expected-content-registry.js';
 import { startTerminalWiring } from '../wiring/terminal-wiring.js';
 import { startExtensionSnapshot } from '../wiring/extension-snapshot.js';
 import { startExtensionActivation } from '../wiring/extension-activation.js';
-import { startGitWiring } from '../wiring/git-wiring.js';
+import { probeGitCapture, startGitWiring } from '../wiring/git-wiring.js';
 import { startPeerWatcher } from '../wiring/peer-watcher.js';
 import type { PeerWatcher, ProvenanceDirWatcher } from '../wiring/peer-watcher.js';
 import { recoverPreviousSession } from '../startup/chain-recovery.js';
@@ -129,7 +136,40 @@ export type StartSessionDeps = {
    * what every pre-S2 test caller gets.
    */
   secrets?: SecretStore;
+  /**
+   * Create the ONE `.provenance/` directory watcher this session uses for peer
+   * witnessing, or throw if it cannot be created.
+   *
+   * Whether this succeeds IS `session.start.witness_capture` (collaboration spec
+   * §5.6 item 3), so it is called before the first entry is chained and its
+   * result is handed on to `startPeerWatcher` — one watcher, one answer, no way
+   * for the report and the wiring to disagree.
+   *
+   * Defaults to the production `vscode.workspace.createFileSystemWatcher`.
+   * Overridden by tests, which have no extension host.
+   */
+  createProvenanceDirWatcher?: (provenanceDir: string) => ProvenanceDirWatcher;
 };
+
+/**
+ * The production `.provenance/` watcher — one `FileSystemWatcher` on the
+ * directory, matching `*.slog` only.
+ *
+ * Read-only by construction: the returned handle exposes three subscriptions
+ * and `dispose`, and nothing that could rename, rewrite or delete a foreign
+ * file (peer-witnessing writer contract rule 5; decision-log bug 2).
+ */
+function createProvenanceDirWatcher(provenanceDir: string): ProvenanceDirWatcher {
+  const w = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(provenanceDir, '*.slog'),
+  );
+  return {
+    onDidCreate: (h) => w.onDidCreate((uri) => h(uri.fsPath)),
+    onDidChange: (h) => w.onDidChange((uri) => h(uri.fsPath)),
+    onDidDelete: (h) => w.onDidDelete((uri) => h(uri.fsPath)),
+    dispose: () => w.dispose(),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Production heartbeat deps
@@ -276,6 +316,52 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   const prevSessionId: string | null =
     recovery.kind === 'previous_session_dangling' ? recovery.prevSessionId : null;
 
+  // Step 3c-quater: THE CAPABILITY REPORTS (collaboration spec §5.6).
+  //
+  // Both must be known BEFORE `session.start` is built, because that is the
+  // entry that carries them, and it is the first entry in the chain. They say
+  // "I could not", never "I was told not to" — neither is policy-gated, and
+  // neither is ever a finding. `undefined` OMITS the field, which is a legal,
+  // permanent, blameless answer.
+
+  // Item 2 — git. A side-effect-free probe that asks `resolveGitApi` the same
+  // question `startGitWiring` asks at step 16, through the same function, so
+  // the report cannot drift from what the wiring actually does. Cheap and
+  // idempotent: `getAPI(1)` is a getter on another extension's exports.
+  let gitCapture: GitCaptureCapability | undefined;
+  try {
+    gitCapture = probeGitCapture({
+      getGitExtension: () => vscode.extensions.getExtension('vscode.git'),
+      isRepoOwnedByThisRoot,
+    });
+  } catch (e) {
+    // Probing must never cost a session. Omitting the report costs context.
+    console.warn('[provenance] git capture probe failed; omitting the report:', e);
+  }
+
+  // Item 3 — `.provenance/` witnessing. The capability IS the artifact: the
+  // watcher the peer-witnessing wiring will use is created HERE, once, and
+  // whether it could be created is the answer. Probing by creating a second,
+  // throwaway watcher would let the report and the wiring disagree.
+  //
+  // Creating it early costs nothing and loses nothing: the peer watcher does not
+  // SUBSCRIBE until step 16b, and a foreign file that appears before that
+  // subscription is missed today exactly as it would be missed now. This session
+  // owns the watcher — it goes into `ownDisposables` — so the peer watcher is
+  // handed a non-disposing view of it and only owns its own subscriptions.
+  let provenanceDirWatcher: ProvenanceDirWatcher | undefined;
+  try {
+    provenanceDirWatcher = deps.createProvenanceDirWatcher
+      ? deps.createProvenanceDirWatcher(provenanceDir)
+      : createProvenanceDirWatcher(provenanceDir);
+    ownDisposables.push(provenanceDirWatcher);
+  } catch (e) {
+    // A watcher that cannot be created costs witnessing, never recording.
+    console.warn('[provenance] could not watch .provenance/ for peer witnessing:', e);
+  }
+  const witnessCapture: WitnessCaptureCapability =
+    provenanceDirWatcher !== undefined ? 'available' : 'unavailable';
+
   // Step 3d: Build recorder context (generates sessionId, machineId, etc.).
   const recorderContext = buildRecorderContext({
     manifest,
@@ -285,6 +371,8 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     platform,
     sessionPubkeyHex: keypair.publicKeyHex,
     ...(identity !== undefined ? { identity } : {}),
+    ...(gitCapture !== undefined ? { gitCapture } : {}),
+    witnessCapture,
   });
 
   // Step 4: Open a SessionWriter (.provenance/ dir already created in Step 3a).
@@ -731,15 +819,28 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
         };
       }
     },
+    // The watcher was created at step 3c-quater, because whether it COULD be
+    // created is `session.start.witness_capture` and that has to be known before
+    // the first entry is chained. Handing back a non-disposing view: this
+    // session owns the watcher (it is in `ownDisposables`), the peer watcher
+    // owns only its own subscriptions.
+    //
+    // When creation failed there is nothing to hand back, and throwing is the
+    // signal `startPeerWatcher` already handles — it logs and carries on with no
+    // subscriptions, which is exactly the state `witness_capture: 'unavailable'`
+    // reported.
     createWatcher: (): ProvenanceDirWatcher => {
-      const w = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(provenanceDir, '*.slog'),
-      );
+      if (provenanceDirWatcher === undefined) {
+        throw new Error('.provenance/ watcher unavailable');
+      }
+      const w = provenanceDirWatcher;
       return {
-        onDidCreate: (h) => w.onDidCreate((uri) => h(uri.fsPath)),
-        onDidChange: (h) => w.onDidChange((uri) => h(uri.fsPath)),
-        onDidDelete: (h) => w.onDidDelete((uri) => h(uri.fsPath)),
-        dispose: () => w.dispose(),
+        onDidCreate: (h) => w.onDidCreate(h),
+        onDidChange: (h) => w.onDidChange(h),
+        onDidDelete: (h) => w.onDidDelete(h),
+        dispose: () => {
+          /* owned by the session, disposed through ownDisposables */
+        },
       };
     },
   });

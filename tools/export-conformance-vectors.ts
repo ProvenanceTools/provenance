@@ -75,6 +75,14 @@ import {
   PEER_OBSERVED_STATES,
   readRepositoryDiscriminator,
   REPOSITORY_DISCRIMINATOR_FIELD,
+  readGitCapture,
+  readWitnessCapture,
+  readFileScope,
+  GIT_CAPTURE_VALUES,
+  WITNESS_CAPTURE_VALUES,
+  GIT_CAPTURE_FIELD,
+  WITNESS_CAPTURE_FIELD,
+  FILE_SCOPE_FIELD,
   DEFAULT_CAPTURE_POLICY,
   FLOOR_EVENT_KINDS,
   POLICY_GATED_EVENT_KINDS,
@@ -1054,6 +1062,320 @@ function buildGitEventVectors(): unknown {
  * implement the narrowing and the canonical form first, and the directory
  * watcher only once the writer contract lands.
  */
+/**
+ * `session-capabilities.json` — the three `session.start` CAPABILITY REPORTS
+ * (collaboration spec §5.6).
+ *
+ * `git_capture` (item 2), `witness_capture` (item 3) and `file_scope` (item 1)
+ * say what the recorder COULD do, so that an absence in the log can be read
+ * correctly: a scope with no `git.event` is otherwise indistinguishable from a
+ * scope where git capture was impossible, and "no events for this file" is
+ * otherwise ambiguous between _nothing happened_ and _it was never watched_.
+ *
+ * A capability report says "I could not". A capture knob says "I was told not
+ * to". None of these is policy-gated, and **none of them is ever a finding** —
+ * no flag, no validation check, no severity, no score.
+ *
+ * Four rules a port must reproduce, each with cases below that prove it:
+ *
+ *  - **Absent is the ordinary case, permanently.** Every bundle recorded before
+ *    §5.6 landed carries none of these fields, and a reader must treat their
+ *    absence as "this recorder does not report", NEVER as "the capability was
+ *    missing". `no_capability_reports` is that payload, and its `hash` is the
+ *    value every 1.x `session.start` of this shape already has: adding the
+ *    fields to the format changed nothing about a payload that omits them.
+ *  - **OMIT, never `null`.** `*_null_is_not_absent` reads as absence and hashes
+ *    DIFFERENTLY from the omitted case. A writer that emits `null` produces a
+ *    log whose entries hash differently from every other recorder's.
+ *  - **The enums are CLOSED.** `git_capture` has three values and
+ *    `witness_capture` has two — there is no witnessing analogue of
+ *    `not_owned`, because a recorder witnesses the directory it is itself
+ *    writing into. A value outside the set is `malformed`, is counted, and never
+ *    reaches a consumer as if it meant something.
+ *  - **`file_scope` paths are ASSIGNMENT-ROOT-RELATIVE, and a bad entry rejects
+ *    the WHOLE set.** S14(b) forbids repository paths and remote URLs; an
+ *    absolute path, a colon (every remote-URL spelling) and a `..` segment are
+ *    all rejected. Dropping only the offending entry would hand a consumer a
+ *    silently narrowed list, which then says "not watched" about a file that
+ *    was.
+ *
+ * `complete` is a required boolean, not an optional truncation flag: the field
+ * exists to remove an inference, so it must never itself require one. An EMPTY
+ * `watched` with `complete: true` is a real answer meaning "the scope resolved
+ * to nothing", and must not be folded into absence.
+ */
+function buildSessionCapabilityVectors(): unknown {
+  // A minimal, realistic 1.x `session.start`. Every case below is this payload
+  // plus at most the fields under test, so the diff between two cases' hashes is
+  // attributable to exactly the field that differs.
+  const BASE: Record<string, unknown> = {
+    format_version: '1.0',
+    session_id: '4e2d9c10-55af-4b3e-9d21-8f0c7a6b3e55',
+    prev_session_id: null,
+    assignment: { id: 'proj2', semester: 'fa26' },
+    manifest_sig: 'a'.repeat(128),
+    machine_id: 'b'.repeat(64),
+    recorder: { version: '1.2.0', extension_id: 'itsgeagle.provenance-recorder' },
+    session_pubkey: 'c'.repeat(64),
+  };
+
+  const capCase = (name: string, note: string, extra: Record<string, unknown>): unknown => {
+    const data = { ...BASE, ...extra };
+    const envelope = {
+      seq: 0,
+      t: 0,
+      wall: '2026-01-01T00:00:00.000Z',
+      kind: 'session.start',
+      data,
+    };
+    return {
+      name,
+      note,
+      data,
+      canonical_json: canonicalize(data),
+      envelope,
+      prev_hash: GENESIS_PREV_HASH,
+      hash: chainEntry(GENESIS_PREV_HASH, envelope).hash,
+      // The three narrowing verdicts, published alongside the bytes so a port
+      // asserts ACCEPT and REJECT rather than only the happy path.
+      git_capture: readGitCapture(data),
+      witness_capture: readWitnessCapture(data),
+      file_scope: readFileScope(data),
+    };
+  };
+
+  return {
+    note:
+      'The three session.start capability reports (collaboration spec §5.6). Each field is ' +
+      'OPTIONAL PERMANENTLY. A reader returns three answers — absent / recorded / malformed — ' +
+      'and absence means "this recorder does not report", never "the capability was missing".',
+    absence_note:
+      'no_capability_reports is the pre-§5.6 payload and is the hash every 1.x session.start ' +
+      'of this shape already has. Compare it against git_capture_available to see that a ' +
+      'report changes the bytes, and against git_capture_null_is_not_absent to see that null ' +
+      'and omission are different bytes despite reading the same.',
+    not_a_knob_note:
+      'These are CAPABILITY REPORTS, not capture knobs. A capability report says "I could ' +
+      'not"; a knob says "I was told not to". Nothing here appears in policy.capture, nothing ' +
+      'here is course-signed, and nothing here is ever a finding — no flag, no validation ' +
+      'check, no severity, no score.',
+    git_capture_note:
+      'unavailable = the editor exposed no git integration, so no git.event could be produced ' +
+      'at all. not_owned = git observation worked and no repository it could see was in this ' +
+      "assignment's scope, so its events were dropped by the ownership gate. These are " +
+      'different situations a grader acts on differently and MUST NOT be collapsed. ' +
+      'available = git observation was live.',
+    witness_capture_note:
+      'Two values, deliberately. There is no witnessing analogue of not_owned: a recorder ' +
+      'witnesses the .provenance/ directory it is itself writing into, so there is no ' +
+      'ownership question to route on.',
+    file_scope_note:
+      'The RESOLVED LIST, not the rule. A count cannot be asked whether it contains a file, ' +
+      'and publishing an unresolved glob set would require three hand-written ports and one ' +
+      'analyzer to agree on a matcher. Paths are assignment-root-relative, exactly as every ' +
+      'other path in the log. complete:false means the list is a strict subset, and a ' +
+      "path's absence from it is then UNKNOWN rather than NOT WATCHED.",
+    file_scope_privacy_note:
+      'S14(b) forbids repository paths and remote URLs. An absolute path (POSIX, Windows ' +
+      'drive or UNC), any colon (which is every remote-URL spelling, including git\u2019s ' +
+      'scp-style user@host:path) and any ".." segment are rejected — and a single bad entry ' +
+      'rejects the WHOLE set, because a silently narrowed list says "not watched" about a ' +
+      'file that was.',
+    writer_note:
+      'OMIT a field you cannot answer. Never emit null: the two canonicalize differently and ' +
+      'therefore chain to different hashes, exactly as `parents: []` and an absent `parents` ' +
+      'do. Readers accept null as absence so a nonconforming log still parses; a writer that ' +
+      'emits it is nonconforming.',
+    git_capture_values: [...GIT_CAPTURE_VALUES],
+    witness_capture_values: [...WITNESS_CAPTURE_VALUES],
+    fields: {
+      git_capture: GIT_CAPTURE_FIELD,
+      witness_capture: WITNESS_CAPTURE_FIELD,
+      file_scope: FILE_SCOPE_FIELD,
+    },
+    cases: [
+      capCase(
+        'no_capability_reports',
+        'The pre-§5.6 payload, and every bundle in existence. All three read absent, and this ' +
+          'hash is unchanged by the fields existing in the format.',
+        {},
+      ),
+
+      // --- item 2: git_capture -------------------------------------------
+      capCase(
+        'git_capture_available',
+        'Git observation was live. An absence of git.event in this session is a statement ' +
+          'about git activity, not about capture.',
+        { git_capture: 'available' },
+      ),
+      capCase(
+        'git_capture_unavailable',
+        'No git integration on this machine. Nothing this session did could have produced a ' +
+          'git.event.',
+        { git_capture: 'unavailable' },
+      ),
+      capCase(
+        'git_capture_not_owned',
+        'Git worked; no repository it could see was in scope. NOT the same fact as ' +
+          'unavailable, and a reader that reports one as the other describes a different ' +
+          'situation than the one that occurred.',
+        { git_capture: 'not_owned' },
+      ),
+      capCase(
+        'git_capture_null_is_not_absent',
+        'Reads as absence, and hashes differently from no_capability_reports. A writer must ' +
+          'OMIT.',
+        { git_capture: null },
+      ),
+      capCase(
+        'git_capture_unknown_value_rejected',
+        'Outside the closed enum. Malformed, counted, never a finding, and never presented as ' +
+          'a capability.',
+        { git_capture: 'partial' },
+      ),
+      capCase(
+        'git_capture_uppercase_rejected',
+        'Case is not folded: folding would be exactly the normalization the reader refuses.',
+        { git_capture: 'Available' },
+      ),
+      capCase(
+        'git_capture_not_a_string_rejected',
+        'A non-string value is malformed rather than coerced.',
+        { git_capture: true },
+      ),
+
+      // --- item 3: witness_capture ---------------------------------------
+      capCase(
+        'witness_capture_available',
+        'A .provenance/ watcher was running. Had a partner log appeared, changed or vanished, ' +
+          'this session would have witnessed it.',
+        { witness_capture: 'available' },
+      ),
+      capCase(
+        'witness_capture_unavailable',
+        'No watcher. The absence of peer.observed in this session says nothing about what was ' +
+          'in .provenance/.',
+        { witness_capture: 'unavailable' },
+      ),
+      capCase(
+        'witness_capture_not_owned_rejected',
+        "git_capture's third value is not legal here. A port that shares one enum between the " +
+          'two fields fails this case.',
+        { witness_capture: 'not_owned' },
+      ),
+      capCase(
+        'witness_capture_null_is_not_absent',
+        'Reads as absence, hashes differently from omission.',
+        { witness_capture: null },
+      ),
+
+      // --- item 1: file_scope --------------------------------------------
+      capCase(
+        'file_scope_complete',
+        'The effective resolved file set. A path NOT in a complete list was not watched, which ' +
+          'is what makes "no events for this file" unambiguous.',
+        { file_scope: { watched: ['Solver.java', 'src/Board.java'], complete: true } },
+      ),
+      capCase(
+        'file_scope_empty_is_a_real_answer',
+        'The scope resolved to nothing. A positive claim that explains every file\u2019s ' +
+          'silence — not absence, and not to be folded into it.',
+        { file_scope: { watched: [], complete: true } },
+      ),
+      capCase(
+        'file_scope_truncated',
+        'The list is a strict subset. A path in it WAS watched; a path not in it is UNKNOWN, ' +
+          'never "not watched".',
+        { file_scope: { watched: ['Solver.java'], complete: false } },
+      ),
+      capCase(
+        'file_scope_missing_complete_rejected',
+        'complete is required and is never inferred — the field exists to remove an inference.',
+        { file_scope: { watched: ['Solver.java'] } },
+      ),
+      capCase(
+        'file_scope_not_an_object_rejected',
+        'An array is not a file scope; the list lives under `watched`.',
+        { file_scope: ['Solver.java'] },
+      ),
+      capCase(
+        'file_scope_absolute_path_rejected',
+        'S14(b). An absolute path embeds the account name and the machine layout. The WHOLE ' +
+          'set is rejected, not just this entry.',
+        {
+          file_scope: {
+            watched: ['Solver.java', '/Users/student/cs61b/Solver.java'],
+            complete: true,
+          },
+        },
+      ),
+      capCase(
+        'file_scope_windows_path_rejected',
+        'A Windows drive path is absolute too. A port that only checks for a leading "/" fails ' +
+          'this case.',
+        { file_scope: { watched: ['C:\\Users\\student\\Solver.java'], complete: true } },
+      ),
+      capCase(
+        'file_scope_remote_url_rejected',
+        'S14(b). A remote URL embeds the org and frequently the student\u2019s own username.',
+        {
+          file_scope: {
+            watched: ['https://github.com/some-student/proj2/Solver.java'],
+            complete: true,
+          },
+        },
+      ),
+      capCase(
+        'file_scope_scp_remote_rejected',
+        'git\u2019s scp-style remote has no "://" and is still a remote URL. The rule is any ' +
+          'colon outside a Windows drive letter.',
+        { file_scope: { watched: ['git@github.com:someone/proj2.git'], complete: true } },
+      ),
+      capCase(
+        'file_scope_parent_escape_rejected',
+        'A ".." segment names something outside the assignment scope.',
+        { file_scope: { watched: ['../other-course/Solver.java'], complete: true } },
+      ),
+      capCase(
+        'file_scope_dotted_names_accepted',
+        'Paths that merely LOOK risky are ordinary: a leading dot, a doubled dot inside a ' +
+          'segment, and backslash separators are all accepted verbatim.',
+        {
+          file_scope: {
+            watched: ['.hidden/config.txt', 'a..b/Solver.java', 'src\\main\\Board.java'],
+            complete: true,
+          },
+        },
+      ),
+      capCase(
+        'file_scope_unknown_extra_key_accepted',
+        'Forward compatibility: a newer recorder adding a key must not make this reader refuse ' +
+          'the whole scope.',
+        {
+          file_scope: { watched: ['Solver.java'], complete: true, resolution: 'repo_tracked' },
+        },
+      ),
+      capCase(
+        'file_scope_null_is_not_absent',
+        'Reads as absence, hashes differently from omission.',
+        { file_scope: null },
+      ),
+
+      // --- all three together ---------------------------------------------
+      capCase(
+        'all_three_reported',
+        'The shape a §5.6-conformant recorder emits when it can answer all three. The three ' +
+          'fields are independent: a port may land one before the others.',
+        {
+          git_capture: 'available',
+          witness_capture: 'available',
+          file_scope: { watched: ['Solver.java'], complete: true },
+        },
+      ),
+    ],
+  };
+}
+
 function buildPeerObservedVectors(): unknown {
   const peerCase = (name: string, note: string, data: Record<string, unknown>): unknown => {
     const envelope = {
@@ -2672,6 +2994,9 @@ async function main(): Promise<void> {
 
   // --- 13b. Tier 4.1 peer.observed: peer witnessing (reader half) ---
   writeJson(outDir, 'peer-observed.json', buildPeerObservedVectors());
+
+  // --- 13c. §5.6 session.start capability reports (reader + VS Code writer) ---
+  writeJson(outDir, 'session-capabilities.json', buildSessionCapabilityVectors());
 
   // --- 14. S3 rolling seal: manifest-<session_id>.json at format_version 1.2 ---
   writeJson(outDir, 'rolling-manifest.json', await buildRollingManifestVectors());

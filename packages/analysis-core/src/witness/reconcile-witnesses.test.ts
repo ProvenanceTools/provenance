@@ -686,3 +686,89 @@ describe('a log with no entry AT the witnessed seq', () => {
     expect(r.presentHashAtWitnessedSeq).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// §5.6 item 3 — "nobody witnessed" vs "witnessing was impossible"
+// ---------------------------------------------------------------------------
+
+/**
+ * A bundle whose sessions carry exactly the given `session.start` extras and no
+ * witnesses at all. Every session here reads `unwitnessed`; what these tests
+ * pin is what a consumer is entitled to SAY about that.
+ */
+async function scopeReporting(...sessionStarts: Array<Record<string, unknown>>): Promise<Bundle> {
+  const { zipBuffer } = await buildTestBundle({
+    sessions: sessionStarts.map((sessionStart) => ({ eventCount: 2, sessionStart })),
+  });
+  const loaded = await loadBundle(new Blob([zipBuffer]), 'test.zip');
+  if (!loaded.ok) throw new Error(`Bundle load failed: ${JSON.stringify(loaded.error)}`);
+  return loaded.value;
+}
+
+describe('the witnessing-capability report', () => {
+  it('reads an ABSENT report as unreported — the state of every bundle in existence', async () => {
+    // The bug-12 trap, aimed squarely at this change: an assertion about an
+    // absent value is only meaningful if you know what the consumer does with
+    // absence. If this said `unavailable`, every archived submission would
+    // assert that its own witnessing was broken.
+    const result = reconcileWitnesses(await scopeReporting({}, {}));
+    expect(result.sessions.map((s) => s.capability)).toEqual(['unreported', 'unreported']);
+    expect(result.witnessingCapability).toBe('unknown');
+    // ...and `unwitnessed` is unchanged, and still blameless.
+    expect(result.counts.unwitnessedSessions).toBe(2);
+  });
+
+  it('says IMPOSSIBLE only when every session reported that it could not witness', async () => {
+    // This is what item 3 buys: `unwitnessedSessions: 2` here is fully explained
+    // by incapacity, and no combination of those absences means anything.
+    const result = reconcileWitnesses(
+      await scopeReporting({ witness_capture: 'unavailable' }, { witness_capture: 'unavailable' }),
+    );
+    expect(result.witnessingCapability).toBe('impossible');
+    expect(result.counts.unwitnessedSessions).toBe(2);
+    expect(result.sessions.map((s) => s.capability)).toEqual(['unavailable', 'unavailable']);
+  });
+
+  it('says AVAILABLE when a session was watching, so its silence is a fact about what it saw', async () => {
+    const result = reconcileWitnesses(
+      await scopeReporting({ witness_capture: 'available' }, { witness_capture: 'unavailable' }),
+    );
+    expect(result.witnessingCapability).toBe('available');
+    expect(result.sessions.map((s) => s.capability)).toEqual(['available', 'unavailable']);
+  });
+
+  it('falls back to unknown when one session said nothing — it might have been the capable one', async () => {
+    const result = reconcileWitnesses(await scopeReporting({ witness_capture: 'unavailable' }, {}));
+    expect(result.witnessingCapability).toBe('unknown');
+  });
+
+  it('reads a value outside the enum as unreported, never as unavailable', async () => {
+    // A nonconforming writer must not be able to assert that witnessing was
+    // broken by inventing a word for it, and must not reach a staff-facing
+    // surface as if that word meant something.
+    const result = reconcileWitnesses(await scopeReporting({ witness_capture: 'partial' }));
+    expect(result.sessions[0]!.capability).toBe('unreported');
+    expect(result.witnessingCapability).toBe('unknown');
+  });
+
+  it('keeps capability on a different axis from state — the two are never merged', async () => {
+    // `state` says whether anyone witnessed THIS log. `capability` says whether
+    // THIS log's recorder could have witnessed anyone. A session can be
+    // unwitnessed while perfectly capable, and that is the ordinary case.
+    const result = reconcileWitnesses(await scopeReporting({ witness_capture: 'available' }));
+    expect(result.sessions[0]!.state).toBe('unwitnessed');
+    expect(result.sessions[0]!.capability).toBe('available');
+  });
+
+  it('does not move a single verdict, count or exclusion', async () => {
+    // Item 3 adds CONTEXT. Nothing about what the reconciler concludes changes.
+    const withReport = reconcileWitnesses(
+      await scopeReporting({ witness_capture: 'unavailable' }, { witness_capture: 'unavailable' }),
+    );
+    const withoutReport = reconcileWitnesses(await scopeReporting({}, {}));
+    expect(withReport.counts).toEqual(withoutReport.counts);
+    expect(withReport.witnesses).toEqual(withoutReport.witnesses);
+    expect(withReport.excluded).toEqual(withoutReport.excluded);
+    expect(withReport.malformed).toEqual(withoutReport.malformed);
+  });
+});

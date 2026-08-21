@@ -210,16 +210,24 @@ function inertWiring(): GitWiring {
   return { dispose() {}, settled: () => Promise.resolve() };
 }
 
-export function startGitWiring(deps: GitWiringDeps): GitWiring {
-  const { emit, getGitExtension, explanationTagger } = deps;
-  const isRepoOwnedByThisRoot = deps.isRepoOwnedByThisRoot ?? (() => true);
-  const readConfiguredGitPath = deps.readConfiguredGitPath ?? (() => undefined);
+/**
+ * The three ways the git integration can be reached, or fail to be.
+ *
+ * Extracted so {@link startGitWiring} and {@link probeGitCapture} ask the
+ * question exactly once, in one place. Two implementations of "is the git API
+ * reachable" would agree today and drift later, and the drift would be silent:
+ * the capability report would say one thing and the wiring would do another,
+ * which is worse than not reporting at all.
+ */
+type GitApiResolution =
+  | { kind: 'unavailable'; reason: 'extension_absent' | 'api_threw' | 'api_undefined' }
+  | { kind: 'available'; api: GitAPI };
 
+function resolveGitApi(
+  getGitExtension: () => vscode.Extension<unknown> | undefined,
+): GitApiResolution {
   const gitExtension = getGitExtension();
-  if (gitExtension === undefined) {
-    console.warn('[provenance] vscode.git extension not found; git.event wiring skipped.');
-    return inertWiring();
-  }
+  if (gitExtension === undefined) return { kind: 'unavailable', reason: 'extension_absent' };
 
   let api: GitAPI | undefined;
   try {
@@ -227,13 +235,98 @@ export function startGitWiring(deps: GitWiringDeps): GitWiring {
     api = exports?.getAPI?.(1);
   } catch (e) {
     console.warn('[provenance] failed to get vscode.git API v1:', e);
-    return inertWiring();
+    return { kind: 'unavailable', reason: 'api_threw' };
   }
 
-  if (api === undefined) {
-    console.warn('[provenance] vscode.git getAPI(1) returned undefined; git.event wiring skipped.');
+  if (api === undefined) return { kind: 'unavailable', reason: 'api_undefined' };
+  return { kind: 'available', api };
+}
+
+/**
+ * The `session.start.git_capture` CAPABILITY REPORT — collaboration spec §5.6
+ * item 2.
+ *
+ * Without it, a scope with no `git.event` is indistinguishable from a scope
+ * where git capture was impossible. Decision D16 made that gap matter: a
+ * content-derived `git_unrecorded_in` is no longer suppressible by the
+ * recorder's timing tag, and the accepted cost is that it fires for an honest
+ * pair whose partner simply was not recording. "Git capture was impossible on
+ * this machine" is exactly the context a grader needs to read that flag, and
+ * until now it was unavailable.
+ *
+ * This is a capability report, NOT a capture knob: it says "I could not", never
+ * "I was told not to". It is not policy-gated and it is never a finding.
+ *
+ * ## The three answers, and how each is reached here
+ *
+ *  - `'unavailable'` — {@link resolveGitApi} could not reach the API. All three
+ *    of its reasons land here: the `vscode.git` extension is absent, its
+ *    `getAPI(1)` threw, or it returned `undefined`. Each is the exact condition
+ *    on which `startGitWiring` returns an inert wiring, so the report is true by
+ *    construction: no `git.event` can be produced this session.
+ *  - `'not_owned'` — the API answered, it knows about at least one repository,
+ *    and NONE of them belongs to this session's assignment scope. `watchRepo`
+ *    would drop every one of their events. The recorder could see git; it was
+ *    routing, not incapacity, and a grader needs the difference.
+ *  - `'available'` — the API answered and either it owns a repository or it
+ *    knows about none yet. **Zero repositories is `'available'`, not
+ *    `'not_owned'`**: an assignment folder that is not in a repository has
+ *    nothing to route, and the wiring's `onDidOpenRepository` subscription would
+ *    pick up one that appeared later.
+ *
+ * ## `undefined` means OMIT
+ *
+ * Returned when the ownership check itself is unusable — the repository list
+ * could not be enumerated, or the predicate threw. Absent is a legal,
+ * permanent, blameless answer and guessing is worse than silence, exactly as it
+ * is for the D12 discriminator. **A writer omits the field; it never emits
+ * `null`**, which canonicalizes differently and chains to a different hash.
+ *
+ * ## What this does NOT claim
+ *
+ * It is a snapshot taken at session start. A repository opened later can change
+ * which answer would have been true — `onDidOpenRepository` is live for the
+ * whole session — so `'not_owned'` means "at session start, nothing git could
+ * see was in scope", never "no owned repository existed at any point". The
+ * field is context for reading an absence, not a bound on it.
+ */
+export function probeGitCapture(deps: {
+  getGitExtension: () => vscode.Extension<unknown> | undefined;
+  /** Same predicate the wiring routes on. Defaults to "always owned". */
+  isRepoOwnedByThisRoot?: (repoRootFsPath: string) => boolean;
+}): 'available' | 'unavailable' | 'not_owned' | undefined {
+  const resolved = resolveGitApi(deps.getGitExtension);
+  if (resolved.kind === 'unavailable') return 'unavailable';
+
+  const isOwned = deps.isRepoOwnedByThisRoot ?? (() => true);
+  try {
+    const repositories = [...resolved.api.repositories];
+    if (repositories.length === 0) return 'available';
+    for (const repo of repositories) {
+      if (isOwned(repo.rootUri.fsPath)) return 'available';
+    }
+    return 'not_owned';
+  } catch (e) {
+    // The API answered but its repository list could not be read, so neither
+    // 'available' nor 'not_owned' is established. Omit.
+    console.warn('[provenance] git wiring: could not enumerate repositories for the report:', e);
+    return undefined;
+  }
+}
+
+export function startGitWiring(deps: GitWiringDeps): GitWiring {
+  const { emit, getGitExtension, explanationTagger } = deps;
+  const isRepoOwnedByThisRoot = deps.isRepoOwnedByThisRoot ?? (() => true);
+  const readConfiguredGitPath = deps.readConfiguredGitPath ?? (() => undefined);
+
+  const resolved = resolveGitApi(getGitExtension);
+  if (resolved.kind === 'unavailable') {
+    console.warn(
+      `[provenance] vscode.git unavailable (${resolved.reason}); git.event wiring skipped.`,
+    );
     return inertWiring();
   }
+  const api: GitAPI = resolved.api;
 
   /**
    * The git executables to try, resolved ONCE and only if the production
@@ -247,7 +340,7 @@ export function startGitWiring(deps: GitWiringDeps): GitWiring {
     if (productionRun === undefined) {
       let extensionApiGitPath: unknown;
       try {
-        extensionApiGitPath = api?.git?.path;
+        extensionApiGitPath = api.git?.path;
       } catch (e) {
         console.warn('[provenance] git wiring: failed to read the git API executable path:', e);
       }
