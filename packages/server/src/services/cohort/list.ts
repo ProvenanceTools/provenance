@@ -46,7 +46,9 @@ export type CohortFilters = {
   hasLargePaste?: boolean;
   recorderVersion?: string;
   includeSuperseded?: boolean; // default false
-  q?: string; // free-text on display_name or sid
+  // Free-text on roster display_name or sid, matched against EVERY contributor
+  // rather than only the submitter of record. See `buildSearchCondition`.
+  q?: string;
 };
 
 export type CohortSort =
@@ -153,6 +155,72 @@ const SEVERITY_ORDER: Record<Severity, number> = {
 // `severity_rank >= N` range predicate using SEVERITY_RANK from
 // services/scoring/denorm.ts so the partial cohort index can answer it
 // with one comparison.
+
+// ---------------------------------------------------------------------------
+// Free-text search predicate
+// ---------------------------------------------------------------------------
+
+/**
+ * The `q` free-text predicate: a submission matches when ANY of the people it
+ * is attributable to matches on roster name or SID.
+ *
+ * ## The defect this closes
+ *
+ * This used to be an ILIKE against the `roster_entries` row reached through
+ * `submissions.student_id` — the single SUBMITTER OF RECORD. A group submission
+ * has one `submission_contributors` row per person but only one submitter of
+ * record, so typing the OTHER partner's name found nothing: a grader looking up
+ * a student by name was told that student had no submission, while their work
+ * sat in the system under their partner's name.
+ *
+ * `submissions.student_id` is deterministic now (settled on the lowest
+ * `roster_entries.sid` among co-submitters — see `ingest/dedup.ts`), so the
+ * miss was reliable rather than random: the same partner was unfindable on
+ * every search, forever.
+ *
+ * ## Why EXISTS on `submission_contributors`
+ *
+ * Exactly the shape the `studentId` filter already uses, and for the same
+ * reason. It is also a strict superset of the old predicate for every state
+ * production can reach: a submission with a non-null `student_id` always has a
+ * contributor row naming it — migration 0029 backfilled one for every
+ * pre-existing row, and `finalizeContributors` writes one in the same
+ * transaction on all three write paths (ingest, recompute, manual attach). So
+ * the submitter-of-record case matches precisely the rows it always did.
+ *
+ * EXISTS rather than a join: a join would emit one row per matching contributor
+ * and inflate both the page and COUNT(*).
+ *
+ * The subquery aliases both tables (`sc`, `re`) because callers already have
+ * `roster_entries` in their FROM via the submitter LEFT join, and an unaliased
+ * reference here would bind to that outer row instead of the contributor's.
+ *
+ * ## Protected mode
+ *
+ * Returns null — the search is SUPPRESSED, not merely masked. An ILIKE that
+ * narrowed the result set would be a name -> "Student N" lookup oracle: a
+ * protected principal could type a real name, see which placeholder rows came
+ * back, and recover exactly the identity protected mode withholds. Widening the
+ * predicate to contributors would have widened that oracle too, which is why
+ * the guard lives HERE, in the one place all three call sites go through,
+ * rather than being restated at each of them.
+ *
+ * Consequence, unchanged from before: in protected mode `q` is ignored, so the
+ * unfiltered result set comes back rather than an empty one.
+ */
+export function buildSearchCondition(q: string | undefined, protectedMode: boolean): SQL | null {
+  if (protectedMode) return null;
+  if (q === undefined) return null;
+  const trimmed = q.trim();
+  if (trimmed === '') return null;
+  const pattern = `%${trimmed}%`;
+  return sql`EXISTS (
+    SELECT 1 FROM submission_contributors sc
+    JOIN roster_entries re ON re.id = sc.roster_entry_id
+    WHERE sc.submission_id = ${submissions.id}
+      AND (re.display_name ILIKE ${pattern} OR re.sid ILIKE ${pattern})
+  )`;
+}
 
 // ---------------------------------------------------------------------------
 // Main query function
@@ -283,16 +351,12 @@ export async function listCohortSubmissions(
     );
   }
 
-  // q: free-text ILIKE on roster_entries.display_name or sid.
-  // Disabled in protected mode (it would be a name->Student-N lookup oracle).
-  if (!protectedMode && filters.q !== undefined && filters.q.trim() !== '') {
-    const pattern = `%${filters.q.trim()}%`;
-    whereConditions.push(
-      or(
-        sql`${roster_entries.display_name} ILIKE ${pattern}`,
-        sql`${roster_entries.sid} ILIKE ${pattern}`,
-      )!,
-    );
+  // q: free-text search over every CONTRIBUTOR's roster name / SID, not just
+  // the submitter of record's. Suppressed in protected mode. See
+  // `buildSearchCondition`.
+  const searchCond = buildSearchCondition(filters.q, protectedMode);
+  if (searchCond !== null) {
+    whereConditions.push(searchCond);
   }
 
   // Apply cursor-based pagination based on sort
@@ -477,15 +541,10 @@ export async function listCohortSubmissions(
       sql`NOT EXISTS (SELECT 1 FROM flags f WHERE f.submission_id = ${submissions.id} AND f.heuristic_id = 'large_paste')`,
     );
   }
-  // q: disabled in protected mode (oracle closure — same guard as main query).
-  if (!protectedMode && filters.q !== undefined && filters.q.trim() !== '') {
-    const pattern = `%${filters.q.trim()}%`;
-    countConditions.push(
-      or(
-        sql`${roster_entries.display_name} ILIKE ${pattern}`,
-        sql`${roster_entries.sid} ILIKE ${pattern}`,
-      )!,
-    );
+  // q: the identical predicate the page query uses — one function, so the count
+  // and the page cannot disagree about which rows the search matches.
+  if (searchCond !== null) {
+    countConditions.push(searchCond);
   }
 
   const [countResult] = await db

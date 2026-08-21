@@ -19,11 +19,12 @@
  * copy of the filter without its own dimension, then aggregates.
  */
 
-import { and, eq, isNull, inArray, or, sql } from 'drizzle-orm';
+import { and, eq, isNull, inArray, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { submissions, assignments, roster_entries } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import type { CohortFilters } from './list.js';
+import { buildSearchCondition } from './list.js';
 
 export type CohortFacets = {
   by_severity: { info: number; low: number; medium: number; high: number };
@@ -138,16 +139,14 @@ function buildWhereConditions(
     );
   }
 
-  // q: free-text ILIKE on roster_entries.display_name or sid.
-  // Disabled in protected mode (it would be a name->Student-N lookup oracle).
-  if (!protectedMode && filters.q !== undefined && filters.q.trim() !== '') {
-    const pattern = `%${filters.q.trim()}%`;
-    conds.push(
-      or(
-        sql`${roster_entries.display_name} ILIKE ${pattern}`,
-        sql`${roster_entries.sid} ILIKE ${pattern}`,
-      )!,
-    );
+  // q: the same contributor-wide search predicate the cohort list uses (see
+  // `list.ts`). The facets and the list are rendered side by side, so a facet
+  // built on the submitter-of-record ILIKE while the list matched contributors
+  // would report counts that contradict the rows beneath them — the same
+  // argument the `studentId` semi-join above is written for.
+  const searchCond = buildSearchCondition(filters.q, protectedMode);
+  if (searchCond !== null) {
+    conds.push(searchCond);
   }
 
   return conds;
