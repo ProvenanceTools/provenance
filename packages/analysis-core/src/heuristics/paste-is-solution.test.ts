@@ -23,15 +23,29 @@ async function buildAndIndex(opts: Parameters<typeof buildTestBundle>[0]) {
 const cfg = DEFAULT_HEURISTIC_CONFIG;
 
 // ---------------------------------------------------------------------------
-// Positive: paste that matches ≥80% of the final file's lines
+// Positive: paste that covers ≥80% of the final file's lines
 // ---------------------------------------------------------------------------
 
 describe('paste_is_solution — positive', () => {
   it('flags a paste whose content is 100% of the final file', async () => {
-    // Build a session where: (a) we paste 5 lines, (b) save the file.
+    // Build a session where: (a) we paste the whole file, (b) save it.
     // No other edits → the paste IS the final content.
-    const pasteContent = 'def solve():\n    return 42\n# end\nresult = solve()\nprint(result)';
-    // 5 lines
+    // 12 lines: comfortably over pasteIsSolution.minSharedLines, and realistic
+    // for a submitted solution file.
+    const pasteContent = [
+      'def solve(data):',
+      '    result = []',
+      '    for row in data:',
+      '        if row is None:',
+      '            continue',
+      '        result.append(row * 2)',
+      '    return result',
+      '',
+      'def main():',
+      '    print(solve([1, 2, 3]))',
+      '',
+      'main()',
+    ].join('\n');
 
     const { index, bundle } = await buildAndIndex({
       sessions: [
@@ -70,17 +84,19 @@ describe('paste_is_solution — positive', () => {
     expect(flag.heuristic).toBe('paste_is_solution');
     expect(flag.severity).toBe('high');
     expect(flag.confidence).toBe(0.85);
-    expect(flag.detail!['overlapRatio']).toBeGreaterThanOrEqual(0.8);
+    expect(flag.detail!['coverageRatio']).toBe(1);
+    expect(flag.detail!['sharedLines']).toBe(12);
     expect(flag.supportingSeqs).toHaveLength(1);
   });
 
-  it('flags a paste matching exactly 80% of lines (at threshold boundary)', async () => {
-    // 10-line file final content; paste has 10 lines, 8 of which match → 80%
-    const sharedLines = 'line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8';
-    const extraLines = '\nline9\nlineA';
-    const finalContent = sharedLines + extraLines; // 10 lines total in final
-    // paste is the first 10 lines with 8 shared + 2 unique paste-only
-    const pasteContent = sharedLines + '\npaste_only_1\npaste_only_2'; // 10 lines
+  it('flags a paste covering exactly 80% of the final file (at threshold boundary)', async () => {
+    // Final file is 15 lines; 12 of them came from the paste → coverage 12/15 = 0.80,
+    // exactly at pasteIsSolution.finalFileCoverage, and 12 ≥ minSharedLines.
+    const sharedLines = Array.from({ length: 12 }, (_, i) => `line${i + 1}`).join('\n');
+    const extraLines = '\nfinal13\nfinal14\nfinal15';
+    const finalContent = sharedLines + extraLines; // 15 lines total in final
+    // paste is the 12 shared lines plus 2 lines the student later removed
+    const pasteContent = sharedLines + '\npaste_only_1\npaste_only_2'; // 14 lines
 
     // Build: paste → doc.change (add extra lines) → save
     const { index, bundle } = await buildAndIndex({
@@ -112,7 +128,8 @@ describe('paste_is_solution — positive', () => {
                 content: finalContent,
                 length: finalContent.length,
                 sha256: 'd'.repeat(64),
-                range: { start: { line: 0, character: 0 }, end: { line: 10, character: 0 } },
+                // clamped to EOF — replaces the whole first paste
+                range: { start: { line: 0, character: 0 }, end: { line: 14, character: 0 } },
               },
             },
             {
@@ -125,28 +142,29 @@ describe('paste_is_solution — positive', () => {
     });
 
     const flags = pasteIsSolutionHeuristic.run(index, bundle, cfg);
-    // The first paste (pasteContent) overlaps 8/10 lines = 80% with finalContent
-    const solutionFlags = flags.filter((f) => f.heuristic === 'paste_is_solution');
-    expect(solutionFlags.length).toBeGreaterThanOrEqual(1);
+    // The first paste covers 12/15 = exactly 80% of finalContent.
+    const boundaryFlag = flags.find((f) => (f.detail!['sharedLines'] as number) === 12);
+    expect(boundaryFlag, 'the exactly-80%-coverage paste should still flag').toBeDefined();
+    expect(boundaryFlag!.detail!['coverageRatio']).toBe(0.8);
+    expect(boundaryFlag!.detail!['finalFileLines']).toBe(15);
+    expect(boundaryFlag!.severity).toBe('high');
   });
 });
 
 // ---------------------------------------------------------------------------
-// Negative: paste below 80% overlap or no inline content
+// Negative: paste covering <80% of the final file, or no inline content
 // ---------------------------------------------------------------------------
 
 describe('paste_is_solution — negative', () => {
-  it('does not flag a paste that shares <80% of its lines with the final file', async () => {
-    // paste has 10 lines; only 3 overlap with the final file → 30%
-    const pasteLines = Array.from({ length: 10 }, (_, i) => `paste_line_${i}`).join('\n');
-    const finalLines = [
-      'paste_line_0', // shared
-      'paste_line_1', // shared
-      'paste_line_2', // shared
-      'completely_different_a',
-      'completely_different_b',
-      'completely_different_c',
-    ].join('\n');
+  it('does not flag a big paste that covers only part of the final file', async () => {
+    // A 12-line block is pasted, survives intact, and the student then types
+    // 18 more lines. Coverage is 12/30 = 40% → no flag.
+    //
+    // This is the defect the coverage gate exists for: survival
+    // (sharedLines/pasteLines) is 1.0 here, so the OLD ratio raised `high` on
+    // a student who wrote 60% of the file by hand.
+    const helper = Array.from({ length: 12 }, (_, i) => `def helper_${i}(): pass`).join('\n');
+    const typed = '\n' + Array.from({ length: 18 }, (_, i) => `typed_line_${i} = ${i}`).join('\n');
 
     const { index, bundle } = await buildAndIndex({
       sessions: [
@@ -154,27 +172,31 @@ describe('paste_is_solution — negative', () => {
           events: [
             {
               kind: 'doc.open',
-              data: { path: '/hw/hw1.py', sha256: 'a'.repeat(64), line_count: 0 },
+              data: { path: '/hw/hw1.py', sha256: 'a'.repeat(64), line_count: 0, content: '' },
             },
             {
               kind: 'paste',
               data: {
                 path: '/hw/hw1.py',
-                content: pasteLines,
-                length: pasteLines.length,
+                content: helper,
+                length: helper.length,
                 sha256: 'b'.repeat(64),
                 range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
               },
             },
-            // The final content is set by a second paste that's quite different
+            // The student types the rest of the file by hand.
             {
-              kind: 'paste',
+              kind: 'doc.change',
               data: {
                 path: '/hw/hw1.py',
-                content: finalLines,
-                length: finalLines.length,
-                sha256: 'c'.repeat(64),
-                range: { start: { line: 0, character: 0 }, end: { line: 10, character: 0 } },
+                source: 'typed',
+                deltas: [
+                  {
+                    // clamped to EOF
+                    range: { start: { line: 99, character: 0 }, end: { line: 99, character: 0 } },
+                    text: typed,
+                  },
+                ],
               },
             },
             {
@@ -187,13 +209,7 @@ describe('paste_is_solution — negative', () => {
     });
 
     const flags = pasteIsSolutionHeuristic.run(index, bundle, cfg);
-    // The first paste shares 3/10 = 30% < 80% → no flag for it.
-    // The second paste is 100% identical to the final → that one MAY fire.
-    // We check there's no flag for the first paste.
-    const detailFlags = flags.filter(
-      (f) => f.heuristic === 'paste_is_solution' && (f.detail!['overlapRatio'] as number) < 0.8,
-    );
-    expect(detailFlags).toHaveLength(0);
+    expect(flags.filter((f) => f.heuristic === 'paste_is_solution')).toHaveLength(0);
   });
 
   it('does not flag a paste with no inline content field', async () => {
@@ -274,6 +290,121 @@ describe('paste_is_solution — negative', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Sizing: the flag must not be reachable by small honest pastes, and must
+// still be reachable by the thing it exists to catch. Every "does not fire"
+// case below is paired with a "still fires on the real thing" case.
+// ---------------------------------------------------------------------------
+
+/** Builds a bundle where `typed` is hand-typed and `pasted` is then pasted on top. */
+async function typedThenPasted(typed: string, pasted: string) {
+  return buildAndIndex({
+    sessions: [
+      {
+        events: [
+          {
+            kind: 'doc.open' as const,
+            data: { path: '/hw/hw1.py', sha256: 'a'.repeat(64), line_count: 0, content: '' },
+          },
+          ...(typed.length > 0
+            ? [
+                {
+                  kind: 'doc.change' as const,
+                  data: {
+                    path: '/hw/hw1.py',
+                    source: 'typed',
+                    deltas: [
+                      {
+                        range: {
+                          start: { line: 0, character: 0 },
+                          end: { line: 0, character: 0 },
+                        },
+                        text: typed,
+                      },
+                    ],
+                  },
+                },
+              ]
+            : []),
+          {
+            kind: 'paste' as const,
+            data: {
+              path: '/hw/hw1.py',
+              content: pasted,
+              length: pasted.length,
+              sha256: 'b'.repeat(64),
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+            },
+          },
+          { kind: 'doc.save' as const, data: { path: '/hw/hw1.py', sha256: 'c'.repeat(64) } },
+        ],
+      },
+    ],
+  });
+}
+
+describe('paste_is_solution — sizing', () => {
+  const IMPORTS = 'import sys\nimport os\nfrom collections import defaultdict\n';
+  const HAND_TYPED_60 = Array.from({ length: 60 }, (_, i) => `line_${i} = ${i}`).join('\n');
+
+  it('does not flag a 3-line import block pasted onto a hand-typed file', async () => {
+    // The regression this heuristic's coverage gate exists for. Survival is
+    // 1.0 (nobody deleted the imports), which used to raise `high` — the most
+    // damning flag in the catalogue — against a student who typed the file.
+    const { index, bundle } = await typedThenPasted(HAND_TYPED_60, IMPORTS);
+    const flags = pasteIsSolutionHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(0);
+  });
+
+  it('still flags high when the whole 60-line file arrives as one paste', async () => {
+    // Same file, but pasted rather than typed. This is the behaviour the whole
+    // system exists to detect and it must survive the sizing gates.
+    const { index, bundle } = await typedThenPasted('', HAND_TYPED_60);
+    const flags = pasteIsSolutionHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.severity).toBe('high');
+    expect(flags[0]!.confidence).toBe(0.85);
+    expect(flags[0]!.detail!['coverageRatio']).toBe(1);
+    expect(flags[0]!.detail!['sharedLines']).toBe(60);
+  });
+
+  it('does not flag a whole-file paste below the minSharedLines floor', async () => {
+    // 100% coverage, but only 6 lines. large_paste declines to raise even
+    // `medium` under 10 lines; this flag raises `high`, so it must not be
+    // reachable below the same floor.
+    const tiny = Array.from({ length: 6 }, (_, i) => `tiny_${i} = ${i}`).join('\n');
+    const { index, bundle } = await typedThenPasted('', tiny);
+    const flags = pasteIsSolutionHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(0);
+  });
+
+  it('flags the same whole-file paste once it clears the floor', async () => {
+    const enough = Array.from({ length: 10 }, (_, i) => `tiny_${i} = ${i}`).join('\n');
+    const { index, bundle } = await typedThenPasted('', enough);
+    const flags = pasteIsSolutionHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.severity).toBe('high');
+    expect(flags[0]!.detail!['sharedLines']).toBe(10);
+  });
+
+  it('reports survival alongside coverage, and gates on coverage', async () => {
+    // 20 pasted lines all survive (survival 1.0) into a 100-line file.
+    const typed = Array.from({ length: 80 }, (_, i) => `typed_${i} = ${i}`).join('\n');
+    const pasted = Array.from({ length: 20 }, (_, i) => `pasted_${i} = ${i}`).join('\n') + '\n';
+    const { index, bundle } = await typedThenPasted(typed, pasted);
+    const flags = pasteIsSolutionHeuristic.run(index, bundle, cfg);
+    // Coverage 20/100 = 0.2 → no flag, despite survival 1.0.
+    expect(flags).toHaveLength(0);
+
+    // And with the coverage threshold lowered, the flag carries both numbers.
+    const loose = mergeConfig({ pasteIsSolution: { finalFileCoverage: 0.1, minSharedLines: 10 } });
+    const looseFlags = pasteIsSolutionHeuristic.run(index, bundle, loose);
+    expect(looseFlags).toHaveLength(1);
+    expect(looseFlags[0]!.detail!['coverageRatio']).toBeCloseTo(0.2, 5);
+    expect(looseFlags[0]!.detail!['survivalRatio']).toBeGreaterThan(0.9);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Recorder v1.2: paste-shaped doc.change should also be evaluated
 // ---------------------------------------------------------------------------
 
@@ -281,11 +412,13 @@ describe('paste_is_solution — paste-shaped doc.change (recorder v1.2)', () => 
   it('flags a doc.change with source=paste_likely whose delta text matches the final file', async () => {
     // Bundle: doc.open seeds the file as empty, then a paste_likely
     // doc.change inserts the entire "solution". Final file content equals
-    // the inserted text → 100% line overlap → flag.
+    // the inserted text → full coverage → flag.
     const solution =
       'def square(x):\n    return x * x\n\n' +
       'def cube(x):\n    return x * x * x\n\n' +
-      'def quad(x):\n    return x ** 4\n';
+      'def quad(x):\n    return x ** 4\n\n' +
+      'def quint(x):\n    return x ** 5\n\n' +
+      'def hexp(x):\n    return x ** 6\n';
     const { index, bundle } = await buildAndIndex({
       sessions: [
         {
@@ -322,8 +455,8 @@ describe('paste_is_solution — paste-shaped doc.change (recorder v1.2)', () => 
     const flags = pasteIsSolutionHeuristic.run(index, bundle, cfg);
     expect(flags).toHaveLength(1);
     expect(flags[0]!.detail!['origin']).toBe('doc.change');
-    expect(flags[0]!.detail!['overlapRatio']).toBeGreaterThanOrEqual(
-      cfg.pasteIsSolution.lineOverlap,
+    expect(flags[0]!.detail!['coverageRatio']).toBeGreaterThanOrEqual(
+      cfg.pasteIsSolution.finalFileCoverage,
     );
   });
 });
@@ -333,14 +466,28 @@ describe('paste_is_solution — paste-shaped doc.change (recorder v1.2)', () => 
 // ---------------------------------------------------------------------------
 
 describe('paste_is_solution — internal move downgrade', () => {
-  const SOLUTION = [
+  // Sized past pasteIsSolution.minSharedLines (10) so the flag is reachable at
+  // all: these tests are about the internal-move classification, not about
+  // size, and a 5-shared-line "solution" is a test artefact, not a submission.
+  const SOLUTION_LINES = [
     'def solve(data):',
     '    result = []',
     '    for row in data:',
+    '        if row is None:',
+    '            continue',
     '        result.append(row * 2)',
     '    return result',
     '',
-  ].join('\n');
+    'def main():',
+    '    values = [1, 2, 3, 4]',
+    '    print(solve(values))',
+    '',
+    'main()',
+    '',
+  ];
+  const SOLUTION = SOLUTION_LINES.join('\n');
+  /** Last line index of SOLUTION — the cut range end that removes all of it. */
+  const SOLUTION_END_LINE = SOLUTION_LINES.length - 1;
 
   /** Type the solution, cut it out, paste it back — pure reorganisation. */
   const cutAndPasteBack = {
@@ -368,7 +515,10 @@ describe('paste_is_solution — internal move downgrade', () => {
               source: 'typed',
               deltas: [
                 {
-                  range: { start: { line: 0, character: 0 }, end: { line: 5, character: 0 } },
+                  range: {
+                    start: { line: 0, character: 0 },
+                    end: { line: SOLUTION_END_LINE, character: 0 },
+                  },
                   text: '',
                 },
               ],

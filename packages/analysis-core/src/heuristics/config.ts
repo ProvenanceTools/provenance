@@ -28,7 +28,8 @@
  *     - always high, confidence 1.0 (cryptographic check — no ambiguity).
  *
  *   paste_is_solution (Phase 16):
- *     - high: shared lines / paste lines >= lineOverlap threshold (default 0.8)
+ *     - high: shared lines >= minSharedLines (default 10) AND
+ *             shared lines / final file lines >= finalFileCoverage (default 0.8)
  *     - confidence: 0.85.
  *
  *   mass_external_replacement (Phase 16):
@@ -126,10 +127,35 @@ export type HeuristicConfig = {
   /** Phase 16: paste_is_solution heuristic thresholds. */
   pasteIsSolution: {
     /**
-     * Minimum shared-line ratio (sharedLines / pasteLines) to flag.
+     * Minimum coverage ratio (sharedLines / finalFileLines) to flag — how much
+     * of the SUBMITTED FILE the insertion accounts for.
+     *
+     * Deliberately not sharedLines/pasteLines ("how much of the paste
+     * survived"), which is trivially 1.0 for any small paste nobody deleted:
+     * a 3-line import block pasted onto a 60-line hand-typed file scored 1.0
+     * under the old ratio and raised `high`. The claim this flag makes is
+     * "the submitted file is pasted code", and the evidence for that claim is
+     * coverage of the final file, not survival of the paste.
+     *
+     * Coverage is per candidate and deliberately does not sum: four pastes
+     * each covering 25% clear neither gate. "How much of this file arrived
+     * without being typed" is low_typing_high_output's question.
+     *
      * Default: 0.8 (80%).
      */
-    lineOverlap: number;
+    finalFileCoverage: number;
+    /**
+     * Minimum absolute shared-line count before the flag can raise at all.
+     *
+     * Deliberately equal to `largePaste.minLines` (10): large_paste declines
+     * to raise even `medium` below 10 lines, and paste_is_solution raises
+     * `high` — a strictly stronger claim — so it must not be reachable below
+     * the same floor. Without it, coverage alone still fires on a 4-line file
+     * whose 4 lines were pasted.
+     *
+     * Default: 10 lines.
+     */
+    minSharedLines: number;
   };
   /** Phase 16: mass_external_replacement heuristic thresholds. */
   massExternalReplacement: {
@@ -273,7 +299,9 @@ export const DEFAULT_HEURISTIC_CONFIG: HeuristicConfig = {
     minCharsForConfidence: 500,
   },
   pasteIsSolution: {
-    lineOverlap: 0.8,
+    finalFileCoverage: 0.8,
+    // Mirrors largePaste.minLines. See the field doc above.
+    minSharedLines: 10,
   },
   massExternalReplacement: {
     sharedThreshold: 0.2,

@@ -25,11 +25,25 @@ import {
 
 const PATH = 'hw.py';
 // No trailing newline: `lineCount` splits on '\n', so a trailing one adds an
-// empty third line that diffLines does not count as shared, dropping the ratio
-// to 0.67 and under the 0.8 threshold. The positive control below is what
-// caught that — without it this suite would have "passed" on a fixture the
-// heuristic never fires on.
-const SOLUTION = 'def solve():\n    return 42';
+// empty last line that diffLines does not count as shared, pulling the
+// coverage ratio below the 0.8 threshold on a short fixture. And ≥ 10 lines,
+// because paste_is_solution will not raise below `minSharedLines`. The
+// positive control below is what keeps both of those honest — without it this
+// suite would "pass" on a fixture the heuristic never fires on.
+const SOLUTION = [
+  'def solve(data):',
+  '    result = []',
+  '    for row in data:',
+  '        if row is None:',
+  '            continue',
+  '        result.append(row * 2)',
+  '    return result',
+  '',
+  'def main():',
+  '    print(solve([1, 2, 3]))',
+  '',
+  'main()',
+].join('\n');
 
 function ev(
   seq: number,
