@@ -223,8 +223,12 @@ describe('multiple_sessions_overlap — positive', () => {
     const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
     expect(flags).toHaveLength(1);
     expect(flags[0]!.heuristic).toBe('multiple_sessions_overlap');
-    expect(flags[0]!.severity).toBe('high');
-    expect(flags[0]!.confidence).toBe(0.95);
+    // These sessions carry NO identity block, so who recorded them is
+    // undecidable and the flag states the overlap rather than accusing anyone.
+    // (`machine_id` is sha256(hostname:username:sessionId) — session-salted, so
+    // "different hosts" is not a fact this fixture can establish either.)
+    expect(flags[0]!.severity).toBe('low');
+    expect(flags[0]!.confidence).toBe(0.5);
     expect(flags[0]!.supportingSeqs).toHaveLength(2);
   });
 
@@ -247,7 +251,9 @@ describe('multiple_sessions_overlap — positive', () => {
     const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
     expect(flags).toHaveLength(1);
     expect(flags[0]!.heuristic).toBe('multiple_sessions_overlap');
-    expect(flags[0]!.severity).toBe('high');
+    // No identity block on either side — undecidable, so stated rather than
+    // accused. The crash-bounding detail below is unaffected.
+    expect(flags[0]!.severity).toBe('low');
     expect(flags[0]!.detail).toMatchObject({
       sessionA: expect.any(String),
       sessionB: expect.any(String),

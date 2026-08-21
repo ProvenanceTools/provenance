@@ -13,22 +13,76 @@
  * accusation against the assignment being done exactly as assigned. See
  * `docs/superpowers/specs/2026-08-19-git-collaboration-semantics.md` §3 S5.
  *
- * So a pair is now judged by {@link compareContributors} over the two sessions'
- * resolved contributors:
+ * So a pair is now judged on the two sessions' resolved contributors, and on
+ * the two things a verified identity establishes — WHO, and on WHICH MACHINE:
  *
- *  - `'same'`     — one verified person recorded both. This is the ORIGINAL
- *                   signal and keeps its severity and confidence untouched.
- *  - `'different'` — two verified, distinct people recorded them. Expected
- *                   collaboration; no flag. This is the ONLY case that
- *                   suppresses, and it requires proof on both sides.
- *  - `'unknown'`  — at least one side is `unattributed` or `unverifiable`, so
- *                   "these are two different people" is exactly what is NOT
- *                   established. The flag fires, with wording that says so.
- *                   An unenrolled cohort therefore loses no findings.
+ *  - **one person, one machine** — the same verified `student_ref` AND the same
+ *    long-lived `student_pubkey`. The ORIGINAL signal, at its original
+ *    severity and confidence. Fires.
+ *  - **one person, two machines** — the same `student_ref`, two proven-distinct
+ *    `student_pubkey`s. D5's supported flow; no flag. See below.
+ *  - **two people** — two verified, distinct `student_ref`s. Expected
+ *    collaboration; no flag.
+ *  - **undecided** — at least one side is `unattributed` or `unverifiable`, so
+ *    NONE of the above is established. Still stated, at a severity that says
+ *    so; see "The undecidable majority" below.
  *
  * Never compare `contributorKey` strings directly here. That reads "unproven"
  * as "different people" and reintroduces the accusation through the back door,
  * because every unattributed session carries a per-session singleton key.
+ *
+ * ## D5: two machines is a supported flow, and the log already proves it
+ *
+ * This flag used to accuse the two-machine flow of forgery in its first clause
+ * ("On a single machine that does not happen without clock manipulation or log
+ * forging") and concede it in its last ("the remaining innocent explanation is
+ * that this person recorded on two machines under one identity"). D5 makes that
+ * flow first class: each machine enrolls independently with its own keypair and
+ * the shared `student_ref` groups them into one contributor, so no secret is
+ * ever copied.
+ *
+ * The evidence that separates the two was already in the bundle. `student_ref`
+ * is per-PERSON; the long-lived `student_pubkey` that countersigned the session
+ * key is per-MACHINE, because a second enrolment mints a fresh student keypair
+ * over the same ref — `mint-credential.ts` counts precisely this as
+ * `machine_count`. No format change and no new event field was needed.
+ *
+ * The contributor is NOT split. `attributedContributorKey` still keys on
+ * `student_ref` alone, so D14's per-contributor scoring, the
+ * `submission_contributors` cut-over and the sole-contributor rule keep seeing
+ * one person; splitting them would split that person's score across two
+ * apparent people, which migration 0029 exists to prevent. Only the overlap
+ * judgement gained sight of the machine.
+ *
+ * The gain is not only a suppression. On the pairs that DO fire, "they used two
+ * machines" is now excluded by evidence rather than conceded, so the wording is
+ * stronger and the high severity is honest for the first time.
+ *
+ * ## The undecidable majority
+ *
+ * `compareContributors` needs BOTH sides attributed, so the answer is
+ * `unknown` for the cases that are ordinary today: one partner unenrolled,
+ * neither enrolled, any 1.x bundle (no identity block exists below Manifest
+ * 2.0), and any deployment with no root key — where
+ * `identity/resolve-contributors.ts` makes every identified session
+ * `unverifiable`, so a MISCONFIGURATION used to turn every partner overlap into
+ * a high-severity accusation. At `N*(N-1)/2` flags per bundle.
+ *
+ * The finding is KEPT in every one of those states — dropping it would fail
+ * toward fewer findings, and a deployment must never be able to switch a
+ * heuristic off by unsetting a variable (the over-correction hazard of decision
+ * log bug 12). What changed is the weight it carries: `low` / 0.5 rather than
+ * `high` / 0.95, with wording that states the overlap, names both readings,
+ * refuses to choose between them, and says what would have settled it — spec §6
+ * Rule 1's third state, and Rule 2's bar for naming a person.
+ *
+ * This is deliberately NOT the call bug 13 made for `no_session_log`, and the
+ * difference is the lever. There, severity was shared with genuine signature
+ * forgery, so lowering it to soften one defect would have weakened the
+ * strongest detection in the check, and only the text could move. Here the
+ * partition separates the decidable single-machine case cleanly into its own
+ * arm, so the undecided arm can be lowered at zero cost to the detection this
+ * heuristic exists for. `same_machine` keeps `high` / 0.95 exactly.
  *
  * ## Where the suppression actually lives
  *
@@ -95,12 +149,16 @@
  * firstEvent.wall (done in the loader). We iterate all pairs N*(N-1)/2.
  * With typical bundle sizes (1–10 sessions) this is negligible.
  *
- * Severity: 'high'. Confidence: 0.95 — unchanged, and deliberately so. Tier 3.2
- * narrows WHICH pairs are judged; it does not soften the judgement on the pairs
- * that survive the gate. The remaining innocent explanations (a misconfigured
- * clock, or one person recording on two machines under one identity) are named
- * in the description rather than being asserted away; clock skew would also
- * trigger monotonic_wall_regression.
+ * Severity follows what was ESTABLISHED, and nothing else:
+ *
+ *  - `same_machine` → 'high' / 0.95, unchanged. Tier 3.2 narrowed WHICH pairs
+ *    are judged and this change narrows it further, but neither softens the
+ *    judgement on the pairs that survive. The one innocent explanation left is
+ *    a misconfigured clock, which is named in the description rather than
+ *    asserted away and would also trigger monotonic_wall_regression.
+ *  - `unknown` → 'low' / 0.5. Not a softer accusation — a statement instead of
+ *    an accusation, because which reading applies is precisely what the
+ *    evidence does not say.
  *
  * One flag per overlapping pair. The supporting seqs are the session.start
  * events of each session.
@@ -110,7 +168,11 @@ import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import { describeSessionContributor } from '../identity/resolve-contributors.js';
 import type { SessionContributor } from '../identity/types.js';
-import { partitionSessionOverlaps, type SessionRange } from '../coverage/session-overlap.js';
+import {
+  partitionSessionOverlaps,
+  type JudgedOverlap,
+  type SessionRange,
+} from '../coverage/session-overlap.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
 
@@ -126,29 +188,77 @@ function flagId(sessionIdA: string, sessionIdB: string): string {
 }
 
 /**
- * The clause that says what the overlap MEANS, given who recorded the two
- * sessions. Never reached for `'different'` — that pair produces no flag.
+ * WHY the identity evidence could not decide, and therefore what would have
+ * resolved it (spec §6 Rule 1: `unknown` is stated, with what would have
+ * resolved it). Ordered by which fact dominates, not by session order.
+ *
+ * `no_root_key` comes first because it is a DEPLOYMENT fact, not a fact about
+ * this submission: one unset environment variable makes EVERY identified
+ * session in EVERY bundle `unverifiable`, and a grader must not read that as
+ * something a student did.
  */
-function contributorClause(
-  comparison: 'same' | 'unknown',
-  ca: SessionContributor,
-  cb: SessionContributor,
-): string {
-  if (comparison === 'same') {
-    const who = ca.kind === 'attributed' ? ca.studentRef : 'the same contributor';
+type UnresolvedBy = 'no_root_key' | 'identity_did_not_verify' | 'no_identity_block';
+
+function unresolvedBy(ca: SessionContributor, cb: SessionContributor): UnresolvedBy {
+  for (const c of [ca, cb]) {
+    if (c.kind === 'unverifiable' && c.reason.kind === 'no_root_key') return 'no_root_key';
+  }
+  for (const c of [ca, cb]) {
+    if (c.kind === 'unverifiable') return 'identity_did_not_verify';
+  }
+  return 'no_identity_block';
+}
+
+/** The sentence that names what would have settled the question. */
+function resolutionClause(by: UnresolvedBy): string {
+  switch (by) {
+    case 'no_root_key':
+      return (
+        `This analyzer has no root public key configured, so no session's enrollment chain — in ` +
+        `this bundle or any other — could be checked at all. That is a deployment setting, not ` +
+        `anything this submission did or failed to do; configuring it is what would decide this.`
+      );
+    case 'identity_did_not_verify':
+      return (
+        `An identity block on at least one of these sessions is present and did not verify, which ` +
+        `is reported on its own terms elsewhere. It establishes nothing about who recorded either ` +
+        `session, so it cannot settle this question either way.`
+      );
+    case 'no_identity_block':
+      return (
+        `At least one of these sessions carries no identity block at all — the ordinary, blameless ` +
+        `state for a student who has not enrolled, and for every bundle recorded below Manifest ` +
+        `2.0. Every collaborator on this scope being enrolled is what would decide this.`
+      );
+  }
+}
+
+/**
+ * The clause that says what the overlap MEANS, given who recorded the two
+ * sessions. Never reached for a suppressed pair — those produce no flag.
+ */
+function contributorClause(pair: JudgedOverlap): string {
+  if (pair.comparison === 'same_machine') {
+    // Both sides are typed `attributed`, so this names a person on
+    // `established` evidence — §6 Rule 2 is satisfied by the type.
     return (
-      `Both sessions are attributed to the same verified contributor (${who}), so this is one ` +
-      `person's recorder covering the same wall-clock window twice. On a single machine that ` +
-      `does not happen without clock manipulation or log forging; the remaining innocent ` +
-      `explanation is that this person recorded on two machines under one identity.`
+      `Both sessions are attributed to the same verified contributor (${pair.studentRef}), and ` +
+      `both were countersigned by the SAME enrolled machine key ` +
+      `(${pair.studentPubkey.slice(0, 16)}…), so this is one person's single enrolled machine ` +
+      `covering the same wall-clock window twice. Working on two machines does not produce this: ` +
+      `each machine enrolls separately and gets its own key, so that explanation is excluded here ` +
+      `by the identity evidence itself. What remains is clock manipulation or log forging.`
     );
   }
   return (
-    `It is NOT established that two different people recorded these sessions: ` +
-    `session A is ${describeSessionContributor(ca)}; session B is ${describeSessionContributor(cb)}. ` +
-    `If one person recorded both, the overlap indicates clock manipulation or log forging. ` +
-    `If two collaborators sharing a repository recorded them, it is ordinary concurrent work — ` +
-    `the verified identity evidence that would tell those apart is absent here.`
+    `It is NOT established who recorded these sessions, so it is not established whether this ` +
+    `overlap means anything: session A is ${describeSessionContributor(pair.contributorA)}; ` +
+    `session B is ${describeSessionContributor(pair.contributorB)}. If one person on one machine ` +
+    `recorded both, the overlap would indicate clock manipulation or log forging. If two ` +
+    `collaborators sharing a repository recorded them, or one person moved between two enrolled ` +
+    `machines, it is ordinary work and no finding at all. This flag states the overlap; it does ` +
+    `not choose between those readings and no one should read it as choosing. ` +
+    resolutionClause(unresolvedBy(pair.contributorA, pair.contributorB))
   );
 }
 
@@ -178,6 +288,7 @@ function run(index: EventIndex, bundle: Bundle, _config: HeuristicConfig): Flag[
     const { a, b, contributorA: ca, contributorB: cb, comparison } = pair;
 
     const pairId = flagId(a.sessionId, b.sessionId);
+
     if (emittedPairs.has(pairId)) continue;
     emittedPairs.add(pairId);
 
@@ -194,18 +305,24 @@ function run(index: EventIndex, bundle: Bundle, _config: HeuristicConfig): Flag[
     const aEndLabel = endLabel(a);
     const bEndLabel = endLabel(b);
 
+    // Severity and confidence follow WHAT WAS ESTABLISHED, which is the only
+    // thing that differs between the two arms. See the header.
+    const decided = comparison === 'same_machine';
+
     flags.push({
       id: pairId,
       heuristic: 'multiple_sessions_overlap',
-      title: `Sessions overlap: ${a.sessionId.slice(0, 8)}… and ${b.sessionId.slice(0, 8)}…`,
-      severity: 'high',
-      confidence: 0.95,
+      title: decided
+        ? `Sessions overlap on one machine: ${a.sessionId.slice(0, 8)}… and ${b.sessionId.slice(0, 8)}…`
+        : `Sessions overlap, recorder unidentified: ${a.sessionId.slice(0, 8)}… and ${b.sessionId.slice(0, 8)}…`,
+      severity: decided ? 'high' : 'low',
+      confidence: decided ? 0.95 : 0.5,
       supportingSeqs,
       description:
         `Sessions "${a.sessionId}" and "${b.sessionId}" have overlapping wall-time ranges. ` +
         `Session A: [${new Date(a.startWall).toISOString()}, ${aEndLabel}]. ` +
         `Session B: [${new Date(b.startWall).toISOString()}, ${bEndLabel}]. ` +
-        contributorClause(comparison, ca, cb),
+        contributorClause(pair),
       detail: {
         sessionA: a.sessionId,
         sessionB: b.sessionId,
@@ -218,6 +335,12 @@ function run(index: EventIndex, bundle: Bundle, _config: HeuristicConfig): Flag[
         contributorComparison: comparison,
         sessionAContributor: describeSessionContributor(ca),
         sessionBContributor: describeSessionContributor(cb),
+        // Only on the undecided arm: which of the three ways identity failed
+        // to decide, so a surface can route the reader to the right fix
+        // without re-deriving it from the prose.
+        ...(pair.comparison === 'unknown'
+          ? { unresolvedBy: unresolvedBy(pair.contributorA, pair.contributorB) }
+          : {}),
       },
     });
   }
