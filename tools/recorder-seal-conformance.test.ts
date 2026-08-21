@@ -2241,7 +2241,7 @@ describe('mutations: the sealed PREFIX of a mid-flight rolling bundle is still e
 // ===========================================================================
 
 describe('a both-shapes bundle keeps WHOLE-FILE semantics', () => {
-  it('carries no rolling coverage, and an append past the classic seal still fails', async () => {
+  it('records coverage from the CLASSIC digest, and an append past it still fails', async () => {
     const root = await makeRoot('both-shapes-append');
     const scenario = await buildRollingSealedBundle({
       root,
@@ -2267,8 +2267,27 @@ describe('a both-shapes bundle keeps WHOLE-FILE semantics', () => {
     expect(verified.bundle.manifest.format_version).toBe('1.1');
     // Rolling seals are present and verified, but they do NOT get to relax the
     // classic manifest's whole-file commitment.
+    //
+    // Coverage IS now recorded for a both-shapes bundle. It used not to be, and
+    // absence is NOT inert: `verify-log-bytes.ts` reads absent coverage as "this
+    // is a classic seal" and applies whole-file equality to a digest that may
+    // only ever have committed to a prefix. That was a fifth route to the
+    // prefix-versus-whole-file false accusation, at the outer gate
+    // `if (classicManifest === null)` — reachable by a student who ran the seal
+    // command once, kept working, and pushed a now-stale classic manifest.
+    //
+    // The strictness is preserved by WHERE the committed digest comes from, not
+    // by refusing to record coverage: when both shapes are present the digest is
+    // taken from the CLASSIC manifest. Here the classic manifest was written by
+    // `sealBundle` over the finished bytes, so the prefix search covers the whole
+    // file and an append past it is still outside the commitment — asserted
+    // below, which is the half that actually matters.
     expect(verified.bundle.rollingSeal!.seals).toHaveLength(1);
-    expect(verified.bundle.rollingSeal!.coverage).toBeUndefined();
+    const bothShapesCoverage = verified.bundle.rollingSeal!.coverage;
+    expect(bothShapesCoverage).toHaveLength(1);
+    // `exact` — the classic digest matches the whole file, so the commitment
+    // covers every byte and there is no unattested tail to hide an append in.
+    expect(bothShapesCoverage![0]!.slog.kind).toBe('exact');
     expectNoBundleDetections(verified.report);
 
     const slogName = `session-${scenario.sessions[0]!.fileUuid}.slog`;
@@ -2291,9 +2310,14 @@ describe('a both-shapes bundle keeps WHOLE-FILE semantics', () => {
     });
     const report = await validateMutated(buf);
     expect(detectionStatusOf(report, 'log_bytes_match')).toBe('fail');
-    expect(report.bundleDetections!.find((c) => c.id === 'log_bytes_match')!.detail).toContain(
-      'modified after sealing',
-    );
+    // The wording moved when the git line-ending reading was added, so assert
+    // the SUBSTANTIVE claim rather than the old literal: this check must still
+    // be willing to say the bytes changed and that an edit is one reading. A
+    // check that had gone silent, or that had been softened into treating every
+    // mismatch as a transport artifact, would fail here.
+    const appendDetail = report.bundleDetections!.find((c) => c.id === 'log_bytes_match')!.detail;
+    expect(appendDetail).toContain('these bytes changed after the session ended');
+    expect(appendDetail).toContain('appended to, truncated, or edited');
   });
 
   // The variant that worried me, written down because the reasoning is subtle
