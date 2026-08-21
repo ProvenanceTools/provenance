@@ -34,6 +34,7 @@ import {
   assignments,
   ingest_jobs,
   submissions,
+  submission_contributors,
   users,
   per_file_stats,
 } from '../../db/schema.js';
@@ -126,7 +127,9 @@ async function seedSubmission(
   opts: {
     semesterId: string;
     assignmentId: string;
-    studentId: string;
+    /** Null exercises the D9 "no single owning student" shape. */
+    studentId: string | null;
+    groupKey?: string;
     ingestJobId: string;
     sourceFilename?: string;
   },
@@ -139,6 +142,7 @@ async function seedSubmission(
       semester_id: opts.semesterId,
       assignment_id: opts.assignmentId,
       student_id: opts.studentId,
+      group_key: opts.studentId === null ? (opts.groupKey ?? `grp-${id}`) : null,
       blob_object_key: `semesters/${opts.semesterId}/submissions/${id}/bundle.zip`,
       blob_sha256: `sha256-${id}`,
       source_filename: opts.sourceFilename ?? 'test.zip',
@@ -206,9 +210,9 @@ describe('getSubmissionSummary — protected mode masking', () => {
         expect(summary).not.toBeNull();
 
         // student.display_name must match /^Student \d+$/
-        expect(summary!.student.display_name).toMatch(/^Student \d+$/);
+        expect(summary!.student!.display_name).toMatch(/^Student \d+$/);
         // student.sid must start with S
-        expect(summary!.student.sid).toMatch(/^S/);
+        expect(summary!.student!.sid).toMatch(/^S/);
         // source_filename must NOT contain 'smith' or 'john'
         expect(summary!.source_filename.toLowerCase()).not.toContain('smith');
         expect(summary!.source_filename.toLowerCase()).not.toContain('john');
@@ -247,8 +251,8 @@ describe('getSubmissionSummary — protected mode masking', () => {
         expect(summary).not.toBeNull();
 
         // Real display name and sid must be present
-        expect(summary!.student.display_name).toBe('John Smith');
-        expect(summary!.student.sid).toBe('smith123');
+        expect(summary!.student!.display_name).toBe('John Smith');
+        expect(summary!.student!.sid).toBe('smith123');
         // Real source_filename must be present
         expect(summary!.source_filename).toBe('smith_john_hw01.zip');
       });
@@ -280,7 +284,7 @@ describe('getSubmissionSummary — protected mode masking', () => {
         expect(summary).not.toBeNull();
 
         // Fallback: display_name uses UUID stub (still matches /^Student /)
-        expect(summary!.student.display_name).toMatch(/^Student /);
+        expect(summary!.student!.display_name).toMatch(/^Student /);
         // source_filename must not contain 'jones' or 'alice'
         expect(summary!.source_filename.toLowerCase()).not.toContain('jones');
         expect(summary!.source_filename.toLowerCase()).not.toContain('alice');
@@ -463,6 +467,110 @@ describe('getSubmissionSummary — assignment_manifest', () => {
 
         const summary = await getSubmissionSummary(db, client, sub.id, false);
         expect(summary!.assignment_manifest.trust_chain).toBe('unconfigured');
+      });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D9: a submission with no single owning student must not 404 the detail shell
+// ---------------------------------------------------------------------------
+
+describe('getSubmissionSummary — a submission with no single owning student', () => {
+  it('returns the summary with student: null and the contributors named', async () => {
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const { semester } = await seedCourseAndSemester(db);
+        const user = await seedUser(db);
+        const student = await seedStudent(db, semester.id, { sid: 'stu-1', displayName: 'Alice' });
+        const assignment = await seedAssignment(db, semester.id);
+        const job = await seedIngestJob(db, semester.id, user.id);
+
+        const sub = await seedSubmission(db, {
+          semesterId: semester.id,
+          assignmentId: assignment.id,
+          studentId: null,
+          groupKey: 'pair-alice-bob',
+          ingestJobId: job.id,
+        });
+        await seedBundleForSubmission(db, client, sub.id);
+
+        // The contributor is named even though no ONE student owns the row.
+        await db.insert(submission_contributors).values({
+          submission_id: sub.id,
+          semester_id: semester.id,
+          contributor_key: `roster:${student.id}`,
+          kind: 'roster',
+          roster_entry_id: student.id,
+          is_submitter: true,
+        });
+
+        const summary = await getSubmissionSummary(db, client, sub.id, false);
+
+        // Before D9 the roster join was INNER, so this query returned zero rows,
+        // the service returned null, and the ROUTE turned that null into a 404 —
+        // taking down the entire submission detail shell (overview, timeline,
+        // replay, validation, source) for a submission that exists and analyses
+        // perfectly. `null` now means only "no such submission".
+        expect(summary).not.toBeNull();
+        expect(summary!.student).toBeNull();
+        expect(summary!.contributors).toHaveLength(1);
+        expect(summary!.contributors[0]!.student?.display_name).toBe('Alice');
+
+        // The protected-mode filename label still has a non-PII handle to use
+        // even with no student to derive one from.
+        const masked = await getSubmissionSummary(db, client, sub.id, true);
+        expect(masked!.source_filename).not.toContain('test.zip');
+      });
+    });
+  });
+
+  it('still returns null — and therefore 404 — for a submission that does not exist', async () => {
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        // The distinction the LEFT join preserves: "no one student" and "no such
+        // submission" must not share a response.
+        expect(await getSubmissionSummary(db, client, crypto.randomUUID(), false)).toBeNull();
+      });
+    });
+  });
+
+  it('a solo submission still reports exactly one contributor, the same student', async () => {
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const { semester } = await seedCourseAndSemester(db);
+        const user = await seedUser(db);
+        const student = await seedStudent(db, semester.id, { sid: 'stu-1', displayName: 'Alice' });
+        const assignment = await seedAssignment(db, semester.id);
+        const job = await seedIngestJob(db, semester.id, user.id);
+        const sub = await seedSubmission(db, {
+          semesterId: semester.id,
+          assignmentId: assignment.id,
+          studentId: student.id,
+          ingestJobId: job.id,
+        });
+        await seedBundleForSubmission(db, client, sub.id);
+        await db.insert(submission_contributors).values({
+          submission_id: sub.id,
+          semester_id: semester.id,
+          contributor_key: `roster:${student.id}`,
+          kind: 'roster',
+          roster_entry_id: student.id,
+          is_submitter: true,
+        });
+
+        const summary = await getSubmissionSummary(db, client, sub.id, false);
+        // toMatchObject, not toEqual: the service returns `projectStudent`'s
+        // full shape (including `id`), which is a superset of what
+        // SubmissionSummarySchema declares. Pre-existing, and not this change's
+        // to alter.
+        expect(summary!.student).toMatchObject({ sid: 'stu-1', display_name: 'Alice' });
+        expect(summary!.contributors).toHaveLength(1);
+        expect(summary!.contributors[0]!.student).toEqual({
+          id: student.id,
+          sid: 'stu-1',
+          display_name: 'Alice',
+        });
       });
     });
   });

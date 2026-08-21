@@ -58,6 +58,7 @@ import { computeAndStoreStats } from './stats.js';
 import { runAndStoreValidation } from './validation.js';
 import { configuredValidationOptions } from '../../config/root-key.js';
 import { runAndStoreHeuristics } from '../heuristics/run-per-submission.js';
+import { finalizeContributors } from '../contributors/finalize.js';
 import { enqueueCrossFlagsJob } from '../../jobs/recompute-cross-flags.js';
 import { Errors } from '../../api/v1/errors.js';
 import { getLogger } from '../../logging.js';
@@ -230,7 +231,7 @@ export async function attachUnmatchedFile(
     //             submission row. Runs as a nested transaction (savepoint) inside
     //             the outer withTransaction.
     // -------------------------------------------------------------------------
-    const submissionResult = await createSubmission(
+    const createOutcome = await createSubmission(
       { db: tx, storageClient },
       {
         semesterId,
@@ -244,6 +245,27 @@ export async function attachUnmatchedFile(
         formatVersion: bundle.manifest.format_version,
       },
     );
+
+    // These exact bytes are already a submission in this semester. On the
+    // MANUAL attach path that is an operator error worth surfacing, not
+    // something to paper over: staff picked an unmatched file and named a
+    // student for it, and the honest answer is that the artifact is already
+    // ingested. Attaching the student silently would leave them believing a new
+    // submission exists.
+    //
+    // Unreachable in practice — phase 2 dedup already marks such a file
+    // `duplicate`, so it never reaches the unmatched tray — but the branch has
+    // to exist, and failing loudly is the right shape for a path with no retry.
+    if (createOutcome.kind === 'duplicate') {
+      throw Errors.internal(
+        undefined,
+        `attachFile: these bundle bytes are already ingested as submission ` +
+          `${createOutcome.existingSubmissionId}; phase 2 dedup should have marked ` +
+          `this file duplicate before it reached the unmatched tray.`,
+      );
+    }
+
+    const submissionResult = createOutcome;
 
     // -------------------------------------------------------------------------
     // Step 7: Handle superseded ingest_files rows (best-effort).
@@ -298,6 +320,22 @@ export async function attachUnmatchedFile(
     } catch (e) {
       const cause = e instanceof Error ? e.message : String(e);
       throw Object.assign(new Error(cause), { phase: 'run_heuristics' as const });
+    }
+
+    // Contributor stage (D9/D14). This path creates a submission, so it owes
+    // the same attribution the worker's path does — without it a manually
+    // attached submission would have no contributor rows at all and would be
+    // invisible in the students rollup and the student filter.
+    //
+    // AFTER heuristics for the same reason as the worker: stamping the bundle
+    // earlier would change which flags this path produces.
+    try {
+      await finalizeContributors(tx, submissionResult.submissionId, semesterId, bundle, [
+        studentId,
+      ]);
+    } catch (e) {
+      const cause = e instanceof Error ? e.message : String(e);
+      throw Object.assign(new Error(cause), { phase: 'store_contributors' as const });
     }
 
     // Update the ingest_files row to 'matched'. This is the final write that

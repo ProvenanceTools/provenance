@@ -121,6 +121,13 @@ function validationReportToResults(report: ValidationReport): ValidationResults 
  * assignment metadata. We synthesize a minimal summary that lets the Overview
  * tab render meaningfully.
  */
+/**
+ * Placeholder roster id for the synthetic /local contributor. There is no
+ * roster in the in-browser path, so the nil UUID stands in for one rather than
+ * inventing an identity that could collide with a real roster entry.
+ */
+const LOCAL_STUDENT_ID = '00000000-0000-0000-0000-000000000000';
+
 function bundleToSubmissionSummary(
   bundle: Bundle,
   flags: Flag[],
@@ -142,9 +149,33 @@ function bundleToSubmissionSummary(
         ? 'low'
         : 'info';
 
+  const flagCounts = {
+    info: flags.filter((f) => f.severity === 'info').length,
+    low: flags.filter((f) => f.severity === 'low').length,
+    medium: flags.filter((f) => f.severity === 'medium').length,
+    high: flags.filter((f) => f.severity === 'high').length,
+  };
+  const localStudent = { sid: 'local', display_name: 'Local bundle' };
+
   return {
     id: bundle.id,
-    student: { sid: 'local', display_name: 'Local bundle' },
+    student: localStudent,
+    // The /local route has no roster and no server, so this is a synthetic
+    // solo submission: exactly one contributor, the same person as `student`,
+    // which is what keeps the shared UI rendering it as it always has.
+    contributors: [
+      {
+        contributor_key: 'roster:local',
+        kind: 'roster',
+        student: { id: LOCAL_STUDENT_ID, ...localStudent },
+        student_ref: null,
+        session_count: 0,
+        is_submitter: true,
+        score_total: scoreTotal,
+        score_max_severity: maxSeverity,
+        flag_counts: flagCounts,
+      },
+    ],
     assignment: { assignment_id_str: bundle.manifest.assignment_id ?? 'unknown', label: null },
     version_index: 1,
     score_total: scoreTotal,

@@ -10,6 +10,7 @@ import { withTestDb } from '../../../test/helpers/db.js';
 import { withTestMinio } from '../../../test/helpers/minio.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { createSubmission } from './create-submission.js';
+import type { CreateSubmissionOutcome, CreateSubmissionResult } from './create-submission.js';
 import { stripBundleSourceFiles } from './strip-bundle.js';
 import { putBlob, getBlob } from '../storage/blobs.js';
 import { ingestStagingKey, bundleKey } from '../storage/keys.js';
@@ -24,6 +25,21 @@ import {
 } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import type { StorageClient } from '../storage/client.js';
+
+/**
+ * Narrow a phase-5 outcome to the CREATED case.
+ *
+ * `createSubmission` can now also answer `'duplicate'` — a concurrent writer
+ * committed these exact bytes first. These tests all assert the creating path,
+ * so anything else is a test failure and should say so loudly rather than
+ * being cast away.
+ */
+function created(outcome: CreateSubmissionOutcome): CreateSubmissionResult {
+  if (outcome.kind !== 'created') {
+    throw new Error(`expected createSubmission to create a row, got kind='${outcome.kind}'`);
+  }
+  return outcome;
+}
 
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
@@ -129,17 +145,19 @@ describe('createSubmission', () => {
         const content = bundleBytes;
         const stagingKey = await stageTestBlob(client, job.id, fileId, content);
 
-        const result = await createSubmission(
-          { db, storageClient: client },
-          {
-            semesterId: semester.id,
-            assignmentIdStr: 'hw01',
-            studentId: student.id,
-            blobSha256: 'a'.repeat(64),
-            stagingKey,
-            originalFilename: 'hw01-123456.zip',
-            ingestJobId: job.id,
-          },
+        const result = created(
+          await createSubmission(
+            { db, storageClient: client },
+            {
+              semesterId: semester.id,
+              assignmentIdStr: 'hw01',
+              studentId: student.id,
+              blobSha256: 'a'.repeat(64),
+              stagingKey,
+              originalFilename: 'hw01-123456.zip',
+              ingestJobId: job.id,
+            },
+          ),
         );
 
         expect(result.versionIndex).toBe(1);
@@ -169,17 +187,19 @@ describe('createSubmission', () => {
         const content1 = bundleBytes;
         const stagingKey1 = await stageTestBlob(client, job.id, fileId1, content1);
 
-        const result1 = await createSubmission(
-          { db, storageClient: client },
-          {
-            semesterId: semester.id,
-            assignmentIdStr: 'hw01',
-            studentId: student.id,
-            blobSha256: 'b'.repeat(64),
-            stagingKey: stagingKey1,
-            originalFilename: 'hw01-123456.zip',
-            ingestJobId: job.id,
-          },
+        const result1 = created(
+          await createSubmission(
+            { db, storageClient: client },
+            {
+              semesterId: semester.id,
+              assignmentIdStr: 'hw01',
+              studentId: student.id,
+              blobSha256: 'b'.repeat(64),
+              stagingKey: stagingKey1,
+              originalFilename: 'hw01-123456.zip',
+              ingestJobId: job.id,
+            },
+          ),
         );
         expect(result1.versionIndex).toBe(1);
 
@@ -188,17 +208,19 @@ describe('createSubmission', () => {
         const content2 = bundleBytes;
         const stagingKey2 = await stageTestBlob(client, job.id, fileId2, content2);
 
-        const result2 = await createSubmission(
-          { db, storageClient: client },
-          {
-            semesterId: semester.id,
-            assignmentIdStr: 'hw01',
-            studentId: student.id,
-            blobSha256: 'c'.repeat(64),
-            stagingKey: stagingKey2,
-            originalFilename: 'hw01-123456.zip',
-            ingestJobId: job.id,
-          },
+        const result2 = created(
+          await createSubmission(
+            { db, storageClient: client },
+            {
+              semesterId: semester.id,
+              assignmentIdStr: 'hw01',
+              studentId: student.id,
+              blobSha256: 'c'.repeat(64),
+              stagingKey: stagingKey2,
+              originalFilename: 'hw01-123456.zip',
+              ingestJobId: job.id,
+            },
+          ),
         );
         expect(result2.versionIndex).toBe(2);
         expect(result2.supersededIds).toContain(result1.submissionId);
@@ -216,32 +238,36 @@ describe('createSubmission', () => {
 
         const fileId1 = crypto.randomUUID();
         const stagingKey1 = await stageTestBlob(client, job.id, fileId1, bundleBytes);
-        const result1 = await createSubmission(
-          { db, storageClient: client },
-          {
-            semesterId: semester.id,
-            assignmentIdStr: 'hw02',
-            studentId: student.id,
-            blobSha256: 'd'.repeat(64),
-            stagingKey: stagingKey1,
-            originalFilename: 'hw02-123456.zip',
-            ingestJobId: job.id,
-          },
+        const result1 = created(
+          await createSubmission(
+            { db, storageClient: client },
+            {
+              semesterId: semester.id,
+              assignmentIdStr: 'hw02',
+              studentId: student.id,
+              blobSha256: 'd'.repeat(64),
+              stagingKey: stagingKey1,
+              originalFilename: 'hw02-123456.zip',
+              ingestJobId: job.id,
+            },
+          ),
         );
 
         const fileId2 = crypto.randomUUID();
         const stagingKey2 = await stageTestBlob(client, job.id, fileId2, bundleBytes);
-        const result2 = await createSubmission(
-          { db, storageClient: client },
-          {
-            semesterId: semester.id,
-            assignmentIdStr: 'hw02',
-            studentId: student.id,
-            blobSha256: 'e'.repeat(64),
-            stagingKey: stagingKey2,
-            originalFilename: 'hw02-123456.zip',
-            ingestJobId: job.id,
-          },
+        const result2 = created(
+          await createSubmission(
+            { db, storageClient: client },
+            {
+              semesterId: semester.id,
+              assignmentIdStr: 'hw02',
+              studentId: student.id,
+              blobSha256: 'e'.repeat(64),
+              stagingKey: stagingKey2,
+              originalFilename: 'hw02-123456.zip',
+              ingestJobId: job.id,
+            },
+          ),
         );
 
         // Verify DB: v1 should have superseded_by_submission_id = v2.id
@@ -266,17 +292,19 @@ describe('createSubmission', () => {
         const content = bundleBytes;
         const stagingKey = await stageTestBlob(client, job.id, fileId, content);
 
-        const result = await createSubmission(
-          { db, storageClient: client },
-          {
-            semesterId: semester.id,
-            assignmentIdStr: 'hw01',
-            studentId: student.id,
-            blobSha256: 'f'.repeat(64),
-            stagingKey,
-            originalFilename: 'hw01-123456.zip',
-            ingestJobId: job.id,
-          },
+        const result = created(
+          await createSubmission(
+            { db, storageClient: client },
+            {
+              semesterId: semester.id,
+              assignmentIdStr: 'hw01',
+              studentId: student.id,
+              blobSha256: 'f'.repeat(64),
+              stagingKey,
+              originalFilename: 'hw01-123456.zip',
+              ingestJobId: job.id,
+            },
+          ),
         );
 
         // Final blob should be readable and equal the source-stripped bundle
@@ -303,32 +331,36 @@ describe('createSubmission', () => {
 
         const fileId1 = crypto.randomUUID();
         const stagingKey1 = await stageTestBlob(client, job.id, fileId1, bundleBytes);
-        const result1 = await createSubmission(
-          { db, storageClient: client },
-          {
-            semesterId: semester.id,
-            assignmentIdStr: 'hw03',
-            studentId: student1.id,
-            blobSha256: '1'.repeat(64),
-            stagingKey: stagingKey1,
-            originalFilename: 'hw03-111111.zip',
-            ingestJobId: job.id,
-          },
+        const result1 = created(
+          await createSubmission(
+            { db, storageClient: client },
+            {
+              semesterId: semester.id,
+              assignmentIdStr: 'hw03',
+              studentId: student1.id,
+              blobSha256: '1'.repeat(64),
+              stagingKey: stagingKey1,
+              originalFilename: 'hw03-111111.zip',
+              ingestJobId: job.id,
+            },
+          ),
         );
 
         const fileId2 = crypto.randomUUID();
         const stagingKey2 = await stageTestBlob(client, job.id, fileId2, bundleBytes);
-        const result2 = await createSubmission(
-          { db, storageClient: client },
-          {
-            semesterId: semester.id,
-            assignmentIdStr: 'hw03', // same assignment
-            studentId: student2.id,
-            blobSha256: '2'.repeat(64),
-            stagingKey: stagingKey2,
-            originalFilename: 'hw03-222222.zip',
-            ingestJobId: job.id,
-          },
+        const result2 = created(
+          await createSubmission(
+            { db, storageClient: client },
+            {
+              semesterId: semester.id,
+              assignmentIdStr: 'hw03', // same assignment
+              studentId: student2.id,
+              blobSha256: '2'.repeat(64),
+              stagingKey: stagingKey2,
+              originalFilename: 'hw03-222222.zip',
+              ingestJobId: job.id,
+            },
+          ),
         );
 
         // Both submissions reference the same assignment row.
@@ -368,19 +400,21 @@ describe('createSubmission', () => {
         const fileId = crypto.randomUUID();
         const stagingKey = await stageTestBlob(client, job.id, fileId, bundleBytes);
 
-        const result = await createSubmission(
-          { db, storageClient: client },
-          {
-            semesterId: semester.id,
-            assignmentIdStr: 'hw01',
-            studentId: student.id,
-            blobSha256: 'a'.repeat(64),
-            stagingKey,
-            originalFilename: 'hw01-123456.zip',
-            ingestJobId: job.id,
-            recorderVersion: '1.2.3',
-            formatVersion: '1.0',
-          },
+        const result = created(
+          await createSubmission(
+            { db, storageClient: client },
+            {
+              semesterId: semester.id,
+              assignmentIdStr: 'hw01',
+              studentId: student.id,
+              blobSha256: 'a'.repeat(64),
+              stagingKey,
+              originalFilename: 'hw01-123456.zip',
+              ingestJobId: job.id,
+              recorderVersion: '1.2.3',
+              formatVersion: '1.0',
+            },
+          ),
         );
 
         const [row] = await db

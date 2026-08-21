@@ -191,8 +191,8 @@ describe('listCrossFlags — protected mode participant masking', () => {
       const participants = result.items[0]!.participants;
       expect(participants).toHaveLength(2);
 
-      const names = participants.map((p) => p.student.display_name);
-      const sids = participants.map((p) => p.student.sid);
+      const names = participants.map((p) => p.student!.display_name);
+      const sids = participants.map((p) => p.student!.sid);
 
       // Real names must NOT appear
       expect(names).not.toContain('Alice Zhao');
@@ -236,8 +236,8 @@ describe('listCrossFlags — protected mode participant masking', () => {
 
       const participants = result.items[0]!.participants;
       expect(participants).toHaveLength(1);
-      expect(participants[0]!.student.display_name).toBe('Alice Zhao');
-      expect(participants[0]!.student.sid).toBe('stu-alice');
+      expect(participants[0]!.student!.display_name).toBe('Alice Zhao');
+      expect(participants[0]!.student!.sid).toBe('stu-alice');
     });
   });
 });

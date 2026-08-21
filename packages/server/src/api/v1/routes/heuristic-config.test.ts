@@ -1630,11 +1630,11 @@ describe('computeDryRunDiff — protected mode masks top_movers student identity
         expect(protectedResult.diff.top_movers).toHaveLength(1);
         const mover = protectedResult.diff.top_movers[0]!;
         // Must match Student N pattern (protected_index = 7).
-        expect(mover.student.display_name).toBe('Student 7');
-        expect(mover.student.sid).toBe('S7');
+        expect(mover.student!.display_name).toBe('Student 7');
+        expect(mover.student!.sid).toBe('S7');
         // Real values must NOT appear.
-        expect(mover.student.display_name).not.toBe('Real Student Name');
-        expect(mover.student.sid).not.toBe('real_sid_001');
+        expect(mover.student!.display_name).not.toBe('Real Student Name');
+        expect(mover.student!.sid).not.toBe('real_sid_001');
 
         // Non-protected mode: real values must appear.
         const realResult = await computeDryRunDiff(
@@ -1647,8 +1647,8 @@ describe('computeDryRunDiff — protected mode masks top_movers student identity
 
         expect(realResult.diff.top_movers).toHaveLength(1);
         const realMover = realResult.diff.top_movers[0]!;
-        expect(realMover.student.display_name).toBe('Real Student Name');
-        expect(realMover.student.sid).toBe('real_sid_001');
+        expect(realMover.student!.display_name).toBe('Real Student Name');
+        expect(realMover.student!.sid).toBe('real_sid_001');
 
         void submission;
       });
@@ -1754,10 +1754,10 @@ describe('computeDryRunDiff — protected mode masks top_movers student identity
             diff: { top_movers: { student: { display_name: string; sid: string } }[] };
           };
           expect(body.diff.top_movers).toHaveLength(1);
-          expect(body.diff.top_movers[0]!.student.display_name).toMatch(/^Student \d+$/);
-          expect(body.diff.top_movers[0]!.student.sid).toMatch(/^S/);
-          expect(body.diff.top_movers[0]!.student.display_name).not.toBe('HTTP Real Name');
-          expect(body.diff.top_movers[0]!.student.sid).not.toBe('http_real_sid');
+          expect(body.diff.top_movers[0]!.student!.display_name).toMatch(/^Student \d+$/);
+          expect(body.diff.top_movers[0]!.student!.sid).toMatch(/^S/);
+          expect(body.diff.top_movers[0]!.student!.display_name).not.toBe('HTTP Real Name');
+          expect(body.diff.top_movers[0]!.student!.sid).not.toBe('http_real_sid');
 
           void submission;
         } finally {

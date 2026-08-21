@@ -16,6 +16,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useCrossFlagDetail } from '../../api/queries.js';
 import { useActiveSemester } from '../../api/use-active-semester.js';
 import type { CrossFlagParticipant } from '@provenance/shared/api-schemas';
+import { personLabel } from '../../lib/contributor-display.js';
 
 // ---------------------------------------------------------------------------
 // Severity badge
@@ -48,9 +49,17 @@ function ParticipantCard({ participant }: { participant: CrossFlagParticipant })
       data-testid={`participant-${participant.submission_id}`}
     >
       <div className="mb-2">
-        <p className="text-sm font-medium text-gray-800">{participant.student.display_name}</p>
+        {/*
+          `student` is null when this participant is not on the semester's
+          roster. Since 0029 they are still LISTED (the join is LEFT, so the
+          evidence no longer silently disappears) — just not named. Neutral
+          wording and the same styling as any named participant: not being on
+          the roster is an administrative gap, not a finding.
+        */}
+        <p className="text-sm font-medium text-gray-800">{personLabel(participant.student)}</p>
         <p className="text-xs text-gray-500">
-          SID: {participant.student.sid} · {participant.assignment.assignment_id_str}
+          {participant.student ? `SID: ${participant.student.sid} · ` : ''}
+          {participant.assignment.assignment_id_str}
         </p>
         <p className="text-xs text-gray-400 font-mono truncate">sub: {participant.submission_id}</p>
       </div>

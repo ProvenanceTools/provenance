@@ -29,7 +29,13 @@ import type {
   SubmittedFileListResult,
   SubmittedFileContentResult,
 } from '../../data/SubmissionDataProvider.js';
-import type { SubmissionSummary, FlagRow, EventRow } from '@provenance/shared/api-schemas';
+import type {
+  SubmissionSummary,
+  SubmissionContributor,
+  FlagRow,
+  EventRow,
+} from '@provenance/shared/api-schemas';
+import { UNNAMED_CONTRIBUTOR_LABEL } from '../../lib/contributor-display.js';
 import { Overview } from './Overview.js';
 
 // ---------------------------------------------------------------------------
@@ -98,6 +104,19 @@ function makeErrorResult<T>(): UseQueryResult<T> {
 const DUMMY_SUMMARY: SubmissionSummary = {
   id: 'test',
   student: { sid: 'test', display_name: 'Test' },
+  contributors: [
+    {
+      contributor_key: 'roster:30000000-0000-0000-0000-0000000000aa',
+      kind: 'roster',
+      student: { id: '30000000-0000-0000-0000-0000000000aa', sid: 'test', display_name: 'Test' },
+      student_ref: null,
+      session_count: 0,
+      is_submitter: true,
+      score_total: 0,
+      score_max_severity: 'info',
+      flag_counts: { info: 0, low: 0, medium: 0, high: 0 },
+    },
+  ],
   assignment: { assignment_id_str: 'hw1', label: 'HW1' },
   version_index: 1,
   score_total: 0,
@@ -459,5 +478,110 @@ describe('Overview tab — sessions and validation labels', () => {
 
     expect(screen.getByText('Monotonic wall clock')).toBeInTheDocument();
     expect(screen.getByText('seq_gaps')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contributors (0029 cut-over)
+// ---------------------------------------------------------------------------
+
+function makeContributor(overrides: Partial<SubmissionContributor> = {}): SubmissionContributor {
+  return {
+    contributor_key: 'roster:30000000-0000-0000-0000-0000000000aa',
+    kind: 'roster',
+    student: {
+      id: '30000000-0000-0000-0000-0000000000aa',
+      sid: 'test',
+      display_name: 'Test',
+    },
+    student_ref: null,
+    session_count: 0,
+    is_submitter: true,
+    score_total: 0,
+    score_max_severity: 'info',
+    flag_counts: { info: 0, low: 0, medium: 0, high: 0 },
+    ...overrides,
+  };
+}
+
+describe('Overview tab — contributors', () => {
+  it('renders a solo submission exactly as before: "Student" over "Name (sid)"', () => {
+    renderAtRoute(makeProvider(makeQueryResult(DUMMY_SUMMARY)));
+
+    expect(DUMMY_SUMMARY.contributors).toHaveLength(1);
+    expect(screen.getByText('Student')).toBeInTheDocument();
+    expect(screen.getByTestId('summary-student')).toHaveTextContent('Test(test)');
+    expect(screen.queryByTestId('summary-contributors')).not.toBeInTheDocument();
+  });
+
+  it('lists every contributor of a group submission under the existing testid', () => {
+    const group: SubmissionSummary = {
+      ...DUMMY_SUMMARY,
+      student: null,
+      contributors: [
+        makeContributor(),
+        makeContributor({
+          contributor_key: 'roster:30000000-0000-0000-0000-0000000000bb',
+          student: {
+            id: '30000000-0000-0000-0000-0000000000bb',
+            sid: '3035678',
+            display_name: 'Bob Cratchit',
+          },
+        }),
+      ],
+    };
+    renderAtRoute(makeProvider(makeQueryResult(group)));
+
+    expect(screen.getByText('Contributors')).toBeInTheDocument();
+    expect(screen.getByTestId('summary-contributors')).toBeInTheDocument();
+    const listed = screen.getAllByTestId('summary-contributor');
+    expect(listed).toHaveLength(2);
+    expect(listed[0]).toHaveTextContent('Test(test)');
+    expect(listed[1]).toHaveTextContent('Bob Cratchit(3035678)');
+  });
+
+  it('renders an unnamed contributor neutrally and never invents a name', () => {
+    const unnamed: SubmissionSummary = {
+      ...DUMMY_SUMMARY,
+      student: null,
+      contributors: [
+        makeContributor({
+          contributor_key: 'attributed:abc',
+          kind: 'attributed',
+          student: null,
+          student_ref: 'ref-abc',
+          session_count: 3,
+          is_submitter: false,
+        }),
+      ],
+    };
+    renderAtRoute(makeProvider(makeQueryResult(unnamed)));
+
+    const cell = screen.getByTestId('summary-student');
+    expect(cell).toHaveTextContent(UNNAMED_CONTRIBUTOR_LABEL);
+    // No invented SID, and no parenthesised placeholder standing in for one.
+    expect(cell.textContent).not.toContain('(');
+    expect(cell.className).not.toMatch(/text-(red|orange|yellow)-/);
+  });
+
+  it('lists a mixed named/unnamed group without dropping the unnamed member', () => {
+    const mixed: SubmissionSummary = {
+      ...DUMMY_SUMMARY,
+      student: null,
+      contributors: [
+        makeContributor(),
+        makeContributor({
+          contributor_key: 'attributed:xyz',
+          kind: 'attributed',
+          student: null,
+          student_ref: 'ref-xyz',
+        }),
+      ],
+    };
+    renderAtRoute(makeProvider(makeQueryResult(mixed)));
+
+    const listed = screen.getAllByTestId('summary-contributor');
+    expect(listed).toHaveLength(2);
+    expect(listed[1]).toHaveTextContent(UNNAMED_CONTRIBUTOR_LABEL);
   });
 });

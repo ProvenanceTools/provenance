@@ -10,13 +10,14 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { mswServer } from '../../test-setup.js';
 import { CrossFlagDetailView } from './CrossFlagDetailView.js';
 import { DEFAULT_COURSE_SLUG, DEFAULT_SEMESTER_SLUG } from '../../test/msw-handlers.js';
+import { UNNAMED_CONTRIBUTOR_LABEL } from '../../lib/contributor-display.js';
 
 const CROSS_FLAG_ID = 'cf000000-0000-0000-0000-000000000001';
 
@@ -155,5 +156,45 @@ describe('CrossFlagDetailView', () => {
     await waitFor(() => {
       expect(screen.getByTestId('list-page')).toBeInTheDocument();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unnamed participants (0029 cut-over)
+// ---------------------------------------------------------------------------
+
+describe('CrossFlagDetailView — participants not on the roster', () => {
+  it('still lists a participant whose student is null, with neutral wording', async () => {
+    const body = {
+      item: {
+        ...DETAIL_FIXTURE.item,
+        participants: [
+          DETAIL_FIXTURE.item.participants[0],
+          { ...DETAIL_FIXTURE.item.participants[1], student: null },
+        ],
+      },
+    };
+    setupDetailHandler(200, body);
+    renderDetailView();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('participants-grid')).toBeInTheDocument();
+    });
+
+    // Both participants are present — an unnamed one is never dropped, which
+    // would turn a two-party cross flag into a one-party one.
+    expect(
+      screen.getByTestId('participant-aa000000-0000-0000-0000-000000000001'),
+    ).toBeInTheDocument();
+    const unnamedCard = screen.getByTestId('participant-bb000000-0000-0000-0000-000000000001');
+    expect(unnamedCard).toBeInTheDocument();
+
+    expect(within(unnamedCard).getByText(UNNAMED_CONTRIBUTOR_LABEL)).toBeInTheDocument();
+    // No invented SID, and the assignment id still renders.
+    expect(unnamedCard.textContent).not.toContain('SID:');
+    expect(within(unnamedCard).getByText('hw1')).toBeInTheDocument();
+    // The named participant is untouched.
+    expect(screen.getByText('Alice Liddell')).toBeInTheDocument();
+    expect(screen.getByText(/SID: 3031234/)).toBeInTheDocument();
   });
 });

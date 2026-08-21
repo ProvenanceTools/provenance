@@ -34,6 +34,7 @@ import {
 } from '../../../db/schema.js';
 import type { DrizzleDb } from '../../../db/client.js';
 import { sql } from 'drizzle-orm';
+import { seedContributor } from '../../../../test/helpers/seed-contributor.js';
 
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
@@ -212,6 +213,17 @@ async function seedSubmission(
       }),
     })
     .returning();
+
+  // Every real submission has a contributor row: migration 0029 backfilled one
+  // for every row that predated it, and `finalizeContributors` writes one
+  // inside the same transaction on every write path since. The students rollup
+  // and the cohort list's student filter go through that table, so a fixture
+  // without one is describing a state production cannot reach — and they
+  // correctly return nothing for it.
+  await seedContributor(db, sub!.id, opts.semesterId, opts.studentId, {
+    score: { total: opts.scoreTotal ?? 0, maxSeverity: opts.scoreSeverity ?? 'info' },
+  });
+
   return sub!;
 }
 

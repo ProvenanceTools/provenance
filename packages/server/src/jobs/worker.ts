@@ -56,13 +56,14 @@ import {
 } from '../services/ingest/stage-upload-job.js';
 import { recordIngestJobTerminal } from '../api/middleware/metrics.js';
 import { timePhase, recordPhase, dumpProfile } from './ingest-profile.js';
-import { dedupFile } from '../services/ingest/dedup.js';
+import { dedupFile, attachCoSubmitter } from '../services/ingest/dedup.js';
 import { parseBundlePhase } from '../services/ingest/parse-bundle-phase.js';
 import { matchStudent, type MatchStudentResult } from '../services/ingest/match-student.js';
 import { createSubmission } from '../services/ingest/create-submission.js';
 import { computeAndStoreStats } from '../services/ingest/stats.js';
 import { runAndStoreValidation } from '../services/ingest/validation.js';
 import { runAndStoreHeuristics } from '../services/heuristics/run-per-submission.js';
+import { finalizeContributors } from '../services/contributors/finalize.js';
 import { withTransaction } from '../db/client.js';
 import { isTransientDbError } from '../db/transient-error.js';
 import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
@@ -271,28 +272,45 @@ export async function startWorker(): Promise<() => Promise<void>> {
       }
 
       // -----------------------------------------------------------------------
-      // Phase 2: Dedup
+      // Phase 2: Dedup — per (semester, blob) for every path (D9).
       //
-      // Hinted (Gradescope) files dedup per (semester, student, blob); normal
-      // files dedup per (semester, blob). See dedupFile docs.
+      // The Gradescope path used to dedup per (semester, student, blob) so that
+      // each co-submitter of one group bundle got their own submission row.
+      // That fan-out is gone: identical bytes are the same artifact, so the
+      // duplicate is linked to the existing submission and the CO-SUBMITTER is
+      // attached to it as a contributor. The student is preserved — which is
+      // all the narrow dedup was protecting — without a second row and a second
+      // copy of the blob. See dedupFile docs.
       // -----------------------------------------------------------------------
       recordPhase('setup:db_lookups', performance.now() - handlerStart);
 
       const dedupResult = await timePhase('dedup', () =>
-        dedupFile(db, semesterId, fileRow.blob_sha256, hintedStudentId ?? undefined),
+        dedupFile(db, semesterId, fileRow.blob_sha256),
       );
 
       if (dedupResult.isDuplicate) {
+        // A hinted co-submitter joins the existing submission rather than being
+        // silently erased by the duplicate (census scenario S20). Idempotent.
+        if (hintedStudentId !== null) {
+          await timePhase('attach_co_submitter', () =>
+            attachCoSubmitter(db, dedupResult.existingSubmissionId, semesterId, hintedStudentId),
+          );
+        }
+
         await db
           .update(ingest_files)
           .set({
             status: 'duplicate',
             submission_id: dedupResult.existingSubmissionId,
+            matched_student_id: hintedStudentId,
             resolved_at: new Date(),
           })
           .where(eq(ingest_files.id, ingestFileId));
 
-        logger.info({ ingestFileId }, 'ingest_file: duplicate detected');
+        logger.info(
+          { ingestFileId, attachedCoSubmitter: hintedStudentId !== null },
+          'ingest_file: duplicate detected',
+        );
         await maybeEnqueueFinalize(boss, db, ingestJobId);
         return;
       }
@@ -378,7 +396,7 @@ export async function startWorker(): Promise<() => Promise<void>> {
       const recorderVersion = '';
       const formatVersion = bundle.manifest.format_version;
 
-      const submissionResult = await timePhase('create_submission', () =>
+      const createOutcome = await timePhase('create_submission', () =>
         createSubmission(
           { db, storageClient },
           {
@@ -394,6 +412,43 @@ export async function startWorker(): Promise<() => Promise<void>> {
           },
         ),
       );
+
+      // A LATE duplicate: a concurrent file in this same batch committed these
+      // exact bytes while we were between phase 2 and phase 5. Phase 2 cannot
+      // see it (separate transactions, `Promise.all` over the batch), so
+      // createSubmission re-checks under an advisory lock and reports it rather
+      // than creating a second submission for one artifact.
+      //
+      // Same handling as the phase-2 dedup hit: the artifact is not duplicated,
+      // and the co-submitter is attached to it so the person is not lost.
+      if (createOutcome.kind === 'duplicate') {
+        if (studentId !== null) {
+          await timePhase('attach_co_submitter', () =>
+            attachCoSubmitter(db, createOutcome.existingSubmissionId, semesterId, studentId),
+          );
+        }
+
+        await db
+          .update(ingest_files)
+          .set({
+            status: 'duplicate',
+            submission_id: createOutcome.existingSubmissionId,
+            matched_student_id: studentId,
+            matched_assignment_id: null,
+            filename_capture: filenameCapture,
+            resolved_at: new Date(),
+          })
+          .where(eq(ingest_files.id, ingestFileId));
+
+        logger.info(
+          { ingestFileId, attachedCoSubmitter: studentId !== null },
+          'ingest_file: late duplicate detected at create_submission',
+        );
+        await maybeEnqueueFinalize(boss, db, ingestJobId);
+        return;
+      }
+
+      const submissionResult = createOutcome;
       // Blob has been moved out of staging — past here a retry cannot re-parse.
       submissionCreated = true;
 
@@ -465,6 +520,24 @@ export async function startWorker(): Promise<() => Promise<void>> {
             } catch (e) {
               const cause = e instanceof Error ? e.message : String(e);
               throw Object.assign(new Error(cause), { phase: 'run_heuristics' as const });
+            }
+            // Contributor stage (D9/D14). AFTER heuristics, deliberately — it
+            // stamps the bundle with `establishBundleContributors`, which
+            // several heuristics read, so stamping earlier would change which
+            // flags ingest produces. See services/contributors/finalize.ts.
+            try {
+              await timePhase('store_contributors', () =>
+                finalizeContributors(
+                  tx,
+                  submissionResult.submissionId,
+                  semesterId,
+                  bundle,
+                  studentId === null ? [] : [studentId],
+                ),
+              );
+            } catch (e) {
+              const cause = e instanceof Error ? e.message : String(e);
+              throw Object.assign(new Error(cause), { phase: 'store_contributors' as const });
             }
             await tx
               .update(ingest_files)

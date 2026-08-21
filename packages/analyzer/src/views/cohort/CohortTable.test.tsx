@@ -17,9 +17,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import {
   makeSubmissionRow,
+  makeSubmissionContributor,
   DEFAULT_COURSE_SLUG,
   DEFAULT_SEMESTER_SLUG,
 } from '../../test/msw-handlers.js';
+import { UNNAMED_CONTRIBUTOR_LABEL } from '../../lib/contributor-display.js';
 import { mswServer } from '../../test-setup.js';
 import { CohortTable, FlagCountBadge } from './CohortTable.js';
 import type { CohortSort } from '../../api/queries.js';
@@ -180,7 +182,7 @@ describe('CohortTable existing behavior preserved', () => {
     renderCohortTable({ rows: [row] });
 
     expect(screen.getByTestId('cohort-table-scroll')).toBeInTheDocument();
-    await screen.findByText(row.student.display_name);
+    await screen.findByText(row.student!.display_name);
   });
 
   it('shows the infinite-scroll sentinel when nextCursor is non-null', () => {
@@ -295,5 +297,87 @@ describe('CohortTable flag-count dropdown', () => {
       `/s/${DEFAULT_COURSE_SLUG}/${DEFAULT_SEMESTER_SLUG}/sub/${submissionId}?tab=overview&flag=large_paste`,
     );
     expect(screen.queryByRole('menuitem', { name: /external/i })).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contributors (0029 cut-over)
+// ---------------------------------------------------------------------------
+
+describe('CohortTable contributors', () => {
+  it('renders a solo submission exactly as before: the student name over their SID', async () => {
+    const row = makeSubmissionRow({ id: '10000000-0000-0000-0000-000000000051' });
+    renderCohortTable({ rows: [row] });
+
+    expect(row.contributors).toHaveLength(1);
+    await screen.findByText('Alice Liddell');
+    expect(screen.getByText('3031234')).toBeInTheDocument();
+  });
+
+  it('names every contributor of a group submission', async () => {
+    const row = makeSubmissionRow({
+      id: '10000000-0000-0000-0000-000000000052',
+      contributors: [
+        makeSubmissionContributor(),
+        makeSubmissionContributor({
+          contributor_key: 'roster:30000000-0000-0000-0000-000000000002',
+          student: {
+            id: '30000000-0000-0000-0000-000000000002',
+            sid: '3035678',
+            display_name: 'Bob Cratchit',
+          },
+        }),
+      ],
+    });
+    renderCohortTable({ rows: [row] });
+
+    await screen.findByText('Alice Liddell, Bob Cratchit');
+    expect(screen.getByText('3031234, 3035678')).toBeInTheDocument();
+  });
+
+  it('renders a contributor who is not on the roster with neutral wording, not as a finding', async () => {
+    const row = makeSubmissionRow({
+      id: '10000000-0000-0000-0000-000000000053',
+      student: null,
+      contributors: [
+        makeSubmissionContributor({
+          contributor_key: 'attributed:abc',
+          kind: 'attributed',
+          student: null,
+          student_ref: 'ref-abc',
+          session_count: 2,
+          is_submitter: false,
+        }),
+      ],
+    });
+    renderCohortTable({ rows: [row] });
+
+    const label = await screen.findByText(UNNAMED_CONTRIBUTOR_LABEL);
+    expect(label).toBeInTheDocument();
+    // Neutral styling — the same gray the named case uses. Not a warning colour.
+    expect(label.className).toContain('text-gray-900');
+    expect(label.className).not.toMatch(/text-(red|orange|yellow)-/);
+    // And no severity/error language leaks into the cell.
+    expect(screen.queryByText(/unknown/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/invalid/i)).not.toBeInTheDocument();
+  });
+
+  it('does not crash when a group submission has a mix of named and unnamed contributors', async () => {
+    const row = makeSubmissionRow({
+      id: '10000000-0000-0000-0000-000000000054',
+      student: null,
+      contributors: [
+        makeSubmissionContributor(),
+        makeSubmissionContributor({
+          contributor_key: 'attributed:xyz',
+          kind: 'attributed',
+          student: null,
+          student_ref: 'ref-xyz',
+        }),
+      ],
+    });
+    renderCohortTable({ rows: [row] });
+
+    await screen.findByText(`Alice Liddell, ${UNNAMED_CONTRIBUTOR_LABEL}`);
   });
 });

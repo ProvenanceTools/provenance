@@ -481,9 +481,62 @@ export const submissions = pgTable(
     assignment_id: uuid('assignment_id')
       .notNull()
       .references(() => assignments.id, { onDelete: 'restrict' }),
-    student_id: uuid('student_id')
+    /**
+     * The SUBMITTER of record — whoever the filename match or the Gradescope
+     * `match_sid` named. NULLABLE since migration 0029 (D9, parent spec §7): a
+     * submission belongs to a SET of people, recorded in
+     * {@link submission_contributors}, and there is not always one roster row
+     * that owns it.
+     *
+     * It is NOT the version lineage. See {@link submissions.version_owner_key} —
+     * keying the version sequence on a nullable column would have destroyed
+     * both the unique constraint (Postgres NULLs are distinct) and the
+     * `FOR UPDATE` supersede lock (`WHERE student_id = NULL` matches nothing),
+     * silently in both cases.
+     */
+    student_id: uuid('student_id').references(() => roster_entries.id, {
+      onDelete: 'restrict',
+    }),
+    /**
+     * Stable lineage identifier for a submission with NO single owning roster
+     * entry. NULL for every solo submission; required exactly when
+     * `student_id` is null. Never the empty string
+     * (`submissions_group_key_check`) — a blank key would merge every such
+     * group into ONE lineage and supersede unrelated pairs' submissions.
+     */
+    group_key: text('group_key'),
+    /**
+     * The version LINEAGE — "whose repeated submissions supersede each other".
+     *
+     * GENERATED ALWAYS by Postgres, and NOT NULL:
+     *
+     *   student_id IS NOT NULL -> 'student:' || student_id
+     *   student_id IS NULL     -> 'group:'   || group_key
+     *   both NULL              -> NULL, which the NOT NULL rejects
+     *
+     * Generated, not application-written, on purpose. The version sequence and
+     * the `FOR UPDATE` supersede lock are keyed on THIS, not on the now-nullable
+     * `student_id` — see `version-owner-key.ts` for why a nullable column
+     * cannot carry a version sequence. A derived column cannot disagree with
+     * its row: Postgres refuses any attempt to write it. So the correspondence
+     * is not a convention, and not a CHECK that the wrong value could still
+     * satisfy.
+     *
+     * For every row predating migration 0029 the derived value is
+     * `'student:' || student_id`, so `submissions_version_key` partitions the
+     * existing table exactly as it did before.
+     *
+     * Drizzle omits generated columns from INSERT/UPDATE, which is why no
+     * insert site — production or test — had to change.
+     */
+    version_owner_key: text('version_owner_key')
       .notNull()
-      .references(() => roster_entries.id, { onDelete: 'restrict' }),
+      .generatedAlwaysAs(
+        sql`(CASE
+            WHEN student_id IS NOT NULL THEN 'student:' || student_id::text
+            ELSE 'group:' || group_key
+          END)`,
+      ),
     blob_object_key: text('blob_object_key').notNull(),
     blob_sha256: text('blob_sha256').notNull(),
     recorder_version: text('recorder_version').notNull().default(''),
@@ -538,13 +591,17 @@ export const submissions = pgTable(
       .default(sql`now()`),
   },
   (t) => [
+    // Migration 0029: keyed on version_owner_key, NOT student_id. The column
+    // is NOT NULL, so this partitions the whole table with no NULL-distinctness
+    // escape hatch — see the migration header.
     unique('submissions_version_key').on(
       t.semester_id,
       t.assignment_id,
-      t.student_id,
+      t.version_owner_key,
       t.version_index,
     ),
     index('submissions_student_idx').on(t.semester_id, t.student_id),
+    index('submissions_version_owner_idx').on(t.semester_id, t.assignment_id, t.version_owner_key),
     index('submissions_blob_sha_idx').on(t.semester_id, t.blob_sha256),
     check(
       'submissions_score_max_severity_check',
@@ -558,6 +615,10 @@ export const submissions = pgTable(
       'submissions_recompute_status_check',
       sql`${t.recompute_status} IN ('fresh','stale','recomputing','error')`,
     ),
+    // Migration 0029: a blank group key would merge every keyless group into
+    // one lineage. The rest of the version-uniqueness answer is the GENERATED
+    // `version_owner_key` above, not a CHECK.
+    check('submissions_group_key_check', sql`${t.group_key} IS NULL OR ${t.group_key} <> ''`),
     // submissions_cohort_idx (partial) is SQL-only; defined in migration 0006
     // and replaced in 0014 to cover severity_rank.
   ],
@@ -760,6 +821,21 @@ export const flags = pgTable(
       .notNull()
       .default(sql`'{}'`),
     session_id: text('session_id').notNull().default(''),
+    /**
+     * Which contributor this finding is charged to (migration 0029, D14).
+     *
+     * `''` means SCOPE-LEVEL — the finding belongs to the submission and to no
+     * one person. That is the default and the honest answer whenever a flag's
+     * supporting events span more than one contributor, or none: §6 Rule 2
+     * says a finding names a person only when the evidence is established FOR
+     * THAT PERSON. Every pre-0029 flag is scope-level, so nothing about an
+     * existing flag's reading or score changes.
+     *
+     * A KEY rather than an FK to `submission_contributors.id` on purpose — see
+     * the migration header. Matches `session_id`'s existing shape in this same
+     * table.
+     */
+    contributor_key: text('contributor_key').notNull().default(''),
     heuristic_config_version: integer('heuristic_config_version').notNull(),
     created_at: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -769,6 +845,118 @@ export const flags = pgTable(
     index('flags_sub_idx').on(t.submission_id),
     index('flags_sem_heur_idx').on(t.semester_id, t.heuristic_id),
     index('flags_sem_sev_idx').on(t.semester_id, t.severity),
+    index('flags_contributor_idx').on(t.submission_id, t.contributor_key),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// submission_contributors  (parent spec §7 / D9 / migration 0029)
+// ---------------------------------------------------------------------------
+
+/**
+ * Who a submission is attributable to — one row per PERSON, not per session
+ * and not per upload.
+ *
+ * This replaces the fan-out in which one group bundle became N `submissions`
+ * rows with N duplicated blobs. Two sources feed it and are reconciled onto one
+ * row per human:
+ *
+ *  - the ROSTER side (the filename match, or the Gradescope `match_sid`) —
+ *    named, but silent about who actually recorded;
+ *  - the BUNDLE side (`analysis-core`'s `establishBundleContributors`, grouping
+ *    sessions on the verified `student_ref`) — the only side that can attribute
+ *    a finding to a person.
+ *
+ * ## Which contributors are representable, and which are deliberately not
+ *
+ * Only contributors that can be NAMED or PROVEN DISTINCT: roster submitters,
+ * and bundle-side `attributed` contributors. A verified contributor with no row
+ * on this semester's roster is kept with `roster_entry_id` NULL — D13's
+ * `unattributed` presentation, an administrative gap and never an integrity
+ * signal.
+ *
+ * Bundle-side `unattributed` sessions (no identity block — the ordinary,
+ * blameless state) get NO row: `analysis-core` gives each a SINGLETON key
+ * exactly because two of them are neither provably one person nor provably two,
+ * so a row per session would turn a five-session solo bundle into five apparent
+ * contributors. Bundle-side `unverifiable` sessions get no row either — an
+ * unbacked claim is a finding, and promoting it here is how a forged identity
+ * block would launder work onto whoever it names.
+ *
+ * ## The invariant that matters
+ *
+ * `submission_contributors_person_key` — UNIQUE (submission_id, roster_entry_id)
+ * WHERE roster_entry_id IS NOT NULL — is SQL-only (Drizzle cannot express a
+ * partial unique index; see migration 0029). A co-submitter who also recorded
+ * arrives from both sources, and two rows for one human would both duplicate
+ * them in the contributor list and SPLIT THEIR SCORE across two apparent
+ * people. The index makes that unrepresentable.
+ */
+export const submission_contributors = pgTable(
+  'submission_contributors',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    submission_id: uuid('submission_id')
+      .notNull()
+      .references(() => submissions.id, { onDelete: 'cascade' }),
+    /** Denormalised so semester-scoped reads need not join back to submissions. */
+    semester_id: uuid('semester_id')
+      .notNull()
+      .references(() => semesters.id, { onDelete: 'cascade' }),
+    /**
+     * `analysis-core`'s `Contributor.key` verbatim for a bundle-side
+     * contributor, or `'roster:<roster_entry_id>'` for a submitter with no
+     * recorded sessions. Deliberately the SAME string the analysis engine
+     * groups on, so the server cannot grow a second notion of contributor
+     * identity that drifts from the one that produced it.
+     */
+    contributor_key: text('contributor_key').notNull(),
+    /** `'roster'` | `'attributed'`. See the type-level docs above. */
+    kind: text('kind').notNull(),
+    /** NULL when the contributor is not on THIS semester's roster (D13). */
+    roster_entry_id: uuid('roster_entry_id').references(() => roster_entries.id, {
+      onDelete: 'restrict',
+    }),
+    /** The verified attribution primitive. Opaque — never a name, SID or email. */
+    student_ref: text('student_ref'),
+    student_pubkey: text('student_pubkey'),
+    /** How much of the scope this person recorded. Always 0 for `'roster'`. */
+    session_count: integer('session_count').notNull().default(0),
+    first_seen: timestamp('first_seen', { withTimezone: true }),
+    last_seen: timestamp('last_seen', { withTimezone: true }),
+    /** True when the roster side named them, whichever source produced the row. */
+    is_submitter: boolean('is_submitter').notNull().default(false),
+    // D14: per-contributor scoring, alongside the per-scope roll-up that stays
+    // on `submissions`. With ONE contributor these equal the scope values —
+    // that is what keeps a solo submission's rollup byte-identical.
+    score_total: doublePrecision('score_total').notNull().default(0),
+    score_max_severity: text('score_max_severity').notNull().default('info'),
+    flag_counts: jsonb('flag_counts')
+      .notNull()
+      .default(sql`'{"info":0,"low":0,"medium":0,"high":0}'::jsonb`),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    unique('submission_contributors_key_unique').on(t.submission_id, t.contributor_key),
+    index('submission_contributors_roster_idx').on(t.semester_id, t.roster_entry_id),
+    index('submission_contributors_submission_idx').on(t.submission_id),
+    check('submission_contributors_kind_check', sql`${t.kind} IN ('roster','attributed')`),
+    check(
+      'submission_contributors_shape_check',
+      sql`(${t.kind} = 'roster' AND ${t.student_ref} IS NULL AND ${t.roster_entry_id} IS NOT NULL)
+          OR (${t.kind} = 'attributed' AND ${t.student_ref} IS NOT NULL)`,
+    ),
+    check(
+      'submission_contributors_severity_check',
+      sql`${t.score_max_severity} IN ('info','low','medium','high')`,
+    ),
+    check('submission_contributors_session_count_check', sql`${t.session_count} >= 0`),
+    // submission_contributors_person_key (partial unique) is SQL-only; see
+    // migration 0029.
   ],
 );
 

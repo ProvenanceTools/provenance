@@ -22,6 +22,7 @@ import {
 } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import { listStudents, decodeStudentCursor } from './students.js';
+import { seedContributor } from '../../../test/helpers/seed-contributor.js';
 
 // ---------------------------------------------------------------------------
 // Seed helpers (adapted from cohort.test.ts)
@@ -132,6 +133,20 @@ async function seedSubmission(
       recorder_version: '1.0.0',
     })
     .returning();
+
+  // Every real submission has a contributor row (migration 0029's backfill for
+  // pre-existing rows, `finalizeContributors` for every write path since), and
+  // the rollup this file tests reads that table. A fixture without one is
+  // describing a state production cannot reach.
+  //
+  // The contributor carries the submission's OWN score, which is what both the
+  // backfill and `scoreContributors` produce for a SOLE contributor: with one
+  // contributor there is no partner to protect, so they own the whole scope
+  // score. Leaving it at zero here would make every score_sum assertion read 0.
+  await seedContributor(db, sub!.id, opts.semesterId, opts.studentId, {
+    score: { total: opts.scoreTotal ?? 0, maxSeverity: 'info' },
+  });
+
   return sub!;
 }
 
@@ -168,8 +183,8 @@ describe('listStudents — protected mode', () => {
       });
 
       const res = await listStudents(db, semester.id, {}, 'student_asc', null, 50, true);
-      const names = res.items.map((i) => i.student.display_name);
-      const sids = res.items.map((i) => i.student.sid);
+      const names = res.items.map((i) => i.student!.display_name);
+      const sids = res.items.map((i) => i.student!.sid);
 
       // No real names should appear
       expect(names).not.toContain('Zara');
@@ -183,8 +198,8 @@ describe('listStudents — protected mode', () => {
 
       // student_asc in protected mode orders by protected_index, not display_name:
       // Aaron(index=1) comes before Zara(index=2)
-      expect(res.items[0]!.student.display_name).toBe('Student 1');
-      expect(res.items[1]!.student.display_name).toBe('Student 2');
+      expect(res.items[0]!.student!.display_name).toBe('Student 1');
+      expect(res.items[1]!.student!.display_name).toBe('Student 2');
     });
   });
 
@@ -322,7 +337,7 @@ describe('listStudents — protected mode', () => {
         false,
       );
       expect(res.totalCount).toBe(1);
-      expect(res.items[0]!.student.display_name).toBe('Zara');
+      expect(res.items[0]!.student!.display_name).toBe('Zara');
     });
   });
 
@@ -343,8 +358,8 @@ describe('listStudents — protected mode', () => {
       });
 
       const res = await listStudents(db, semester.id, {}, 'score_sum_desc', null, 50, false);
-      expect(res.items.map((i) => i.student.display_name)).toContain('Zara');
-      expect(res.items.map((i) => i.student.sid)).toContain('stu-zara');
+      expect(res.items.map((i) => i.student!.display_name)).toContain('Zara');
+      expect(res.items.map((i) => i.student!.sid)).toContain('stu-zara');
       expect(res.items[0]!.student.email).toBe('zara@berkeley.edu');
     });
   });
@@ -369,8 +384,8 @@ describe('listStudents — protected mode', () => {
       const res = await listStudents(db, semester.id, {}, 'score_sum_desc', null, 50, true);
       expect(res.items).toHaveLength(1);
       const worstSub = res.items[0]!.worst_submission;
-      expect(worstSub.student.display_name).not.toBe('Zara');
-      expect(worstSub.student.display_name).toMatch(/^Student \d+$/);
+      expect(worstSub.student!.display_name).not.toBe('Zara');
+      expect(worstSub.student!.display_name).toMatch(/^Student \d+$/);
     });
   });
 
@@ -396,12 +411,12 @@ describe('listStudents — protected mode', () => {
       // Page 1: limit=1 with student_asc in protected mode.
       const res1 = await listStudents(db, semester.id, {}, 'student_asc', null, 1, true);
       expect(res1.items).toHaveLength(1);
-      expect(res1.items[0]!.student.display_name).toBe('Student 1');
+      expect(res1.items[0]!.student!.display_name).toBe('Student 1');
       // sid must be masked (starts with 'S', not the raw 'stu-real-1')
-      expect(res1.items[0]!.student.sid).toMatch(/^S/);
-      expect(res1.items[0]!.student.sid).not.toBe('stu-real-1');
-      // worst_submission.student.sid is also masked
-      expect(res1.items[0]!.worst_submission.student.sid).toMatch(/^S/);
+      expect(res1.items[0]!.student!.sid).toMatch(/^S/);
+      expect(res1.items[0]!.student!.sid).not.toBe('stu-real-1');
+      // worst_submission.student!.sid is also masked
+      expect(res1.items[0]!.worst_submission.student!.sid).toMatch(/^S/);
       expect(res1.nextCursor).not.toBeNull();
 
       // Feed cursor into page 2 — should start at Student 2.
@@ -411,11 +426,11 @@ describe('listStudents — protected mode', () => {
 
       const res2 = await listStudents(db, semester.id, {}, 'student_asc', cursor1, 1, true);
       expect(res2.items).toHaveLength(1);
-      expect(res2.items[0]!.student.display_name).toBe('Student 2');
-      expect(res2.items[0]!.student.sid).toMatch(/^S/);
+      expect(res2.items[0]!.student!.display_name).toBe('Student 2');
+      expect(res2.items[0]!.student!.sid).toMatch(/^S/);
 
       // No overlap between pages.
-      expect(res1.items[0]!.student.sid).not.toBe(res2.items[0]!.student.sid);
+      expect(res1.items[0]!.student!.sid).not.toBe(res2.items[0]!.student!.sid);
     });
   });
 
@@ -448,8 +463,8 @@ describe('listStudents — protected mode', () => {
       const res = await listStudents(db, semester.id, {}, 'student_asc', null, 50, true);
       expect(res.items).toHaveLength(2);
       // Zero-padded numeric sort: 2 comes before 10 (not lexicographic "10" < "2").
-      expect(res.items[0]!.student.display_name).toBe('Student 2');
-      expect(res.items[1]!.student.display_name).toBe('Student 10');
+      expect(res.items[0]!.student!.display_name).toBe('Student 2');
+      expect(res.items[1]!.student!.display_name).toBe('Student 10');
     });
   });
 });
