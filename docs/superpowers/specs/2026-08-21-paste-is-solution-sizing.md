@@ -11,7 +11,7 @@ Found 2026-08-21 while fixing the git-merge false-accusation family.
 shared_lines / paste_lines >= pasteIsSolution.lineOverlap   // default 0.8
 ```
 
-`candidate-pastes.ts` applies **no size gate**, so the ratio is trivially `1.0` for *any* paste
+`candidate-pastes.ts` applies **no size gate**, so the ratio is trivially `1.0` for _any_ paste
 whose lines survive into the final file, regardless of size. A student who hand-types a 60-line
 file and pastes a 3-line import block on top scores 1.0 and gets `high`. Every honest paste of a
 boilerplate header, licence comment, or provided function signature reaches it.
@@ -22,14 +22,14 @@ survived the false-accusation audits.
 
 ## Why the ratio is wrong
 
-The claim the flag makes is *"the submitted file is pasted code, not written code."* The evidence
+The claim the flag makes is _"the submitted file is pasted code, not written code."_ The evidence
 for that claim is how much of the **final file** the paste accounts for, not how much of the
 **paste** survived:
 
-|                       | survival = shared/paste | coverage = shared/final | should fire? |
-| --------------------- | ----------------------- | ----------------------- | ------------ |
-| paste 1000 lines, trim to the 100 submitted | 0.1 | 1.0 | **yes** — submitted code is pasted |
-| paste 3 lines into a 60-line typed file     | 1.0 | 0.05 | **no**  — the student wrote the file |
+|                                             | survival = shared/paste | coverage = shared/final | should fire?                        |
+| ------------------------------------------- | ----------------------- | ----------------------- | ----------------------------------- |
+| paste 1000 lines, trim to the 100 submitted | 0.1                     | 1.0                     | **yes** — submitted code is pasted  |
+| paste 3 lines into a 60-line typed file     | 1.0                     | 0.05                    | **no** — the student wrote the file |
 
 Survival is not evidence for the claim. Coverage is.
 
