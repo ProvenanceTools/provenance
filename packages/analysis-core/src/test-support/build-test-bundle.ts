@@ -277,6 +277,37 @@ export type BuildBundleOpts = {
     addStrayFile?: { name: string; content: string };
     corruptNdjsonAtLine?: { sessionIndex: number; line: number };
     /**
+     * Append a TORN final line to one session's `.slog`: a fragment of a real
+     * entry, with **no trailing newline**.
+     *
+     * This is what a power cut, a full disk, or an OS kill part-way through a
+     * flush leaves behind — under the log's completely NORMAL name, so none of
+     * the `.corrupt-` / `.tmp` / zero-byte patterns the unzipper drops can
+     * match it. It is the only corruption shape an honest student can produce
+     * without doing anything at all.
+     *
+     * Applied LAST, after every other tamper and after the digests the manifest
+     * commits to were taken, because that is the faithful ordering: the seal
+     * was signed while the log was healthy and the tear happened afterwards.
+     * A test that wants the reverse — a classic `seal` run over an already-torn
+     * file — passes `resealAfterTear`.
+     */
+    tornTail?: {
+      sessionIndex: number;
+      /**
+       * The partial bytes to append. Defaults to the first half of the `.slog`'s
+       * own last line, which is a genuine prefix of a genuine entry.
+       */
+      fragment?: string;
+      /**
+       * Re-take this session's `slog_sha256` over the TORN bytes, so the
+       * manifest (classic and rolling alike) commits to the file as it is
+       * archived. Models the classic path, where `seal` reads whatever is on
+       * disk. Default false: the seal predates the tear.
+       */
+      resealAfterTear?: boolean;
+    };
+    /**
      * Mutate the hash field of one or more entries (by 0-based entryIndex
      * within the session) to break the hash chain at those points.
      * Accepts a single object or an array for multiple mutations.
@@ -824,6 +855,27 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
         }
       }
       session.slogText = serializeSlogLines(entries);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 2c. Tear the final line — LAST, because every mutation above round-trips the
+  // `.slog` through `parseSlogLines`, which would either throw on the fragment
+  // or silently re-serialize it away.
+  // ---------------------------------------------------------------------------
+  if (tamper.tornTail !== undefined) {
+    const { sessionIndex, fragment, resealAfterTear } = tamper.tornTail;
+    const session = sessions[sessionIndex];
+    if (session !== undefined) {
+      const lines = session.slogText.split('\n').filter((l) => l !== '');
+      const last = lines[lines.length - 1] ?? '{"seq":0';
+      const torn = fragment ?? last.slice(0, Math.max(1, Math.floor(last.length / 2)));
+      // No trailing newline: that absence IS the tear. A flush that completed
+      // always ends the line.
+      session.slogText = session.slogText + torn;
+      if (resealAfterTear === true) {
+        session.slogSha256 = sha256Hex(session.slogText);
+      }
     }
   }
 
