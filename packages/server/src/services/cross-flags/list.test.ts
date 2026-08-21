@@ -24,6 +24,7 @@ import {
   cross_flags,
   cross_flag_exclusions,
   cross_flag_participants,
+  submission_contributors,
 } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import { listCrossFlags, listCrossScopeExclusions } from './list.js';
@@ -244,6 +245,89 @@ describe('listCrossFlags — protected mode participant masking', () => {
       expect(participants).toHaveLength(1);
       expect(participants[0]!.student!.display_name).toBe('Alice Zhao');
       expect(participants[0]!.student!.sid).toBe('stu-alice');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Group participants (D9)
+  // -------------------------------------------------------------------------
+
+  it('carries EVERY contributor of a participant, not just the submitter of record', async () => {
+    // A cross flag is a finding about sharing BETWEEN students. `student` is one
+    // person — the submitter of record — so a participant that is a pair's work
+    // was presented under one partner's name and the other was invisible on the
+    // finding that concerns them both.
+    await withTestDb(async (db) => {
+      const { semester } = await seedCourseAndSemester(db);
+      const user = await seedUser(db);
+      const job = await seedIngestJob(db, semester.id, user.id);
+      const assignment = await seedAssignment(db, semester.id);
+
+      const alice = await seedStudent(db, semester.id, 'stu-alice', 'Alice Zhao', 3);
+      const bob = await seedStudent(db, semester.id, 'stu-bob', 'Bob Smith', 7);
+      const sub = await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: assignment.id,
+        studentId: alice.id,
+        ingestJobId: job.id,
+        versionIndex: 1,
+      });
+
+      for (const person of [alice, bob]) {
+        await db.insert(submission_contributors).values({
+          submission_id: sub.id,
+          semester_id: semester.id,
+          contributor_key: `roster:${person.id}`,
+          kind: 'roster',
+          roster_entry_id: person.id,
+          is_submitter: true,
+        });
+      }
+
+      await seedCrossFlag(db, semester.id, [sub.id]);
+
+      const result = await listCrossFlags(db, semester.id, {}, null, 50, false);
+      const participant = result.items[0]!.participants[0]!;
+
+      expect(participant.contributors.map((c) => c.student!.display_name).sort()).toEqual([
+        'Alice Zhao',
+        'Bob Smith',
+      ]);
+    });
+  });
+
+  it('masks the contributor list in protected mode, like every other name-bearing field', async () => {
+    await withTestDb(async (db) => {
+      const { semester } = await seedCourseAndSemester(db);
+      const user = await seedUser(db);
+      const job = await seedIngestJob(db, semester.id, user.id);
+      const assignment = await seedAssignment(db, semester.id);
+
+      const alice = await seedStudent(db, semester.id, 'stu-alice', 'Alice Zhao', 3);
+      const sub = await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: assignment.id,
+        studentId: alice.id,
+        ingestJobId: job.id,
+        versionIndex: 1,
+      });
+      await db.insert(submission_contributors).values({
+        submission_id: sub.id,
+        semester_id: semester.id,
+        contributor_key: `roster:${alice.id}`,
+        kind: 'roster',
+        roster_entry_id: alice.id,
+        is_submitter: true,
+      });
+
+      await seedCrossFlag(db, semester.id, [sub.id]);
+
+      const result = await listCrossFlags(db, semester.id, {}, null, 50, true);
+      const participant = result.items[0]!.participants[0]!;
+
+      expect(participant.contributors).toHaveLength(1);
+      expect(participant.contributors[0]!.student!.display_name).toBe('Student 3');
+      expect(participant.contributors[0]!.student!.sid).toBe('S3');
     });
   });
 });

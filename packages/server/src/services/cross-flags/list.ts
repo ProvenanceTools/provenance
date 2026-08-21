@@ -28,7 +28,9 @@ import {
 } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import type { Severity } from '@provenance/analysis-core/heuristics/types.js';
+import type { SubmissionContributor } from '@provenance/shared/api-schemas';
 import { projectStudent } from '../protect.js';
+import { fetchContributorsFor } from '../contributors/fetch-contributors.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -43,6 +45,13 @@ export type CrossFlagParticipantRow = {
    * be absent.
    */
   student: { id: string; sid: string; display_name: string } | null;
+  /**
+   * Everyone this participant's submission is attributable to (D9). `student`
+   * above is one of them; on a group submission it is one of several, and
+   * naming only that one points the finding at an arbitrary partner. Exactly
+   * one entry, equal to `student`, for every solo submission.
+   */
+  contributors: SubmissionContributor[];
   assignment: { id: string; assignment_id_str: string };
   supporting_seqs: number[];
 };
@@ -417,12 +426,22 @@ export async function fetchParticipants(
     .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
     .where(inArray(cross_flag_participants.cross_flag_id, crossFlagIds));
 
+  // ONE batched query for every participant submission on the page, for the
+  // same reason the cohort list batches: a per-participant fetch would put an
+  // N+1 on a list endpoint.
+  const contributorsBySubmission = await fetchContributorsFor(
+    db,
+    [...new Set(rows.map((r) => r.submission_id))],
+    protectedMode,
+  );
+
   for (const row of rows) {
     if (!result.has(row.cross_flag_id)) {
       result.set(row.cross_flag_id, []);
     }
     result.get(row.cross_flag_id)!.push({
       submission_id: row.submission_id,
+      contributors: contributorsBySubmission.get(row.submission_id) ?? [],
       student:
         row.student_id === null || row.student_sid === null || row.student_display_name === null
           ? null

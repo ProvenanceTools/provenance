@@ -25,6 +25,7 @@ import {
   DEFAULT_SEMESTER_ID,
   DEFAULT_SEMESTER_SLUG,
   defaultMembership,
+  makeSoloContributor,
   meWithMembershipsHandler,
 } from '../../test/msw-handlers.js';
 
@@ -72,6 +73,22 @@ const DEFAULT_ACTIVE_CONFIG = {
   is_active: true,
 };
 
+const MOVER_ALICE = {
+  id: '30000000-0000-0000-0000-000000000001',
+  sid: '3031234',
+  display_name: 'Alice',
+};
+const MOVER_BOB = {
+  id: '30000000-0000-0000-0000-000000000002',
+  sid: '3032345',
+  display_name: 'Bob',
+};
+const MOVER_NO_SCORE = {
+  score_total: 0,
+  score_max_severity: 'info' as const,
+  flag_counts: { info: 0, low: 0, medium: 0, high: 0 },
+};
+
 const DRY_RUN_DIFF = {
   candidate_version: 4,
   diff: {
@@ -80,6 +97,7 @@ const DRY_RUN_DIFF = {
       {
         submission_id: 'aa000000-0000-0000-0000-000000000001',
         student: { sid: '3031234', display_name: 'Alice' },
+        contributors: [makeSoloContributor(MOVER_ALICE, MOVER_NO_SCORE)],
         assignment: { assignment_id_str: 'hw1', label: 'Homework 1' },
         old_score: 3.0,
         new_score: 5.0,
@@ -288,6 +306,74 @@ describe('TuningView', () => {
       },
       { timeout: 2000 },
     );
+  }, 10000);
+
+  it('names every contributor of a group mover, not just the submitter of record', async () => {
+    // A mover row says "this score moves by N under the proposed weights", and
+    // the score belongs to the SCOPE. Naming only `student` charged the swing
+    // to one partner of a pair — and which partner that was had been decided by
+    // an ingest race.
+    //
+    // The override is registered BEFORE render because the view fires a dry run
+    // on load to draw the "before" histogram; MSW takes the last handler
+    // registered, so this one answers that first call.
+    setupHandlers();
+    mswServer.use(
+      http.put(`/api/v1/semesters/${DEFAULT_SEMESTER_ID}/heuristic-config`, async ({ request }) => {
+        const url = new URL(request.url);
+        if (url.searchParams.get('dryRun') !== 'true') return HttpResponse.json({});
+        return HttpResponse.json({
+          ...DRY_RUN_DIFF,
+          diff: {
+            ...DRY_RUN_DIFF.diff,
+            top_movers: [
+              {
+                ...DRY_RUN_DIFF.diff.top_movers[0],
+                contributors: [
+                  makeSoloContributor(MOVER_ALICE, MOVER_NO_SCORE),
+                  makeSoloContributor(MOVER_BOB, MOVER_NO_SCORE),
+                ],
+              },
+            ],
+          },
+        });
+      }),
+    );
+    renderTuningView();
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('top-movers')).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+    expect(screen.getByText('Alice, Bob')).toBeInTheDocument();
+  }, 10000);
+
+  it('falls back to the submitter of record for a response predating contributors', async () => {
+    setupHandlers();
+    mswServer.use(
+      http.put(`/api/v1/semesters/${DEFAULT_SEMESTER_ID}/heuristic-config`, async ({ request }) => {
+        const url = new URL(request.url);
+        if (url.searchParams.get('dryRun') !== 'true') return HttpResponse.json({});
+        return HttpResponse.json({
+          ...DRY_RUN_DIFF,
+          diff: {
+            ...DRY_RUN_DIFF.diff,
+            top_movers: [{ ...DRY_RUN_DIFF.diff.top_movers[0], contributors: [] }],
+          },
+        });
+      }),
+    );
+    renderTuningView();
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('top-movers')).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+    expect(screen.getByText('Alice')).toBeInTheDocument();
   }, 10000);
 
   it('slider change within 300ms does NOT trigger dry-run (debounce)', async () => {

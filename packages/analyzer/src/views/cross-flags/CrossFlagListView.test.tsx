@@ -26,12 +26,29 @@ import {
   DEFAULT_SEMESTER_ID,
   DEFAULT_SEMESTER_SLUG,
   defaultMembership,
+  makeSoloContributor,
   meWithMembershipsHandler,
 } from '../../test/msw-handlers.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
+
+const LIST_ALICE = {
+  id: '30000000-0000-0000-0000-000000000001',
+  sid: '3031234',
+  display_name: 'Alice',
+};
+const LIST_BOB = {
+  id: '30000000-0000-0000-0000-000000000002',
+  sid: '3032345',
+  display_name: 'Bob',
+};
+const LIST_NO_SCORE = {
+  score_total: 0,
+  score_max_severity: 'info' as const,
+  flag_counts: { info: 0, low: 0, medium: 0, high: 0 },
+};
 
 function makeCrossFlag(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -43,21 +60,15 @@ function makeCrossFlag(overrides: Partial<Record<string, unknown>> = {}) {
     participants: [
       {
         submission_id: 'aa000000-0000-0000-0000-000000000001',
-        student: {
-          id: '30000000-0000-0000-0000-000000000001',
-          sid: '3031234',
-          display_name: 'Alice',
-        },
+        student: LIST_ALICE,
+        contributors: [makeSoloContributor(LIST_ALICE, LIST_NO_SCORE)],
         assignment: { id: '20000000-0000-0000-0000-000000000001', assignment_id_str: 'hw1' },
         supporting_seqs: [1, 2, 3],
       },
       {
         submission_id: 'bb000000-0000-0000-0000-000000000001',
-        student: {
-          id: '30000000-0000-0000-0000-000000000002',
-          sid: '3032345',
-          display_name: 'Bob',
-        },
+        student: LIST_BOB,
+        contributors: [makeSoloContributor(LIST_BOB, LIST_NO_SCORE)],
         assignment: { id: '20000000-0000-0000-0000-000000000001', assignment_id_str: 'hw1' },
         supporting_seqs: [4, 5, 6],
       },

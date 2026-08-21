@@ -58,11 +58,10 @@ export function buildCsv(rows: SubmissionRow[]): string {
     'recompute_status',
     'superseded',
     // Appended at the END so every existing consumer's column positions are
-    // unchanged. `student_sid`/`student_name` above still carry the SUBMITTER
-    // of record (empty when no single roster entry owns the submission); these
-    // three carry everyone the submission is attributable to. For a solo
-    // submission contributor_count is 1 and the two lists repeat student_sid /
-    // student_name exactly.
+    // unchanged. `student_sid`/`student_name` above carry the same people as
+    // `contributor_sids`/`contributor_names`; the pair is kept because the
+    // column positions are the contract, and `contributor_count` is the only
+    // thing here a consumer cannot derive from them.
     'contributor_count',
     'contributor_sids',
     'contributor_names',
@@ -74,8 +73,18 @@ export function buildCsv(rows: SubmissionRow[]): string {
     const topFlagsStr = row.top_flags.map((f) => f.heuristic_id).join(';');
     const cells = [
       row.id,
-      row.student?.sid ?? '',
-      row.student?.display_name ?? '',
+      // Every contributor, not `row.student`.
+      //
+      // `student` is the SUBMITTER of record, and on a group submission it is
+      // one of several people who worked on the artifact — so a spreadsheet
+      // column headed `student_name` was naming one partner and hiding the
+      // other. The column NAMES and POSITIONS are the contract here (graders'
+      // sheets index them), so they are untouched: what changes is that a
+      // multi-contributor cell becomes a `;`-separated list rather than one
+      // arbitrary name. A solo submission has exactly one contributor, equal to
+      // `student`, so its two cells are byte-identical to before.
+      contributorsSidLabel(row.contributors, { fallbackStudent: row.student, separator: ';' }),
+      contributorsLabel(row.contributors, { fallbackStudent: row.student, separator: ';' }),
       row.assignment.label || row.assignment.assignment_id_str,
       String(row.score_total),
       row.score_max_severity,

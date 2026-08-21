@@ -1321,6 +1321,14 @@ export const TopMoverSchema = z.object({
       display_name: z.string(),
     })
     .nullable(),
+  /**
+   * Everyone this submission is attributable to. A mover row says "this
+   * person's score moves by N under your proposed weights"; on a group
+   * submission the score belongs to the whole scope, so naming only the
+   * submitter of record attributes a swing to one arbitrary partner. Render
+   * this and fall back to `student` only when the list is empty.
+   */
+  contributors: z.array(SubmissionContributorSchema),
   assignment: z.object({
     assignment_id_str: z.string(),
     label: z.string().nullable(),
@@ -1417,6 +1425,18 @@ export const CrossFlagParticipantSchema = z.object({
       display_name: z.string(),
     })
     .nullable(),
+  /**
+   * Everyone this participant's submission is attributable to.
+   *
+   * `student` above is ONE of these — the submitter of record — and for a
+   * group submission it is one of several people who worked on the artifact.
+   * A cross-flag names participants in a comparison, so naming one partner and
+   * not the other is a finding pointed at an arbitrary person. Render this;
+   * fall back to `student` only when the list is empty.
+   *
+   * Exactly one entry, equal to `student`, for every solo submission.
+   */
+  contributors: z.array(SubmissionContributorSchema),
   assignment: z.object({
     id: z.string().uuid(),
     assignment_id_str: z.string(),

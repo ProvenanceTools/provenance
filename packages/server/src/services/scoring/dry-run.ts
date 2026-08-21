@@ -40,6 +40,8 @@ import type { ServerHeuristicConfig } from '../heuristics/config.js';
 import { recomputeSubmission } from './recompute-submission.js';
 import { getStorageClient } from '../storage/default-client.js';
 import { projectStudent } from '../protect.js';
+import { fetchContributorsFor } from '../contributors/fetch-contributors.js';
+import type { SubmissionContributor } from '@provenance/shared/api-schemas';
 import type { Severity } from '@provenance/analysis-core/heuristics/types.js';
 
 // ---------------------------------------------------------------------------
@@ -53,6 +55,13 @@ export type TierMover = {
    * submission (D9). Mirrors `TopMoverSchema.student` in `@provenance/shared`.
    */
   student: { id: string; sid: string; display_name: string } | null;
+  /**
+   * Everyone this submission is attributable to (D9). A mover row says "this
+   * score moves by N"; on a group submission the score is the SCOPE's, so
+   * naming only the submitter of record charges the swing to one arbitrary
+   * partner. Exactly one entry, equal to `student`, for every solo submission.
+   */
+  contributors: SubmissionContributor[];
   assignment: { id: string; assignment_id_str: string; label: string };
   old_score: number;
   new_score: number;
@@ -240,8 +249,20 @@ export async function computeDryRunDiff(
   const sorted = [...diffs].sort(
     (a, b) => Math.abs(b.new_score - b.old_score) - Math.abs(a.new_score - a.old_score),
   );
-  const topMovers: TierMover[] = sorted.slice(0, 20).map((d) => ({
+  const movers = sorted.slice(0, 20);
+
+  // Only the 20 rows that are actually returned — the dry run recomputes every
+  // submission in the semester, and fetching contributors for all of them to
+  // render 20 would cost the §10.5 latency budget for nothing.
+  const contributorsBySubmission = await fetchContributorsFor(
+    db,
+    movers.map((d) => d.submission_id),
+    protectedMode,
+  );
+
+  const topMovers: TierMover[] = movers.map((d) => ({
     submission_id: d.submission_id,
+    contributors: contributorsBySubmission.get(d.submission_id) ?? [],
     student:
       d.student_id === null || d.student_sid === null || d.student_display_name === null
         ? null

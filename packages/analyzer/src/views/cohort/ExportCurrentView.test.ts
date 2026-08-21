@@ -90,7 +90,47 @@ describe('buildCsv column contract', () => {
     ]);
   });
 
-  it('emits empty submitter cells and the neutral label when nobody is on the roster', () => {
+  it('names both partners in student_sid/student_name, not an arbitrary one', () => {
+    // `student` is the SUBMITTER of record, and which co-submitter that is was
+    // decided by a race until the ingest tie-break landed. A grader filtering a
+    // spreadsheet on `student_name` was therefore seeing one partner of a pair
+    // and not the other, with nothing on the row to say so.
+    //
+    // The column NAMES and POSITIONS are the contract and are untouched; a
+    // multi-contributor cell is now a `;`-separated list. Deliberately the same
+    // value as `contributor_sids`/`contributor_names` — the appended columns are
+    // kept because their positions are themselves consumed.
+    const row = makeSubmissionRow({
+      student: {
+        id: '30000000-0000-0000-0000-000000000001',
+        sid: '3031234',
+        display_name: 'Alice Liddell',
+      },
+      contributors: [
+        makeSubmissionContributor(),
+        makeSubmissionContributor({
+          contributor_key: 'roster:30000000-0000-0000-0000-000000000002',
+          student: {
+            id: '30000000-0000-0000-0000-000000000002',
+            sid: '3035678',
+            display_name: 'Bob Cratchit',
+          },
+        }),
+      ],
+    });
+    const cells = rowCells(buildCsv([row]), 0);
+    expect(cells[1]).toBe('3031234;3035678');
+    expect(cells[2]).toBe('Alice Liddell;Bob Cratchit');
+  });
+
+  it('falls back to the submitter columns for a response predating contributors', () => {
+    const row = makeSubmissionRow({ contributors: [] });
+    const cells = rowCells(buildCsv([row]), 0);
+    expect(cells[1]).toBe(row.student!.sid);
+    expect(cells[2]).toBe(row.student!.display_name);
+  });
+
+  it('emits an empty sid and the neutral label when nobody is on the roster', () => {
     const row = makeSubmissionRow({
       student: null,
       contributors: [
@@ -104,7 +144,11 @@ describe('buildCsv column contract', () => {
     });
     const cells = rowCells(buildCsv([row]), 0);
     expect(cells[1]).toBe('');
-    expect(cells[2]).toBe('');
+    // Was `''` while this column rendered the (absent) submitter of record.
+    // The person is real — they are simply not on this semester's roster — so
+    // the row now says so in neutral wording instead of reading as no person at
+    // all. An unnamed contributor still has no SID to show.
+    expect(cells[2]).toBe(UNNAMED_CONTRIBUTOR_LABEL);
     expect(cells.slice(PRE_0029_HEADERS.length)).toEqual(['1', '', UNNAMED_CONTRIBUTOR_LABEL]);
   });
 });

@@ -16,7 +16,11 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useCrossFlagDetail } from '../../api/queries.js';
 import { useActiveSemester } from '../../api/use-active-semester.js';
 import type { CrossFlagParticipant } from '@provenance/shared/api-schemas';
-import { personLabel } from '../../lib/contributor-display.js';
+import {
+  contributorsLabel,
+  contributorsSidLabel,
+  personLabel,
+} from '../../lib/contributor-display.js';
 
 // ---------------------------------------------------------------------------
 // Severity badge
@@ -43,6 +47,15 @@ function SeverityBadge({ severity }: { severity: string }) {
 // ---------------------------------------------------------------------------
 
 function ParticipantCard({ participant }: { participant: CrossFlagParticipant }) {
+  // Empty when nobody in the list is on the roster — the SID line is then
+  // dropped entirely rather than rendering a bare "SID: ".
+  const sids = contributorsSidLabel(participant.contributors, {
+    fallbackStudent: participant.student,
+  })
+    .split(', ')
+    .filter((s) => s !== '')
+    .join(', ');
+
   return (
     <div
       className="bg-white border border-gray-200 rounded p-4"
@@ -50,15 +63,27 @@ function ParticipantCard({ participant }: { participant: CrossFlagParticipant })
     >
       <div className="mb-2">
         {/*
-          `student` is null when this participant is not on the semester's
-          roster. Since 0029 they are still LISTED (the join is LEFT, so the
-          evidence no longer silently disappears) — just not named. Neutral
-          wording and the same styling as any named participant: not being on
-          the roster is an administrative gap, not a finding.
+          EVERY contributor, not the submitter of record.
+          `participant.student` is one person; a group submission is
+          attributable to several, so naming only that one puts a cross-flag —
+          a finding about sharing between students — against an arbitrary
+          partner while hiding the rest.
+
+          A contributor with no `student` is not on the semester's roster.
+          They are still LISTED (the join is LEFT, so the evidence no longer
+          silently disappears) — just not named, with neutral wording and the
+          same styling as any named participant: not being on the roster is an
+          administrative gap, not a finding.
+
+          `fallbackStudent` covers a response that predates `contributors`.
         */}
-        <p className="text-sm font-medium text-gray-800">{personLabel(participant.student)}</p>
+        <p className="text-sm font-medium text-gray-800">
+          {contributorsLabel(participant.contributors, {
+            fallbackStudent: participant.student,
+          }) || personLabel(null)}
+        </p>
         <p className="text-xs text-gray-500">
-          {participant.student ? `SID: ${participant.student.sid} · ` : ''}
+          {sids ? `SID: ${sids} · ` : ''}
           {participant.assignment.assignment_id_str}
         </p>
         <p className="text-xs text-gray-400 font-mono truncate">sub: {participant.submission_id}</p>

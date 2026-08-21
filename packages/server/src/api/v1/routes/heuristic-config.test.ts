@@ -35,6 +35,7 @@ import {
   roster_entries,
   assignments,
   submissions,
+  submission_contributors,
   flags,
 } from '../../../db/schema.js';
 import type { DrizzleDb } from '../../../db/client.js';
@@ -1144,6 +1145,28 @@ describe('computeDryRunDiff', () => {
         candidateConfig.per_flag['large_paste']!.enabled = false;
         candidateConfig.per_flag['extension_hash_mismatch']!.enabled = false;
 
+        // A partner who co-submitted this work. The mover row reports a SCOPE
+        // score, so naming only `student` (the submitter of record, which an
+        // ingest race used to pick) charges the whole swing to one of them.
+        const [partner] = await db
+          .insert(roster_entries)
+          .values({
+            semester_id: semester.id,
+            sid: 'stu003',
+            display_name: 'Carol',
+          })
+          .returning();
+        for (const person of [student!, partner!]) {
+          await db.insert(submission_contributors).values({
+            submission_id: submission!.id,
+            semester_id: semester.id,
+            contributor_key: `roster:${person.id}`,
+            kind: 'roster',
+            roster_entry_id: person.id,
+            is_submitter: true,
+          });
+        }
+
         const result = await computeDryRunDiff(db, semester.id, candidateConfig, 2);
 
         expect(result.diff.submissions_with_tier_change).toBe(1);
@@ -1152,6 +1175,9 @@ describe('computeDryRunDiff', () => {
         expect(result.diff.top_movers[0]!.new_tier).toBe('info');
         expect(result.diff.top_movers[0]!.old_score).toBe(3);
         expect(result.diff.top_movers[0]!.new_score).toBe(0);
+        expect(
+          result.diff.top_movers[0]!.contributors.map((c) => c.student!.display_name).sort(),
+        ).toEqual(['Bob', 'Carol']);
       });
     });
   });
