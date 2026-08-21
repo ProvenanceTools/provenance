@@ -335,14 +335,37 @@ export async function loadBundle(
       ...new Set(rollingValidation.seals.map((s) => s.manifest.extension_hash)),
     ].sort();
 
-    // Prefix coverage, computed ONLY when the union manifest is the one the rest
-    // of analysis-core will read. A rolling seal is rewritten as its session
-    // grows, so its digests commit to a prefix; a classic seal is taken once
-    // over a finished log and commits to the whole file. A both-shapes bundle
-    // uses the classic manifest, so it keeps whole-file equality — and keeps
-    // catching a post-seal append at full strength. See rolling-coverage.ts.
+    // Prefix coverage, computed for every rolling-sealed session — INCLUDING in
+    // a bundle that also carries a classic `manifest.json`.
+    //
+    // This used to be gated on `classicManifest === null`, on the reasoning that
+    // "a classic seal is taken once over a finished log and commits to the whole
+    // file". That is true of a classic-ONLY bundle and false of a both-shapes
+    // one. `commands/seal.ts` writes `manifest.json` + `manifest.sig` INTO
+    // `.provenance/` and never removes them, so a student who runs "Prepare
+    // Submission Bundle" once and then keeps working and pushes ships a classic
+    // manifest that committed to the log as it stood THEN, beside rolling seals
+    // that commit to it as it stands NOW. `manifest = classicManifest ??
+    // unionManifest` makes the stale one the manifest the rest of analysis-core
+    // reads; coverage stayed `undefined`; and `verify-log-bytes.ts` reads absent
+    // coverage as a classic whole-file commitment. The student's honest later
+    // work then failed `log_bytes_match` at high severity, confidence 1.0, with
+    // text reading "This is not recoverable from a benign cause" — while check 1
+    // went on passing, so nothing contradicted it.
+    //
+    // This is the FIFTH route to the prefix-vs-whole-file accusation (bugs 5,
+    // 10, 12 were the others). Bug 10 fixed one branch of the conditional
+    // INSIDE this block and bug 12 fixed the other; the gate one level up was
+    // never looked at. The lesson the log already recorded — "fixing one branch
+    // of a conditional does not fix the conditional" — applies to the enclosing
+    // `if` too.
+    //
+    // The digest each session is measured against is the WINNING manifest's,
+    // because that is the digest `verify-log-bytes.ts` would otherwise compare
+    // whole-file. `final` is still honoured, so an append past a `dispose()`
+    // seal is still caught at full strength.
     let coverage: RollingSealCoverage[] | undefined;
-    if (classicManifest === null) {
+    {
       coverage = [];
       for (const seal of rollingValidation.seals) {
         // `seal.sessionId` is a LOGICAL session id — a rolling seal is named
@@ -357,7 +380,49 @@ export async function loadBundle(
         // No `.slog` records this session at all → `no_session_log`, already
         // reported as a defect by reconcileRollingSealsWithSessions above.
         if (claimants === undefined || claimants.length === 0) continue;
-        const entry = seal.manifest.sessions[0];
+
+        // Measure against the digest the rest of analysis-core will read.
+        //
+        // On a rolling-only bundle that is the seal's own entry, unchanged. On a
+        // both-shapes bundle it is the classic manifest's entry for this
+        // session, because `verify-log-bytes.ts` compares
+        // `bundle.manifest.sessions[]` and uses coverage in place of that
+        // comparison — measuring the rolling digest and applying the verdict to
+        // the classic one would answer a question nobody asked.
+        //
+        // Deliberately skipped when the classic manifest says nothing about this
+        // session, or says two different things about it.
+        //
+        // Zero entries: `verify-log-bytes.ts` skips the session outright, so a
+        // coverage verdict would be read by nobody.
+        //
+        // Entries that DISAGREE: two manifest entries claiming one session with
+        // different digests is itself evidence, and `verify-log-bytes.ts`
+        // deliberately checks every one of them rather than `find()`ing the
+        // first — precisely so the honest entry cannot mask the other. Coverage
+        // is per-session, so a single verdict would be applied to both and
+        // would restore exactly that masking. Falling through leaves whole-file
+        // equality, which is today's behaviour and the stricter reading.
+        //
+        // Entries that AGREE are one claim written more than once, and are used.
+        //
+        // Only the two DIGESTS are taken, not the manifest entry: a rolling
+        // entry's `session_id` is proven non-null by the filename binding and a
+        // classic one's is not, and nothing here needs the id anyway.
+        const sealEntry = seal.manifest.sessions[0];
+        let committedSlogSha: unknown = sealEntry.slog_sha256;
+        let committedMetaSha: unknown = sealEntry.meta_sha256;
+        if (classicManifest !== null) {
+          const classicEntries = classicManifest.sessions.filter(
+            (s) => s.session_id === seal.sessionId,
+          );
+          const distinct = new Set(
+            classicEntries.map((s) => `${String(s.slog_sha256)}|${String(s.meta_sha256)}`),
+          );
+          if (classicEntries.length === 0 || distinct.size !== 1) continue;
+          committedSlogSha = classicEntries[0]!.slog_sha256;
+          committedMetaSha = classicEntries[0]!.meta_sha256;
+        }
         // A FINAL seal (written by dispose() over a finished, flushed log, and
         // signed) commits to the whole file, so it skips the prefix search
         // entirely and an append past it fails. Everything else is still
@@ -367,11 +432,11 @@ export async function loadBundle(
         const final = isFinalRollingSeal(seal.manifest);
         const per = claimants.map((files) => ({
           slog: final
-            ? wholeFileCoverage(files.slogSha256, entry.slog_sha256)
-            : computeSlogCoverage(files.slogText, files.slogSha256, entry.slog_sha256),
+            ? wholeFileCoverage(files.slogSha256, committedSlogSha)
+            : computeSlogCoverage(files.slogText, files.slogSha256, committedSlogSha),
           meta: final
-            ? wholeFileCoverage(files.metaSha256, entry.meta_sha256)
-            : computeMetaCoverage(files.metaJson, files.metaSha256, entry.meta_sha256),
+            ? wholeFileCoverage(files.metaSha256, committedMetaSha)
+            : computeMetaCoverage(files.metaJson, files.metaSha256, committedMetaSha),
         }));
 
         // The ordinary case: exactly one `.slog` records this session, and its

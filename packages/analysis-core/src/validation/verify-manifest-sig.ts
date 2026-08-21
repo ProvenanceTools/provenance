@@ -24,11 +24,35 @@
  * filename ↔ `session_id` binding meaningful, since falling back to other keys
  * would let `manifest-A.json` holding B's seal verify against B and pass.
  *
- * Every rolling-seal defect the loader recorded (unsigned manifest, missing
- * manifest, shape failure, sideways copy, sealed-but-absent session, unsealed
- * session, seals disagreeing on the assignment) is reported here as a failure of
- * this check. That is deliberate: those are integrity findings, and this is the
- * check that carries integrity findings about the seal.
+ * ## Not every defect is a signature failure
+ *
+ * Every rolling-seal defect used to be pushed into this check's problem list
+ * unconditionally, so ANY of them produced a `fail` under the label "Bundle
+ * manifest signature" — a title that asserts the signature did not verify. For
+ * most defect kinds that is exactly right: an unsigned manifest, a missing
+ * manifest, a manifest that will not parse or does not fit the shape, a seal
+ * naming a different session, and seals disagreeing on the assignment all mean
+ * that something which should be vouched for by a signature is not. So does
+ * `no_session_log` (bug 13 settled that deliberately: a signed claim that can
+ * never be checked is a real hole, and the only lever for lowering it is shared
+ * with genuine forgery) and so does `unsealed_session` (the recorder seals a
+ * session from its first instant — see `session-registry.ts` — so an unsealed
+ * `.slog` means a seal was removed, and check 7 cannot catch that because a
+ * session absent from the union manifest is simply skipped there).
+ *
+ * `ambiguous_session_log` is the one that is NOT. Its own type docstring says it
+ * "is NOT an integrity finding on its own", and the text bug 12 wrote for it
+ * ends "a fact about the archive, not evidence of tampering on its own". It is
+ * reached by a student keeping a copy of their own `.provenance/` directory,
+ * every signature in the bundle verifies perfectly, and the loader has already
+ * degraded that seal's coverage to `indeterminate` so no OTHER check reads the
+ * duplication as tampering either. Rendering a neutral statement of fact
+ * underneath a title asserting the signature failed is the accusation bug 12
+ * moved rather than removed.
+ *
+ * Such a defect is therefore REPORTED in this check's detail — failing toward
+ * fewer findings would be the other way to get this wrong — and does not decide
+ * the verdict. See {@link ARCHIVE_FACT_DEFECT_KINDS}.
  *
  * A bundle carrying BOTH shapes must satisfy both: the classic signature AND
  * every per-session rolling signature. Neither is allowed to excuse the other.
@@ -36,11 +60,38 @@
 
 import * as ed from '@noble/ed25519';
 import { canonicalize } from '@provenance/log-core';
-import type { Bundle, BundleRollingSeal } from '../loader/types.js';
+import type { Bundle, BundleRollingSeal, RollingSealDefect } from '../loader/types.js';
 import type { ValidationCheck } from './check-types.js';
 
 const ID = 'manifest_sig' as const;
 const LABEL = 'Bundle manifest signature';
+
+/**
+ * Defect kinds that state a fact about the archive without impugning any
+ * signature. They are reported, and they do not fail this check.
+ *
+ * Deliberately a closed set of ONE, and adding to it is a product decision: a
+ * defect that stops failing check 1 stops being caught anywhere unless another
+ * check picks it up. `unsealed_session` and `no_session_log` in particular look
+ * like candidates and are not — see the module docstring.
+ */
+const ARCHIVE_FACT_DEFECT_KINDS: ReadonlySet<RollingSealDefect['kind']> = new Set([
+  'ambiguous_session_log',
+]);
+
+/** Split the loader's defects into "the signature is in doubt" and "worth stating". */
+function partitionDefects(defects: readonly RollingSealDefect[]): {
+  signature: RollingSealDefect[];
+  archiveFacts: RollingSealDefect[];
+} {
+  const signature: RollingSealDefect[] = [];
+  const archiveFacts: RollingSealDefect[] = [];
+  for (const d of defects) {
+    if (ARCHIVE_FACT_DEFECT_KINDS.has(d.kind)) archiveFacts.push(d);
+    else signature.push(d);
+  }
+  return { signature, archiveFacts };
+}
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -219,17 +270,32 @@ export async function verifyManifestSig(bundle: Bundle): Promise<ValidationCheck
     rollingSeal,
   );
   problems.push(...sigProblems);
-  problems.push(...rollingSeal.defects.map((d) => d.detail));
+
+  const { signature, archiveFacts } = partitionDefects(rollingSeal.defects);
+  problems.push(...signature.map((d) => d.detail));
+
+  // Stated on BOTH paths. These are facts the loader established and a reader
+  // should see; what they must not do is decide the verdict.
+  const factsNote =
+    archiveFacts.length === 0
+      ? ''
+      : ` Also noted about this archive, and not a signature problem: ${archiveFacts
+          .map((d) => d.detail)
+          .join(' | ')}`;
+
+  // Evidence pointers, not accusations — they name the sessions a reader should
+  // go and look at, so they cover every defect this check mentions.
+  const supportingSeqs = [...signature, ...archiveFacts]
+    .filter((d) => bundle.sessions.some((s) => s.sessionId === d.sessionId))
+    .map((d) => ({ sessionId: d.sessionId, seq: 0 }));
 
   if (problems.length > 0) {
     return {
       id: ID,
       label: LABEL,
       status: 'fail',
-      detail: `Rolling seal did not fully verify: ${problems.join(' | ')}`,
-      supportingSeqs: rollingSeal.defects
-        .filter((d) => bundle.sessions.some((s) => s.sessionId === d.sessionId))
-        .map((d) => ({ sessionId: d.sessionId, seq: 0 })),
+      detail: `Rolling seal did not fully verify: ${problems.join(' | ')}${factsNote}`,
+      supportingSeqs,
     };
   }
 
@@ -240,6 +306,7 @@ export async function verifyManifestSig(bundle: Bundle): Promise<ValidationCheck
     status: 'pass',
     detail:
       `${verifiedSessionIds.length} rolling manifest(s) verified, each against its own ` +
-      `session key: [${verifiedSessionIds.join(', ')}].${classicNote}`,
+      `session key: [${verifiedSessionIds.join(', ')}].${classicNote}${factsNote}`,
+    ...(supportingSeqs.length > 0 ? { supportingSeqs } : {}),
   };
 }

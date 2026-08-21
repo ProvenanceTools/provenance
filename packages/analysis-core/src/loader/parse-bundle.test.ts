@@ -451,13 +451,39 @@ describe('loadBundle — rolling-seal coverage lives in the LOGICAL id space', (
   });
 
   it('leaves a BOTH-SHAPES bundle untouched when a log is duplicated', async () => {
-    // A bundle carrying `manifest.json` AS WELL AS rolling seals reads the
-    // CLASSIC manifest, which is taken once over a finished log and genuinely is
-    // a whole-file commitment — so no coverage is computed for it, whole-file
-    // equality is the right reading, and the ambiguity has no bearing on what is
-    // attested. Deliberately scoped that way: the ambiguity handling exists to
-    // stop an absent coverage entry being misread, and there is no coverage
-    // entry to misread here.
+    // WAS: "leaves a BOTH-SHAPES bundle untouched when a log is duplicated",
+    // asserting `coverage` came out `undefined` and no ambiguity defect was
+    // recorded. Its reasoning was that a classic manifest "is taken once over a
+    // finished log and genuinely is a whole-file commitment".
+    //
+    // That is true of a classic-ONLY bundle and false of a both-shapes one.
+    // `commands/seal.ts` writes `manifest.json` + `manifest.sig` INTO
+    // `.provenance/` and never removes them, so a student who runs "Prepare
+    // Submission Bundle" once and then keeps working and pushes ships a classic
+    // manifest that is STALE beside rolling seals that are current. Leaving
+    // coverage `undefined` sent that student down the whole-file path and
+    // failed `log_bytes_match` at high severity — the fifth route to the
+    // prefix-vs-whole-file accusation. See `stale-classic-manifest.test.ts`.
+    //
+    // So coverage IS computed for both-shapes bundles now, measured against the
+    // classic manifest's own digest — the one `verify-log-bytes.ts` would
+    // otherwise compare whole-file. See `stale-classic-manifest.test.ts` for
+    // the case that drives it.
+    //
+    // THIS fixture is the shape that still gets no verdict, and deliberately.
+    // Its two sessions are not copies of one log: they are two DIFFERENT logs
+    // built from two different session specs that happen to claim one logical
+    // id, so the classic manifest carries two entries for that id with two
+    // different digests. `verify-log-bytes.ts` checks EVERY entry claiming a
+    // session rather than `find()`ing the first, precisely so the honest entry
+    // cannot mask the other — and coverage is per-session, so one verdict
+    // applied to both would restore exactly that masking. The loader therefore
+    // declines, and whole-file equality (today's behaviour, and the stricter
+    // reading) stands.
+    //
+    // `[]` rather than `undefined` is not a behaviour change: both
+    // `verify-log-bytes.ts` (`?? []`) and `coverage-facts.ts` (`=== undefined`
+    // → `[]`) reduce them to the same empty map.
     const built = await buildTestBundle({
       sessions: [
         {
@@ -478,12 +504,61 @@ describe('loadBundle — rolling-seal coverage lives in the LOGICAL id space', (
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    // The classic manifest wins, so there is no coverage at all...
+    // The classic manifest still wins for the manifest the rest of
+    // analysis-core reads...
     expect(result.value.manifestSigHex).not.toBeNull();
-    expect(result.value.rollingSeal!.coverage).toBeUndefined();
-    // ...and no ambiguity defect is invented for a path it cannot affect.
+    // ...and the coverage pass now runs, but declines to answer for this
+    // session, because the classic manifest disagrees with itself about it.
+    const coverage = result.value.rollingSeal!.coverage;
+    expect(coverage).toBeDefined();
+    expect(coverage!).toEqual([]);
+    // No ambiguity defect either: the loader stopped before it could reach a
+    // verdict, so it has nothing to report about which log the seal covers.
     expect(result.value.rollingSeal!.defects.some((d) => d.kind === 'ambiguous_session_log')).toBe(
       false,
+    );
+  });
+
+  it('DOES answer a both-shapes bundle when the classic manifest agrees with itself', async () => {
+    // The companion to the case above, and the one a student actually
+    // produces: ONE session, its log copied verbatim under a second filename.
+    // The classic manifest carries a single entry, so there is nothing for a
+    // per-session verdict to mask, and the seal is answered exactly as it is on
+    // a rolling-only bundle. Before the outer gate was removed this bundle got
+    // no coverage at all and no ambiguity report.
+    const built = await buildTestBundle({
+      sessions: [
+        {
+          sessionId: 'aaaaaaaa-0000-4000-8000-000000000000',
+          fileUuid: '11111111-0000-4000-8000-000000000000',
+          eventCount: 4,
+        },
+      ],
+      rollingSeal: { alsoClassic: true },
+    });
+
+    const zip = await JSZip.loadAsync(built.zipBuffer);
+    const base = 'session-11111111-0000-4000-8000-000000000000';
+    const copy = 'session-33333333-0000-4000-8000-000000000000';
+    zip.file(`${copy}.slog`, await zip.file(`${base}.slog`)!.async('uint8array'));
+    zip.file(`${copy}.slog.meta`, await zip.file(`${base}.slog.meta`)!.async('uint8array'));
+    const dupZip = await zip.generateAsync({ type: 'arraybuffer' });
+
+    const result = await loadBundle(dupZip, 'both-shapes-copy.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.manifestSigHex).not.toBeNull();
+    const coverage = result.value.rollingSeal!.coverage!;
+    expect(coverage).toHaveLength(1);
+    // Byte-identical claimants agree, and the classic manifest is fresh, so the
+    // whole file is attested — the strictest verdict available.
+    expect(coverage[0]!.slog).toEqual({ kind: 'exact' });
+    // And the duplication is reported here too. It was not before, so one
+    // archive was described two different ways depending on whether a stale
+    // `manifest.json` happened to be sitting beside the rolling seals.
+    expect(result.value.rollingSeal!.defects.some((d) => d.kind === 'ambiguous_session_log')).toBe(
+      true,
     );
   });
 

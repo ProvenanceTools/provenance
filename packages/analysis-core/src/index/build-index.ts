@@ -167,8 +167,39 @@ export function buildIndex(bundle: Bundle): EventIndex {
     file?: string;
   };
 
+  // ---------------------------------------------------------------------------
+  // ONE logical session is replayed ONCE, however many files record it.
+  //
+  // `bundle.sessions` deliberately carries every `.slog` that claims a logical
+  // session id — a log duplicated under a second filename by a hand copy of
+  // `.provenance/`, a backup taken before a push, an odd merge. Two consumers
+  // genuinely need all of them: the rolling seal is resolved on what the
+  // claimants AGREE about (`resolveAmbiguousCoverage`, bug 12), and the witness
+  // reconciler answers `indeterminate` rather than the harsher `tip_mismatch`
+  // when they disagree. Removing the duplicate upstream in `parse-bundle.ts`
+  // silently took both of those answers away — measured, not assumed: it turned
+  // two `witness/reconcile-witnesses.test.ts` cases red, one of them by
+  // producing exactly the harsher verdict that test exists to prevent.
+  //
+  // The INDEX is the one consumer that must not see them all. It dedupes only
+  // `bySeq` (a Map); `byKind`, `byFile` and `bySessionId` all push. So a second
+  // copy replayed every delta twice: `reconstructFile` returned content the
+  // student never wrote ("x2x2x1x1" for a file written as "x2x1"), `charsTyped`
+  // doubled, and every heuristic dividing by it saw a fabricated denominator.
+  //
+  // Ties break on `slogSha256` — content-derived, so the choice depends on
+  // neither the archive's entry order nor either id space, and the server's
+  // repeated re-parses of one stored blob agree with each other. WHICH copy is
+  // observable only when the copies disagree, and that case is already reported
+  // (an `ambiguous_session_log` defect naming both files, and coverage
+  // degraded to `indeterminate`). Replaying both is not the cautious
+  // alternative to choosing one: it is the only option that invents events.
+  const sessionsToReplay = [...bundle.sessions]
+    .sort((a, b) => (a.slogSha256 < b.slogSha256 ? -1 : a.slogSha256 > b.slogSha256 ? 1 : 0))
+    .filter((s, i, all) => all.findIndex((o) => o.sessionId === s.sessionId) === i);
+
   const flat: FlatEvent[] = [];
-  for (const session of bundle.sessions) {
+  for (const session of sessionsToReplay) {
     for (const envelope of session.events) {
       const file = getFileFromPayload(envelope.kind, envelope.data);
       const event: FlatEvent = {

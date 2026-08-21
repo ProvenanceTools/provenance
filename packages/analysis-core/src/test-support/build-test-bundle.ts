@@ -82,6 +82,27 @@ export type RollingSealSpec = {
    */
   alsoClassic?: boolean;
   /**
+   * Make the `alsoClassic` manifest **stale**: mint its `slog_sha256` for one
+   * session over only the first `entries` log entries, as if the classic seal
+   * had been taken at that moment and the session had gone on recording.
+   *
+   * Without this, `alsoClassic: true` mints the classic manifest over the SAME
+   * final bytes as the rolling seals, so the classic digest is never stale and
+   * the both-shapes bundle a real student produces is not constructible here.
+   *
+   * That student is easy to find. `commands/seal.ts` writes `manifest.json` +
+   * `manifest.sig` INTO `.provenance/` and never removes them, so anyone who
+   * runs "Prepare Submission Bundle" once — curiosity, a ZIP-submitted sibling
+   * assignment, a mixed cohort — and then keeps working and pushes ships a
+   * stale classic manifest alongside live rolling seals.
+   *
+   * Only the `.slog` digest is staled; the `.slog.meta` digest stays current,
+   * because this builder has no snapshot of the sidecar as it stood at that
+   * entry. The `.slog` mismatch is what the accusation was built on, so the
+   * shape is faithful where it matters and is called out where it is not.
+   */
+  staleClassicAfterEntries?: { sessionIndex: number; entries: number };
+  /**
    * Mark each session's rolling seal FINAL — the seal the recorder writes at
    * `dispose()` over a log that will not grow again. A final seal commits to the
    * WHOLE file, so an append to it fails `log_bytes_match`; a non-final one
@@ -760,6 +781,18 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
     }
   }
 
+  // The digest the CLASSIC manifest commits to for session `i`. Normally the
+  // finished log's, exactly as before. With `staleClassicAfterEntries` it is the
+  // digest of a PREFIX — the log as it stood when the classic seal was taken,
+  // after which the session went on recording. See `staleClassicAfterEntries`.
+  const stale = rollingSpec?.staleClassicAfterEntries;
+  const classicSlogShaFor = (i: number): string => {
+    const s = sessions[i]!;
+    if (stale === undefined || stale.sessionIndex !== i) return s.slogSha256;
+    const entries = s.slogText.split('\n').filter((l) => l !== '');
+    return sha256Hex(entries.slice(0, stale.entries).join('\n') + '\n');
+  };
+
   const manifest: BundleManifest =
     submissionFileSpecs !== undefined
       ? {
@@ -767,10 +800,10 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
           assignment_id: assignmentId,
           semester,
           extension_hash: 'a'.repeat(64),
-          sessions: sessions.map((s) => ({
+          sessions: sessions.map((s, i) => ({
             session_id: s.sessionId,
             prev_session_id: null,
-            slog_sha256: s.slogSha256,
+            slog_sha256: classicSlogShaFor(i),
             meta_sha256: s.metaSha256,
           })),
           submission_files: submissionEntries,
@@ -780,10 +813,10 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
           assignment_id: assignmentId,
           semester,
           extension_hash: 'a'.repeat(64),
-          sessions: sessions.map((s) => ({
+          sessions: sessions.map((s, i) => ({
             session_id: s.sessionId,
             prev_session_id: null,
-            slog_sha256: s.slogSha256,
+            slog_sha256: classicSlogShaFor(i),
             meta_sha256: s.metaSha256,
           })),
         };
