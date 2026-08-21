@@ -24,8 +24,13 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import { readRepositoryDiscriminator } from '@provenance/log-core';
-import { deriveRootCommitSha } from './root-commit-sha.js';
-import type { GitRunner } from './root-commit-sha.js';
+import {
+  BARE_GIT_COMMAND,
+  createGitRunner,
+  deriveRootCommitSha,
+  resolveGitPathCandidates,
+} from './root-commit-sha.js';
+import type { GitRunner, GitSpawn } from './root-commit-sha.js';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -291,5 +296,359 @@ describe('against a REAL git repository', () => {
     await expect(
       deriveRootCommitSha(path.join(os.tmpdir(), 'prov-does-not-exist-9f3a')),
     ).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding git at all — writer correction 8
+//
+// This half has only ever RUN on macOS, and most of the machines it has to work
+// on are not macOS. The resolution and the output parsing are therefore pinned
+// against Windows- and Linux-shaped inputs through the injectable seams, since
+// no Windows machine is available to run them on. What is NOT proved here is
+// stated plainly rather than papered over: no assertion below claims a real
+// Windows process was ever started.
+// ---------------------------------------------------------------------------
+
+/** The Windows default install location — and the reason spaces matter. */
+const WINDOWS_GIT = 'C:\\Program Files\\Git\\cmd\\git.exe';
+const WINDOWS_GIT_BIN = 'C:\\Program Files\\Git\\bin\\git.exe';
+const LINUX_GIT = '/usr/bin/git';
+
+/** An error shaped like the one `execFile` produces for the named condition. */
+function spawnFailure(code: unknown, extra: Record<string, unknown> = {}): Error {
+  return Object.assign(new Error(`git: ${String(code)}`), { code, ...extra });
+}
+
+/** Records every (file, args, cwd) a runner asks for, answering from a script. */
+function recordingSpawn(answers: ReadonlyMap<string, string | Error>): {
+  spawn: GitSpawn;
+  calls: Array<{ file: string; args: readonly string[]; cwd: string }>;
+} {
+  const calls: Array<{ file: string; args: readonly string[]; cwd: string }> = [];
+  const spawn: GitSpawn = async (file, args, cwd) => {
+    calls.push({ file, args, cwd });
+    const answer = answers.get(file);
+    if (answer === undefined) throw spawnFailure('ENOENT');
+    if (answer instanceof Error) throw answer;
+    return answer;
+  };
+  return { spawn, calls };
+}
+
+describe('resolveGitPathCandidates — which git to spawn', () => {
+  it('is the bare PATH lookup when VS Code knows nothing, exactly as before', () => {
+    // The pre-existing behaviour, preserved on every machine where it was
+    // already right.
+    expect(resolveGitPathCandidates()).toEqual([BARE_GIT_COMMAND]);
+    expect(resolveGitPathCandidates({})).toEqual([BARE_GIT_COMMAND]);
+    expect(
+      resolveGitPathCandidates({ extensionApiGitPath: undefined, configuredGitPath: undefined }),
+    ).toEqual(['git']);
+  });
+
+  it('prefers the git extension’s OWN resolved binary, then the setting, then PATH', () => {
+    // MUTATION GUARD: ignoring `git.path` and always spawning bare `git` — the
+    // behaviour this change exists to fix — returns ['git'] here.
+    expect(
+      resolveGitPathCandidates({
+        extensionApiGitPath: WINDOWS_GIT,
+        configuredGitPath: WINDOWS_GIT_BIN,
+      }),
+    ).toEqual([WINDOWS_GIT, WINDOWS_GIT_BIN, 'git']);
+  });
+
+  it('keeps a Windows path containing SPACES verbatim — no quoting, no splitting', () => {
+    // `execFile` takes an argv, not a command line, so the space needs no
+    // treatment at all. Quoting it here would produce a path with literal quote
+    // characters in it, which is the classic cross-platform spawn bug.
+    const candidates = resolveGitPathCandidates({ extensionApiGitPath: WINDOWS_GIT });
+    expect(candidates[0]).toBe('C:\\Program Files\\Git\\cmd\\git.exe');
+    expect(candidates[0]).not.toContain('"');
+    expect(candidates).toHaveLength(2);
+  });
+
+  it('accepts an ARRAY-valued git.path and keeps the candidates in order', () => {
+    // The setting is documented as a string OR an array of paths to look up. A
+    // port that assumes a string gets `undefined` — or worse, an array coerced
+    // to "a,b", a path that exists nowhere.
+    //
+    // MUTATION GUARD: mishandling the array — `String(configured)`, taking only
+    // `[0]`, or dropping it as "not a string" — fails here.
+    expect(
+      resolveGitPathCandidates({ configuredGitPath: [WINDOWS_GIT, WINDOWS_GIT_BIN, LINUX_GIT] }),
+    ).toEqual([WINDOWS_GIT, WINDOWS_GIT_BIN, LINUX_GIT, 'git']);
+  });
+
+  it('drops array entries that cannot name an executable, keeping the rest in order', () => {
+    expect(
+      resolveGitPathCandidates({
+        configuredGitPath: ['', '   ', null, 42, { path: LINUX_GIT }, WINDOWS_GIT, LINUX_GIT],
+      }),
+    ).toEqual([WINDOWS_GIT, LINUX_GIT, 'git']);
+  });
+
+  it('ignores a git.path that is neither a string nor an array', () => {
+    for (const configuredGitPath of [42, true, null, { path: LINUX_GIT }, '', '  \t ']) {
+      expect(resolveGitPathCandidates({ configuredGitPath })).toEqual(['git']);
+    }
+  });
+
+  it('ignores an api.git.path that is not a usable string', () => {
+    // Another extension's untyped `exports`. It is not trusted to be a string.
+    for (const extensionApiGitPath of [42, true, null, {}, [], '', '   ']) {
+      expect(resolveGitPathCandidates({ extensionApiGitPath })).toEqual(['git']);
+    }
+  });
+
+  it('always ends at the bare PATH lookup, and is never empty', () => {
+    // The fallback is what makes this change incapable of losing a machine that
+    // already worked.
+    for (const hints of [
+      {},
+      { extensionApiGitPath: WINDOWS_GIT },
+      { configuredGitPath: [LINUX_GIT] },
+      { extensionApiGitPath: 42, configuredGitPath: [null] },
+    ]) {
+      const candidates = resolveGitPathCandidates(hints);
+      expect(candidates.length).toBeGreaterThan(0);
+      expect(candidates[candidates.length - 1]).toBe('git');
+    }
+  });
+
+  it('de-duplicates, so a setting that merely repeats the API answer costs nothing', () => {
+    expect(
+      resolveGitPathCandidates({
+        extensionApiGitPath: WINDOWS_GIT,
+        configuredGitPath: [WINDOWS_GIT, WINDOWS_GIT, LINUX_GIT],
+      }),
+    ).toEqual([WINDOWS_GIT, LINUX_GIT, 'git']);
+
+    // …including when the bare fallback is itself what was configured: once,
+    // and last is where it already is.
+    expect(resolveGitPathCandidates({ configuredGitPath: 'git' })).toEqual(['git']);
+  });
+
+  it('preserves drive letters, UNC paths and non-ASCII directories verbatim', () => {
+    const unc = '\\\\build-server\\tools\\Git\\cmd\\git.exe';
+    const nonAscii = '/home/étudiant/outils/git';
+    expect(
+      resolveGitPathCandidates({ configuredGitPath: [unc, 'D:\\git\\git.exe', nonAscii] }),
+    ).toEqual([unc, 'D:\\git\\git.exe', nonAscii, 'git']);
+  });
+});
+
+describe('createGitRunner — walking the candidate ladder', () => {
+  it('falls through to the next candidate when one is NOT THERE (ENOENT)', async () => {
+    // The whole point: a stale `git.path`, or a git the inherited PATH lacks.
+    const { spawn, calls } = recordingSpawn(new Map([['git', `${A}\n`]]));
+    const run = createGitRunner([WINDOWS_GIT, 'git'], spawn);
+
+    expect(await run(['rev-parse', '--is-shallow-repository'], '/ws/p')).toBe(`${A}\n`);
+    expect(calls.map((c) => c.file)).toEqual([WINDOWS_GIT, 'git']);
+  });
+
+  it('falls through for a candidate that is present but cannot be RUN', async () => {
+    // EACCES / EPERM: there, not runnable. ENOTDIR: a path component is a file.
+    // EINVAL: not a launchable program — a .cmd/.bat git wrapper, which Node
+    // refuses without a shell, and a shell is exactly what we will not add.
+    for (const code of ['EACCES', 'EPERM', 'ENOTDIR', 'EINVAL']) {
+      const { spawn, calls } = recordingSpawn(
+        new Map<string, string | Error>([
+          [WINDOWS_GIT, spawnFailure(code)],
+          ['git', `${B}\n`],
+        ]),
+      );
+      const run = createGitRunner([WINDOWS_GIT, 'git'], spawn);
+      expect(await run(['rev-list'], '/ws/p')).toBe(`${B}\n`);
+      expect(calls).toHaveLength(2);
+    }
+  });
+
+  it('does NOT fall through on a non-zero exit — git was found and it ANSWERED', async () => {
+    // "not a git repository" is an answer, not a failed launch. Re-asking a
+    // different binary in the same directory can only hear the same thing.
+    const { spawn, calls } = recordingSpawn(
+      new Map<string, string | Error>([
+        [WINDOWS_GIT, spawnFailure(128, { stderr: 'fatal: not a git repository' })],
+        ['git', `${A}\n`],
+      ]),
+    );
+    const run = createGitRunner([WINDOWS_GIT, 'git'], spawn);
+
+    await expect(run(['rev-parse'], '/ws/p')).rejects.toThrow();
+    expect(calls.map((c) => c.file)).toEqual([WINDOWS_GIT]);
+  });
+
+  it('does NOT fall through on a TIMEOUT — the 5s budget is spent once, not per candidate', async () => {
+    // execFile's timeout kill: `killed`, a signal, and no string `code`. Three
+    // candidates laddering here would put a 15s stall in front of activation.
+    const timedOut = spawnFailure(null, { killed: true, signal: 'SIGTERM' });
+    const { spawn, calls } = recordingSpawn(
+      new Map<string, string | Error>([
+        [WINDOWS_GIT, timedOut],
+        [WINDOWS_GIT_BIN, `${A}\n`],
+        ['git', `${A}\n`],
+      ]),
+    );
+    const run = createGitRunner([WINDOWS_GIT, WINDOWS_GIT_BIN, 'git'], spawn);
+
+    await expect(run(['rev-parse'], '/ws/p')).rejects.toThrow();
+    expect(calls).toHaveLength(1);
+  });
+
+  it('rejects when NO candidate can start, and that reaches the same OMISSION', async () => {
+    // ENOENT from a missing binary, a non-zero exit and a timeout all land in
+    // deriveRootCommitSha's single catch. The field is omitted; nothing is
+    // invented, and nothing is reported as a defect.
+    //
+    // MUTATION GUARD: treating a missing binary as a FINDING rather than an
+    // omission — throwing, or returning a sentinel such as 'git-unavailable' —
+    // fails on the `toBeUndefined()` below.
+    const { spawn, calls } = recordingSpawn(new Map());
+    const run = createGitRunner([WINDOWS_GIT, LINUX_GIT, 'git'], spawn);
+
+    await expect(run(['rev-parse'], '/ws/p')).rejects.toThrow();
+    expect(calls).toHaveLength(3);
+    await expect(deriveRootCommitSha('/ws/p', run)).resolves.toBeUndefined();
+  });
+
+  it('passes args and cwd through VERBATIM to whichever executable it chose', async () => {
+    // No shell means no quoting, on any platform. A cwd with spaces, a drive
+    // letter, or non-ASCII is handed over exactly as given.
+    const cwd = 'C:\\Users\\Student\\CS 61B\\proj2';
+    const { spawn, calls } = recordingSpawn(new Map([[WINDOWS_GIT, 'false\r\n']]));
+    const run = createGitRunner([WINDOWS_GIT, 'git'], spawn);
+
+    await run(['rev-list', '--max-parents=0', '--first-parent', 'HEAD'], cwd);
+    expect(calls).toEqual([
+      { file: WINDOWS_GIT, args: ['rev-list', '--max-parents=0', '--first-parent', 'HEAD'], cwd },
+    ]);
+  });
+
+  it('falls back to the bare PATH lookup when handed an empty candidate list', async () => {
+    const { spawn, calls } = recordingSpawn(new Map([['git', `${A}\n`]]));
+    expect(await createGitRunner([], spawn)(['rev-parse'], '/ws/p')).toBe(`${A}\n`);
+    expect(calls.map((c) => c.file)).toEqual(['git']);
+  });
+});
+
+describe('command output shapes — Windows line endings and odd working directories', () => {
+  it('reads a CRLF shallow probe as NOT shallow', async () => {
+    // MUTATION GUARD: dropping the trim on the shallow probe makes
+    // 'false\r\n' !== 'false', so every Windows repository silently omits the
+    // field — a whole platform failing to correlate, with no error anywhere.
+    expect(
+      await deriveRootCommitSha('/ws/p', stubRunner({ shallow: 'false\r\n', revList: `${A}\r\n` })),
+    ).toBe(A);
+  });
+
+  it('still OMITS for a CRLF shallow repository', async () => {
+    expect(
+      await deriveRootCommitSha('/ws/p', stubRunner({ shallow: 'true\r\n', revList: `${A}\r\n` })),
+    ).toBeUndefined();
+  });
+
+  it('parses a CRLF root listing — the trim is applied PER LINE, not once at the end', async () => {
+    // A trailing `\r` is not lowercase hex, so log-core's reader rejects the
+    // whole value: without the per-line trim the field is omitted on Windows
+    // even though git answered correctly.
+    expect(await deriveRootCommitSha('/ws/p', stubRunner({ revList: `${A}\r\n` }))).toBe(A);
+    // …and the tie-break still compares real shas, not `\r`-suffixed ones.
+    expect(await deriveRootCommitSha('/ws/p', stubRunner({ revList: `${B}\r\n${A}\r\n` }))).toBe(A);
+  });
+
+  it('treats blank and bare-CR lines as nothing, never as a phantom root', async () => {
+    expect(await deriveRootCommitSha('/ws/p', stubRunner({ revList: '\r\n\r\n' }))).toBeUndefined();
+    expect(await deriveRootCommitSha('/ws/p', stubRunner({ revList: '\r' }))).toBeUndefined();
+    expect(await deriveRootCommitSha('/ws/p', stubRunner({ revList: `\r\n${A}\r\n\r\n` }))).toBe(A);
+  });
+
+  it('never emits a Windows path or a UNC share, however git got confused', async () => {
+    for (const bad of [
+      'C:\\Users\\Student\\CS 61B\\proj2',
+      '\\\\build-server\\share\\proj2',
+      'D:/repos/proj2',
+    ]) {
+      expect(
+        await deriveRootCommitSha('/ws/p', stubRunner({ revList: `${bad}\r\n` })),
+      ).toBeUndefined();
+    }
+  });
+
+  it('hands the repository root to BOTH commands exactly as given', async () => {
+    // Absolute POSIX, a Windows absolute path with spaces, a UNC share, a
+    // non-ASCII directory, and a relative path (which the OS resolves against
+    // the process cwd — the recorder always passes `repo.rootUri.fsPath`, which
+    // is absolute, but nothing here mangles one that is not).
+    for (const cwd of [
+      '/Users/student/cs61b/proj2',
+      'C:\\Users\\Student\\CS 61B\\proj2',
+      '\\\\build-server\\share\\proj2',
+      '/Users/étudiant/projet ✓/proj2',
+      './proj2',
+    ]) {
+      const seen: string[] = [];
+      const sha = await deriveRootCommitSha(
+        cwd,
+        stubRunner({ revList: `${A}\n`, onCall: (_args, got) => seen.push(got) }),
+      );
+      expect(sha).toBe(A);
+      expect(seen).toEqual([cwd, cwd]);
+    }
+  });
+});
+
+describe('against a REAL git repository — odd paths and candidate fall-through', () => {
+  it('derives in a repository whose path contains SPACES and non-ASCII', async () => {
+    // Only provable on this machine's filesystem, but it exercises the same
+    // argv path Windows takes: no shell, one argument, no quoting.
+    const parent = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'prov-odd-'));
+    const dir = path.join(parent, 'CS 61B — projet ✓');
+    await fsPromises.mkdir(dir);
+    await git(dir, 'init', '-q', '-b', 'main');
+    const root = await commit(dir, 'one');
+    await commit(dir, 'two');
+
+    expect(await deriveRootCommitSha(dir)).toBe(root);
+    await fsPromises.rm(parent, { recursive: true, force: true });
+  });
+
+  it('falls through a configured git that is NOT THERE to the real one on PATH', async () => {
+    // The end-to-end shape of the Windows fix, with a real spawn: a stale
+    // `git.path` costs one failed launch and nothing else.
+    const dir = await initRepo();
+    const root = await commit(dir, 'one');
+
+    const missing = path.join(os.tmpdir(), 'prov-no-such-git-4b1c', 'git');
+    const candidates = resolveGitPathCandidates({
+      extensionApiGitPath: missing,
+      configuredGitPath: ['', `${missing}.exe`],
+    });
+    expect(candidates[candidates.length - 1]).toBe('git');
+
+    expect(await deriveRootCommitSha(dir, createGitRunner(candidates))).toBe(root);
+    await fsPromises.rm(dir, { recursive: true, force: true });
+  });
+
+  it('does not ladder past a real git that answered — a non-repo omits after ONE launch', async () => {
+    const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'prov-nogit2-'));
+    const launched: string[] = [];
+    const countingSpawn: GitSpawn = async (file, args, cwd) => {
+      launched.push(file);
+      const { stdout } = await run(file, [...args], { cwd });
+      return stdout;
+    };
+
+    const derived = await deriveRootCommitSha(
+      dir,
+      createGitRunner(['git', path.join(os.tmpdir(), 'prov-no-such-git-4b1c')], countingSpawn),
+    );
+    expect(derived).toBeUndefined();
+    // `rev-parse --is-shallow-repository` exits non-zero outside a repository:
+    // an answer, so the second candidate is never tried.
+    expect(launched).toEqual(['git']);
+
+    await fsPromises.rm(dir, { recursive: true, force: true });
   });
 });
