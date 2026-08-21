@@ -19,10 +19,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import {
-  CrossFlagListResponseSchema,
-  CoverageFactsSchema,
-} from './api-schemas.js';
+import { CrossFlagListResponseSchema, CoverageFactsSchema } from './api-schemas.js';
 
 // ---------------------------------------------------------------------------
 // Rolling-deploy defaults
@@ -83,8 +80,7 @@ describe('capability reports keep "unknown" distinct from a negative answer', ()
 // ---------------------------------------------------------------------------
 
 describe('witness discrepancy vocabulary', () => {
-  const discrepancy =
-    CoverageFactsSchema.shape.witnessing.shape.discrepancies.element;
+  const discrepancy = CoverageFactsSchema.shape.witnessing.shape.discrepancies.element;
 
   it('never carries `corroborated` as a discrepancy verdict', () => {
     // `corroborated` is a COUNT, not a discrepancy. Admitting it here would let
@@ -120,14 +116,11 @@ describe('boundary rejection', () => {
   it('rejects an unknown witnessing capability rather than coercing it', () => {
     const bad = { capability: 'probably_fine' };
     expect(
-      CoverageFactsSchema.shape.witnessing.shape.capability.safeParse(bad.capability)
-        .success,
+      CoverageFactsSchema.shape.witnessing.shape.capability.safeParse(bad.capability).success,
     ).toBe(false);
   });
 
   it('rejects a non-integer session count', () => {
-    expect(
-      CoverageFactsSchema.shape.witnessing.shape.sessions.safeParse(1.5).success,
-    ).toBe(false);
+    expect(CoverageFactsSchema.shape.witnessing.shape.sessions.safeParse(1.5).success).toBe(false);
   });
 });
