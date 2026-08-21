@@ -56,6 +56,21 @@
  *    row. Merging them would tell a grader that two students collaborated when
  *    one person moved between their own machines — the same class of fabricated
  *    relationship as the rules above, pointing the other way.
+ *  - **"nobody reported" is not "the answer was no".** The two §5.6 sections —
+ *    peer witnessing and git observation — each have a THIRD state for a
+ *    recorder that says nothing, and it is the permanent state of every bundle
+ *    recorded before those fields existed. It renders as an open question, never
+ *    as `impossible` and never as a deficiency. `unwitnessed` in particular is
+ *    stated as the ordinary case, and `disappeared` is stated as a description
+ *    of what a file did, with a branch checkout and a stash named as the causes.
+ *  - **"could not observe" is not "nothing happened".** The git section exists
+ *    so a grader can tell those two apart. Both are stated; neither is implied.
+ *
+ * ## Which of these sections render, and why they differ
+ *
+ * Git observation renders unconditionally in state 3; peer witnessing renders
+ * only when something reported or a witness was read. See the comments at each
+ * one — the asymmetry is deliberate and is about which silence is dangerous.
  *
  * Presentation is deliberately the `IncompleteRecordingBanner` family — slate,
  * `role="status"`, no icons that read as warnings — and deliberately NOT the
@@ -123,6 +138,37 @@ function Section({
   );
 }
 
+/**
+ * What each `peer.observed` state is worth saying out loud, and what it is not.
+ *
+ * Only the three states that invite a wrong reading get a note. `appeared` and
+ * `grew` are what a partner recording normally looks like and are left silent —
+ * annotating them would pad a list a grader is already reading for signal.
+ *
+ * Every note here exists to say the SAME thing in three different shapes: the
+ * state is what the recorder saw happen to a file, and an ordinary git operation
+ * produces each one. `disappeared` is the one that has to be got right —
+ * `log-core/events.ts` is explicit that it is not evidence of misconduct,
+ * because checking out a branch that never contained a partner's log removes it
+ * from the working tree, and so does a stash.
+ */
+const OBSERVED_STATE_NOTES: Readonly<Record<string, string>> = {
+  disappeared:
+    'At some point the recorder saw this file leave the working tree. That is descriptive, not a finding: checking out a branch that never contained a partner’s log removes it, and so does a stash. What the observation still carries is the last state the recorder saw.',
+  shrank:
+    'At some point the recorder saw this file get smaller than it had been. On its own that is not evidence of anything — a branch switch and a fresh checkout both produce it.',
+  unparseable:
+    'At some point the recorder could not read this file as a provenance log. It did not rename, alter or remove it; recording what it saw is the entire response.',
+};
+
+/** How far a witnessing session's own identity got, said without insinuation. */
+const WITNESS_AUTHORITY_NOTES: Readonly<Record<string, string>> = {
+  unverifiable:
+    'The session that made this observation asserts an identity that could not be verified, so the observation is recorded and is not being relied on.',
+  unattributed:
+    'The session that made this observation is not attributed to anyone — the usual cause is a student who had not enrolled. Its own chain verifies, so the observation is real; it simply has no name attached to it.',
+};
+
 export function CoveragePanel({ facts }: CoveragePanelProps) {
   // State 1 — no facts. Say so. Never render counts here: zeroes would assert
   // "no commits observed, no contributors, no root key", none of which was
@@ -151,6 +197,8 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
     unattestedTails,
     dagDefects,
     dagCoverage,
+    witnessing,
+    gitObservation,
   } = facts;
 
   // State 2 — facts computed, nothing to note. Rule 3 wants the statement, not
@@ -252,6 +300,134 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
       </Section>
 
       {/* -----------------------------------------------------------------
+          Peer witnessing (§5.5).
+
+          Rendered only when something ACTUALLY REPORTED — a capability
+          report, or a witness that was read. A bundle whose recorder predates
+          peer witnessing has nothing to say here, and "0 of 3 logs are
+          witnessed" said about such a bundle is an invitation to read absence
+          as suspicion. The section stays away rather than volunteer it.
+          ----------------------------------------------------------------- */}
+      {(witnessing.capability !== 'unknown' ||
+        witnessing.corroborated > 0 ||
+        witnessing.discrepancies.length > 0 ||
+        witnessing.excluded > 0 ||
+        witnessing.malformed > 0) && (
+        <Section title="Peer witnessing" testId="coverage-witnessing">
+          {witnessing.capability === 'available' && (
+            <p data-testid="coverage-witness-capability-available">
+              At least one session here was watching the shared <code>.provenance/</code> directory,
+              so what it did and did not see about the other logs is on the record.
+            </p>
+          )}
+          {witnessing.capability === 'impossible' && (
+            <p data-testid="coverage-witness-capability-impossible">
+              <span className="font-medium">
+                No session here was able to witness any other log.
+              </span>{' '}
+              Every session reported that it could not watch the shared <code>.provenance/</code>{' '}
+              directory, so nothing in this submission could have been witnessed by anything else in
+              it. That is a limit on what this record can show, and it is not something anyone did.
+            </p>
+          )}
+          {witnessing.capability === 'unknown' && (
+            <p data-testid="coverage-witness-capability-unknown">
+              Not every session here reported whether it could watch the shared{' '}
+              <code>.provenance/</code> directory, so we cannot say whether a log went unwitnessed
+              because nothing saw it or because nothing was looking. Recorders only began reporting
+              this recently; every submission recorded before then is in this state, and nothing
+              follows from it.
+            </p>
+          )}
+
+          {witnessing.sessions > 0 && (
+            <p data-testid="coverage-witness-counts">
+              {witnessing.witnessedSessions} of {witnessing.sessions} log
+              {witnessing.sessions === 1 ? '' : 's'} in this submission{' '}
+              {witnessing.witnessedSessions === 1 ? 'is' : 'are'} named by another session&rsquo;s
+              signed chain.
+            </p>
+          )}
+          {witnessing.unwitnessedSessions > 0 && (
+            <p data-testid="coverage-unwitnessed-note">
+              The other {witnessing.unwitnessedSessions}{' '}
+              {witnessing.unwitnessedSessions === 1 ? 'is' : 'are'} named by no witness. That is the
+              ordinary case and it is not a finding: the partner may not have been recording, their
+              recorder may predate peer witnessing, or their sessions may simply never have
+              overlapped this one. Nothing about the student, or about the log, follows from it.
+            </p>
+          )}
+          {witnessing.corroborated > 0 && (
+            <p data-testid="coverage-witness-corroborated">
+              {witnessing.corroborated} observation
+              {witnessing.corroborated === 1 ? '' : 's'} match the log that is here at the point
+              {witnessing.corroborated === 1 ? ' it was' : ' they were'} taken, so the witnessed
+              part of that log is intact.
+            </p>
+          )}
+
+          {witnessing.discrepancies.map((d) => (
+            <p
+              key={`${d.file}:${d.verdict}`}
+              data-testid="coverage-witness-discrepancy"
+              data-verdict={d.verdict}
+            >
+              <span className="font-mono text-[11px] font-medium">{d.file}</span>
+              {d.observations > 1 && (
+                <span className="text-slate-500 dark:text-slate-400">
+                  {' '}
+                  (observed {d.observations} times)
+                </span>
+              )}{' '}
+              — {d.detail}
+              {d.states.map(
+                (s) =>
+                  OBSERVED_STATE_NOTES[s] !== undefined && (
+                    <span key={s} data-testid="coverage-witness-state-note">
+                      {' '}
+                      {OBSERVED_STATE_NOTES[s]}
+                    </span>
+                  ),
+              )}
+              {WITNESS_AUTHORITY_NOTES[d.authority] !== undefined && (
+                <span data-testid="coverage-witness-authority-note">
+                  {' '}
+                  {WITNESS_AUTHORITY_NOTES[d.authority]}
+                </span>
+              )}
+            </p>
+          ))}
+          {witnessing.discrepancies.length > 0 && (
+            <p data-testid="coverage-witness-discrepancy-note">
+              An observation that does not line up with the log that is here says nothing about who
+              altered anything, and each of these has ordinary explanations too: a partner who had
+              not pushed when this archive was taken, a partner who kept recording after their last
+              push, or a branch that never carried the file. They are stated so a grader can see
+              them, not so anyone can be accused.
+            </p>
+          )}
+
+          {witnessing.excluded > 0 && (
+            <p data-testid="coverage-witness-excluded">
+              {witnessing.excluded} observation{witnessing.excluded === 1 ? ' was' : 's were'} read
+              and deliberately not used. A chain cannot vouch for itself, and an observation about
+              another session of the same proven contributor is not independent evidence — whoever
+              could alter one of those chains could alter both.
+            </p>
+          )}
+          {witnessing.malformed > 0 && (
+            <p data-testid="coverage-witness-malformed">
+              {witnessing.malformed} observation
+              {witnessing.malformed === 1 ? ' could' : 's could'} not be read in the shape this
+              format defines, so {witnessing.malformed === 1 ? 'it was' : 'they were'} not used.
+              That is a fact about the recorder that wrote them; nothing is concluded from it about
+              anyone.
+            </p>
+          )}
+        </Section>
+      )}
+
+      {/* -----------------------------------------------------------------
           Commit-graph coverage.
           ----------------------------------------------------------------- */}
       {(dagCoverage.commits > 0 || dagDefects.length > 0) && (
@@ -306,6 +482,95 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
           ))}
         </Section>
       )}
+
+      {/* -----------------------------------------------------------------
+          Git observation (§5.6 item 2) — the caveat the commit graph is read
+          against, so it sits directly under it.
+
+          UNCONDITIONAL, unlike peer witnessing above. The difference is that
+          this section always has something true to say, and the thing it says
+          on a legacy bundle — "this recorder does not report whether git was
+          observable, so an absence of git evidence here is unresolved" — is
+          precisely the sentence that stops silence from implying git was fine.
+          A `git_unrecorded_in` classification is readable only with this
+          paragraph in front of it, and that classification does not require the
+          bundle to have observed a single commit. Given this project's history,
+          the cost of one neutral paragraph on a submission nobody asked a git
+          question about is the cheaper of the two errors.
+
+          It does NOT feed `hasCoverageFacts`: a bundle whose only "fact" is
+          that nothing reported still says "nothing to note".
+          ----------------------------------------------------------------- */}
+      <Section title="Git observation" testId="coverage-git-observation">
+        {gitObservation.availability === 'available' && (
+          <p data-testid="coverage-git-available">
+            Git observation was reported as available to at least one session here. Where a session
+            recorded no commits, that is a statement about git activity rather than about what could
+            be captured.
+          </p>
+        )}
+        {gitObservation.availability === 'impossible' && (
+          <p data-testid="coverage-git-impossible">
+            <span className="font-medium">No git evidence could be collected here.</span>{' '}
+            {gitObservation.impossibleReason === 'not_owned'
+              ? 'Every session reported that git observation worked but that this assignment sat outside any repository it could see. There is no git evidence in this record because there was no repository to observe — not because nothing was done.'
+              : gitObservation.impossibleReason === 'mixed'
+                ? 'Some sessions reported that git observation was unavailable to them, and others reported that the assignment sat outside any repository they could see. Either way nothing could be observed, so the absence of git evidence in this record says nothing about what was done.'
+                : 'Every session reported that git observation was unavailable to it — the editor’s git integration was not present, or could not be reached. There is no git evidence in this record because none could be gathered — not because nothing was done.'}
+          </p>
+        )}
+        {gitObservation.availability === 'unknown' && (
+          <p data-testid="coverage-git-unknown">
+            This submission&rsquo;s recorder does not report whether git observation was available
+            to it. An absence of git evidence here is therefore <em>unresolved</em>: it is equally
+            consistent with no git activity having happened and with git never having been
+            observable. Recorders only began reporting this recently, so every submission recorded
+            before then is permanently in this state. It is not a defect and it is not a finding.
+          </p>
+        )}
+
+        {gitObservation.observing > 0 && (
+          <p data-testid="coverage-git-observing">
+            {gitObservation.observing} of {gitObservation.sessions} session
+            {gitObservation.sessions === 1 ? '' : 's'} recorded at least one commit.
+          </p>
+        )}
+        {gitObservation.silentAndIncapable > 0 && (
+          <p data-testid="coverage-git-silent-incapable">
+            {gitObservation.silentAndIncapable} session
+            {gitObservation.silentAndIncapable === 1 ? '' : 's'} recorded no commits and reported
+            that {gitObservation.silentAndIncapable === 1 ? 'it' : 'they'} could not observe git.
+            That silence is fully explained by what{' '}
+            {gitObservation.silentAndIncapable === 1 ? 'that session' : 'those sessions'} could see,
+            and nothing further should be read into it.
+          </p>
+        )}
+        {gitObservation.silentThoughCapable > 0 && (
+          <p data-testid="coverage-git-silent-capable">
+            {gitObservation.silentThoughCapable} session
+            {gitObservation.silentThoughCapable === 1 ? '' : 's'} recorded no commits and reported
+            that git was available. So no git command ran while{' '}
+            {gitObservation.silentThoughCapable === 1 ? 'it was' : 'they were'} recording — which is
+            the ordinary shape of most honest sessions, and is not a finding.
+          </p>
+        )}
+        {gitObservation.silentAndUnreported > 0 && (
+          <p data-testid="coverage-git-silent-unreported">
+            {gitObservation.silentAndUnreported} session
+            {gitObservation.silentAndUnreported === 1 ? '' : 's'} recorded no commits and said
+            nothing about whether git could be observed, so that silence stays ambiguous. It is
+            exactly as ambiguous as it has always been; nothing has been checked and found wanting.
+          </p>
+        )}
+        {gitObservation.malformed > 0 && (
+          <p data-testid="coverage-git-malformed">
+            {gitObservation.malformed} session
+            {gitObservation.malformed === 1 ? '' : 's'} reported a git-capture value this format
+            does not define, so that report could not be used. That is a fact about the recorder,
+            never about the student.
+          </p>
+        )}
+      </Section>
 
       {/* -----------------------------------------------------------------
           Torn final lines — an interrupted write, absorbed rather than fatal.

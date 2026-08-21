@@ -642,6 +642,30 @@ const COVERAGE_WITH_FACTS: NonNullable<SubmissionSummary['coverage']> = {
     gitEventsWithUnreadableRepository: 0,
   },
   repositoryAssumedSingle: false,
+  // The §5.6 shape a PRE-§5.6 recorder produces, which is every bundle in the
+  // archive: nothing reported, nothing witnessed, and no conclusion drawn.
+  // Deliberately not the "everything available" shape — this fixture's job is
+  // to keep describing the ordinary submission.
+  witnessing: {
+    capability: 'unknown',
+    sessions: 3,
+    witnessedSessions: 0,
+    unwitnessedSessions: 3,
+    corroborated: 0,
+    excluded: 0,
+    malformed: 0,
+    discrepancies: [],
+  },
+  gitObservation: {
+    availability: 'unknown',
+    impossibleReason: null,
+    sessions: 3,
+    observing: 0,
+    silentAndIncapable: 0,
+    silentThoughCapable: 0,
+    silentAndUnreported: 3,
+    malformed: 0,
+  },
 };
 
 describe('Overview coverage panel', () => {
