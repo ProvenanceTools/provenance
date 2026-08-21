@@ -44,6 +44,8 @@ import { sha256Hex } from '@provenance/log-core';
 import JSZip from 'jszip';
 import { loadBundle } from './parse-bundle.js';
 import { runValidation } from '../validation/run-validation.js';
+import { buildIndex } from '../index/build-index.js';
+import { coverageFacts, hasCoverageFacts } from '../coverage/coverage-facts.js';
 import { buildTestBundle } from '../test-support/build-test-bundle.js';
 
 beforeAll(() => {
@@ -191,8 +193,41 @@ describe('truncation cannot launder a modification', () => {
 
     // And it is NOT the digest of what the reader kept — that value is what an
     // attacker would need this check to compare against.
-    const kept = result.value.sessions[0]!.events;
-    expect(kept.length).toBeGreaterThan(0);
+    const keptPrefix = new TextDecoder()
+      .decode(archived)
+      .slice(0, new TextDecoder().decode(archived).lastIndexOf('\n') + 1);
+    expect(result.value.sessions[0]!.slogSha256).not.toBe(sha256Hex(keptPrefix));
+  });
+
+  it('TRUNCATE-TO-SEAL: bytes added past a FINAL seal and then torn still fail', async () => {
+    // The purest form of the laundering attack, and the one a reader that
+    // re-hashed its own truncated view would hand over for free.
+    //
+    // A FINAL rolling seal is written by dispose() AFTER session.end is
+    // emitted and both files are flushed and closed, so it commits to the whole
+    // file. Append anything unterminated to that finished log and the kept
+    // prefix is EXACTLY the sealed bytes — so a reader hashing what it kept
+    // would reproduce the committed digest and report `exact`. Hashing the
+    // ARCHIVE instead reports the difference, which is what it is.
+    //
+    // This is not a false accusation against a crash victim: dispose() writes
+    // the final seal only after the log is flushed and closed, so the recorder
+    // that produced a final seal can no longer tear its own file. A final seal
+    // beside a torn log means the bytes changed after the writer said it was
+    // finished.
+    const built = await buildTestBundle({
+      sessions: [{ eventCount: 4 }],
+      rollingSeal: { final: true },
+      tamper: { tornTail: { sessionIndex: 0 } },
+    });
+    const result = await loadBundle(built.blob, 'truncate-to-seal.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.sessions[0]!.tornTail).not.toBeNull();
+
+    const report = await runValidation(result.value);
+    const bytes = (report.bundleDetections ?? []).find((d) => d.id === 'log_bytes_match');
+    expect(bytes?.status).toBe('fail');
   });
 
   it('a post-seal append hidden behind a torn tail still fails log_bytes_match at full strength', async () => {
@@ -305,7 +340,60 @@ describe('truncation cannot launder a modification', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. The rest of the analysis is unharmed.
+// 4. The fact reaches the stage that reports it.
+//
+// Written after mutation testing found the gap: emptying `tornTails` in the
+// coverage stage left every analysis-core test green and was caught only by an
+// analyzer render test, one package away. A fact whose only pin lives in a
+// consumer is a fact this package can silently stop producing.
+// ---------------------------------------------------------------------------
+
+describe('the coverage stage carries the truncation', () => {
+  it('reports one fact per torn session, with the session id and the loss', async () => {
+    const built = await buildTestBundle({
+      sessions: [{ eventCount: 4 }, { eventCount: 4 }],
+      tamper: { tornTail: { sessionIndex: 1 } },
+    });
+    const result = await loadBundle(built.blob, 'crashed.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const facts = coverageFacts(result.value, buildIndex(result.value));
+    expect(facts.tornTails).toHaveLength(1);
+    expect(facts.tornTails[0]!.sessionId).toBe(built.sessionIds[1]);
+    expect(facts.tornTails[0]!.discardedChars).toBeGreaterThan(0);
+    // The panel renders on `hasCoverageFacts`; a fact it does not switch on is
+    // a fact the panel never shows.
+    expect(hasCoverageFacts(facts)).toBe(true);
+  });
+
+  it('says nothing when no log was torn', async () => {
+    const built = await buildTestBundle({ sessions: [{ eventCount: 4 }] });
+    const result = await loadBundle(built.blob, 'clean.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(coverageFacts(result.value, buildIndex(result.value)).tornTails).toEqual([]);
+  });
+
+  it('is NOT reported as a dropped artifact — the file was analysed', async () => {
+    // `droppedArtifacts` says a file was left out entirely, and both of its
+    // renderers say so in prose ("N files could not be analysed"). A torn
+    // session was analysed; folding the two together would state a falsehood
+    // on two staff-facing surfaces.
+    const built = await buildTestBundle({
+      sessions: [{ eventCount: 4 }],
+      tamper: { tornTail: { sessionIndex: 0 } },
+    });
+    const result = await loadBundle(built.blob, 'crashed.zip', fixedNow);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.droppedArtifacts).toEqual([]);
+    expect(result.value.sessions).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. The rest of the analysis is unharmed.
 // ---------------------------------------------------------------------------
 
 describe('the surviving prefix is analysed at full strength', () => {
