@@ -1356,6 +1356,83 @@ tried — the targeted `ON CONFLICT`, and the prune rule — and both got regres
 
 ---
 
+### Landed 2026-08-21 — four MORE fan-out tests, and what the first fix got wrong
+
+The cut-over entry above found **one** test asserting the removed fan-out
+(`ingest-gradescope.e2e.test.ts`) and treated that as the sweep. There were
+**five**. The other four failed on the branch and were rewritten here:
+
+| test                                           | asserted the OLD shape as                                         |
+| ---------------------------------------------- | ----------------------------------------------------------------- |
+| `services/ingest/local-path.e2e.test.ts`       | `every(status === 'matched')`, THREE submissions keyed by student |
+| `services/ingest/resumable-upload.e2e.test.ts` | same, plus `subs).toHaveLength(3)`                                |
+| `services/ingest/stage-upload-job.e2e.test.ts` | `every(status === 'matched')` over three rows                     |
+| `jobs/worker-hint.e2e.test.ts`                 | "no duplicate collapse" — `rowA.submission_id).not.toBe(rowB…)`   |
+
+Their failing is the cut-over working, by its own rule. What is worth recording
+is that four of the five were **missed**, in a repo where three separate
+transports exist precisely to assert one shared end state — the sweep looked for
+the behaviour by NAME (`gradescope`) and the other three spell it
+`local-path`, `resumable-upload`, `stage-upload-job`. **Grep the assertion, not
+the feature name.**
+
+**The observed end state, verified by dumping all four tables before writing a
+single assertion.** For a Gradescope export with one solo folder (sid 111) and
+one pair folder (222 + 333):
+
+- `ingest_files`: exactly `duplicate` / `matched` / `matched`. **Which** of the
+  pair resolves as the duplicate is a race and nothing may assume it;
+- the `'duplicate'` row carries a non-null `submission_id` pointing at the
+  shared submission and its OWN `matched_student_id`;
+- **two** `submissions` rows, and — correcting an expectation held going in —
+  the pair's row has `student_id` set to whichever co-submitter won the race,
+  with `group_key` **NULL**. It is not the nullable-student/`group_key` shape;
+  that shape belongs to the git-repo group path, not to the Gradescope
+  co-submitter path, where the second person arrives purely as a contributor;
+- `submission_contributors`: two rows on the pair's submission, one on the
+  solo's, all `kind='roster'`, `is_submitter=true`.
+
+**The one substantive thing to fix in the cut-over's own repair.** The
+`ingest-gradescope` rewrite settled on
+
+```ts
+expect(fileRows.every((f) => f.status === 'matched' || f.status === 'duplicate')).toBe(true);
+expect(fileRows.every((f) => f.matched_student_id !== null)).toBe(true);
+```
+
+Both spellings are satisfied by the state they were written to exclude. The
+first passes on three `'matched'` — the fan-out reinstated — and the second
+passes when a duplicate resolves under the WRONG partner's name. Proven, not
+argued: mutation 3 below (dedup made to miss on both paths, so every
+co-submitter creates a row again) is caught by the exact multiset
+`['duplicate','matched','matched']` and would **not** be caught by that
+`every`. The four rewritten tests pin the multiset exactly and pin each row's
+`matched_student_id` to the roster id of the sid it was hinted with.
+
+**One shared helper**, `test/helpers/gradescope-group-shape.ts`. Three of the
+four exist to prove that different transports reach the SAME end state, and
+each had drifted to a separately-weakened hand-copy of it. Sharing the function
+makes "the same end state" a property of the code rather than a claim in a
+comment: a mutation any one of them can catch is now caught by all three.
+
+**Mutation testing, three mutations, all caught by all four tests:**
+
+| mutation                                                         | caught by                                                                        |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `attachCoSubmitter` made a no-op                                 | all 4 — `expected […] to have a length of 2 but got 1` on the contributors       |
+| duplicate row's `matched_student_id` forced to null (both paths) | all 4 — `matched_student_id for sid 222: expected null to be '3cd8…'`            |
+| dedup made to miss on BOTH paths, so the duplicate creates a row | all 4 — `['matched','matched','matched']` vs `['duplicate','matched','matched']` |
+
+**Noticed, not changed:** on the Gradescope co-submitter path the shared
+submission's `student_id` is whichever partner won a `Promise.all` race, so the
+single name the submission is filed under is non-deterministic for a group.
+Contributors carry both people so nothing is lost, and `student` is nullable on
+the wire, but any surface still rendering `submissions.student_id` as "the
+student" will name an arbitrary one of the two, and re-ingesting the same export
+can name the other. Worth a decision of its own.
+
+---
+
 ### Known gaps, deliberately accepted
 
 - **Neither-partner-enrolled** leaves shared-repo ownership undecidable; the quarantine and
