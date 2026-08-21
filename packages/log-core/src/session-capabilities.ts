@@ -132,14 +132,14 @@ export const FILE_SCOPE_FIELD = 'file_scope' satisfies keyof SessionStartPayload
  *    repositories across a multi-root workspace and the recorder routes by
  *    ownership, so "git worked, but every repository it could see was outside
  *    this assignment's scope" is a state it can actually observe and report.
- *  - **provjet (JetBrains)** — produces only `'available'` / `'unavailable'`,
- *    never `'not_owned'`. Referencing Git4Idea types from always-loaded plugin
- *    code risks `NoClassDefFoundError` if the VCS plugin is absent, and its two
- *    startup activities have no ordering guarantee relative to each other, so
- *    it reports capability via a race-free reflective classloadability probe.
- *    That probe can only answer "is git observation reachable at all", not
- *    "and if so, does it see a repository outside this scope" — a platform
- *    constraint, not a design choice.
+ *  - **provjet (JetBrains)** — can produce all three. It reaches `'not_owned'`
+ *    by a different route than VS Code: it runs one recording session per
+ *    discovered `.provenance-manifest`, and IntelliJ auto-detects every nested
+ *    `.git` as its own VCS mapping, so a session on an assignment with no
+ *    repository of its own can see a SIBLING assignment's repository and route
+ *    nothing to itself. It reads the repository set reflectively (never a
+ *    static Git4Idea import, which would risk `NoClassDefFoundError` when the
+ *    VCS plugin is absent) and omits the field entirely if that read fails.
  *  - **provnvim (Neovim)** — produces only `'available'` / `'unavailable'`,
  *    never `'not_owned'`. It watches exactly one repository — the activated
  *    workspace, with no cross-repo enumeration — so there is no "git worked
