@@ -158,6 +158,13 @@ const rawEnvSchema = z.object({
    * many-small-bundle imports.
    */
   INGEST_POLLING_INTERVAL_MS: intStr(500),
+  /**
+   * batchSize for the RECOMPUTE_SUBMISSION pg-boss queue (jobs/recompute.ts):
+   * how many submissions a recompute batch recomputes concurrently. Jobs that
+   * happen to target the SAME submission id are still run one after another
+   * within a batch — only distinct submissions run in parallel — so raising
+   * this does not risk two concurrent writers racing on one submission's rows.
+   */
   RECOMPUTE_MAX_PARALLEL: intStr(4),
   BLOB_DOWNLOAD_URL_TTL_SECONDS: intStr(300),
   ROSTER_CSV_MAX_BYTES: intStr(10485760),

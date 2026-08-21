@@ -648,7 +648,7 @@ There is no `GOOGLE_OAUTH_REDIRECT_URI`. The callback URL is always
 | `INGEST_POLLING_INTERVAL_MS` | No       | `500`                  | pg-boss polling interval for the ingest queues (the library default is 2000).                              |
 | `ROSTER_CSV_MAX_BYTES`       | No       | `10485760` (10 MiB)    | Roster CSV upload ceiling.                                                                                 |
 | `RECONSTRUCTION_CACHE_SIZE`  | No       | `100`                  | LRU capacity for reconstructed file content + per-character provenance.                                    |
-| `RECOMPUTE_MAX_PARALLEL`     | No       | `4`                    | Parsed and validated, but **no code currently reads it** — recompute fan-out is not yet governed by it.    |
+| `RECOMPUTE_MAX_PARALLEL`     | No       | `4`                    | Concurrent submissions per `recompute_submission` batch. Jobs targeting the same submission (e.g. a config commit's auto-recompute racing an explicit `POST /recompute`) still run one after another; only distinct submissions run in parallel. |
 
 ### 10.5 Email, alerts and storage quota
 
