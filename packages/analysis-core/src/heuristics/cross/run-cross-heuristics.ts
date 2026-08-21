@@ -22,6 +22,7 @@ import type {
 import { DEFAULT_CROSS_HEURISTIC_CONFIG } from './types.js';
 import { pasteSharedAcrossStudentsHeuristic } from './paste-shared-across-students.js';
 import { editingPatternCloneHeuristic } from './editing-pattern-clone.js';
+import { partitionCrossScopes } from '../../coverage/cross-scope.js';
 
 // ---------------------------------------------------------------------------
 // Registry
@@ -71,10 +72,21 @@ export function runCrossHeuristics(
     ...configOverride,
   };
 
+  // The repository-lineage partition, computed ONCE and handed to every
+  // heuristic (spec S20). A git-native group submission shares one committed,
+  // add-only `.provenance/`, so both partners' bundles carry both partners'
+  // signed logs; without this, every paste either partner made fires
+  // `paste_shared_across_students` at high severity against the two people the
+  // course assigned to work together. `coverage/cross-scope.ts` owns the rule —
+  // no heuristic re-derives it, and the coverage register reads the other half
+  // of the same partition so the two can never disagree about what was
+  // suppressed.
+  const scopes = partitionCrossScopes(features);
+
   const allFlags: CrossFlag[] = [];
 
   for (const heuristic of CROSS_HEURISTIC_REGISTRY) {
-    const flags = heuristic.run(features, config);
+    const flags = heuristic.run(features, config, scopes);
     // Use a for-of append rather than `allFlags.push(...flags)` — spread-into-push
     // passes every element as a separate argument, which overflows the call stack
     // when a single heuristic returns tens of thousands of candidate flags

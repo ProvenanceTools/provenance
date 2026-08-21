@@ -3,7 +3,28 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { pasteSharedAcrossStudentsHeuristic } from './paste-shared-across-students.js';
+import { pasteSharedAcrossStudentsHeuristic as realPasteSharedAcrossStudentsHeuristic } from './paste-shared-across-students.js';
+import { partitionCrossScopes } from '../../coverage/cross-scope.js';
+import type { CrossHeuristicConfig, CrossSubmissionFeatures } from './types.js';
+
+/**
+ * The heuristic under test, driven with the repository-lineage partition of its
+ * OWN features — which is exactly what `runCrossHeuristics` hands it in
+ * production (spec S20, `coverage/cross-scope.ts`).
+ *
+ * Wrapped here rather than threaded through every call site so these tests keep
+ * asserting what they always asserted. The suppression path itself is covered in
+ * `same-scope-exclusion.test.ts`, end to end from real bundles: none of the stub
+ * bundles below records a `git.event`, so every one of them is its own lineage
+ * and nothing here is suppressed. Deliberately NOT solved with a default
+ * parameter on `run` — a default is how "no partition" would slip silently into
+ * a production caller.
+ */
+const pasteSharedAcrossStudentsHeuristic = {
+  ...realPasteSharedAcrossStudentsHeuristic,
+  run: (features: CrossSubmissionFeatures[], config: CrossHeuristicConfig) =>
+    realPasteSharedAcrossStudentsHeuristic.run(features, config, partitionCrossScopes(features)),
+};
 import { DEFAULT_CROSS_HEURISTIC_CONFIG } from './types.js';
 import { extractCrossFeatures } from './features.js';
 import type { Bundle } from '../../loader/types.js';
