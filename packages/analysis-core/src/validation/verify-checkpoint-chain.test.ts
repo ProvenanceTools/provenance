@@ -362,3 +362,140 @@ describe('verifyCheckpointChain — catches tampering', () => {
     expect(check.detail).not.toContain('swears the entry at seq');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Honest crash at the tail vs. genuine mid-log deletion
+// ---------------------------------------------------------------------------
+
+describe('verifyCheckpointChain — honest crash at the tail is a dual reading', () => {
+  it(
+    'sets flagOverride to a reduced-severity dual reading when the absent seq is the ' +
+      'LAST checkpoint and nothing follows it',
+    async () => {
+      // Same on-disk shape an honest crash produces: SessionWriter buffers in
+      // memory, the checkpoint gets signed and written to .slog.meta, and the
+      // process dies before the entry itself is flushed to .slog. Nothing
+      // after seq 6 exists either, because nothing after it was ever written.
+      const keypair = await generateSessionKeypair();
+      const session = await makeSession({
+        sessionId: 's1',
+        eventCount: 8,
+        checkpointAt: [6],
+        keypair,
+      });
+
+      const crashed: ParsedSession = {
+        ...session,
+        events: session.events.filter((e) => e.seq <= 4),
+      };
+
+      const check = await verifyCheckpointChain(makeBundle([crashed]));
+
+      // The check itself is unchanged in shape: it still fails, and still
+      // names the absent seq the same way. Only the flag reading changes.
+      expect(check.status).toBe('fail');
+      expect(check.detail).toContain('no entry with that seq is present');
+
+      expect(check.flagOverride).toBeDefined();
+      expect(check.flagOverride?.severity).toBe('low');
+      expect(check.flagOverride?.confidence).toBe(0.5);
+      expect(check.flagOverride?.description).toContain('NOT established as tampering');
+      expect(check.flagOverride?.description).toContain('honest crash');
+      expect(check.flagOverride?.description).toContain('truncat');
+    },
+  );
+
+  it(
+    'does NOT set flagOverride when a checkpoint EARLIER in the session is absent and ' +
+      'later entries survive it (genuine mid-log deletion)',
+    async () => {
+      const keypair = await generateSessionKeypair();
+      const session = await makeSession({
+        sessionId: 's1',
+        eventCount: 8,
+        checkpointAt: [3],
+        keypair,
+      });
+
+      // Remove only seq 3. Seqs 4-7 survive, so this cannot be an honest crash
+      // — something after the checkpointed seq was written, meaning seq 3 was
+      // deleted rather than never flushed.
+      const midLogDeleted: ParsedSession = {
+        ...session,
+        events: session.events.filter((e) => e.seq !== 3),
+      };
+
+      const check = await verifyCheckpointChain(makeBundle([midLogDeleted]));
+      expect(check.status).toBe('fail');
+      expect(check.flagOverride).toBeUndefined();
+    },
+  );
+
+  it(
+    'does NOT set flagOverride when a tail-position absence is accompanied by a ' +
+      'genuine hash mismatch elsewhere in the bundle',
+    async () => {
+      const keypair = await generateSessionKeypair();
+
+      // Session A: tail-position honest-crash shape.
+      const sessionA = await makeSession({
+        sessionId: 's1',
+        eventCount: 8,
+        checkpointAt: [6],
+        keypair,
+      });
+      const crashedA: ParsedSession = {
+        ...sessionA,
+        events: sessionA.events.filter((e) => e.seq <= 4),
+      };
+
+      // Session B: a genuinely rewritten entry — real evidence something is
+      // wrong, so the bundle as a whole should not get the benefit of the
+      // ambiguous reading.
+      const sessionB = await makeSession({
+        sessionId: 's2',
+        eventCount: 6,
+        checkpointAt: [3],
+        keypair,
+      });
+      const rewrittenB: ParsedSession = {
+        ...sessionB,
+        events: sessionB.events.map((e) => (e.seq === 3 ? { ...e, hash: 'd'.repeat(64) } : e)),
+      };
+
+      const check = await verifyCheckpointChain(makeBundle([crashedA, rewrittenB]));
+      expect(check.status).toBe('fail');
+      expect(check.flagOverride).toBeUndefined();
+    },
+  );
+
+  it(
+    'still fails at full severity for the pre-existing TRUNCATED-below-a-checkpoint ' +
+      'fixture, but that fixture is itself the tail-ambiguous shape and now carries a ' +
+      'flagOverride too',
+    async () => {
+      // This mirrors the fixture in the "catches tampering" describe block
+      // above, which this change must not weaken: checkpointAt=[6], truncated
+      // to seq<=4. Read literally, that IS the honest-crash-at-tail shape (the
+      // checkpoint is the session's only/highest one, and nothing exists past
+      // it), so it now also gets a flagOverride — the check's own `status` and
+      // `detail`, which is what that other test asserts on, are untouched.
+      const keypair = await generateSessionKeypair();
+      const session = await makeSession({
+        sessionId: 's1',
+        eventCount: 8,
+        checkpointAt: [6],
+        keypair,
+      });
+      const truncated: ParsedSession = {
+        ...session,
+        events: session.events.filter((e) => e.seq <= 4),
+      };
+
+      const check = await verifyCheckpointChain(makeBundle([truncated]));
+      expect(check.status).toBe('fail');
+      expect(check.detail).toContain('no entry with that seq is present');
+      expect(check.flagOverride).toBeDefined();
+    },
+  );
+});

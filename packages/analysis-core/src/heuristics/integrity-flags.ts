@@ -16,7 +16,12 @@
  *   - log_bytes_match: .slog/.slog.meta bytes differ from the digests the
  *     SIGNED manifest commits to → 'high'
  *   - checkpoint_chain_valid: a signed PRD §4.6 checkpoint is forged, or is
- *     contradicted by the log it commits to → 'high'
+ *     contradicted by the log it commits to → 'high', EXCEPT a seq_absent
+ *     offence at the tail of a session (the checkpoint names that session's
+ *     highest seq, and nothing later exists either) → 'low', via
+ *     `ValidationCheck.flagOverride` — an honest crash between the checkpoint
+ *     being signed and the entry being flushed produces that exact shape, so
+ *     it cannot be told apart from truncation. See `verify-checkpoint-chain.ts`.
  *   - manifest_downgrade: a 1.x assignment manifest carrying Manifest 2.0-only
  *     fields → 'high'
  *
@@ -104,17 +109,24 @@ export const CHECK_META: Partial<Record<ValidationCheckId, CheckMeta>> = {
   // `report.bundleDetections` rather than `report.checks` — see the module
   // docstring and `validation/check-types.ts`.
   //
-  // All three are severity 'high' at confidence 1.0, and that is a deliberate
-  // choice rather than a default. Each is a CRYPTOGRAPHIC contradiction, not a
-  // behavioural inference: a digest that a signed manifest fixed at seal time
-  // does not match; a checkpoint signed by the session key is refuted by the
-  // log; a signed 1.x manifest carries fields no 1.x signer can emit. None has
-  // a benign explanation, none has a threshold to tune, and none can fire by
-  // accident — every "cannot evaluate" path in the three verifiers returns
-  // `skipped`, so a flag here only ever exists because evidence was present and
-  // contradicted. A log-bytes mismatch in particular is the single strongest
-  // signal the system can produce, and grading it below 'high' would rank
-  // proof-of-tampering under heuristics that are merely suggestive.
+  // All three are severity 'high' at confidence 1.0 in this table, and that is
+  // a deliberate choice rather than a default. Each is a CRYPTOGRAPHIC
+  // contradiction, not a behavioural inference: a digest that a signed
+  // manifest fixed at seal time does not match; a checkpoint signed by the
+  // session key is refuted by the log; a signed 1.x manifest carries fields no
+  // 1.x signer can emit. None has a benign explanation, none has a threshold
+  // to tune, and none can fire by accident — every "cannot evaluate" path in
+  // the three verifiers returns `skipped`, so a flag here only ever exists
+  // because evidence was present and contradicted. A log-bytes mismatch in
+  // particular is the single strongest signal the system can produce, and
+  // grading it below 'high' would rank proof-of-tampering under heuristics
+  // that are merely suggestive.
+  //
+  // The one exception is checkpoint_chain_valid's tail-position seq_absent
+  // case, which DOES have a benign explanation (an honest crash produces the
+  // same bytes as a truncation there) and is downgraded per-occurrence via
+  // `ValidationCheck.flagOverride` rather than in this table — see
+  // `verify-checkpoint-chain.ts` and the entry below.
   // -------------------------------------------------------------------------
   log_bytes_match: {
     heuristic: 'log_bytes_match',
@@ -177,14 +189,24 @@ export function integrityFlagsFromReport(report: ValidationReport): Flag[] {
     const seqKey0 = supportingSeqs[0] ?? 'no-seq';
     const id = `${meta.heuristic}-${seqKey0}`;
 
+    // A check's `flagOverride`, when present, replaces CHECK_META's
+    // severity/confidence/description for THIS occurrence only — see
+    // `check-types.ts`. Used by `checkpoint_chain_valid`'s tail-position
+    // seq_absent case, where the check genuinely fails but an honest crash
+    // and a truncation are undecidable from the evidence, so accusing at the
+    // check's normal 'high' severity would outrun what was actually shown.
+    const severity = check.flagOverride?.severity ?? meta.severity;
+    const confidence = check.flagOverride?.confidence ?? meta.confidence;
+    const description = check.flagOverride?.description ?? check.detail ?? meta.fallbackDescription;
+
     flags.push({
       id,
       heuristic: meta.heuristic,
       title: meta.title,
-      severity: meta.severity,
-      confidence: meta.confidence,
+      severity,
+      confidence,
       supportingSeqs,
-      description: check.detail ?? meta.fallbackDescription,
+      description,
       detail: {
         checkId: check.id,
         checkLabel: check.label,

@@ -56,6 +56,27 @@ export type ValidationCheck = {
   detail?: string;
   /** Session-local seqs of entries that contributed to a failure. */
   supportingSeqs?: Array<{ sessionId: string; seq: number }>;
+  /**
+   * Optional override of the severity/confidence/description that
+   * `heuristics/integrity-flags.ts`'s `CHECK_META` table would otherwise
+   * assign this check's id when it fails.
+   *
+   * `CHECK_META` is keyed by check id, so it can only carry ONE severity per
+   * id — correct for checks where every failure means the same thing. It is
+   * wrong for a check that can legitimately fail for two different-strength
+   * reasons under the same id, e.g. `checkpoint_chain_valid`'s seq-absent-at-
+   * the-tail case (see `verify-checkpoint-chain.ts`): an honest crash and a
+   * truncation produce byte-for-byte identical evidence there, so accusing at
+   * the check's normal 'high' severity would be an accusation the evidence
+   * cannot support. `flagOverride`, when present, replaces `CHECK_META`'s
+   * severity/confidence/description for that occurrence's `Flag`; `detail`
+   * above is untouched and keeps describing the check itself.
+   */
+  flagOverride?: {
+    severity: 'info' | 'low' | 'medium' | 'high';
+    confidence: number;
+    description: string;
+  };
 };
 
 // ---------------------------------------------------------------------------

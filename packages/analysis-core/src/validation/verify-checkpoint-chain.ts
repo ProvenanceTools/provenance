@@ -61,6 +61,35 @@
  * A checkpoint is only ever a finding when it is present, verifiable in
  * principle, and *contradicted*.
  *
+ * ## Honest crash vs. truncation — the tail is genuinely ambiguous
+ *
+ * The recorder's `SessionWriter.append` only buffers entries in memory; the
+ * `.slog` flush is on a 1s/256KB timer. Checkpoints are signed and appended
+ * to `.slog.meta` on an unrelated async chain — nothing orders the two
+ * against each other. A crash between "checkpoint signed" and "entry
+ * flushed" leaves `.slog.meta` naming a seq S that `.slog` never received a
+ * single byte of. On disk that is indistinguishable from an attacker cutting
+ * the log short right after S was checkpointed: both leave the log ending
+ * before S, with nothing after S either, because in the honest case nothing
+ * after S was ever written and in the dishonest case everything after S was
+ * removed.
+ *
+ * A `seq_absent` offence in the MIDDLE of a session's checkpoint history has
+ * no such excuse: entries with a greater seq than S survived, which is only
+ * possible if S itself was written and then later removed — deletion is the
+ * only honest reading, and the finding stays at full severity below.
+ *
+ * A `seq_absent` offence AT THE TAIL — S is the highest-seq checkpoint this
+ * session carries, and no entry with a greater seq is in the log — gets a
+ * `flagOverride` (see `check-types.ts`) that turns the resulting `Flag` into
+ * a dual reading at reduced severity, worded the way
+ * `multiple_sessions_overlap`'s `unknown` arm is: both readings named, the
+ * check refuses to choose, and it says why it cannot. This check's `status`
+ * is unaffected — it still reports `fail` and the same `detail`, because the
+ * checkpoint genuinely IS contradicted by the log it was signed over; what
+ * changes is only how confidently that contradiction gets read as an
+ * accusation against the student.
+ *
  * ## Re-runnable against a STORED bundle
  *
  * `.slog.meta` is on `strip-bundle.ts`'s `isProvenanceEntry` allowlist and is
@@ -93,6 +122,15 @@ type Offence = {
   seq: number;
   kind: 'bad_signature' | 'hash_mismatch' | 'seq_absent';
   detail: string;
+  /**
+   * Only meaningful for `kind: 'seq_absent'`. True when this offence sits at
+   * the very tail of its session: it names the highest-seq checkpoint that
+   * session carries, and no entry with a greater seq exists in the log
+   * either. See the "Honest crash vs. truncation" section below — that shape
+   * is what an honest crash produces too, so it cannot by itself be blamed on
+   * deletion the way a mid-log absence can.
+   */
+  tailAmbiguous?: boolean;
 };
 
 /**
@@ -127,6 +165,20 @@ export async function verifyCheckpointChain(bundle: Bundle): Promise<ValidationC
     const hashBySeq = new Map<number, string>();
     for (const event of session.events) hashBySeq.set(event.seq, event.hash);
 
+    // The highest seq this session's log actually holds (−1 if the log has
+    // no entries at all) and the highest seq this session's checkpoints
+    // name. Both are needed to tell a mid-log seq_absent (deletion, no
+    // honest reading) from one at the tail (crash and truncation produce the
+    // same bytes) — see the "Honest crash vs. truncation" doc above.
+    let maxEventSeq = -1;
+    for (const event of session.events) {
+      if (event.seq > maxEventSeq) maxEventSeq = event.seq;
+    }
+    let maxCheckpointSeq = -1;
+    for (const cp of checkpoints) {
+      if (cp.seq > maxCheckpointSeq) maxCheckpointSeq = cp.seq;
+    }
+
     for (const cp of checkpoints) {
       // 1. Is the checkpoint genuine? Verify BEFORE comparing hashes: an
       //    unsigned or forged checkpoint proves nothing about the log, and
@@ -157,6 +209,7 @@ export async function verifyCheckpointChain(bundle: Bundle): Promise<ValidationC
           detail:
             `a validly signed checkpoint names seq ${cp.seq}, but no entry with that seq is ` +
             `present in the log — entries that existed when the checkpoint was signed are gone`,
+          tailAmbiguous: cp.seq === maxCheckpointSeq && maxEventSeq <= cp.seq,
         });
         continue;
       }
@@ -177,6 +230,15 @@ export async function verifyCheckpointChain(bundle: Bundle): Promise<ValidationC
   if (offences.length > 0) {
     const per = offences.map((o) => `session ${o.sessionId}: ${o.detail}`).join('; ');
 
+    // Every offence is a tail-position seq_absent — the ONLY shape an honest
+    // crash between "checkpoint signed" and "entry flushed" can produce. A
+    // single bad_signature, hash_mismatch, or mid-log seq_absent anywhere in
+    // the bundle rules that reading out (something else is definitely
+    // wrong), so the override applies only when nothing else is present.
+    const allTailAmbiguous = offences.every(
+      (o) => o.kind === 'seq_absent' && o.tailAmbiguous === true,
+    );
+
     return {
       id: ID,
       label: LABEL,
@@ -188,6 +250,27 @@ export async function verifyCheckpointChain(bundle: Bundle): Promise<ValidationC
         `altered log. A contradicted checkpoint means the log was rewritten or truncated ` +
         `after that checkpoint was written.`,
       supportingSeqs: offences.map((o) => ({ sessionId: o.sessionId, seq: o.seq })),
+      ...(allTailAmbiguous
+        ? {
+            flagOverride: {
+              severity: 'low' as const,
+              confidence: 0.5,
+              description:
+                `${per}. This is NOT established as tampering: the recorder buffers entries in ` +
+                `memory and flushes them to .slog on a timer, independently of when a checkpoint ` +
+                `is signed to .slog.meta, so nothing orders the two against each other. A crash ` +
+                `between "checkpoint signed" and "entry flushed" leaves exactly this shape — a ` +
+                `checkpoint naming a seq that was never written to disk, with nothing after it ` +
+                `either — and that is byte-for-byte identical to an attacker truncating the log ` +
+                `right after this checkpoint was signed. This flag states the contradiction; it ` +
+                `does not choose between an honest crash and a truncation, and no one should read ` +
+                `it as choosing. Nothing in the stored bundle can settle which one happened: the ` +
+                `two readings are undecidable from the log alone, which is exactly why this sits ` +
+                `at the tail — a checkpoint contradicted anywhere earlier, with entries surviving ` +
+                `past it, has no such honest explanation and is reported at full severity instead.`,
+            },
+          }
+        : {}),
     };
   }
 
