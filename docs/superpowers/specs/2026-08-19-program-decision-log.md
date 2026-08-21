@@ -257,6 +257,70 @@ Every one of these was live on the branch and none was on any worklist.
     tri-repo format change, not built) can prove a log existed, and the text says so rather than
     implying the system could close the gap today.
 
+14. **Keyset pagination silently dropped rows whenever rows shared a millisecond — all three
+    timestamp-keyed call sites.** Postgres stores `timestamptz` at **microsecond** precision.
+    `schema.ts` declares these columns as `timestamp(..., { withTimezone: true })`, and Drizzle's
+    default is `mode: 'date'`, which hands back a JS `Date` — **millisecond** precision. So the
+    microseconds were destroyed by the ORM read, *before* the cursor was ever encoded from
+    `last.created_at.toISOString()`. The cursor therefore could not express the true position of
+    the last row on a page, and every same-millisecond row had to be decided by the id tiebreak
+    instead — a random `gen_random_uuid()`, which contradicts the microsecond ordering the query
+    ORDERs BY. Rows fell through both branches and vanished, or satisfied both and repeated.
+    **Nothing reported a short page**: `next_cursor` reported success either way.
+    Not an edge case: `recompute_cross_flags` writes a whole batch of cross flags in one go and
+    batch ingest writes a whole tray of files, so sharing a millisecond is the **normal** case at
+    all three sites. Every dropped cross flag is a collusion finding a grader is meant to see and
+    never does — on the flagship collusion-detection surface. This had been dismissed as an
+    ordering flake for weeks.
+    The three sites were **not** equally broken, and the difference is instructive. `unmatched.ts`
+    (ASC) and `cohort/list.ts` `ingested_desc` (DESC) had **correct bucket coverage** — their
+    branches tiled `[floor, floor+1ms)` with no gap — and were still wrong, purely from the lost
+    precision. Reproduced deterministically at five rows in one millisecond with distinct non-zero
+    microsecond remainders, paginated to exhaustion at `limit=2`: cross-flags returned **2 of 5**,
+    unmatched **3 of 5**, and cohort returned five rows of which only **3 were distinct** — the
+    DESC bucket predicate duplicates as well as drops. `cross-flags/list.ts` was additionally
+    broken twice over: its same-ms branch was bounded above by `<= floor`, excluding every
+    same-bucket row with a non-zero microsecond remainder (i.e. nearly all of them), and its lower
+    bound of `floor - 1ms` pulled the *previous* millisecond's rows into an id tiebreak they should
+    never have faced. **Correcting only those two defects still returned 3 of 5** — which is what
+    proves the root cause is the truncation and not the predicate shape.
+    Fixed in `services/keyset.ts` and applied at all three sites: project the column as a
+    microsecond string (`to_char(... 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`, selected **alongside** the
+    `Date` so no response field changes), carry that in the cursor, and compare with a Postgres
+    **row-value comparison** — `(ts, id) < (cursor_ts, cursor_id)` for DESC, `>` for ASC. That is
+    exactly the total keyset order, so the hand-rolled bucket branches are **deleted rather than
+    patched**; there is no bucket left to get wrong. Read-path only: no migration, no stored
+    timestamp rewritten.
+    **Index usage improved, measured not assumed.** A row-value comparison is a range condition on
+    a matching btree index and is pushed down as an `Index Cond`; the old OR-of-AND form could not
+    be and degraded to a `Filter`. Postgres 16, 200k rows, index `(semester_id, created_at DESC, id
+    DESC)`, `LIMIT 51`: row-value 10 buffers / 0.054 ms vs. old 1016 buffers / 3.003 ms with 10 000
+    rows removed by filter. It also holds under bound parameters, and in the ASC direction as an
+    Index Only Scan Backward.
+    **Old cursors are rejected (400), not reinterpreted.** A pre-fix cursor carries a
+    millisecond-precision timestamp; treating it as a bucket floor would silently drop the
+    remainder of its millisecond — the exact defect being fixed. Every payload now carries `v: 2`
+    and the timestamp is shape-checked to exactly six fractional digits, so a legacy value cannot
+    be mistaken for a new one; `cohort`'s variant is renamed `kind: 'wall'` → `'wall_us'` for the
+    same reason. `unmatched.ts` had no invalid-cursor 400 at all and silently restarted from page 1
+    — that is now a 400 too, matching cohort and cross-flags.
+    **Only the timestamp-keyed cursors had this.** `score_*`, `student_*`, and `assignment_asc` key
+    on values that survive the ORM read intact and were left alone. The per-student list
+    (`cohort/students.ts`) has no timestamp key and slices in memory; also untouched.
+
+### Two things noticed alongside bug 14 and deliberately not changed
+
+- **None of `cross_flags`, `submissions`, or `ingest_files` carries an index on its timestamp
+  keyset.** `submissions_cohort_idx` is `(semester_id, score_total DESC, severity_rank, id)` — it
+  serves `score_desc`, not `ingested_desc`. So all three of these plans are a sort over a scan
+  today, and the row-value form is the one that *would* benefit from such an index. Adding one is a
+  migration, not a read-path fix, so it was left out of scope.
+- **A cursor whose `kind` does not match the requested `sort` is silently ignored**, not rejected:
+  `buildCursorCondition` returns `null` and the page is served from the top while the client
+  believes it is paging forward. Same silent-mis-pagination family as bug 14, reachable by changing
+  sort with a stale cursor in hand. Not fixed here because it needs a product call on whether a
+  sort change should 400 or restart explicitly.
+
 ### Why no test caught bug 10 — and the fixture rule that stops the next one
 
 Nothing was wrong with the assertions. **Every fixture in the repo spelled both uuids with the

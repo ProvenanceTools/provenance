@@ -14,7 +14,7 @@
  */
 
 import { vi, describe, it, expect, beforeEach } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
@@ -332,6 +332,130 @@ describe('GET /semesters/:semesterId/unmatched', () => {
       expect(body2.next_cursor).toBeNull();
       // Pages must have different items.
       expect(body2.items[0]!.id).not.toBe(body1.items[0]!.id);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Keyset pagination across a shared millisecond.
+  //
+  // Postgres stores `timestamptz` at MICROSECOND precision; a JS `Date` — which
+  // is what Drizzle's default `mode: 'date'` hands back — carries only
+  // MILLISECONDS. The cursor used to be minted from that Date, so it could not
+  // express the true position of the last row on the page, and every same-ms
+  // row had to be decided by the uuid tiebreak instead. `id` is a random
+  // `gen_random_uuid()`, so that tiebreak contradicts the true microsecond
+  // ordering the query ORDERs BY: rows fall through both branches and vanish,
+  // with `next_cursor` still reporting success.
+  //
+  // Batch ingest writes a whole tray of files in one go, so sharing a
+  // millisecond is the normal case here, not an edge case.
+  //
+  // The timestamps are literal rather than defaulted so this is deterministic.
+  // -------------------------------------------------------------------------
+  it('does not drop unmatched files that share a millisecond with the cursor row', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      _setConfigForTest(parseEnv(makeTestEnv()));
+
+      const user = await seedUser(db);
+      const sessionId = await seedSession(db, user.id);
+      const { semester } = await seedCourseAndSemester(db);
+      await seedMembership(db, user.id, semester.id, 'admin');
+      const job = await seedIngestJob(db, semester.id, user.id);
+
+      // Five files inside ONE millisecond, each with a distinct non-zero
+      // microsecond remainder. A `Date` cannot express microseconds, so the
+      // value is written as a literal string.
+      const SHARED_MS = '2026-08-20T12:00:00.500';
+      const MICROS = ['123', '456', '789', '012', '345'];
+      for (const us of MICROS) {
+        await db.insert(ingest_files).values({
+          ingest_job_id: job.id,
+          original_filename: `hw01-${us}.zip`,
+          size_bytes: 1024,
+          blob_sha256: `sha256-${crypto.randomUUID()}`,
+          status: 'unmatched',
+          error: { phase: 'match_student', cause: 'unknown_sid' },
+          created_at: sql`${`${SHARED_MS}${us}+00`}::timestamptz`,
+        });
+      }
+
+      const app = createV1App();
+      const base = `http://localhost/semesters/${semester.id}/unmatched`;
+
+      // Walk every page to exhaustion, exactly as a client would.
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; page < 10; page++) {
+        const url: string =
+          cursor === null ? `${base}?limit=2` : `${base}?limit=2&cursor=${cursor}`;
+        const res = await app.fetch(
+          new Request(url, { headers: { Cookie: `__Host-prov_sess=${sessionId}` } }),
+        );
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as {
+          items: Array<{ id: string }>;
+          next_cursor: string | null;
+        };
+        seen.push(...body.items.map((i) => i.id));
+        cursor = body.next_cursor;
+        if (cursor === null) break;
+      }
+
+      // Every file is reachable, exactly once. `Set` size guards the opposite
+      // failure: a cursor that re-serves rows is not a fix either.
+      expect(seen).toHaveLength(MICROS.length);
+      expect(new Set(seen).size).toBe(MICROS.length);
+    });
+  });
+
+  // A cursor minted before the microsecond fix carries a millisecond-precision
+  // timestamp. Honouring it would silently drop the rest of its millisecond
+  // bucket, so it is rejected and the client restarts pagination.
+  it('rejects a legacy millisecond-precision cursor with 400', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      _setConfigForTest(parseEnv(makeTestEnv()));
+
+      const user = await seedUser(db);
+      const sessionId = await seedSession(db, user.id);
+      const { semester } = await seedCourseAndSemester(db);
+      await seedMembership(db, user.id, semester.id, 'admin');
+      const job = await seedIngestJob(db, semester.id, user.id);
+      await seedUnmatchedFile(db, job.id);
+
+      // Exactly the shape `encodeCursor` produced before this change.
+      const legacy = Buffer.from(
+        JSON.stringify({ ca: '2026-08-20T12:00:00.500Z', id: crypto.randomUUID() }),
+      ).toString('base64url');
+
+      const app = createV1App();
+      const res = await app.fetch(
+        new Request(`http://localhost/semesters/${semester.id}/unmatched?limit=2&cursor=${legacy}`, {
+          headers: { Cookie: `__Host-prov_sess=${sessionId}` },
+        }),
+      );
+      expect(res.status).toBe(400);
+    });
+  });
+
+  it('rejects a structurally invalid cursor with 400', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      _setConfigForTest(parseEnv(makeTestEnv()));
+
+      const user = await seedUser(db);
+      const sessionId = await seedSession(db, user.id);
+      const { semester } = await seedCourseAndSemester(db);
+      await seedMembership(db, user.id, semester.id, 'admin');
+
+      const app = createV1App();
+      const res = await app.fetch(
+        new Request(`http://localhost/semesters/${semester.id}/unmatched?limit=2&cursor=not-base64`, {
+          headers: { Cookie: `__Host-prov_sess=${sessionId}` },
+        }),
+      );
+      expect(res.status).toBe(400);
     });
   });
 });
