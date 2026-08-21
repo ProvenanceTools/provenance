@@ -295,7 +295,7 @@ describe('CrossFlagListView — the cross-scope exclusion register', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Alice · Bob')).toBeInTheDocument();
     expect(screen.getByText(/1 comparison not applicable/)).toBeInTheDocument();
-    expect(screen.getByText(/Established by 1 commit/)).toBeInTheDocument();
+    expect(screen.getByText(/Established by 1 commit reference/)).toBeInTheDocument();
   });
 
   it('names the commits that proved the lineage', async () => {

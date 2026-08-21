@@ -85,9 +85,14 @@ function CrossScopeExclusionPanel({ exclusions }: { exclusions: CrossScopeExclus
               {ex.excluded_pair_count === 1
                 ? '1 comparison not applicable'
                 : `${ex.excluded_pair_count} comparisons not applicable`}
+              {/* "commit references", not "commits": a mixed-scope proof lists
+                  the SAME sha under two repository keys, because neither key
+                  was observed by both sides. Counting those as two commits
+                  recorded in more than one archive would be a false claim, in
+                  the one place a grader looks for the evidence. */}
               . Established by {ex.shared_commits.length}{' '}
-              {ex.shared_commits.length === 1 ? 'commit' : 'commits'} recorded in more than one of
-              these archives.
+              {ex.shared_commits.length === 1 ? 'commit reference' : 'commit references'} shared
+              across these archives.
             </p>
             <ul className="mt-1.5 space-y-0.5" data-testid="cross-scope-exclusion-commits">
               {ex.shared_commits.slice(0, 5).map((key) => (
