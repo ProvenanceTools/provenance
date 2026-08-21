@@ -170,11 +170,14 @@ describe('startSession — the predicate handed to the git wiring', () => {
       expect(read).toBeTypeOf('function');
 
       const configured = ['C:\\Program Files\\Git\\cmd\\git.exe'];
-      const getConfiguration = vi.spyOn(vscodeModule.workspace, 'getConfiguration').mockReturnValue({
-        get: <T,>(_key: string): T => configured as unknown as T,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the
-        // rest of WorkspaceConfiguration is irrelevant to this read.
-      } as any);
+      // Only `get` is exercised; the rest of WorkspaceConfiguration is
+      // irrelevant to a single settings read.
+      const fakeConfig = {
+        get: <T>(_key: string): T => configured as unknown as T,
+      } as unknown as import('vscode').WorkspaceConfiguration;
+      const getConfiguration = vi
+        .spyOn(vscodeModule.workspace, 'getConfiguration')
+        .mockReturnValue(fakeConfig);
 
       expect(read?.()).toEqual(configured);
       expect(getConfiguration).toHaveBeenCalledWith('git');
