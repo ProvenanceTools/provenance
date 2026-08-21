@@ -45,10 +45,11 @@ digraph er {
     label="  SUBMISSIONS  " fontsize=9.5 fontcolor="#3fbf62" color="#153c25"
     penwidth=1.5 style=rounded bgcolor="#0a130d" labeljust="l"
     node [fillcolor="#0d2416" color="#3fbf62"]
-    submissions[label="submissions\nblob_sha256 · version_index" penwidth=1.9]
+    submissions[label="submissions\nblob_sha256 · version_index\nversion_owner_key — GENERATED ALWAYS,\nso a row cannot disagree with its own lineage" penwidth=1.9]
+    subcontrib[label="submission_contributors — 0029\none row per PERSON, roster side and bundle\nside reconciled onto ONE row.\nD14 scoring lives here." penwidth=1.9]
     stats     [label="per_file_stats"]
     valres    [label="validation_results"]
-    flags     [label="flags"]
+    flags     [label="flags\ncontributor_key: '' = scope-level"]
   }
 
   subgraph cluster_x {
@@ -91,7 +92,10 @@ digraph er {
   semesters -> hcfg
   semesters -> ijobs
   assignments -> submissions
-  roster -> submissions [label="matched to"]
+  roster -> submissions [label="the SUBMITTER of record —\nNULLABLE since 0029, so every\nread-path join is LEFT" style=dashed]
+  submissions -> subcontrib [label="who the submission is\nattributable to · CASCADE"]
+  roster -> subcontrib [label="RESTRICT — plus a partial UNIQUE\n(submission_id, roster_entry_id), so a\nco-submitter who ALSO recorded cannot\nsplit into two apparent people" color="#3fbf62"]
+  semesters -> subcontrib [label="denormalized, to keep\nthe rollup off a join" style=dashed]
   semesters -> srefs
   roster -> srefs [label="soft link\nSET NULL" style=dashed]
   srefs -> senr

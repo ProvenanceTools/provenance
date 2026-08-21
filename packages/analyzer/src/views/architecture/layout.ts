@@ -58,7 +58,7 @@ const META: Record<string, { title: string; caption: string; band: string }> = {
   chain: { title: 'Format and crypto', caption: 'keys, chain, seal, verify', band: '--fmt' },
   ingest: { title: 'Ingest pipeline', caption: 'parse, match, analyse, store', band: '--tra' },
   readpath: { title: 'Read path', caption: 'postgres rows or re-parse the blob', band: '--srv' },
-  er: { title: 'Data model', caption: '25 tables, no events table', band: '--srv' },
+  er: { title: 'Data model', caption: '26 tables, no events table', band: '--srv' },
   analysis: { title: 'Analysis engine', caption: 'validation, heuristics, ranking', band: '--ana' },
   staff: { title: 'Staff review', caption: 'ranked queue to evidence', band: '--uix' },
   provgate: { title: 'Gradescope gateway', caption: 'hourly delta sync', band: '--tra' },

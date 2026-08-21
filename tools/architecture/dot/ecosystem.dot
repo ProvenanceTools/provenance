@@ -90,10 +90,16 @@ digraph ecosystem {
   gsync -> gapi
   gsync -> gweb [style=dashed color="#c9a227"]
 
+  e2e [label="AND each sibling repo runs its OWN end-to-end gate,\ndriving a bundle it really produced through the real\nmonorepo loadBundle + runValidation. The vectors prove the\nPRIMITIVES agree; only this proves a whole archive is\nacceptable. All three exist, and every one has caught a\ndefect its own repo's suite asserted was impossible."
+        shape=note fillcolor="#0d2416" color="#3fbf62" fontsize=9]
+
   rule [label="A format change is a cross-repo, signature-affecting,\ntest-vector-pinned decision owned by the monorepo.\nIt is never made unilaterally in a sibling repo to make\nan implementation easier."
         shape=note fillcolor="#241a0c" color="#F97316" fontsize=9]
   vectors -> rule [style=dashed color="#F97316"]
   analyzer -> tgates [label="the composer is signed-format code\nin a UI package — a unit test cannot\ncatch it drifting from the CLI"
                       color="#F97316" style=dashed]
   vsrec -> tgates [style=dashed color="#F97316"]
+  jrec -> e2e [style=dashed color="#3fbf62"]
+  nrec -> e2e [style=dashed color="#3fbf62"]
+  e2e -> acore [label="the REAL loader and\nthe REAL 8 checks" color="#3fbf62" style=dashed]
 }

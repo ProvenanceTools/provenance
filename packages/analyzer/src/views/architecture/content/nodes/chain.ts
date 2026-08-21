@@ -6,12 +6,13 @@ export const nodes: Record<string, ArchNode> = {
   // ── Key material ──────────────────────────────────────────────────────────
   rkpriv: {
     title: 'The root private key',
-    body: 'It signs certificates and nothing else. It never touches a manifest, never reaches a server, and never appears in a build; the only artefact it produces is a course_cert vouching for one course’s public key over one validity window. That is the entire reason the layer exists. Before it, the recorder embedded a single course’s public key, so a second course meant a second VSIX, a second Marketplace listing, and a second release to keep in step with the first.\n\nConcentrating that much authority in one offline key is a deliberate trade. Holding it lets you certify any key for any course id, which is strictly more power than any single course key ever had. What buys it back is that it is used a handful of times a year, on a secured machine, and never by the people who run assignments — the minting tool refuses to hand out a certificate that does not verify against its own root public key before printing it, and the same tool exists precisely so course staff never need this file.',
+    body: 'It signs certificates and nothing else. It never touches a manifest, never signs a credential, never reaches a server, and never appears in a build. Two artefacts hang off it and both are certificates: a course_cert vouching for one course’s public key over one validity window, and an institution_cert vouching for one institution’s. That is the entire reason the layer exists. Before it, the recorder embedded a single course’s public key, so a second course meant a second VSIX, a second Marketplace listing, and a second release to keep in step with the first.\n\nThe two chains beneath it are shaped differently on purpose, and the difference is where the signing key can live. The course key is deliberately offline, held by staff, so it can sign an assignment manifest at leisure and cannot be reached by anything on the network — which also means it can never issue anything on demand. The institution key can, because it lives on the server: a student arriving at /enroll needs a credential minted while they wait, and a chain that required an offline key to be touched per student is a chain nobody would operate. So the student side is one delegation hop from root and the course side is two, and that asymmetry is a statement about operational reachability rather than about trust levels.\n\nConcentrating that much authority in one offline key is a deliberate trade. Holding it lets you certify any key for any course or institution id, which is strictly more power than any single course key ever had. What buys it back is that it is used a handful of times a year, on a secured machine, and never by the people who run assignments — the minting tools refuse to hand out a certificate that does not verify against their own root public key before printing it, and they exist precisely so course staff never need this file.',
     invariant:
-      'The root key signs certificates only. A manifest signed directly by the root key is not a thing the format can express.',
+      'The root key signs certificates only — course certs and institution certs. A manifest or a credential signed directly by the root key is not a thing the format can express.',
     links: [
       { label: 'mint-course-cert.ts', href: `${GH}/tools/mint-course-cert.ts` },
       { label: 'course-cert.ts', href: `${GH}/packages/log-core/src/course-cert.ts` },
+      { label: 'institution.ts', href: `${GH}/packages/log-core/src/institution.ts` },
     ],
   },
   rkpub: {
@@ -72,6 +73,44 @@ export const nodes: Record<string, ArchNode> = {
       {
         label: 'session-registry.ts',
         href: `${GH}/packages/recorder/src/session/session-registry.ts`,
+      },
+    ],
+  },
+
+  // ── Student identity 2.1 ──────────────────────────────────────────────────
+  icert: {
+    title: 'institution_cert',
+    body: 'The root key vouching for one institution’s public key over one validity window: institution_id, institution_pubkey, valid_from, valid_until, root_sig. Structurally it is the course_cert’s twin, and the resemblance is not accidental — a recorder verifying either walks the same shape from the same embedded root key with no network.\n\nWhat it delegates is different. A course_cert authorises signing ASSIGNMENT MANIFESTS, and its private half stays offline. This authorises signing STUDENT CREDENTIALS, and its private half lives on the server, because credentials must be issued on demand to a student sitting at a browser. One hop instead of two follows directly: 2.0 needed a course_cert and then a per-student enrollment_cert because the course key could not be reached at enrolment time; here the certified key is already reachable.\n\nThe check that makes the delegation real is conformance of ids, and it is mandatory rather than advisory: the credential’s institution_id, this certificate’s institution_id and the trust anchor’s must all be the same value, and the certificate’s public key must be the one the root actually vouched for. Without it a credential minted by one institution would verify inside another’s scope — the cross-institution analogue of the cross-course forgery the 2.0 chain already has to refuse.\n\nThere is no institutions table anywhere in the server schema, and that is consistent rather than an omission: institution_id is read off this signed certificate, not looked up. A value nothing signed is not an institution.',
+    invariant:
+      'Certificate, credential and anchor must all name the SAME institution_id. Anything else is a cross-institution forgery, whatever else verifies.',
+    links: [
+      { label: 'institution.ts', href: `${GH}/packages/log-core/src/institution.ts` },
+      { label: 'enrollment.ts (2.0)', href: `${GH}/packages/log-core/src/enrollment.ts` },
+    ],
+  },
+  scred: {
+    title: 'student_credential',
+    body: 'One student’s long-lived public key, signed by the institution key: institution_id, student_ref, student_pubkey, issued_at, expires_at, institution_sig. It is obtained once, in a browser, at /enroll, and every session after that is offline.\n\nIt is institution-scoped, not course-scoped, and that replaced 2.0 on evidence rather than on preference. The 2.0 mint path required a roster_entries match before it would issue anything, and rosters are populated by Gradescope ingest — which runs only AFTER a student submits. A student therefore could not enrol before their first submission, which is precisely when they need to. That is a deadlock, not a rough edge, and the fix was to key identity on the institution and the SSO subject so a credential is allocatable with no roster row in existence; linking to a roster row happens later, in either direction, and returns harmlessly empty when there is nothing to link.\n\nThe cost is stated rather than hidden. Derivation is fully global — no user-derived input in the HKDF info — so the recorder can show a student their own public key with zero configuration, and cross-institution unlinkability is gone. That was taken deliberately.\n\nMultiple machines is a first-class flow, not a migration. Each machine enrols independently and generates its own keypair; the shared student_ref is what groups them into one contributor, so nothing has to be copied between machines and export/import exists as a BACKUP path rather than as a step anyone must perform. Every issuance is appended to student_credentials rather than overwriting the row, because verification is a signed artefact consulting no server while adjudication asks a question about history — was this key ever theirs — and an overwritten column cannot answer it.\n\nA credential is public material and is treated as such at both ends. A master secret and a public key are both sixty-four lowercase hex characters, and the paste box’s whole-document fallback once extracted whichever single hex run it found, so a student could paste their private master secret into /enroll and ship it to the server. Secrets now carry an explicit provenance-secret-v1: marker and are refused on sight, at both ends.',
+    invariant:
+      'Allocatable before any roster row exists — that is the whole point. And the server stores public keys only; a database breach forges nobody.',
+    links: [
+      { label: 'institution.ts', href: `${GH}/packages/log-core/src/institution.ts` },
+      {
+        label: '0027_student_credentials.sql',
+        href: `${GH}/packages/server/db/migrations/0027_student_credentials.sql`,
+      },
+    ],
+  },
+  sbind: {
+    title: 'Countersigning the session key',
+    body: 'The last hop. The student’s long-lived private key signs a payload naming the institution, a fixed purpose string, the session’s ephemeral public key and the student_ref, and that signature rides into session.start’s identity block. A reader who walks root → institution_cert → student_credential → this signature has established, offline and from the archive alone, that the holder of a credentialled key was present when this session started.\n\nA keypair rather than a bearer token, and the difference is repudiation. A uuid is copyable, so "someone must have got hold of my token" is always available and is unfalsifiable. A signature over this session’s ephemeral key is not, and the server never holds anything that could produce one — only public keys — so a database breach forges nobody.\n\nThe purpose string is in the signed payload for the reason every domain separator is: without it a signature produced for one purpose could be replayed as one produced for another, and a countersignature that means "this is my session key" must not also be readable as "this is my anything else".\n\nWhat this does NOT establish is worth stating, because the three-state contributor vocabulary downstream depends on it. A session with no identity block at all is unattributed, and that is the ordinary, blameless state for almost every bundle in existence — the recorder records regardless, because never blocking recording matters more than always knowing who. A block that is present and does not verify is unverifiable, and it is never merged into the contributor it names, since honouring an unverified claim is exactly how work would be laundered onto an innocent student.',
+    invariant:
+      'Identity comes only from session.start.identity — never machine_id, never a git author, never the filename a submission was uploaded under.',
+    links: [
+      { label: 'institution.ts', href: `${GH}/packages/log-core/src/institution.ts` },
+      {
+        label: 'resolve-contributors.ts',
+        href: `${GH}/packages/analysis-core/src/identity/resolve-contributors.ts`,
       },
     ],
   },
@@ -190,7 +229,7 @@ export const nodes: Record<string, ArchNode> = {
   },
   e100: {
     title: 'The signed checkpoint',
-    body: 'Two things about this box are not what the drawing suggests. A checkpoint is not a log entry. It is a record appended to the .slog.meta sidecar (a seq, the hash at that seq, and an ed25519 signature over the canonical form of the pair) describing an entry that is itself an ordinary event of whatever kind. And the cadence counts entries actually written, so the first checkpoint lands on the hundredth write, and entries dropped in degraded mode never advance the counter.\n\nCheckpoints exist because the chain proves consistency, not authorship. A log rewritten from genesis is perfectly self-consistent (every link recomputes), so what a checkpoint adds is a signature over the chain state at a point, which cannot be produced without the session key. They are written every hundred entries rather than once at seal because sessions end badly more often than they end cleanly, and a signature that exists only at seal time is a signature a crashed session never has. Signing stays off the entry path: the operation is chained onto a pending promise that teardown drains.\n\nThe cadence now carries a second artefact. Right after the checkpoint lands in the sidecar, the recorder rewrites this session’s ROLLING SEAL — manifest-<session_id>.json plus .sig, a 1.2 manifest covering exactly this session, signed by this session’s own key — so a git-submitted repo, which never runs seal at all, always has a valid seal of the current state committed alongside the log. It is also written at session start (so a session that never reaches a hundred entries is still covered) and at teardown over the flushed log. A failure to write it is logged and dropped: it never aborts the checkpoint and never stops recording, because losing the recording to save the receipt is backwards.\n\nNothing yet checks the checkpoints themselves. log-core exports and tests a checkpoint verifier and the loader shape-validates the sidecar, but no validation check verifies a checkpoint signature, so today they are evidence available to a reviewer rather than evidence the pipeline acts on.',
+    body: 'Two things about this box are not what the drawing suggests. A checkpoint is not a log entry. It is a record appended to the .slog.meta sidecar (a seq, the hash at that seq, and an ed25519 signature over the canonical form of the pair) describing an entry that is itself an ordinary event of whatever kind. And the cadence counts entries actually written, so the first checkpoint lands on the hundredth write, and entries dropped in degraded mode never advance the counter.\n\nCheckpoints exist because the chain proves consistency, not authorship. A log rewritten from genesis is perfectly self-consistent (every link recomputes), so what a checkpoint adds is a signature over the chain state at a point, which cannot be produced without the session key. They are written every hundred entries rather than once at seal because sessions end badly more often than they end cleanly, and a signature that exists only at seal time is a signature a crashed session never has. Signing stays off the entry path: the operation is chained onto a pending promise that teardown drains.\n\nThe cadence now carries two more pieces of work, in a fixed order: the peer-observation drain runs first so its entries land in bytes the seal will cover, and then this session’s rolling seal is rewritten. A failure to write that seal is logged and dropped — it never aborts the checkpoint and never stops recording, because losing the recording to save the receipt is backwards.\n\nThe checkpoints were, for a long time, evidence nobody checked. log-core exported and tested a verifier, the loader shape-validated the sidecar, and no validation check ever verified a signature, which meant an appended, correctly-chained entry passed all eight checks. That hole is closed by checkpoint_chain_valid, a bundle-level detection rather than a ninth check, since the eight are a frozen persisted contract with one status column each. Its limit is worth knowing and no checkpoint scheme can lift it: an append PAST the final checkpoint leaves every checkpoint verifying perfectly. Only log_bytes_match catches that, and only a final rolling seal makes it unambiguous.',
     links: [
       {
         label: 'checkpoint-signer.ts',
@@ -229,6 +268,34 @@ export const nodes: Record<string, ArchNode> = {
     links: [
       { label: 'seal.ts', href: `${GH}/packages/recorder/src/commands/seal.ts` },
       { label: 'unzip.ts', href: `${GH}/packages/analysis-core/src/loader/unzip.ts` },
+    ],
+  },
+
+  rseal: {
+    title: 'The rolling seal',
+    body: 'format_version 1.2, and the only format change on this branch. It reuses the 1.1 field set verbatim — assignment_id, semester, extension_hash, sessions, submission_files — and adds exactly two things: the invariant that sessions holds exactly ONE entry, whose session_id equals the id in the filename, and an optional boolean final.\n\nThe filename is part of the contract, not decoration. manifest-<session_id>.json and .sig cannot collide with manifest.json (the hyphen is mandatory in the pattern), so the two shapes coexist in one directory and a bundle carrying both keeps the classic manifest as its manifest while still having to satisfy every per-session signature beside it. Neither excuses the other.\n\nCryptographically the interesting property is what the digests commit to. A classic seal is taken once over a finished log, so its slog_sha256 is a whole-file commitment and any later byte is tampering. A rolling seal is signed while the log is still growing, so its digest commits to a PREFIX, and the archived log routinely runs past it — a git submission has no seal step, and an archive can be taken mid-session, after a crash, or from a partner’s repo. Reading a prefix commitment as a whole-file one accuses honest work at high severity with confidence 1.0, which this system has done, from three separate routes, and each time the wording told the student it was not recoverable from a benign cause.\n\nfinal is what closes the gap the prefix reading leaves open, in which an append after the session ended is indistinguishable from honest mid-session growth. It is a claim by the WRITER inside the signed payload rather than something the reader infers, and the distinction matters: the obvious alternative — inferring finality from a trailing session.end entry — infers it from the log, whose completeness is the very thing in question. Its absence is never a finding.\n\nEach seal is signed by its own session’s ephemeral key and is verified against exactly that session’s public key, with no fallback to any other. In a shared repository the neighbouring seals belong to somebody else, so a fallback would let a manifest copied sideways under another session’s filename verify and pass.',
+    invariant:
+      'A rolling seal commits to a PREFIX. Only a seal the writer marked final commits to the whole file, and absence of final is never a finding.',
+    links: [
+      {
+        label: 'rolling-manifest.ts',
+        href: `${GH}/packages/log-core/src/rolling-manifest.ts`,
+      },
+      {
+        label: 'verify-log-bytes.ts',
+        href: `${GH}/packages/analysis-core/src/validation/verify-log-bytes.ts`,
+      },
+    ],
+  },
+  push: {
+    title: 'Git submission',
+    body: 'The second way work leaves a student’s machine, and the one that has no submit moment at all. The student commits and pushes; the grader or the ingest pipeline clones; whatever is in .provenance/ on disk IS the submission. Nothing runs seal, nothing zips anything, and nothing gives the recorder a signal that the work is finished.\n\nThat is what the rolling seal exists for, and it is also why two guarantees the .zip path takes for granted have to be re-established here. The zip is assembled by seal, which can exclude an artifact the analyzer could not open; a pushed directory is whatever is on disk, and the leftovers that guard exists to catch — a stranded sidecar after a crash-recovery quarantine, a zero-byte log from a session torn down before its first flush — are exactly the ones a git submission carries. So the loader applies the same rule on the read side. And a shared .provenance/ has to survive two people committing into it, which is why every artifact in it is named per session: the directory is add-only and therefore merge-conflict-free, verified experimentally rather than assumed.\n\nIngest treats the archive as a repository rather than a bundle, fanning it out into one submission per assignment scope, under a declared submission type for the batch. What arrives at verification afterwards is the same flat bundle shape the classic path produces, so everything downstream of the loader is unchanged.\n\nThe honest limit: an archive cannot distinguish a log that was never pushed from one that was removed. A partner who committed manifest-<session_id>.json before their .slog landed, or whose log is caught by a .gitignore, produces an archive byte-identical to one where a log was deleted. Check 1 still reports the gap — a signed claim nothing can ever verify is a real hole — but its text names the innocent reading alongside the others rather than asserting deletion or planting. Only peer witnessing can prove a log existed.',
+    links: [
+      { label: 'repo-zip.ts', href: `${GH}/packages/server/src/services/ingest/repo-zip.ts` },
+      {
+        label: 'rolling-seal.ts (loader)',
+        href: `${GH}/packages/analysis-core/src/loader/rolling-seal.ts`,
+      },
     ],
   },
 

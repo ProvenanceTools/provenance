@@ -23,6 +23,18 @@ digraph chain {
     skey   [label="session keypair\ngenerated fresh at session.start"]
   }
 
+  /* ── student identity: a SECOND chain off the same root ── */
+  subgraph cluster_id21 {
+    label="  STUDENT IDENTITY 2.1 — a second chain off the SAME root  "
+    fontsize=9.5 fontcolor="#e8559c" color="#4a1b35" penwidth=1.5 style=rounded
+    bgcolor="#150a10" labeljust="l"
+    node [fillcolor="#2a0f1e" color="#e8559c" fontsize=9]
+
+    icert [label="institution_cert\ninstitution_id · institution_pubkey\nvalid_from · valid_until · root_sig" shape=note]
+    scred [label="student_credential\ninstitution_id · student_ref · student_pubkey\nissued_at · expires_at · institution_sig\nIssued by the SERVER from /enroll — no course,\nno semester, and NO roster row required" shape=note]
+    sbind [label="the student key countersigns\nthe SESSION pubkey\n{institution_id, purpose, session_pubkey, student_ref}\nA keypair, NOT a bearer token: a uuid is copyable and\nrepudiable, a signature is not — and the server holds\nonly PUBLIC keys, so a breach forges nobody"]
+  }
+
   /* ── activation ── */
   subgraph cluster_act {
     label="  ACTIVATION  "
@@ -66,6 +78,10 @@ digraph chain {
     bman [label="manifest.json\nextension_hash + per-session\nslog_sha256 / meta_sha256" shape=note]
     bsig [label="manifest.sig\ned25519 over JCS(manifest)" shape=note]
     zip  [label="bundle .zip" shape=note penwidth=2.0]
+
+    rseal[label="ROLLING SEAL — format_version 1.2\nmanifest-<session_id>.json + .sig, ONE session per\nfile, rewritten at start, at every checkpoint and at\ndispose. Its digests commit to a PREFIX — except the\ndispose-time roll, which carries final: true inside the\nsigned payload and commits to the WHOLE file." shape=note]
+    push [label="git push\n.provenance/ IS the submission.\nNo seal step ever runs, so the archived\nlog routinely runs past its own last seal."
+          shape=note penwidth=2.0]
   }
 
   /* ── verification, later ── */
@@ -85,7 +101,14 @@ digraph chain {
             fillcolor="#2a1216" color="#ff6b6b"]
   }
 
-  rkpriv -> cert    [label="signs root_sig — the only thing\nthe root key ever signs" color="#e8559c"]
+  rkpriv -> cert    [label="signs root_sig. The root key signs\nCERTIFICATES only — never a manifest,\nnever a credential, never a log" color="#e8559c"]
+  rkpriv -> icert   [label="and the institution's cert.\nONE delegation hop, not two: the institution\nkey lives on a server and mints on demand,\nwhich is what the offline course key cannot do"
+                     color="#e8559c"]
+  icert  -> scred   [label="the institution's server-held key\nsigns institution_sig" color="#e8559c"]
+  scred  -> sbind   [color="#e8559c"]
+  skey   -> sbind   [label="the ephemeral pubkey is\nwhat gets countersigned" color="#e8559c" style=dashed]
+  sbind  -> e0      [label="session.start.identity — never machine_id,\nnever a git author, never the upload filename.\nAbsent is the ORDINARY case and is blameless."
+                     color="#e8559c" style=dashed]
   cert   -> ckpub   [label="vouches for, for one\nsemester-length window" color="#e8559c" constraint=false]
   ckpriv -> amf     [label="signs the payload, offline" color="#e8559c"]
   cert   -> amf     [label="travels inline, OUTSIDE the\ncourse-signed payload" color="#e8559c" style=dashed]
@@ -113,7 +136,14 @@ digraph chain {
   bman -> zip
   bsig -> zip
 
+  e100 -> rseal [label="on EVERY checkpoint —\nthere is no submit moment\nto wait for" color="#17bfae"]
+  skey -> rseal [label="each session signs its OWN seal,\nso no key can vouch for another" color="#e8559c" style=dashed]
+  rseal -> push [color="#17bfae"]
+  rseal -> zip  [label="a classically sealed bundle carries\nBOTH shapes, and check 1 requires\nboth — neither excuses the other"
+                 color="#17bfae" style=dashed]
+
   zip -> vchain [label="ingest, or a drag-and-drop\ninto /local" color="#3fbf62"]
+  push -> vchain [label="the grader clones, and ingest\nfans the repo out per scope" color="#3fbf62"]
   vchain -> verdict
   vsig -> verdict
   vbind -> verdict
