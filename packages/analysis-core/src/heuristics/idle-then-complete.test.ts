@@ -8,6 +8,20 @@ import { buildIndex } from '../index/build-index.js';
 import { loadBundle } from '../loader/parse-bundle.js';
 import { buildTestBundle } from '../test-support/build-test-bundle.js';
 import { DEFAULT_HEURISTIC_CONFIG } from './config.js';
+import {
+  buildCollabScope,
+  collabDocOpen,
+  collabDocSave,
+  collabExternalChange,
+  collabGitEvent,
+  collabPartnerSession,
+  COLLAB_ALICE,
+  COLLAB_BOB,
+  COLLAB_C0,
+  COLLAB_C1,
+  COLLAB_C2,
+  COLLAB_FILE,
+} from '../test-support/build-collab-scope.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -393,5 +407,103 @@ describe('idle_then_complete — negative', () => {
     };
     const flagsCustom = idleThenCompleteHeuristic.run(index, bundle, customConfig);
     expect(flagsCustom.filter((f) => f.heuristic === 'idle_then_complete')).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tier 3.1 — a file completed by a `git pull` was not completed by the student
+// ---------------------------------------------------------------------------
+//
+// Alice opens the starter, pulls Bob's work onto a descendant commit, goes to
+// lunch, and the pulled content reaches the editor through the save-time
+// compare when she comes back. Skeleton before the gap, complete file after —
+// the exact shape this heuristic looks for, at HIGH severity, for going to
+// lunch. Found while fixing the same shape in low_typing_high_output; this
+// heuristic never consulted Tier 3.1 either.
+//
+// Two things about the fixture are load-bearing:
+//
+//  - **Alice's session sorts first.** That is what leaves the pre-gap cut
+//    reconstructible (Bob's events are past it), and it is the ordinary case
+//    when the puller started work first — so the accusation is reachable, not
+//    hypothetical. With Bob first, the pre-gap cut is `concurrent` and Tier 2.2
+//    skips the file for an unrelated reason.
+//  - **Alice edits a second file in the same session**, whose post-idle content
+//    matches nothing any contributor recorded. It fires, in the same run, on the
+//    same student. That is the control: it shows the zero on `hw1.py` is the
+//    content test doing its job and not the heuristic having gone quiet.
+//    (The usual `stamp: false` control does not work here — unstamped, the
+//    reconstruction falls back to globalIdx order, Bob's empty `doc.open` lands
+//    last and zeroes the file, so the heuristic skips for a third unrelated
+//    reason.)
+
+describe('idle_then_complete — Tier 3.1 (a pull is not a completion)', () => {
+  const IMPLEMENTATION =
+    Array.from(
+      { length: 24 },
+      (_, i) => `def helper_${i}(value):\n    return value * ${i} + 1`,
+    ).join('\n') + '\n';
+
+  /** Content of the same size that NO contributor recorded. */
+  const ELSEWHERE =
+    Array.from({ length: 24 }, (_, i) => `def other_${i}(value):\n    return value - ${i}`).join(
+      '\n',
+    ) + '\n';
+
+  const OTHER_FILE = 'notes.py';
+
+  function heartbeat(t: number) {
+    return {
+      kind: 'session.heartbeat' as const,
+      data: { focused: true, active_file: COLLAB_FILE, idle_since_ms: 0 },
+      t,
+    };
+  }
+
+  async function lunchThenPull() {
+    return buildCollabScope([
+      {
+        who: { studentRef: COLLAB_ALICE },
+        events: [
+          { ...collabGitEvent(COLLAB_C0), t: 500 },
+          { ...collabDocOpen('# starter\n'), t: 1_000 },
+          { ...collabDocOpen('# notes\n', OTHER_FILE), t: 1_200 },
+          { ...collabGitEvent(COLLAB_C1, [COLLAB_C0]), t: 2_000 },
+          { ...collabGitEvent(COLLAB_C2, [COLLAB_C1]), t: 2_500 },
+          heartbeat(3_000),
+          heartbeat(700_000),
+          collabExternalChange(IMPLEMENTATION, { t: 701_000 }),
+          { ...collabDocSave(IMPLEMENTATION), t: 702_000 },
+          collabExternalChange(ELSEWHERE, { path: OTHER_FILE, t: 701_200 }),
+          { ...collabDocSave(ELSEWHERE, OTHER_FILE), t: 702_200 },
+        ],
+      },
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession(IMPLEMENTATION) },
+    ]);
+  }
+
+  it('does not fire when the post-idle content is a partner’s recorded work', async () => {
+    const { bundle, index } = await lunchThenPull();
+    const flags = idleThenCompleteHeuristic.run(index, bundle, cfg);
+    expect(
+      flags.filter((f) => f.detail!['filePath'] === COLLAB_FILE),
+      'idle_then_complete fired on an honest pull: the file was completed by Bob, whose ' +
+        'recorder recorded these exact bytes, not by Alice going to lunch. Do not relax ' +
+        'this assertion.',
+    ).toHaveLength(0);
+  });
+
+  it('still fires, in the same run, on content no verified contributor recorded', async () => {
+    const { bundle, index } = await lunchThenPull();
+    const flags = idleThenCompleteHeuristic.run(index, bundle, cfg);
+    const other = flags.filter((f) => f.detail!['filePath'] === OTHER_FILE);
+    expect(
+      other,
+      'a file that filled itself over an idle gap with content no verified contributor ever ' +
+        'recorded is exactly what this heuristic exists to surface. A fix that silences the ' +
+        'heuristic is worse than the false positive it was fixing.',
+    ).toHaveLength(1);
+    expect(other[0]!.severity).toBe('high');
+    expect(other[0]!.detail!['mergedInChars']).toBe(0);
   });
 });

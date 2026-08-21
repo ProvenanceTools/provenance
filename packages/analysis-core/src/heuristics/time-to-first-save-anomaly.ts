@@ -29,6 +29,14 @@
  * inline content) and external changes clear the reconstruction, so we skip
  * tainted reconstructions (empty content).
  *
+ * Tier 3.1: characters a git merge delivered from a provably different verified
+ * contributor's recorded work are not counted as written in the window either.
+ * Opening the starter, running `git pull` in the terminal and saving is an
+ * ordinary ten-second sequence, and it fired here at HIGH severity on the
+ * honest puller. Discounting only those characters leaves a student who really
+ * did produce 500+ chars in under 30 seconds firing exactly as before; always 0
+ * for a solo bundle. See `merged-in-content.ts`.
+ *
  * Severity: high. Confidence: 0.8.
  */
 
@@ -37,6 +45,8 @@ import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
 import { establishedReplayState } from './reconstruction-gate.js';
+import { externalChangeClassificationFor } from '../index/classify-external-changes.js';
+import { charsWrittenAfter } from './merged-in-content.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -61,6 +71,9 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
   // in the same session after the open.
   const openEvents = index.byKind.get('doc.open') ?? [];
   const saveEvents = index.byKind.get('doc.save') ?? [];
+
+  // Tier 3.1. Empty for a solo bundle — the pass does not run there.
+  const { gitMergeIn } = externalChangeClassificationFor(bundle, index);
 
   // Build a lookup: filePath → ordered list of {t, globalIdx, sessionId} for saves.
   type SaveEntry = { t: number; globalIdx: number; sessionId: string; seq: number };
@@ -122,10 +135,11 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
     // instead measures total file size, which flags any quick save of a large
     // existing file — reopening a 15k-char file, typing a newline, and saving
     // 9s later is not evidence of anything.
-    let newChars = 0;
-    for (let i = 0; i < state.provenance.length; i++) {
-      if (state.provenance[i]! > openEvent.globalIdx) newChars++;
-    }
+    //
+    // Tier 3.1: a `git pull` inside the window writes characters that the
+    // student did not, so merged-in content is excluded on the same footing as
+    // content that predates the open.
+    const newChars = charsWrittenAfter(state, openEvent.globalIdx, gitMergeIn);
     if (newChars <= minChars) continue;
 
     const openSeqKey = `${openEvent.sessionId}:${openEvent.seq}`;

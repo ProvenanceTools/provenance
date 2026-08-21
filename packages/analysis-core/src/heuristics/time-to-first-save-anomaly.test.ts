@@ -8,6 +8,17 @@ import { buildIndex } from '../index/build-index.js';
 import { loadBundle } from '../loader/parse-bundle.js';
 import { buildTestBundle } from '../test-support/build-test-bundle.js';
 import { DEFAULT_HEURISTIC_CONFIG } from './config.js';
+import {
+  buildCollabScope,
+  collabDocOpen,
+  collabDocSave,
+  collabPartnerSession,
+  collabPullerSession,
+  COLLAB_ALICE,
+  COLLAB_BOB,
+  COLLAB_FILE,
+} from '../test-support/build-collab-scope.js';
+import type { EventSpec } from '../test-support/build-test-bundle.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -290,5 +301,78 @@ describe('time_to_first_save_anomaly — negative', () => {
     const flags = timeToFirstSaveAnomalyHeuristic.run(index, bundle, cfg);
     expect(flags).toHaveLength(1);
     expect(flags[0]!.detail!['newChars']).toBe(600);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tier 3.1 — a `git pull` inside the window did not type anything
+// ---------------------------------------------------------------------------
+//
+// Open the starter, run `git pull` in the terminal, save. Ten seconds, 1000+
+// chars of "new content", HIGH severity — on a student who typed nothing
+// because there was nothing for her to type. Found while fixing the same shape
+// in low_typing_high_output; this heuristic never consulted Tier 3.1 either.
+
+describe('time_to_first_save_anomaly — Tier 3.1 (a pull is not typing)', () => {
+  const IMPLEMENTATION =
+    Array.from(
+      { length: 24 },
+      (_, i) => `def helper_${i}(value):\n    return value * ${i} + 1`,
+    ).join('\n') + '\n';
+
+  function pullThenSave(after: EventSpec[] = []) {
+    return [
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession(IMPLEMENTATION) },
+      {
+        who: { studentRef: COLLAB_ALICE },
+        events: collabPullerSession(IMPLEMENTATION, {
+          merge: true,
+          before: [collabDocOpen('# starter\n')],
+          after: [...after, collabDocSave(IMPLEMENTATION)],
+        }),
+      },
+    ] satisfies Parameters<typeof buildCollabScope>[0];
+  }
+
+  it('does not fire when the content in the window arrived by `git pull`', async () => {
+    const { bundle, index } = await buildCollabScope(pullThenSave());
+    const flags = timeToFirstSaveAnomalyHeuristic.run(index, bundle, cfg);
+    expect(
+      flags,
+      'time_to_first_save_anomaly fired on an honest pull: opening a file and pulling a ' +
+        "partner's recorded work seconds later is not 1000 characters of typing. Do not " +
+        'relax this assertion.',
+    ).toHaveLength(0);
+  });
+
+  it('the same events WITHOUT a contributor verdict still fire — the zero above is the gate', async () => {
+    const { bundle, index } = await buildCollabScope(pullThenSave(), { stamp: false });
+    const flags = timeToFirstSaveAnomalyHeuristic.run(index, bundle, cfg);
+    expect(flags.length).toBeGreaterThan(0);
+    expect(flags[0]!.severity).toBe('high');
+  });
+
+  it('still fires when the student pastes 500+ chars in the same window', async () => {
+    const pasted = 'q'.repeat(800);
+    const { bundle, index } = await buildCollabScope(
+      pullThenSave([
+        {
+          kind: 'paste',
+          data: {
+            path: COLLAB_FILE,
+            content: pasted,
+            length: pasted.length,
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          },
+        },
+      ]),
+    );
+    const flags = timeToFirstSaveAnomalyHeuristic.run(index, bundle, cfg);
+    expect(
+      flags,
+      'the discount covers only what git delivered. 800 pasted chars inside the window are ' +
+        'still 800 chars this heuristic is meant to see.',
+    ).toHaveLength(1);
+    expect(flags[0]!.detail!['newChars']).toBe(pasted.length);
   });
 });
