@@ -574,6 +574,29 @@ describe('failure mode B — a one-contributor scope cannot recognise a partner�
     expect(maxSeverity(sliced)).toBe('high');
   });
 
+  it('low_typing_high_output would count the pulled file as Alice’s own output', async () => {
+    // This heuristic appears in failure mode A as well, and the two cases are
+    // about DIFFERENT protections. There, the file is `concurrent` and Tier 2.2
+    // skips it. Here it re-anchors to `determinate`, so the reconstruction gate
+    // has no opinion at all and the only thing between Alice and a
+    // high-severity finding is `git_merge_in`: the characters the pull
+    // delivered are subtracted from her output (`merged-in-content.ts`).
+    // Narrow the scope to Alice and Bob's recorded sha goes with him, so the
+    // same bytes become 1132 chars of unexplained output divided by nothing.
+    const { pair, unstamped } = await stampedAndUnstamped(pullAfterMerge());
+
+    const whole = flagsOf(lowTypingHighOutputHeuristic, pair);
+    expect(whole, wholeScopeAccused(lowTypingHighOutputHeuristic, whole)).toHaveLength(0);
+    expect(
+      flagsOf(lowTypingHighOutputHeuristic, unstamped).length,
+      suppressionIsDead(lowTypingHighOutputHeuristic),
+    ).toBeGreaterThan(0);
+
+    const sliced = flagsOf(lowTypingHighOutputHeuristic, sliceToContributor(pair, ALICE_ONLY));
+    expect(sliced.length, boundaryMoved(lowTypingHighOutputHeuristic, 'B')).toBeGreaterThan(0);
+    expect(maxSeverity(sliced)).toBe('high');
+  });
+
   it('large_paste would lose the internal-move evidence that keeps a refactor at `info`', async () => {
     // Alice cuts a block Bob typed and pastes it lower down — ordinary
     // refactoring in a shared repository. `internal-move.ts` recognises it from
