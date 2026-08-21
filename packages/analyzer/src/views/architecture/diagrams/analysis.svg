@@ -79,11 +79,11 @@
 
 <g id="edge4" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M511.04,-1706.01C745.57,-1706.32 1344.79,-1701.23 1842,-1647.34 2050.4,-1624.75 2290.66,-1577.32 2426.82,-1548.42" class="s-fmt"/>
-<polygon stroke-width="1.15" points="2426.89,-1550.55 2432.32,-1547.24 2426.02,-1546.44 2426.89,-1550.55" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="2157.37" y="-1634.68" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">session.start.identity —</text>
-<text xml:space="preserve" text-anchor="middle" x="2157.37" y="-1625.68" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">never machine_id, never a git author,</text>
-<text xml:space="preserve" text-anchor="middle" x="2157.37" y="-1616.68" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">never the upload filename</text>
+<path fill="none" stroke-width="1.15" d="M511.29,-1704.3C815.06,-1700.45 1715.26,-1686 2006,-1647.34 2153.59,-1627.71 2320.37,-1585.63 2426.75,-1556.19" class="s-fmt"/>
+<polygon stroke-width="1.15" points="2427.09,-1558.27 2432.31,-1554.64 2425.96,-1554.23 2427.09,-1558.27" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="2263.24" y="-1634.68" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">session.start.identity —</text>
+<text xml:space="preserve" text-anchor="middle" x="2263.24" y="-1625.68" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">never machine_id, never a git author,</text>
+<text xml:space="preserve" text-anchor="middle" x="2263.24" y="-1616.68" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">never the upload filename</text>
 </g>
 
 <g id="node33" class="node">
@@ -121,8 +121,8 @@
 
 <g id="edge22" class="edge">
 
-<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M511.06,-1699.17C721.51,-1685.64 1221.98,-1650.94 1640,-1602.59 1986.78,-1562.48 2070.2,-1527.57 2417,-1487.63 2467.95,-1481.76 2842.26,-1487.36 2877,-1449.63 2885.13,-1440.8 2885.41,-1431.19 2877,-1422.63 2859.32,-1404.64 2443.68,-1429.08 2423,-1414.63 2370.47,-1377.94 2423.21,-1317.31 2371,-1280.17 2271.89,-1209.67 1361.5,-1329.65 1277,-1242.17 1265.88,-1230.66 1267.24,-1218.85 1277,-1206.17 1291.87,-1186.87 1306.48,-1198.51 1330,-1192.17 1375.84,-1179.82 1426.04,-1166.08 1470.42,-1153.87" class="s-ana"/>
-<polygon stroke-width="1.15" points="1470.87,-1155.92 1476.1,-1152.3 1469.76,-1151.87 1470.87,-1155.92" class="a-ana s-ana"/>
+<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M511.06,-1699.17C721.51,-1685.64 1221.98,-1650.94 1640,-1602.59 1986.78,-1562.48 2070.2,-1527.57 2417,-1487.63 2467.95,-1481.76 2842.26,-1487.36 2877,-1449.63 2885.13,-1440.8 2885.41,-1431.19 2877,-1422.63 2859.32,-1404.64 2443.68,-1429.08 2423,-1414.63 2370.47,-1377.94 2423.21,-1317.31 2371,-1280.17 2271.89,-1209.67 1361.5,-1329.65 1277,-1242.17 1265.88,-1230.66 1266.35,-1218.11 1277,-1206.17 1295.32,-1185.65 1373.25,-1198.57 1400,-1192.17 1423.24,-1186.61 1447.48,-1179.09 1470.69,-1170.99" class="s-ana"/>
+<polygon stroke-width="1.15" points="1471.25,-1173.01 1476.21,-1169.03 1469.85,-1169.05 1471.25,-1173.01" class="a-ana s-ana"/>
 <text xml:space="preserve" text-anchor="middle" x="2955.95" y="-1441.84" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">dropped artifacts · unattested seal tails ·</text>
 <text xml:space="preserve" text-anchor="middle" x="2955.95" y="-1432.84" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">and the torn trailing lines it TRUNCATED</text>
 <text xml:space="preserve" text-anchor="middle" x="2955.95" y="-1423.84" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">rather than dropping</text>
@@ -168,8 +168,8 @@
 
 <g id="edge28" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M515.44,-1516.98C878.73,-1499.03 2015.14,-1440.9 2043,-1414.63 2103.02,-1358.04 2105.08,-1257.67 2098.02,-1189.72" class="s-fmt"/>
-<polygon stroke-width="1.15" points="2100.15,-1189.88 2097.41,-1184.15 2095.98,-1190.34 2100.15,-1189.88" class="a-fmt s-fmt"/>
+<path fill="none" stroke-width="1.15" d="M515.54,-1517.23C791.36,-1504.27 1504.81,-1469.85 1742,-1449.63 1876.19,-1438.19 1946.42,-1508.49 2043,-1414.63 2101.94,-1357.35 2104.41,-1257.74 2097.73,-1190.09" class="s-fmt"/>
+<polygon stroke-width="1.15" points="2099.82,-1189.89 2097.1,-1184.15 2095.64,-1190.33 2099.82,-1189.89" class="a-fmt s-fmt"/>
 </g>
 
 <g id="node14" class="node">
@@ -199,8 +199,8 @@
 
 <g id="edge34" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M464.34,-1506.54C550.12,-1484.29 714.07,-1444.07 856,-1422.63 877.39,-1419.4 936.21,-1428.26 953,-1414.63 1031.34,-1351.02 1042.04,-1220.89 1042.23,-1156.55" class="s-edge"/>
-<polygon stroke-width="1.15" points="1044.33,-1156.77 1042.21,-1150.78 1040.13,-1156.79 1044.33,-1156.77" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.15" d="M515.71,-1514C656.86,-1501.13 890.18,-1471.74 953,-1414.63 1027.29,-1347.09 1039.97,-1219.93 1041.43,-1156.62" class="s-edge"/>
+<polygon stroke-width="1.15" points="1043.53,-1157 1041.53,-1150.97 1039.33,-1156.93 1043.53,-1157" class="a-edge s-edge"/>
 </g>
 
 <g id="node17" class="node">
@@ -230,9 +230,9 @@
 
 <g id="edge6" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M515.4,-1533.45C709.37,-1550.75 1124.04,-1585.82 1475,-1602.59 1633.34,-1610.15 1673.1,-1609.19 1831.62,-1608.61 2015.49,-1607.94 2484.1,-1659.31 2659,-1602.59 2685.65,-1593.95 2711.37,-1576.37 2731.34,-1559.96" class="s-fmt"/>
-<polygon stroke-width="1.15" points="2732.5,-1561.73 2735.75,-1556.26 2729.8,-1558.51 2732.5,-1561.73" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1793" y="-1625.68" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">git.event observations</text>
+<path fill="none" stroke-width="1.15" d="M515.53,-1532.6C724.32,-1549.64 1191.14,-1585.82 1585,-1602.59 1767.35,-1610.35 1813.11,-1609.44 1995.62,-1608.61 2143.05,-1607.94 2518.81,-1648.19 2659,-1602.59 2685.64,-1593.92 2711.37,-1576.34 2731.33,-1559.94" class="s-fmt"/>
+<polygon stroke-width="1.15" points="2732.49,-1561.71 2735.74,-1556.25 2729.79,-1558.49 2732.49,-1561.71" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1957" y="-1625.68" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">git.event observations</text>
 </g>
 
 <g id="node31" class="node">
@@ -250,9 +250,9 @@
 
 <g id="edge11" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M515.46,-1516.85C608.16,-1509.34 742.71,-1491.58 853,-1449.63 873.92,-1441.67 874.1,-1429.16 895.5,-1422.63 960.24,-1402.88 1135.03,-1433.62 1200,-1414.63 1228.29,-1406.36 1256.67,-1391.21 1280.78,-1375.78" class="s-fmt"/>
-<polygon stroke-width="1.15" points="1281.8,-1377.63 1285.68,-1372.59 1279.51,-1374.11 1281.8,-1377.63" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="929.25" y="-1432.84" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">fs.external_change</text>
+<path fill="none" stroke-width="1.15" d="M515.53,-1521.95C630.56,-1518.34 814.33,-1503.53 963,-1449.63 984.04,-1442 984.14,-1429.32 1005.5,-1422.63 1046.78,-1409.7 1158.57,-1427.07 1200,-1414.63 1228.1,-1406.19 1256.33,-1391.09 1280.38,-1375.76" class="s-fmt"/>
+<polygon stroke-width="1.15" points="1281.37,-1377.62 1285.26,-1372.6 1279.09,-1374.1 1281.37,-1377.62" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1039.25" y="-1432.84" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">fs.external_change</text>
 </g>
 
 <g id="node32" class="node">
@@ -269,8 +269,8 @@
 
 <g id="edge19" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M515.73,-1515.22C630.39,-1506.17 814.13,-1487.02 969,-1449.63 1003.44,-1441.32 1009.16,-1429.04 1044,-1422.63 1091.76,-1413.84 1434.29,-1427.93 1481,-1414.63 1512.67,-1405.61 1544.49,-1388.06 1570.47,-1371" class="s-fmt"/>
-<polygon stroke-width="1.15" points="1571.33,-1372.95 1575.15,-1367.87 1569,-1369.45 1571.33,-1372.95" class="a-fmt s-fmt"/>
+<path fill="none" stroke-width="1.15" d="M515.48,-1518.49C650.1,-1511.94 883.75,-1494.63 1079,-1449.63 1113.52,-1441.67 1119.18,-1429.15 1154,-1422.63 1189.72,-1415.94 1446.08,-1424.69 1481,-1414.63 1512.64,-1405.52 1544.46,-1387.95 1570.44,-1370.9" class="s-fmt"/>
+<polygon stroke-width="1.15" points="1571.3,-1372.85 1575.13,-1367.78 1568.97,-1369.36 1571.3,-1372.85" class="a-fmt s-fmt"/>
 </g>
 
 <g id="node35" class="node">
@@ -287,7 +287,7 @@
 
 <g id="edge16" class="edge">
 
-<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M515.53,-1519.69C804.57,-1512.18 1563.14,-1488.8 1600,-1449.63 1608.22,-1440.89 1608.41,-1431.19 1600,-1422.63 1581.54,-1403.86 1144.71,-1433.4 1126.25,-1414.63 1084.35,-1372.02 1086.18,-1324.51 1126.25,-1280.17 1182.37,-1218.07 1420.31,-1264.43 1501,-1242.17 1537.42,-1232.12 1541.52,-1215.98 1578,-1206.17 1646.51,-1187.76 1669.5,-1214 1737,-1192.17 1758.15,-1185.33 1779.52,-1174.32 1798.39,-1162.89" class="s-hum"/>
+<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M515.61,-1520.27C822.76,-1513.92 1666.32,-1492.64 1707,-1449.63 1715.25,-1440.91 1715.43,-1431.17 1707,-1422.63 1684.34,-1399.66 1148.91,-1437.6 1126.25,-1414.63 1084.29,-1372.08 1086.18,-1324.51 1126.25,-1280.17 1182.37,-1218.07 1420.31,-1264.43 1501,-1242.17 1537.42,-1232.12 1541.52,-1215.98 1578,-1206.17 1646.51,-1187.76 1669.5,-1214 1737,-1192.17 1758.15,-1185.33 1779.52,-1174.32 1798.39,-1162.89" class="s-hum"/>
 <polygon stroke-width="1.15" points="1799.21,-1164.86 1803.21,-1159.92 1797,-1161.28 1799.21,-1164.86" class="a-hum s-hum"/>
 <text xml:space="preserve" text-anchor="middle" x="1168.62" y="-1331.36" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">peer.observed —</text>
 <text xml:space="preserve" text-anchor="middle" x="1168.62" y="-1322.36" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">no recorder emitted this</text>
@@ -315,16 +315,16 @@
 
 <g id="node13" class="node">
 <title>report</title>
-<polygon stroke-width="1.3" points="1652.38,-966.97 1561.54,-966.97 1561.54,-942.49 1656.46,-942.49 1656.46,-962.89 1652.38,-966.97" class="f-fmt s-fmt"/>
-<polyline fill="none" stroke-width="1.3" points="1652.38,-966.97 1652.38,-962.89" class="s-fmt"/>
-<polyline fill="none" stroke-width="1.3" points="1656.46,-962.89 1652.38,-962.89" class="s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1609" y="-950.86" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">validation report</text>
+<polygon stroke-width="1.3" points="1962.38,-966.97 1871.54,-966.97 1871.54,-942.49 1966.46,-942.49 1966.46,-962.89 1962.38,-966.97" class="f-fmt s-fmt"/>
+<polyline fill="none" stroke-width="1.3" points="1962.38,-966.97 1962.38,-962.89" class="s-fmt"/>
+<polyline fill="none" stroke-width="1.3" points="1966.46,-962.89 1962.38,-962.89" class="s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1919" y="-950.86" font-family="Helvetica,sans-Serif" font-size="10.00" class="t-ink">validation report</text>
 </g>
 
 <g id="edge29" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M2070.66,-1088.71C2063.55,-1078.09 2054.18,-1066.8 2043,-1059.46 1923.88,-981.24 1751.87,-961.87 1664.48,-957.17" class="s-fmt"/>
-<polygon stroke-width="1.15" points="1664.64,-955.07 1658.54,-956.87 1664.43,-959.27 1664.64,-955.07" class="a-fmt s-fmt"/>
+<path fill="none" stroke-width="1.15" d="M2066.93,-1088.71C2059.87,-1079.05 2051.5,-1068.42 2043,-1059.46 2010.6,-1025.29 1967.41,-991.35 1941.48,-972.02" class="s-fmt"/>
+<polygon stroke-width="1.15" points="1942.75,-970.35 1936.68,-968.46 1940.25,-973.72 1942.75,-970.35" class="a-fmt s-fmt"/>
 </g>
 
 <g id="node6" class="node">
@@ -374,15 +374,15 @@
 
 <g id="node21" class="node">
 <title>integ</title>
-<path stroke-width="1.3" d="M1588.64,-633.05C1588.64,-633.05 1389.36,-633.05 1389.36,-633.05 1383.95,-633.05 1378.54,-627.64 1378.54,-622.23 1378.54,-622.23 1378.54,-611.41 1378.54,-611.41 1378.54,-606 1383.95,-600.59 1389.36,-600.59 1389.36,-600.59 1588.64,-600.59 1588.64,-600.59 1594.05,-600.59 1599.46,-606 1599.46,-611.41 1599.46,-611.41 1599.46,-622.23 1599.46,-622.23 1599.46,-627.64 1594.05,-633.05 1588.64,-633.05" class="f-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1489" y="-617.55" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">integrity&#45;flags adapter</text>
-<text xml:space="preserve" text-anchor="middle" x="1489" y="-607.8" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">lifts each FAILED check into the same flag list</text>
+<path stroke-width="1.3" d="M1672.64,-633.05C1672.64,-633.05 1473.36,-633.05 1473.36,-633.05 1467.95,-633.05 1462.54,-627.64 1462.54,-622.23 1462.54,-622.23 1462.54,-611.41 1462.54,-611.41 1462.54,-606 1467.95,-600.59 1473.36,-600.59 1473.36,-600.59 1672.64,-600.59 1672.64,-600.59 1678.05,-600.59 1683.46,-606 1683.46,-611.41 1683.46,-611.41 1683.46,-622.23 1683.46,-622.23 1683.46,-627.64 1678.05,-633.05 1672.64,-633.05" class="f-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1573" y="-617.55" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">integrity&#45;flags adapter</text>
+<text xml:space="preserve" text-anchor="middle" x="1573" y="-607.8" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">lifts each FAILED check into the same flag list</text>
 </g>
 
 <g id="edge30" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M1604.87,-942.17C1587.53,-893.62 1520.43,-705.8 1497.07,-640.41" class="s-edge"/>
-<polygon stroke-width="1.15" points="1499.15,-640 1495.16,-635.05 1495.2,-641.41 1499.15,-640" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.15" d="M1907.09,-942.17C1856.58,-893.13 1659.68,-701.97 1594.26,-638.46" class="s-edge"/>
+<polygon stroke-width="1.15" points="1596.08,-637.3 1590.31,-634.63 1593.15,-640.31 1596.08,-637.3" class="a-edge s-edge"/>
 </g>
 
 <g id="edge33" class="edge">
@@ -473,8 +473,8 @@
 
 <g id="edge51" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M1444.97,-599.96C1388.31,-579.55 1288.43,-543.58 1215.1,-517.17" class="s-edge"/>
-<polygon stroke-width="1.15" points="1216.08,-515.29 1209.73,-515.24 1214.66,-519.24 1216.08,-515.29" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.15" d="M1518.84,-599.96C1448.78,-579.45 1325.03,-543.22 1234.7,-516.77" class="s-edge"/>
+<polygon stroke-width="1.15" points="1235.46,-514.81 1229.11,-515.13 1234.28,-518.84 1235.46,-514.81" class="a-edge s-edge"/>
 </g>
 
 <g id="node23" class="node">
@@ -586,11 +586,11 @@
 
 <g id="edge12" class="edge">
 
-<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M2434.03,-1518.26C2101.96,-1504.8 1072.12,-1462.1 1060.25,-1449.63 1051.98,-1440.94 1052.01,-1431.35 1060.25,-1422.63 1070.93,-1411.32 1185.14,-1419.22 1200,-1414.63 1227.9,-1406.01 1255.99,-1390.96 1279.97,-1375.72" class="s-fmt"/>
-<polygon stroke-width="1.15" points="1280.93,-1377.6 1284.83,-1372.58 1278.65,-1374.07 1280.93,-1377.6" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1131.12" y="-1441.84" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">gated on a COLLABORATIVE scope —</text>
-<text xml:space="preserve" text-anchor="middle" x="1131.12" y="-1432.84" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">a solo bundle short&#45;circuits and is</text>
-<text xml:space="preserve" text-anchor="middle" x="1131.12" y="-1423.84" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">byte&#45;for&#45;byte unaffected</text>
+<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M2433.99,-1517.85C2118.83,-1503.81 1181.12,-1461.1 1170.25,-1449.63 1161.99,-1440.92 1162.95,-1432.15 1170.25,-1422.63 1178.58,-1411.76 1187.4,-1419.99 1200,-1414.63 1225.01,-1403.98 1250.87,-1389.65 1273.75,-1375.64" class="s-fmt"/>
+<polygon stroke-width="1.15" points="1274.65,-1377.56 1278.65,-1372.62 1272.44,-1373.99 1274.65,-1377.56" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1241.12" y="-1441.84" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">gated on a COLLABORATIVE scope —</text>
+<text xml:space="preserve" text-anchor="middle" x="1241.12" y="-1432.84" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">a solo bundle short&#45;circuits and is</text>
+<text xml:space="preserve" text-anchor="middle" x="1241.12" y="-1423.84" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">byte&#45;for&#45;byte unaffected</text>
 </g>
 
 <g id="edge18" class="edge">
@@ -636,10 +636,10 @@
 
 <g id="edge9" class="edge">
 
-<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M2664.99,-1358.64C2599.26,-1379.24 2509.96,-1403.81 2429,-1414.63 2238.25,-1440.11 887.3,-1443.26 697,-1414.63 613.37,-1402.05 520.52,-1371.71 460.81,-1349.96" class="s-fmt"/>
-<polygon stroke-width="1.15" points="461.68,-1348.04 455.33,-1347.95 460.24,-1351.98 461.68,-1348.04" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1281" y="-1437.34" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">segments a file only when two provably</text>
-<text xml:space="preserve" text-anchor="middle" x="1281" y="-1428.34" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">different contributors touched it</text>
+<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M2664.98,-1358.63C2599.26,-1379.22 2509.96,-1403.79 2429,-1414.63 2238.26,-1440.16 887.33,-1443.1 697,-1414.63 613.36,-1402.12 520.51,-1371.76 460.8,-1349.99" class="s-fmt"/>
+<polygon stroke-width="1.15" points="461.68,-1348.07 455.32,-1347.98 460.23,-1352.02 461.68,-1348.07" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1391" y="-1437.34" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">segments a file only when two provably</text>
+<text xml:space="preserve" text-anchor="middle" x="1391" y="-1428.34" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">different contributors touched it</text>
 </g>
 
 <g id="edge10" class="edge">
@@ -654,9 +654,11 @@
 
 <path fill="none" stroke-width="1.15" d="M1267.16,-1279.71C1252.72,-1268.84 1238.83,-1256.23 1228,-1242.17 1175.24,-1173.64 1226.45,-1116 1161,-1059.46 1114.33,-1019.14 970.16,-991.9 849.04,-975.5" class="s-fmt"/>
 <polygon stroke-width="1.15" points="849.42,-973.43 843.19,-974.71 848.86,-977.59 849.42,-973.43" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1262.36" y="-1123.53" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">external_edits and</text>
-<text xml:space="preserve" text-anchor="middle" x="1262.36" y="-1114.53" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">mass_external_replacement skip</text>
-<text xml:space="preserve" text-anchor="middle" x="1262.36" y="-1105.53" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">only the git_merge_in set</text>
+<text xml:space="preserve" text-anchor="middle" x="1297.24" y="-1132.53" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">external_edits, mass_external_replacement and</text>
+<text xml:space="preserve" text-anchor="middle" x="1297.24" y="-1123.53" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">terminal_active_during_external_change SKIP</text>
+<text xml:space="preserve" text-anchor="middle" x="1297.24" y="-1114.53" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the git_merge_in set. low_typing_high_output,</text>
+<text xml:space="preserve" text-anchor="middle" x="1297.24" y="-1105.53" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">time_to_first_save_anomaly and idle_then_complete</text>
+<text xml:space="preserve" text-anchor="middle" x="1297.24" y="-1096.53" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">SUBTRACT its characters from their own counts.</text>
 </g>
 
 <g id="edge15" class="edge">

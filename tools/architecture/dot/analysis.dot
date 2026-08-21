@@ -137,7 +137,7 @@ digraph analysis {
   index -> extclass [label="fs.external_change" color="#9d7bf5"]
   contrib -> extclass [label="gated on a COLLABORATIVE scope —\na solo bundle short-circuits and is\nbyte-for-byte unaffected" color="#9d7bf5" style=dashed]
   dag -> extclass [label="corroboration only:\nancestor · same_commit ·\nunordered · no_observations" color="#9d7bf5" style=dashed]
-  extclass -> hp [label="external_edits and\nmass_external_replacement skip\nonly the git_merge_in set" color="#9d7bf5"]
+  extclass -> hp [label="external_edits, mass_external_replacement and\nterminal_active_during_external_change SKIP\nthe git_merge_in set. low_typing_high_output,\ntime_to_first_save_anomaly and idle_then_complete\nSUBTRACT its characters from their own counts." color="#9d7bf5"]
   extclass -> he [label="⇒ terminal_active_during_\nexternal_change too" color="#9d7bf5" style=dashed]
 
   /* peer witnessing: the reader landed first, exactly as 2.0 and the seal did */
