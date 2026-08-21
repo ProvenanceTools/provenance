@@ -49,6 +49,8 @@ import { putBlob } from '../../../services/storage/blobs.js';
 import { ingestStagingKey } from '../../../services/storage/keys.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 
+vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
+
 // ---------------------------------------------------------------------------
 // Mock pg-boss so PATCH /unmatched doesn't require a real pg-boss connection.
 // The attach service calls boss.send(recompute_cross_flags) after commit.

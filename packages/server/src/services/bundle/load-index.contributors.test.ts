@@ -28,11 +28,12 @@
  *    deployment misconfiguration presented as a class-wide integrity finding.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-// Testcontainers spin up Postgres + MinIO per file; vitest.config.ts raises
-// the default testTimeout/hookTimeout to 180s workspace-wide so container
-// startup under a loaded full-suite run doesn't look like a product failure.
+// Testcontainers spin up Postgres + MinIO per file; the repo convention is to
+// raise the 10s unit-test default here rather than let container startup under
+// a loaded full-suite run look like a product failure.
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 import { withTestDb } from '../../../test/helpers/db.js';
 import { withTestMinio } from '../../../test/helpers/minio.js';

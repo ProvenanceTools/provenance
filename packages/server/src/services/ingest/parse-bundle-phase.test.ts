@@ -10,13 +10,15 @@
  * tests, ensuring behavioral consistency without a committed binary fixture.
  */
 
-import { describe, it, expect } from 'vitest';
+import { vi, describe, it, expect } from 'vitest';
 import JSZip from 'jszip';
 import { withTestMinio } from '../../../test/helpers/minio.js';
 import { parseBundlePhase, errorDetail } from './parse-bundle-phase.js';
 import { putBlob } from '../storage/blobs.js';
 import { ingestStagingKey } from '../storage/keys.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
+
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 // ---------------------------------------------------------------------------
 // Helpers

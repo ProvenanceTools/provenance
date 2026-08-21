@@ -31,6 +31,8 @@ import {
 import { users, courses, semesters, ingest_jobs, ingest_files } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+
 // ---------------------------------------------------------------------------
 // Seed helpers
 // ---------------------------------------------------------------------------

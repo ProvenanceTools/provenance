@@ -21,7 +21,7 @@
  * show up as a mismatch there.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
@@ -57,6 +57,8 @@ import { buildTestBundle } from '@provenance/analysis-core/test-support/build-te
 import type { DrizzleDb } from '../db/client.js';
 import { recomputeSubmission } from '../services/scoring/recompute-submission.js';
 import { createStorageClient, storageConfigFromEnv } from '../services/storage/client.js';
+
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 // ---------------------------------------------------------------------------
 // Module-level state

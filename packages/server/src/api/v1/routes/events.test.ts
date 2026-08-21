@@ -51,6 +51,8 @@ import {
   type EventSpec,
 } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 
+vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
+
 // ---------------------------------------------------------------------------
 // DB injection
 // ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@
  *   - After the test, all singletons are reset to avoid state leaking.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
@@ -47,6 +47,8 @@ import * as schema from '../../../db/schema.js';
 import { startWorker } from '../../../jobs/worker.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import type { DrizzleDb } from '../../../db/client.js';
+
+vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
 
 // ---------------------------------------------------------------------------
 // Module-level state

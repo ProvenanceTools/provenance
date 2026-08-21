@@ -37,6 +37,8 @@ import type { DrizzleDb } from '../../../db/client.js';
 import { sql } from 'drizzle-orm';
 import { seedContributor } from '../../../../test/helpers/seed-contributor.js';
 
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+
 // ---------------------------------------------------------------------------
 // DB injection
 // ---------------------------------------------------------------------------

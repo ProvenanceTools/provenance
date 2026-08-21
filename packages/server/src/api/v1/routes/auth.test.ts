@@ -32,6 +32,8 @@ import {
 import { eq, and } from 'drizzle-orm';
 import type { DrizzleDb } from '../../../db/client.js';
 
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+
 // ---------------------------------------------------------------------------
 // Test env
 // ---------------------------------------------------------------------------

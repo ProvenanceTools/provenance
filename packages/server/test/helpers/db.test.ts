@@ -4,10 +4,13 @@
  * even when the test fn throws.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { withTestDb } from './db.js';
 import { sql } from 'drizzle-orm';
 import { users } from '../../src/db/schema.js';
+
+// testcontainers needs a long startup budget
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 describe('withTestDb harness', () => {
   it('spawns a container, runs migrations, and can query the DB', async () => {

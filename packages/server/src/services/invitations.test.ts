@@ -14,6 +14,8 @@ import { users, courses, semesters, memberships, pending_invitations } from '../
 import type { DrizzleDb } from '../db/client.js';
 import { inviteMember, activatePendingInvitations, revokeInvitation } from './invitations.js';
 
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+
 const BASE_ENV: Record<string, string> = {
   NODE_ENV: 'test',
   PUBLIC_BASE_URL: 'http://localhost:3000',

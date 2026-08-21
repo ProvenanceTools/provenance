@@ -18,6 +18,8 @@ import { createToken } from '../../../auth/tokens.js';
 import type { DrizzleDb } from '../../../db/client.js';
 import type { Principal } from '../../middleware/auth-session.js';
 
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+
 // ---------------------------------------------------------------------------
 // Test env
 // ---------------------------------------------------------------------------

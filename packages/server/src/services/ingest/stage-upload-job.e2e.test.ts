@@ -9,7 +9,7 @@
  * Real pg-boss + Postgres + MinIO via testcontainers.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
@@ -45,6 +45,8 @@ import type { IngestScopeConfig } from './gradescope/repo-scopes.js';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import type { DrizzleDb } from '../../db/client.js';
+
+vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../../db/migrations');

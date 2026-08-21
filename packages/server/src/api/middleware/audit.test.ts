@@ -15,6 +15,8 @@ import { audit_log, users } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import type { Principal } from './auth-session.js';
 
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+
 // ---------------------------------------------------------------------------
 // Test env
 // ---------------------------------------------------------------------------

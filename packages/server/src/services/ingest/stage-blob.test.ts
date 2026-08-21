@@ -4,12 +4,14 @@
  * Uses withTestMinio — requires Docker.
  */
 
-import { describe, it, expect } from 'vitest';
+import { vi, describe, it, expect } from 'vitest';
 import { createHash } from 'node:crypto';
 import { withTestMinio } from '../../../test/helpers/minio.js';
 import { stageBlob } from './stage-blob.js';
 import { getBlob } from '../storage/blobs.js';
 import { ingestStagingKey } from '../storage/keys.js';
+
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 // ---------------------------------------------------------------------------
 // Helpers

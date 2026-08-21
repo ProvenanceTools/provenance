@@ -19,7 +19,7 @@
  * phase) and drives the real worker through pg-boss, mirroring ingest-e2e.test.ts.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
@@ -50,6 +50,8 @@ import { stageBlob } from '../services/ingest/stage-blob.js';
 import { createStorageClient, storageConfigFromEnv } from '../services/storage/client.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import type { DrizzleDb } from '../db/client.js';
+
+vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../db/migrations');

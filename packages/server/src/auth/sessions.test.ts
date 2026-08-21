@@ -4,7 +4,7 @@
  * Uses withTestDb (testcontainers) for fully isolated DB per test.
  */
 
-import { describe, it, expect } from 'vitest';
+import { vi, describe, it, expect } from 'vitest';
 import { withTestDb } from '../../test/helpers/db.js';
 import {
   generateSessionId,
@@ -15,6 +15,9 @@ import {
   sessionExpiresAt,
 } from './sessions.js';
 import { users } from '../db/schema.js';
+
+// Integration tests need extended timeout for testcontainers.
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 // ---------------------------------------------------------------------------
 // Helpers

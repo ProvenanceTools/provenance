@@ -41,6 +41,8 @@ import type { StorageClient } from '../services/storage/client.js';
 import type { AwsClient } from 'aws4fetch';
 import { sql } from 'drizzle-orm';
 
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+
 // ---------------------------------------------------------------------------
 // Mock storage client
 // ---------------------------------------------------------------------------

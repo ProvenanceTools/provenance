@@ -22,6 +22,8 @@ import { createV1App } from '../index.js';
 import { users, sessions, courses, semesters, memberships, audit_log } from '../../../db/schema.js';
 import type { DrizzleDb } from '../../../db/client.js';
 
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+
 // ---------------------------------------------------------------------------
 // DB injection
 // ---------------------------------------------------------------------------

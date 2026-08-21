@@ -2,12 +2,14 @@
  * Integration tests for upsertRosterFromSubmitters — uses withTestDb (Docker).
  */
 
-import { describe, it, expect } from 'vitest';
+import { vi, describe, it, expect } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { withTestDb } from '../../../../test/helpers/db.js';
 import { courses, semesters, roster_entries, students } from '../../../db/schema.js';
 import { upsertRosterFromSubmitters } from './upsert-roster.js';
 import type { DrizzleDb } from '../../../db/client.js';
+
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 async function seedSemester(db: DrizzleDb): Promise<string> {
   const slug = `cs61a-${crypto.randomUUID().slice(0, 8)}`;

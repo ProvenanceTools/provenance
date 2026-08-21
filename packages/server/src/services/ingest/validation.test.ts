@@ -17,7 +17,7 @@
  *   - Tampered bundle (broken chain): chain_integrity fails → overall 'fail'.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { vi, describe, it, expect, beforeAll } from 'vitest';
 import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha2.js';
 import { eq, count } from 'drizzle-orm';
@@ -27,6 +27,8 @@ import { runAndStoreValidation } from './validation.js';
 import { validation_results, submissions } from '../../db/schema.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { loadBundle } from '@provenance/analysis-core/loader/parse-bundle.js';
+
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 // ---------------------------------------------------------------------------
 // Wire SHA-512 for @noble/ed25519 (required in non-browser environments).

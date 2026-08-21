@@ -39,6 +39,8 @@ import type { StorageClient } from '../../../services/storage/client.js';
 import { _resetReconstructionCacheForTest } from '../../../services/reconstruction.js';
 import { _resetBundleIndexCacheForTest } from '../../../services/bundle/load-index.js';
 
+vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
+
 // ---------------------------------------------------------------------------
 // DB injection
 // ---------------------------------------------------------------------------

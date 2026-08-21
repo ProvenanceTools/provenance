@@ -14,7 +14,7 @@
  * Uses testcontainers (ephemeral Postgres) via withTestDb.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { vi, describe, it, expect, beforeAll } from 'vitest';
 import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha2.js';
 import JSZip from 'jszip';
@@ -31,6 +31,8 @@ import { flags, per_file_stats, submissions } from '../../../db/schema.js';
 import { discoverRepoScopes } from './repo-scopes.js';
 import { zipBundleEntries } from './build-bundle-zip.js';
 import type { DrizzleDb } from '../../../db/client.js';
+
+vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
 
 beforeAll(() => {
   ed.hashes.sha512 = sha512;
