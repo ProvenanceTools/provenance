@@ -93,10 +93,17 @@ export type SubmissionSummary = {
   /**
    * The coverage stage's facts (§6 Rule 3) — concurrent recording, identity
    * counts, commit-graph coverage, DAG defects, the single-repository caveat,
-   * unattested seal tails, dropped artifacts.
+   * unattested seal tails, dropped artifacts, peer-witness reconciliation
+   * (§5.5) and git observability (§5.6 item 2).
    *
    * Same source as `sessions` and `assignment_manifest`: the already-parsed
-   * bundle + index, so it adds no query and no extra blob parse.
+   * bundle + index, so it adds no query and no extra blob parse. The §5.6
+   * additions are RECOMPUTED here rather than persisted at ingest, for the same
+   * reason as everything else in this object: the inputs (`session.start`
+   * capability fields and `peer.observed` entries) live inside the signed
+   * chains, which are exactly what survives source stripping, so the stored
+   * bundle can always answer and a column would only be a second copy that can
+   * go stale against a fixed reader.
    * `coverageFacts` is pure and isomorphic — nothing new is computed here, it is
    * the same function `/local` runs in the browser.
    *

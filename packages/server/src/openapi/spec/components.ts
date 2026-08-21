@@ -500,6 +500,8 @@ export const components = {
         'dagDefects',
         'dagCoverage',
         'repositoryAssumedSingle',
+        'witnessing',
+        'gitObservation',
       ],
       properties: {
         identity: {
@@ -679,6 +681,122 @@ export const components = {
             'AND for a mixed one where only some observations are labelled. Never a ' +
             'finding: a recorder that predates the field, and a shallow clone whose ' +
             'root commit is not reachable, both produce it.',
+        },
+        witnessing: {
+          type: 'object',
+          description:
+            'What peer witnessing (collaboration spec 5.5) establishes about this ' +
+            'bundle. FACTS, NEVER FINDINGS. `unwitnessedSessions` is the ORDINARY ' +
+            'case — a partner who was not recording, a recorder predating peer ' +
+            'witnessing, or sessions that never overlapped all produce it — and must ' +
+            'never render as "unverified, therefore suspect". `capability: unknown` ' +
+            'means at least one session did not report whether it could witness; it ' +
+            'is the state of every bundle recorded before the field existed and is ' +
+            'NOT `impossible`. No discrepancy carries a contributor: a witness shows ' +
+            'that a LOG was in a state, never who put it there.',
+          required: [
+            'capability',
+            'sessions',
+            'witnessedSessions',
+            'unwitnessedSessions',
+            'corroborated',
+            'excluded',
+            'malformed',
+            'discrepancies',
+          ],
+          properties: {
+            capability: { type: 'string', enum: ['available', 'impossible', 'unknown'] },
+            sessions: { type: 'integer' },
+            witnessedSessions: { type: 'integer' },
+            unwitnessedSessions: { type: 'integer' },
+            corroborated: { type: 'integer' },
+            excluded: { type: 'integer' },
+            malformed: { type: 'integer' },
+            discrepancies: {
+              type: 'array',
+              description:
+                'Non-corroborated verdicts, aggregated on (file, verdict) so a ' +
+                'checkpoint-cadence repeat of one observation is one row. `detail` is ' +
+                "the analysis engine's own wording, carried verbatim. `states` is " +
+                'DESCRIPTIVE ONLY: `disappeared` is not misconduct — a checkout of a ' +
+                'branch that never contained a partner log removes it, as does a stash.',
+              items: {
+                type: 'object',
+                required: [
+                  'file',
+                  'witnessedSessionId',
+                  'verdict',
+                  'observations',
+                  'states',
+                  'authority',
+                  'detail',
+                ],
+                properties: {
+                  file: { type: 'string' },
+                  witnessedSessionId: { type: 'string', nullable: true },
+                  verdict: {
+                    type: 'string',
+                    enum: ['absent', 'short', 'tip_mismatch', 'indeterminate'],
+                  },
+                  observations: { type: 'integer' },
+                  states: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                      enum: ['appeared', 'grew', 'shrank', 'disappeared', 'unparseable'],
+                    },
+                  },
+                  authority: {
+                    type: 'string',
+                    enum: ['attributed', 'unattributed', 'unverifiable'],
+                  },
+                  detail: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        gitObservation: {
+          type: 'object',
+          description:
+            'Whether git could be observed at all (collaboration spec 5.6 item 2), ' +
+            'paired with what the commit DAG saw. This is what lets a reader say "we ' +
+            'could not check" instead of silently implying git was fine. SEPARATE ' +
+            'from dagCoverage, which counts what WAS seen: merging the two would let ' +
+            '"nothing was observed" pass for "nothing happened". `availability: ' +
+            'unknown` and `silentAndUnreported` are the permanent state of every ' +
+            'bundle recorded before the field existed and are not defects. ' +
+            '`silentThoughCapable` is not evidence of anything — a session in which ' +
+            'no git command ran produces it, which is most honest sessions.',
+          required: [
+            'availability',
+            'impossibleReason',
+            'sessions',
+            'observing',
+            'silentAndIncapable',
+            'silentThoughCapable',
+            'silentAndUnreported',
+            'malformed',
+          ],
+          properties: {
+            availability: { type: 'string', enum: ['available', 'impossible', 'unknown'] },
+            impossibleReason: {
+              type: 'string',
+              nullable: true,
+              enum: ['unavailable', 'not_owned', 'mixed'],
+              description:
+                'Why availability is `impossible`; null otherwise. `unavailable` (no ' +
+                'git integration on the machine) and `not_owned` (git worked, the ' +
+                'assignment sat outside every repository it could see) are different ' +
+                'situations a grader acts differently on.',
+            },
+            sessions: { type: 'integer' },
+            observing: { type: 'integer' },
+            silentAndIncapable: { type: 'integer' },
+            silentThoughCapable: { type: 'integer' },
+            silentAndUnreported: { type: 'integer' },
+            malformed: { type: 'integer' },
+          },
         },
       },
     },
