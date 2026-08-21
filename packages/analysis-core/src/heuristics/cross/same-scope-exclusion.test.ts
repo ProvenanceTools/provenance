@@ -31,6 +31,9 @@ import { buildTestBundle } from '../../test-support/build-test-bundle.js';
 import { partitionCrossScopes } from '../../coverage/cross-scope.js';
 import { extractCrossFeatures } from './features.js';
 import { runCrossHeuristics } from './run-cross-heuristics.js';
+import { pasteSharedAcrossStudentsHeuristic } from './paste-shared-across-students.js';
+import { editingPatternCloneHeuristic } from './editing-pattern-clone.js';
+import { DEFAULT_CROSS_HEURISTIC_CONFIG } from './types.js';
 import type { Bundle } from '../../loader/types.js';
 import type { EventIndex } from '../../index/event-index.js';
 
@@ -316,6 +319,41 @@ describe('S20 — the negative controls, which are not optional', () => {
 
     expect(partitionCrossScopes(features).exclusions).toEqual([]);
     expect(pasteFlags(runCrossHeuristics(features))).toHaveLength(1);
+  });
+
+  it('STILL fires when the partition does not know either bundle', async () => {
+    // A mismatched or stale partition — a bundle id the pass never saw — must
+    // fail toward reporting the finding. Suppression is the direction that
+    // silently loses evidence, and a silent loss is the one failure mode nobody
+    // is told about; a spurious finding is at least reviewable.
+    const sha = await sha256Hex(PASTED_CODE);
+
+    const carol = await buildSubmission('carol_proj1.zip', [
+      { minute: 0, observed: [CAROL_COMMIT], paste: PASTED_CODE, pasteSha: sha },
+    ]);
+    const dave = await buildSubmission('dave_proj1.zip', [
+      { minute: 240, observed: [CAROL_COMMIT], paste: PASTED_CODE, pasteSha: sha },
+    ]);
+
+    const features = [featuresOf(carol), featuresOf(dave)];
+    // They ARE one lineage under their own partition, so this proves the flag
+    // comes back purely because the partition handed in knows neither of them.
+    expect(partitionCrossScopes(features).exclusions).toHaveLength(1);
+
+    const emptyPartition = partitionCrossScopes([]);
+    const paste = pasteSharedAcrossStudentsHeuristic.run(
+      features,
+      DEFAULT_CROSS_HEURISTIC_CONFIG,
+      emptyPartition,
+    );
+    const clone = editingPatternCloneHeuristic.run(
+      features,
+      DEFAULT_CROSS_HEURISTIC_CONFIG,
+      emptyPartition,
+    );
+
+    expect(paste).toHaveLength(1);
+    expect(clone.length).toBeGreaterThan(0);
   });
 
   it('STILL fires between a partner and an outsider who shares the same paste', async () => {

@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { ASSUMED_SINGLE_REPOSITORY, commitNodeKey } from '../git/observed-dag.js';
-import { partitionCrossScopes } from './cross-scope.js';
+import { partitionCrossScopes, sameRepositoryLineage } from './cross-scope.js';
 import type { CrossSubmissionFeatures } from '../heuristics/cross/types.js';
 
 const A = 'a'.repeat(40);
@@ -143,14 +143,32 @@ describe('partitionCrossScopes', () => {
   });
 
   it('is deterministic and order-independent', () => {
-    const fa = features('alice', unlabelled(A, B));
-    const fb = features('bob', unlabelled(B, C));
-    const fc = features('carol', unlabelled('d'.repeat(40)));
+    // Deliberately shaped to exercise all three orderings at once, because each
+    // is a separate place a Map's insertion order could leak into the output:
+    //   - TWO lineages, so the exclusion list itself has an order;
+    //   - TWO shared commits inside one lineage, listed in OPPOSITE order by its
+    //     two members, so the proving-commit list has an order;
+    //   - members whose filename order differs from their input order.
+    // The register is read by a person and compared across runs; an order that
+    // depends on which archive was uploaded first is a diff nobody can trust.
+    const X = 'e'.repeat(40);
+    const Y = 'f'.repeat(40);
 
-    const forward = partitionCrossScopes([fa, fb, fc]);
-    const backward = partitionCrossScopes([fc, fb, fa]);
+    const zed = features('zed', unlabelled(X, Y));
+    const abe = { ...features('abe'), observedCommitKeys: unlabelled(Y, X) };
+    const bea = features('bea', unlabelled(A));
+    const cal = features('cal', unlabelled(A));
+
+    const forward = partitionCrossScopes([zed, abe, bea, cal]);
+    const backward = partitionCrossScopes([cal, bea, abe, zed]);
 
     expect(forward.exclusions).toEqual(backward.exclusions);
+    expect(forward.exclusions).toHaveLength(2);
+    // Sorted by first bundle id: abe/zed (two shared commits) then bea/cal (one).
+    expect(forward.exclusions[0]!.bundleIds).toEqual(['abe', 'zed']);
+    expect(forward.exclusions[0]!.sharedCommits).toEqual(unlabelled(X, Y).sort());
+    expect(forward.exclusions[1]!.bundleIds).toEqual(['bea', 'cal']);
+    expect(forward.exclusions[1]!.sharedCommits).toEqual(unlabelled(A));
   });
 
   it('does not treat a repeated key inside ONE submission as two observers', () => {
@@ -165,6 +183,45 @@ describe('partitionCrossScopes', () => {
 
     expect(p.lineageOf.get('alice')).not.toBe(p.lineageOf.get('carol'));
     expect(p.exclusions).toEqual([]);
+  });
+
+  it('never lists a one-sided commit among the commits that proved an exclusion', () => {
+    // The visible half of the register is EVIDENCE, and a duplicate inside one
+    // submission must not be laundered into it. Alice and Bob are one lineage
+    // because of C; A appears twice but only in Alice's list, so naming A as
+    // proof would be a claim nothing in the record supports.
+    const p = partitionCrossScopes([
+      { ...features('alice'), observedCommitKeys: [...unlabelled(A), ...unlabelled(A, C)] },
+      features('bob', unlabelled(C)),
+    ]);
+
+    expect(p.exclusions).toHaveLength(1);
+    expect(p.exclusions[0]!.sharedCommits).toEqual(unlabelled(C));
+  });
+});
+
+describe('sameRepositoryLineage', () => {
+  it('is false for a bundle the partition never saw', () => {
+    // Suppression is the dangerous direction, so an id the partition does not
+    // know is NOT proved to share anything with anyone. Failing toward
+    // comparing means a stale or mismatched partition can only ever produce a
+    // finding to review, never a silent exclusion nobody is told about.
+    const p = partitionCrossScopes([features('alice', unlabelled(A))]);
+
+    expect(sameRepositoryLineage(p, 'alice', 'nobody')).toBe(false);
+    expect(sameRepositoryLineage(p, 'nobody', 'alice')).toBe(false);
+    expect(sameRepositoryLineage(p, 'nobody', 'nobody-else')).toBe(false);
+  });
+
+  it('is true only for two members of one lineage', () => {
+    const p = partitionCrossScopes([
+      features('alice', unlabelled(A)),
+      features('bob', unlabelled(A)),
+      features('carol', unlabelled(B)),
+    ]);
+
+    expect(sameRepositoryLineage(p, 'alice', 'bob')).toBe(true);
+    expect(sameRepositoryLineage(p, 'alice', 'carol')).toBe(false);
   });
 
   it('reports a singleton lineage as no exclusion at all', () => {
