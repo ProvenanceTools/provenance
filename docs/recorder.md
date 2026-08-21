@@ -149,11 +149,13 @@ Produces `packages/recorder/provenance-recorder-<version>.vsix` (~250 KB). Insta
 See the [repo root README](../README.md#course-staff-key--manifest-workflow). The short version:
 
 ```sh
-PROVENANCE_COURSE_PUBLIC_KEY_HEX=<64-hex> \
+PROVENANCE_ROOT_PUBLIC_KEY_HEX=<64-hex> \
   npm run build:prod --workspace packages/recorder
 ```
 
-The `build:prod` script refuses to run if the env var is missing, malformed, or matches the dev key, then embeds the production key, builds, packages, and restores the source.
+`PROVENANCE_ROOT_PUBLIC_KEY_HEX` is the **root** key of the Manifest 2.0 trust chain — the key an inline `course_cert` must chain to. It is required. `PROVENANCE_LEGACY_COURSE_PUBLIC_KEY_HEX` is optional and grandfathers 1.x manifests, whose payload signature is checked against it directly. (There is no `PROVENANCE_COURSE_PUBLIC_KEY_HEX`; `tools/embed-root-key.ts` reads only those two names.)
+
+The `build:prod` script refuses to run if the required env var is missing, malformed, or matches the dev key, then embeds the production key(s), builds, packages, and restores the source.
 
 ## Architecture overview
 
@@ -161,8 +163,10 @@ The `build:prod` script refuses to run if the env var is missing, malformed, or 
 src/
 ├── extension.ts                      # VS Code entry: activate() / deactivate()
 ├── activation/
-│   ├── course-keys.ts                # re-exports the course public key
-│   ├── course-public-key.ts          # the constant; swapped by build:prod
+│   ├── course-keys.ts                # re-exports the embedded verification keys
+│   ├── root-public-key.ts            # the 2.0 root constant; swapped by build:prod
+│   ├── legacy-course-public-key.ts   # the grandfathered 1.x constant; ditto
+│   ├── manifest-discovery.ts         # globs nested manifests under the workspace
 │   ├── manifest-loader.ts            # reads + verifies .provenance-manifest
 │   └── status-bar.ts                 # the "Provenance: recording" indicator
 ├── session/

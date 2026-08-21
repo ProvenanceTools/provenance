@@ -17,7 +17,11 @@ If you don't see `Provenance: recording` in the status bar, your work isn't bein
 ## What you'll see
 
 - A `Provenance: recording` indicator in the status bar whenever the extension is active. That's the only visible UI change. No popups, no toolbars, no slowdowns.
-- A hidden `.provenance/` folder inside the assignment workspace where the log lives. It's normal — don't delete it, don't commit it, don't edit it. The seal command bundles it for you.
+- A hidden `.provenance/` folder inside the assignment workspace where the log lives. It's normal — don't delete it and don't edit it.
+
+  Whether you **commit** it depends on how the assignment is submitted, and your course will tell you which it is:
+  - **ZIP submission** — run **Provenance: Prepare Submission Bundle** when you're done and upload the `.zip`. The seal command packages `.provenance/` for you, so there's no need to commit it.
+  - **Git submission** — there is no seal step. `.provenance/` **must be committed and pushed** along with your code; the graders read it out of your repository. The extension keeps a signed seal inside that folder up to date as you work, so whatever you push is always sealed. Make sure nothing in your `.gitignore` excludes `.provenance/` — if part of the log doesn't reach the repo, the missing piece shows up as a gap in your record.
 
 The extension does not change your editor settings, your keybindings, or how VS Code looks. Auto-complete, IntelliSense, linting, debugging, the integrated terminal — all of it works exactly the same.
 
