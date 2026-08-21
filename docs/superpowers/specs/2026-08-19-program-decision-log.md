@@ -1377,3 +1377,148 @@ tried — the targeted `ON CONFLICT`, and the prune rule — and both got regres
   nobody recorded, which is `git_unrecorded_in` by definition. Accepted on the user's decision, and
   handled by text rather than by score: the flag establishes only that the content has no recorded
   authorship _in this scope_ and says so. Enrolment coverage is what actually closes it.
+
+---
+
+### Landed 2026-08-21 — `multiple_sessions_overlap` stopped accusing D5's two-machine flow
+
+**The flag accused a supported flow in its first clause and conceded it in its last.** It fired at
+`high` / 0.95 saying the overlap _"indicates clock manipulation or log forging"_, and then, for the
+proven-same-contributor case, _"the remaining innocent explanation is that this person recorded on
+two machines under one identity"_ — which is **D5**, a first-class flow where each machine enrols
+independently with its own keypair and the shared `student_ref` groups them into one contributor.
+
+**The evidence that separates the two was already in the bundle and was being discarded.**
+`student_ref` is per-PERSON; the long-lived `student_pubkey` the chain walk returns is per-MACHINE,
+because a second enrolment mints a fresh student keypair over the same ref —
+`mint-credential.ts` counts exactly this as `machine_count`, and its own header says so. **No
+format change, no new event field, and `identity/` is untouched**: `resolveSessionContributor`
+already put `studentPubkey` on the attributed verdict.
+
+**The briefing named the wrong key, and this is the part worth carrying forward.** The task said to
+key on _"`student_ref` + the session public key"_, citing `session.start`'s `session_pubkey`. That
+key is **per-session ephemeral** — `identity/types.ts` says so in as many words ("`session_pubkey`
+is per-session ephemeral and could never group two sessions") — so two sessions on ONE machine also
+carry different `session_pubkey`s. Keying on it would have suppressed **every** same-contributor
+overlap, including the genuine single-machine clock manipulation this heuristic exists for, and the
+required negative control would have been the only thing standing between that and shipping. Two
+adjacent keys, one per-machine and one per-session, both 64 hex, both on `session.start`.
+
+**The contributor is NOT split**, which was the constraint. `attributedContributorKey` still keys
+on `student_ref` alone, so D14's per-contributor scoring, the `submission_contributors` cut-over
+and the sole-contributor rule all keep seeing one person. Splitting them would split that person's
+score across two apparent people, which migration 0029 exists to prevent. Only the overlap
+JUDGEMENT gained sight of the machine.
+
+**The partition is now three-way and still disjoint and exhaustive by construction** — one loop,
+one decision, one `push` per pair. `judged` / `collaboration` / `multiMachine`. The anti-drift
+property is preserved and strengthened: `JudgedOverlap` became a discriminated union whose
+`comparison` is `'same_machine' | 'unknown'`, so re-adding a local
+`if (comparison === 'different') continue;` is still **TS2367**, verified by mutation, and a
+two-machine pair now has **no arm to arrive in** either. The `same_machine` arm carries `attributed`
+contributors, so the flag that names a person is typed to have proof of who — the old runtime
+fallback to `'the same contributor'` is gone rather than merely unreachable.
+
+**A same-machine overlap and a two-machine overlap are kept as different facts in different arms.**
+Folding two machines into `judged` accuses the supported flow; folding one machine into
+`multiMachine` loses the detection. And two machines is not two PEOPLE either, which is why it is a
+third arm and a separate coverage field rather than more `collaboration`: rendering it as "two
+contributors recorded concurrently" would tell a grader that two students collaborated when one
+person moved between their own machines.
+
+**The gain is not only a suppression.** On the pairs that still fire, "they used two machines" is
+now **excluded by evidence** rather than conceded, so the wording is stronger and the `high` / 0.95
+is honest for the first time.
+
+#### The bigger half: the undecidable majority
+
+`compareContributors` needs BOTH sides `attributed`, so `'unknown'` — and therefore a `high` / 0.95
+flag, `N*(N-1)/2` per bundle — was the answer for the cases that are **ordinary today**: one
+partner unenrolled, neither enrolled, any 1.x bundle (no identity block exists below Manifest 2.0),
+and **any deployment with no root key**, where `identity/resolve-contributors.ts` makes every
+identified session `unverifiable`, so one unset environment variable turned every partner overlap
+in every bundle into a high-severity accusation. The accepted-gaps entry above names only the
+quarantine and `prev_session_id` defects for the unenrolled case; it did not cover this.
+
+**The finding is KEPT in every one of those states**, at `low` / 0.5. Dropping it would fail toward
+fewer findings, and a deployment must never be able to switch a heuristic off by unsetting a
+variable — bug 12's over-correction hazard, stated there as "if ambiguity always suppressed the
+verdict, appending to a `.slog` and copying it under a second filename would switch
+`log_bytes_match` off". What changed is the weight it carries into a grader's triage
+(`severity_weights.high` is 8 and `low` is 1, times confidence, so 7.6 → 0.5). The text now states
+the overlap, names both readings, **refuses to choose between them in as many words**, and says
+what would have settled it — §6 Rule 1's third state and Rule 2's bar for naming a person. A new
+`detail.unresolvedBy` (`no_root_key` / `identity_did_not_verify` / `no_identity_block`) routes a
+surface to the right fix without re-deriving it from prose, and `no_root_key` is checked FIRST
+because it is a DEPLOYMENT fact, not a fact about the submission.
+
+**This is deliberately NOT the call bug 13 made for `no_session_log`, and the difference is the
+lever.** There the severity lever was shared with genuine signature forgery via check 1's
+`manifest_sig` mapping, so lowering it to soften one defect would have weakened the strongest
+detection in the check, and only the text could move. Here the partition separates the decidable
+single-machine case cleanly into its own arm, so the undecided arm can be lowered at **zero cost**
+to the detection this heuristic exists for. `same_machine` keeps `high` / 0.95 exactly.
+
+#### Contract change
+
+`multiMachineRecording` on `CoverageFactsSchema` (`packages/shared`), both ends in one diff. The
+server needed no change — `summary.ts` returns `coverageFacts()` wholesale — but the schema did,
+and the existing key-set parity test _"sends every top-level fact the coverage stage computes, and
+no more"_ is what caught it. Without that field the server would compute the fact and never send
+it, so `/local` would show it and the server-backed panel would go quiet: precisely the divergence
+that test was written to prevent.
+
+#### Mutation testing, fourteen mutations
+
+Caught, with the tests that went red: two-machine suppression disabled (6, incl. the D5 test and
+the three-way partition property); the machine test inverted so same-machine suppresses and
+two-machine fires (8, incl. the negative control); the `student_ref` guard dropped **and** the
+branches reordered so two different people report as one person's two machines (7, incl. "never two
+people"); `no_root_key` collapsed into the generic reason (1); the undecidable arm dropped
+entirely rather than stated (15); severity back to `high` (7); confidence left at 0.95 (2); the
+resolution clause deleted (5, **after** the fix below); the `no_root_key` priority inverted (2);
+`multiMachineRecording` removed from `hasCoverageFacts` (1); the two coverage facts collapsed into
+one list (2); the panel rendering the two-machine row inside the collaboration section (1); and
+re-adding a local `if (comparison === 'different') continue;` to the heuristic, which is a **build
+failure**, TS2367, not a test failure.
+
+**One mutation was NOT caught and got a regression test**, and it is the familiar shape. Deleting
+the ENTIRE resolution clause — Rule 1's third state, the whole point of the wording change — left
+the suite green, because every string being asserted had a **second source**: `/enrol/i` matched
+"two enrolled machines" in the fixed frame, `'not established'` matched the opening sentence, and
+`'root public key'` and `/deployment/i` were both already produced by `describeSessionContributor`'s
+`no_root_key` detail, which is interpolated into the same description. Each resolution is now
+asserted on a string that appears ONLY in it, plus a cross-product test driving all three states
+through one table and requiring each description to carry its own marker and none of the others.
+**Generalisable:** when a fix adds prose to a string that already interpolates other prose, assert
+on a phrase the interpolated parts cannot produce — otherwise the assertion tests the frame.
+
+**One mutation is EQUIVALENT and is recorded rather than papered over.** Dropping
+`comparison === 'same' &&` from the two-machine branch changes nothing at runtime, because the
+`'different'` branch `continue`s above it and both are inside the both-attributed narrowing, so
+`comparison` is necessarily `'same'` there. The guard is kept for the reordering hazard, which is
+reachable and IS caught (the third mutation above).
+
+#### `/architecture` — owed, not drawn
+
+No node is added or removed, so `nodes.coverage.test.ts` stays green and nothing is a failing test.
+Two node BODIES in `packages/analyzer/src/views/architecture/content/nodes/analysis.ts` are now
+**wrong** and are owed to the consolidated diagram pass:
+
+- the `coverage/session-overlap.ts` node says "exactly one decision about whether the two sides are
+  the same contributor" and "returns a partition … judged pairs … collaboration pairs … every
+  overlapping pair is in exactly one of them", and names `JudgedOverlap.comparison` as
+  `same | unknown`. It is now **two** decisions, **three** parts, and `same_machine | unknown`.
+- the behavioural-heuristics node says "One verified person's own two sessions overlapping is the
+  original signal and keeps high severity at 0.95; an overlap where either side is unattributed or
+  unverifiable still fires". The first half is now true only on ONE machine, and the second half
+  still fires but at `low` / 0.5.
+
+Left alone deliberately, per the standing instruction that concurrent agents must not touch
+`tools/architecture/**` or the architecture views.
+
+#### Suites
+
+log-core **689** · analysis-core **1165** (+12) · analyzer **1327** (+4) · tools **188**. Build,
+typecheck, lint clean. Server not run and no server source touched; `summary.ts` returns the
+aggregate wholesale, so the new field crosses the wire with no route change.
