@@ -447,8 +447,12 @@ completion contract, not a wish list.
   below. **Per-contributor heuristic scoping is still owed** — heuristics still run ONCE over the
   whole scope; what landed is per-contributor ATTRIBUTION and SCORING of the resulting flags.
 - Peer witnessing (`peer.observed`) — **reader half DONE 2026-08-20** (see below). The
-  **writer half is deliberately not built**: the directory watcher in the three recorders, and
-  the `session.start` witnessing-availability capability report §5.6 item 3 calls for.
+  **writer half is deliberately not built**: the directory watcher in the three recorders.
+  ~~and the `session.start` witnessing-availability capability report §5.6 item 3 calls for.~~
+  **That report is DONE 2026-08-21** — see "the three `session.start` capability reports" below.
+- The three `session.start` capability reports (§5.6) — **reader + VS Code writer DONE
+  2026-08-21** (see below). The **provjet and provnvim ports are outstanding**, to the writer
+  contract recorded below.
 - The repository discriminator (D12) — **reader half DONE 2026-08-20** (see below). The
   **writer half is deliberately not built**: deriving and emitting `root_commit_sha` in the three
   recorders, to the writer contract recorded below.
@@ -922,6 +926,165 @@ branch, which renders a different paragraph entirely, so the counts line was nev
 with a test that needed a fixture the repo did not have — an identity block that IS present and
 does NOT verify on a deployment whose root key IS configured, built via `buildInstitutionIdentity`'s
 `certSignedBy` so the anchor is not root-signed.
+
+### Landed 2026-08-21 — the three `session.start` capability reports (§5.6)
+
+Readers before writers, then the VS Code writer in the same change — which is a **departure from
+the rolling seal / peer witnessing / D12 pattern and is deliberate**. Those three are new
+EVIDENCE, where shipping a writer ahead of a reader means a bundle nobody can read. These are new
+CONTEXT for evidence that already exists: nothing branches on them, absence is the permanent
+ordinary answer, and the reader was built first in the same diff. Splitting them would have left
+the honest consumer with no producer to test against.
+
+**The three fields.** All on `SessionStartPayload`, all optional **permanently** (1.x support is
+permanent, program spec §9). The narrowing is `log-core/session-capabilities.ts`, in log-core
+rather than in the reader for the same reason `peer-observed.ts` and `git-event.ts` are: four
+consumers need identical rules — this monorepo's analyzer and server through `analysis-core`, plus
+the two sibling recorder repos, which need them to EMIT conformant payloads.
+
+| field             | shape                                         | §5.6 |
+| ----------------- | --------------------------------------------- | ---- |
+| `git_capture`     | `'available' \| 'unavailable' \| 'not_owned'` | 2    |
+| `witness_capture` | `'available' \| 'unavailable'`                | 3    |
+| `file_scope`      | `{ watched: string[]; complete: boolean }`    | 1    |
+
+Each reader returns **three** answers, the D12 shape — `absent` / `recorded` / `malformed` — and
+the third is what makes the second safe. `git_capture` and `witness_capture` are CLOSED ENUMS, so a
+value outside the set is a nonconforming writer and never reaches a staff-facing surface as if it
+meant something.
+
+**`witness_capture` has two values where `git_capture` has three, and that is not an oversight.**
+There is no witnessing analogue of `not_owned`: a recorder witnesses the `.provenance/` directory
+it is itself writing into, so there is no ownership question to route on. Inventing a third value
+to make the enums look alike would publish a state no recorder can be in.
+
+**Why item 1 is the resolved LIST and not a count or the glob set.** S25's problem is that "no
+events for this file" is ambiguous between _nothing happened_ and _it was never watched_. A COUNT
+cannot answer it — you cannot ask a number whether it contains `Solver.java`. The unresolved GLOB
+SET cannot either, and worse: it would require three hand-written ports and one analyzer to agree
+on a matcher, which S25 itself names as a divergence risk and parent spec §10 exists to prevent.
+Publishing the RESULT keeps exactly one matcher wherever it eventually lives, and is stable across
+whatever the still-open `scope: 'repo'` decision (§8.7) settles on — every candidate resolution
+produces a list of paths.
+
+**`complete` is a required boolean, not an optional `truncated` flag.** A consumer must read a
+path's absence from a truncated list as _unknown_, never as _not watched_; the field exists to
+remove an inference, so it must never itself require one. An EMPTY `watched` with `complete: true`
+is a real answer — "the scope resolved to nothing" — and is not absence.
+
+**Privacy (S14(b)), which item 1 is the risky one for.** Paths are ASSIGNMENT-ROOT-RELATIVE,
+verbatim, which is the same category `doc.open.path` already carries — so the field introduces no
+new class of identifier. The reader shape-checks every entry and rejects an absolute path (POSIX,
+Windows drive, UNC), any colon outside a drive letter (which is every remote-URL spelling,
+including git's scp-style `user@host:path`) and any `..` segment. A single bad entry rejects the
+**WHOLE set**: dropping only the offender would hand a consumer a silently NARROWED list, which
+then says "this file was not watched" about a file that was. That is `validatePeerObservedPayload`'s
+rule, for the same reason.
+
+**None of the three is ever a finding.** No `Flag`, no ninth check, no severity, no score. They
+exist to make an EXISTING finding readable — D16's `git_unrecorded_in` above all — and to let the
+coverage stage say "we could not check" rather than implying "there was nothing to check". Nothing
+was added to `policy.capture`: a capability report says "I could not", a knob says "I was told not
+to", and `policy.ts` already names `git_capture` as the reason `peer.observed` is floor rather than
+knobbed.
+
+**Compatibility.** An older reader meeting these fields is unaffected: `session.start` payload
+readers ignore keys they do not know and the chain is computed over the envelope without
+interpreting `data`. A newer reader meeting a bundle without them is unaffected, which is **every
+bundle in existence** — and the vector proves the bytes: `no_capability_reports` is the pre-§5.6
+payload spelled literally, and `session-capabilities.test.ts` pins its canonical JSON character for
+character so the hash cannot move unnoticed. Omission is the writer rule; the four
+`*_null_is_not_absent` cases read as absence and hash **differently**, exactly as `parents: []` and
+an absent `parents` do.
+
+**Where the readers are consumed.** `analysis-core/src/capability/session-capabilities.ts` is the
+one reader; `reconcileWitnesses` consumes it for item 3, gaining `witnessingCapability` at bundle
+level and a per-session `capability`. That `capability` is on a **DIFFERENT AXIS** from `state`:
+`state` says whether anyone witnessed this log, `capability` says whether this log's recorder could
+have witnessed anyone. `unwitnessed` stays blameless in all three states — what changes is what a
+surface is entitled to SAY about it.
+
+**The bundle-level summaries require unanimity to say `impossible`.** One session saying "git was
+unavailable to me" does not mean the scope had no git observation; a partner's session may have had
+it. So `'impossible'` needs NO session reporting available AND every session reporting at all — a
+single unreported session takes the answer to `'unknown'`, because that session might have been the
+capable one. Fail toward not knowing.
+
+**Vector drift**, verified by regenerating before and after into a scratch directory:
+`session-capabilities.json` is NEW (26 cases) and **every other vector is byte-identical** — the
+diff is one added file. `golden-bundle.{json,zip}` differ for the known pre-existing reason and
+were confirmed to differ across two runs with NO change at all. `capture-policy.json` is
+deliberately untouched: that vector publishes the event-KIND partition, and this change adds no
+kind. Nothing was written into the sibling repos.
+
+**Mutation testing**, ten mutations. Nine caught first time; the tenth exposed a vacuous test and
+got a fix. See the report's table — the one worth carrying here is that
+`recorder-context`'s null-vs-omit assertion was originally driven on a session where all three
+reports were established, so there was nothing there to spell wrongly. **Bug 12's lesson again, in
+its exact shape.**
+
+### The writer contract for the capability reports — what the two ports must emit
+
+Written down here so provjet and provnvim are mechanical rather than re-derived twice. The VS Code
+writer is the reference implementation; where a rule below names a VS Code mechanism, a port must
+answer its own host's equivalent question, not copy the mechanism.
+
+1. **A capability report is not a capture knob.** Nothing here is policy-gated, nothing here reads
+   `policy.capture`, and nothing here is ever a finding. If a port finds itself adding a manifest
+   key, it has taken a wrong turn.
+2. **OMIT, never `null`.** Omission and `null` canonicalize differently and therefore chain to
+   different hashes. Readers accept `null` as absence so a nonconforming log still parses; a writer
+   that emits it is nonconforming. Spread the key conditionally — do not assign `undefined` and
+   trust the canonicalizer to drop it, because that makes the payload's shape depend on a
+   canonicalizer detail three ports each have to reproduce.
+3. **Report BEFORE the first entry is chained.** `session.start` is seq 0, so every value must be
+   resolved before it is emitted. In VS Code this moved the `.provenance/` watcher's creation to
+   before `session.start`; a port whose host resolves later must restructure rather than report a
+   value it will only learn afterwards.
+4. **`git_capture` — ask the same function the wiring routes on.** VS Code extracted
+   `resolveGitApi` and `probeGitCapture` so the report and the behaviour cannot drift; two
+   implementations of "is the git integration reachable" would agree today and drift later, and the
+   drift would be silent. A port must derive the value from the same code path its wiring uses.
+   - `'unavailable'` — the host exposes no git integration, or obtaining it failed. Exactly the
+     condition on which the wiring becomes inert.
+   - `'not_owned'` — git works, the host knows about at least one repository, and NONE is in this
+     session's assignment scope, so every event would be dropped by the ownership gate.
+   - `'available'` — git works and either a repository is owned **or the host knows about none
+     yet**. **Zero repositories is `available`, not `not_owned`** — there is nothing to route, and
+     an ownership answer would be a claim the evidence does not support.
+   - OMIT when the repository list or the ownership predicate is itself unusable. Absent is legal,
+     permanent and blameless; guessing is worse than silence (D12 writer rule 5).
+   - It is a SNAPSHOT at session start. A repository opened later can change what would have been
+     true, so `not_owned` means "at session start, nothing git could see was in scope" and never
+     "no owned repository existed at any point".
+5. **`witness_capture` — the capability IS the artifact.** Create the one directory watcher, once,
+   and report whether it could be created; then hand THAT watcher to the witnessing wiring. Probing
+   with a second, throwaway watcher lets the report and the wiring disagree, which is the failure
+   this field exists to prevent. Two values only.
+6. **`file_scope` — publish the RESULT, not the rule.** Assignment-root-relative paths, verbatim,
+   in resolution order. Never absolute, never a URL, never a `..` segment: a port that cannot
+   guarantee that must OMIT the field rather than publish one. `log-core`'s `buildFileScope` does
+   the check and returns `undefined` on any bad entry — a port should mirror its rules exactly,
+   because a path this repo's reader rejects is a set the analyzer discards whole.
+7. **Cap at 4096 entries and set `complete: false` when the cap bites.** The three recorders must
+   cap at the SAME number, or two ports disagree about when `complete` goes false. Today's resolver
+   is the manifest's own `files_under_review` — a hand-authored course list — so the cap never
+   bites; it is there so a future `scope: 'repo'` resolver cannot put an unbounded list inside one
+   hash-chained entry by accident.
+8. **`complete` is always present.** It is a required boolean inside a payload the writer owns
+   (peer-witnessing writer rule 6, same reason). An empty `watched` with `complete: true` is a real
+   answer and must be emitted rather than suppressed.
+9. **The three are INDEPENDENT.** A port may land one before the others; each is omitted on its own
+   terms. Do not group them into one object — a port that implements two would then have to choose
+   a spelling for the third, and the honest spelling is "not there".
+10. **Do not report a capability the port does not actually have.** A recorder with no witnessing
+    implementation at all OMITS `witness_capture`; it does not report `'unavailable'`. `'unavailable'`
+    means "I tried and could not", absence means "I do not report this". A reader treats them
+    differently and a grader reads them differently.
+
+Conformance: `session-capabilities.json`, 26 cases, each publishing all three narrowing verdicts
+alongside the canonical bytes and chain hash so a port asserts **accept and reject**, not only the
+happy path.
 
 ### Landed 2026-08-21 — the `submission_contributors` cut-over (D9 + D14)
 
