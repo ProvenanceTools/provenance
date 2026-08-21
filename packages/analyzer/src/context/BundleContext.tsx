@@ -51,6 +51,8 @@ import type { Flag } from '@provenance/analysis-core/heuristics/types.js';
 import type { CrossFlag } from '@provenance/analysis-core/heuristics/cross/types.js';
 import { runCrossHeuristics } from '@provenance/analysis-core/heuristics/cross/run-cross-heuristics.js';
 import { extractCrossFeatures } from '@provenance/analysis-core/heuristics/cross/features.js';
+import { partitionCrossScopes } from '@provenance/analysis-core/coverage/cross-scope.js';
+import type { SameScopeExclusion } from '@provenance/analysis-core/coverage/cross-scope.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -84,6 +86,23 @@ export type BundleContextValue = {
    * Empty when only one bundle is loaded (no cross-bundle analysis possible).
    */
   crossFlags: CrossFlag[];
+
+  /**
+   * Pairs of loaded submissions the cross-heuristics did NOT compare, because
+   * they are two views of one repository (spec S20).
+   *
+   * A git-native group submission shares one committed, add-only
+   * `.provenance/`, so both partners' signed logs sit inside both partners'
+   * archives. Comparing them accuses the two people the course assigned to work
+   * together. The suppression is deliberately NOT silent: a grader reading "no
+   * findings" has to be able to tell a searched comparison from a withheld one,
+   * which is what this list is for (§6 Rule 3 — a fact about the recording,
+   * never a finding about anyone).
+   *
+   * Comes from the same single `partitionCrossScopes` pass that produced the
+   * suppression, so it cannot disagree with it.
+   */
+  crossScopeExclusions: SameScopeExclusion[];
 
   status: 'idle' | 'loading' | 'loaded' | 'error';
   loadingStage: LoadingStage;
@@ -137,6 +156,7 @@ export function BundleProvider({ children }: { children: ReactNode }) {
   const [flagsByBundle, setFlagsByBundle] = useState<Map<string, Flag[]>>(new Map());
 
   const [crossFlags, setCrossFlags] = useState<CrossFlag[]>([]);
+  const [crossScopeExclusions, setCrossScopeExclusions] = useState<SameScopeExclusion[]>([]);
 
   const [status, setStatus] = useState<BundleContextValue['status']>('idle');
   const [loadingStage, setLoadingStage] = useState<LoadingStage>(null);
@@ -323,6 +343,7 @@ export function BundleProvider({ children }: { children: ReactNode }) {
     setValidationReportByBundle(new Map());
     setFlagsByBundle(new Map());
     setCrossFlags([]);
+    setCrossScopeExclusions([]);
     setStatus('idle');
     setLoadingStage(null);
     setLoadError(null);
@@ -358,6 +379,12 @@ export function BundleProvider({ children }: { children: ReactNode }) {
       if (index !== undefined) features.push(extractCrossFeatures(bundle, index));
     }
     setCrossFlags(runCrossHeuristics(features));
+    // The other half of the SAME partition runCrossHeuristics used. Recomputed
+    // rather than returned because `runCrossHeuristics` is also the server's
+    // entry point and its signature is a cross-package contract;
+    // `partitionCrossScopes` is pure and deterministic, so the two calls cannot
+    // produce different answers from the same features.
+    setCrossScopeExclusions([...partitionCrossScopes(features).exclusions]);
   }, [bundles, indicesByBundle]);
 
   // ---------------------------------------------------------------------------
@@ -386,6 +413,7 @@ export function BundleProvider({ children }: { children: ReactNode }) {
       validationReport,
       flags,
       crossFlags,
+      crossScopeExclusions,
       status,
       loadingStage,
       loadError,
@@ -405,6 +433,7 @@ export function BundleProvider({ children }: { children: ReactNode }) {
       validationReport,
       flags,
       crossFlags,
+      crossScopeExclusions,
       status,
       loadingStage,
       loadError,
