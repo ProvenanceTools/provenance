@@ -273,7 +273,10 @@ and ship their signing identity to the server. This was a live bug.
 4. Record a session on A and one on B against the same assignment.
 5. ✅ In the analyzer both resolve to **one contributor**, not two.
 6. ✅ **No high-severity `multiple_sessions_overlap` flag** for overlapping sessions across the two
-   machines.
+   machines. Suppression keys on `student_pubkey` (per machine), not `session_pubkey` (per session
+   and ephemeral — keying on that would suppress a single machine's overlaps too).
+7. ✅ Overlapping sessions on **one** machine are still flagged at **high / 0.95** — that is the
+   case the heuristic exists for.
 
 **The anti-test:** ✅ the on-screen copy calls export/import a **backup** and does **not** recommend
 it for a second machine. Telling a student to hand-carry the one value that can sign as them is a
@@ -358,7 +361,7 @@ Each of these was a real maximum-severity accusation against an innocent student
 | Keep a copy of your own `.provenance/` (two `.slog` files, one logical session id)          | An `ambiguous_session_log` fact; **not** "Manifest signature verification failed"; content not doubled |
 | Partial push: commit `manifest-<id>.json`, let `.gitignore` catch the `.slog`               | Check 1 still fails, **but the text names the innocent reading** and says what would settle it         |
 | Run "Prepare Submission Bundle" once, keep working, push (a stale classic manifest is left) | `log_bytes_match` must **not** fail                                                                    |
-| Power cut mid-write → a torn trailing line in `.slog`                                       | The complete prefix survives; the whole submission is not destroyed                                    |
+| Power cut mid-write → a torn trailing line in `.slog`                                       | Truncated to the last complete entry and the session **kept**; the torn tail is reported as a fact     |
 | Two partners, corrupt one byte of partner B's `.slog` in A's tree, restart A's editor       | **B's file is untouched** — no quarantine, no rename                                                   |
 | Repo root **above** the assignment folder (the standard 61B layout), commit                 | `git.event` entries land (this was dark for the whole standard layout once)                            |
 | OS sleep / suspend for an hour mid-session                                                  | No `gap_in_heartbeats` flag                                                                            |
@@ -370,12 +373,21 @@ Each of these was a real maximum-severity accusation against an innocent student
 Two students, both enrolled, both recording, one repo, `collaboration: "group"`,
 `submission: "git"`. Both edit, commit, push, and pull each other's work. Ingest once.
 
-- ✅ **One `submissions` row with two contributors** — not the pre-0029 fan-out.
+- ✅ **One `submissions` row with two contributors** — not the pre-0029 fan-out. On the Gradescope
+  co-submitter path the shared row's `student_id` is **non-null** (whichever partner's file was
+  processed first) and `group_key` is NULL; the nullable-student/`group_key` shape belongs to the
+  git-repo group path. Both people appear in `submission_contributors`.
+- ✅ The second co-submitter's `ingest_files` row is **`duplicate`**, not `matched`, and still
+  carries its own `matched_student_id` and a `submission_id` pointing at the shared submission.
+  `duplicate` here means "the ARTIFACT is a duplicate", never "the person was dropped".
 - ✅ A flag earned by one partner is **not charged to the other**.
 - ✅ **No `paste_shared_across_students`** between the two partners. A shared `.provenance/` is
   add-only, so each partner's paste events are physically in the other's bundle — this fired on
   every honest pair at high severity.
-- ✅ Excluded pairs are **visibly** excluded, not silently dropped.
+- ✅ Excluded pairs are **visibly** excluded, not silently dropped: `/local/compare` shows a
+  **"Not cross-compared"** panel naming each lineage, how many comparisons it withheld, and the
+  commit keys that proved it. **Known gap:** that register is browser-side only — the server-backed
+  cross-flags view gets the suppression but not the explanation, because nothing persists it.
 - ✅ **No high-severity `multiple_sessions_overlap`** for ordinary concurrent work.
 - ✅ Solo submissions are unchanged: one contributor is charged everything, so their total equals
   the scope score exactly.
@@ -489,6 +501,10 @@ For **cross-flags**, the **cohort list sorted by `ingested_desc`**, and the **un
 2. Page through to exhaustion at a small `limit`.
 3. ✅ Every row appears **exactly once**. Count distinct ids and compare to the total.
 4. ✅ A cursor from an older client version is **rejected with 400**, not silently mis-paginated.
+   Cursors carry full microsecond precision and compare by row-value; a pre-fix millisecond cursor
+   is refused rather than treated as a bucket floor.
+5. ⚠️ **Migration `0030` must be applied**, or all three of these list queries fall back to a
+   sequential scan plus a sort. It adds the keyset indexes, which did not previously exist.
 
 Also: ✅ the cohort list's `student_asc` sort reaches **every page**, including in **protected
 mode** — a keyset predicate on a NULL column is never true, which makes those rows unreachable
