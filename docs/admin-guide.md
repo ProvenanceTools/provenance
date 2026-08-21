@@ -182,6 +182,24 @@ settings govern it, and they must move together:
   set in heap, so safe concurrency is roughly
   `min(cores, DATABASE_POOL_MAX − headroom, RAM ÷ peak-bundle-footprint)`.
 
+`INGEST_CONCURRENCY` isn't the only knob drawing from that same
+`DATABASE_POOL_MAX` pool in a `--mode=worker` (or `--mode=all`) process:
+`INGEST_STAGE_CONCURRENCY` (bundle-staging, default `1`) and
+`RECOMPUTE_MAX_PARALLEL` (recompute fan-out, default `4`) each hold roughly
+one connection per in-flight job too, and none of the three are
+cross-validated against `DATABASE_POOL_MAX` at startup. At the shipped
+defaults the three sum to 9 of 10 — it works, but leaves only 1 connection
+of headroom for HTTP request handling, the other pg-boss queues (retention
+sweep, session/export purge, `recompute_finalize`/`recompute_semester`/
+`recompute_cross_flags`, etc.), and pg-boss's own polling connections, all of
+which share the same pool and are not accounted for above. `startWorker()`
+logs a **warning** (never a hard failure — this must not be able to take down
+a running instance over a configuration that works in practice) when
+`INGEST_CONCURRENCY + INGEST_STAGE_CONCURRENCY + RECOMPUTE_MAX_PARALLEL`
+leaves less than `max(3, 25% of DATABASE_POOL_MAX)` of headroom; see
+`packages/server/src/config/pool-margin.ts`. If you see that warning, raise
+`DATABASE_POOL_MAX` or lower one of the three knobs.
+
 For more throughput beyond one instance, run multiple `--mode=worker`
 processes (§3.2 of the v3 PRD) against the same database; pg-boss distributes
 jobs across them. Each process gets its own `DATABASE_POOL_MAX`, so size
@@ -588,17 +606,17 @@ variables read directly from `process.env` outside it (§10.7).
 
 ### 10.1 Core
 
-| Variable            | Required | Default       | Meaning                                                                                                                             |
-| ------------------- | -------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`          | No       | `development` | One of `development`, `production`, `test`. Turns on the production-only requirements below.                                        |
-| `PORT`              | No       | `3000`        | TCP port for the API. Ignored when `SOCKET_PATH` is set.                                                                            |
-| `PUBLIC_BASE_URL`   | **Yes**  | —             | Absolute origin the app is reached at. The OAuth redirect URI and invitation login links are derived from it.                       |
-| `DATABASE_URL`      | **Yes**  | —             | Postgres connection string.                                                                                                         |
-| `DATABASE_POOL_MAX` | No       | `10`          | Per-process Postgres connection cap. Keep comfortably above `INGEST_CONCURRENCY` + `INGEST_STAGE_CONCURRENCY` (§2.6).               |
-| `LOG_LEVEL`         | No       | `info`        | Pino level: `trace`, `debug`, `info`, `warn`, `error`.                                                                              |
-| `SOCKET_PATH`       | No       | unset         | Listen on this Unix domain socket instead of `PORT` (apphost deployment). Empty or unset falls back to TCP.                         |
-| `PUBLIC_DIR`        | No       | `./public`    | Directory of the built analyzer SPA, served same-origin with an `index.html` fallback. Missing directory = static serving disabled. |
-| `GIT_SHA`           | No       | unset         | Build commit, surfaced in the `app.startup` notification. See the note in §10.8.                                                    |
+| Variable            | Required | Default       | Meaning                                                                                                                                                                                                                       |
+| ------------------- | -------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`          | No       | `development` | One of `development`, `production`, `test`. Turns on the production-only requirements below.                                                                                                                                  |
+| `PORT`              | No       | `3000`        | TCP port for the API. Ignored when `SOCKET_PATH` is set.                                                                                                                                                                      |
+| `PUBLIC_BASE_URL`   | **Yes**  | —             | Absolute origin the app is reached at. The OAuth redirect URI and invitation login links are derived from it.                                                                                                                 |
+| `DATABASE_URL`      | **Yes**  | —             | Postgres connection string.                                                                                                                                                                                                   |
+| `DATABASE_POOL_MAX` | No       | `10`          | Per-process Postgres connection cap. Keep comfortably above `INGEST_CONCURRENCY` + `INGEST_STAGE_CONCURRENCY` + `RECOMPUTE_MAX_PARALLEL` (§2.6) — `startWorker()` warns at boot, but does not fail, when that margin is thin. |
+| `LOG_LEVEL`         | No       | `info`        | Pino level: `trace`, `debug`, `info`, `warn`, `error`.                                                                                                                                                                        |
+| `SOCKET_PATH`       | No       | unset         | Listen on this Unix domain socket instead of `PORT` (apphost deployment). Empty or unset falls back to TCP.                                                                                                                   |
+| `PUBLIC_DIR`        | No       | `./public`    | Directory of the built analyzer SPA, served same-origin with an `index.html` fallback. Missing directory = static serving disabled.                                                                                           |
+| `GIT_SHA`           | No       | unset         | Build commit, surfaced in the `app.startup` notification. See the note in §10.8.                                                                                                                                              |
 
 ### 10.2 Blob storage
 
@@ -637,18 +655,18 @@ There is no `GOOGLE_OAUTH_REDIRECT_URI`. The callback URL is always
 
 ### 10.4 Ingest and analysis
 
-| Variable                     | Required | Default                | Meaning                                                                                                                                                                                                                                          |
-| ---------------------------- | -------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `INGEST_MAX_BUNDLE_BYTES`    | No       | `52428800` (50 MiB)    | Per-bundle upload ceiling.                                                                                                                                                                                                                       |
-| `INGEST_MAX_BATCH_BYTES`     | No       | `5368709120` (5 GiB)   | Ceiling for a batch held in memory.                                                                                                                                                                                                              |
-| `INGEST_MAX_BATCH_FILES`     | No       | `10000`                | Max bundles staged from one export.                                                                                                                                                                                                              |
-| `INGEST_MAX_UPLOAD_BYTES`    | No       | `10737418240` (10 GiB) | Ceiling for a streamed Gradescope upload, which goes straight to a temp file — disk-bound, not heap-bound.                                                                                                                                       |
-| `INGEST_CONCURRENCY`         | No       | `4`                    | Concurrent `ingest_file` jobs per worker. See §2.6.                                                                                                                                                                                              |
-| `INGEST_STAGE_CONCURRENCY`   | No       | `1`                    | Bundles staged concurrently while unpacking an export; >1 also sizes the ZIP-rebuild worker-thread pool.                                                                                                                                         |
-| `INGEST_POLLING_INTERVAL_MS` | No       | `500`                  | pg-boss polling interval for the ingest queues (the library default is 2000).                                                                                                                                                                    |
-| `ROSTER_CSV_MAX_BYTES`       | No       | `10485760` (10 MiB)    | Roster CSV upload ceiling.                                                                                                                                                                                                                       |
-| `RECONSTRUCTION_CACHE_SIZE`  | No       | `100`                  | LRU capacity for reconstructed file content + per-character provenance.                                                                                                                                                                          |
-| `RECOMPUTE_MAX_PARALLEL`     | No       | `4`                    | Concurrent submissions per `recompute_submission` batch. Jobs targeting the same submission (e.g. a config commit's auto-recompute racing an explicit `POST /recompute`) still run one after another; only distinct submissions run in parallel. |
+| Variable                     | Required | Default                | Meaning                                                                                                                                                                                                                                                                                                               |
+| ---------------------------- | -------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INGEST_MAX_BUNDLE_BYTES`    | No       | `52428800` (50 MiB)    | Per-bundle upload ceiling.                                                                                                                                                                                                                                                                                            |
+| `INGEST_MAX_BATCH_BYTES`     | No       | `5368709120` (5 GiB)   | Ceiling for a batch held in memory.                                                                                                                                                                                                                                                                                   |
+| `INGEST_MAX_BATCH_FILES`     | No       | `10000`                | Max bundles staged from one export.                                                                                                                                                                                                                                                                                   |
+| `INGEST_MAX_UPLOAD_BYTES`    | No       | `10737418240` (10 GiB) | Ceiling for a streamed Gradescope upload, which goes straight to a temp file — disk-bound, not heap-bound.                                                                                                                                                                                                            |
+| `INGEST_CONCURRENCY`         | No       | `4`                    | Concurrent `ingest_file` jobs per worker. See §2.6.                                                                                                                                                                                                                                                                   |
+| `INGEST_STAGE_CONCURRENCY`   | No       | `1`                    | Bundles staged concurrently while unpacking an export; >1 also sizes the ZIP-rebuild worker-thread pool.                                                                                                                                                                                                              |
+| `INGEST_POLLING_INTERVAL_MS` | No       | `500`                  | pg-boss polling interval for the ingest queues (the library default is 2000).                                                                                                                                                                                                                                         |
+| `ROSTER_CSV_MAX_BYTES`       | No       | `10485760` (10 MiB)    | Roster CSV upload ceiling.                                                                                                                                                                                                                                                                                            |
+| `RECONSTRUCTION_CACHE_SIZE`  | No       | `100`                  | LRU capacity for reconstructed file content + per-character provenance.                                                                                                                                                                                                                                               |
+| `RECOMPUTE_MAX_PARALLEL`     | No       | `4`                    | Concurrent submissions per `recompute_submission` batch. Jobs targeting the same submission (e.g. a config commit's auto-recompute racing an explicit `POST /recompute`) still run one after another; only distinct submissions run in parallel. Draws from `DATABASE_POOL_MAX` like `INGEST_CONCURRENCY` — see §2.6. |
 
 ### 10.5 Email, alerts and storage quota
 

@@ -40,6 +40,7 @@ import { getLogger } from '../logging.js';
 import { getDb, type DrizzleDb } from '../db/client.js';
 import { getConfig } from '../config/index.js';
 import { configuredValidationOptions } from '../config/root-key.js';
+import { checkPoolMargin } from '../config/pool-margin.js';
 import { ingest_files, ingest_jobs, semesters } from '../db/schema.js';
 import { createStorageClient, storageConfigFromEnv } from '../services/storage/client.js';
 import { ingestStagingKey } from '../services/storage/keys.js';
@@ -133,6 +134,31 @@ export async function startWorker(): Promise<() => Promise<void>> {
   const db = getDb();
   const cfg = getConfig();
   const storageClient = createStorageClient(storageConfigFromEnv(cfg));
+
+  // Startup-only, non-fatal: warn (never fail) when INGEST_CONCURRENCY +
+  // INGEST_STAGE_CONCURRENCY + RECOMPUTE_MAX_PARALLEL leaves too little of
+  // DATABASE_POOL_MAX for everything else that shares this process's pool —
+  // HTTP request handling (--mode=all), the other batchSize:1 pg-boss queues
+  // registered below, and the retention/purge crons. See config/pool-margin.ts.
+  const poolMargin = checkPoolMargin(cfg);
+  if (poolMargin.thin) {
+    logger.warn(
+      {
+        DATABASE_POOL_MAX: cfg.DATABASE_POOL_MAX,
+        INGEST_CONCURRENCY: cfg.INGEST_CONCURRENCY,
+        INGEST_STAGE_CONCURRENCY: cfg.INGEST_STAGE_CONCURRENCY,
+        RECOMPUTE_MAX_PARALLEL: cfg.RECOMPUTE_MAX_PARALLEL,
+        concurrencySum: poolMargin.concurrencySum,
+        margin: poolMargin.margin,
+        minMargin: poolMargin.minMargin,
+      },
+      'worker: DATABASE_POOL_MAX has thin headroom above INGEST_CONCURRENCY + ' +
+        'INGEST_STAGE_CONCURRENCY + RECOMPUTE_MAX_PARALLEL — HTTP request handling, the ' +
+        'other pg-boss queues, and the retention/purge crons all draw from the same pool. ' +
+        'Consider raising DATABASE_POOL_MAX or lowering a concurrency knob (see ' +
+        'docs/admin-guide.md §2.6).',
+    );
+  }
 
   // -------------------------------------------------------------------------
   // Ensure queues exist (pg-boss v10 requires explicit queue creation before
