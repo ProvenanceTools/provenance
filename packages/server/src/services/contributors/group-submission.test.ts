@@ -42,7 +42,9 @@ import { listStudents } from '../cohort/students.js';
 import { buildFacets } from '../cohort/facets.js';
 import { listAssignments } from '../cohort/assignments.js';
 import { applyContributorScores } from './contributor-scores.js';
-import { rosterContributorKey } from './store-contributors.js';
+import { rosterContributorKey, storeContributors } from './store-contributors.js';
+import { attachCoSubmitter } from '../ingest/dedup.js';
+import type { Bundle } from '@provenance/analysis-core/loader/types.js';
 
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
@@ -459,6 +461,103 @@ describe('group submissions', () => {
       const first = await applyContributorScores(db, sub.id);
       const second = await applyContributorScores(db, sub.id);
       expect(second).toEqual(first);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2b. The concurrency hazard: two co-submitters ingested at the same time
+// ---------------------------------------------------------------------------
+
+/**
+ * A Bundle that is ALREADY stamped with an empty contributor verdict.
+ *
+ * Pre-stamped on purpose: `storeContributors` only calls
+ * `establishBundleContributors` when the stamp is absent, and these tests are
+ * about the PRUNE rule, not about identity resolution. An unstamped stub would
+ * drag the real chain walk in and fail on the bundle fields it needs.
+ */
+function alreadyStampedEmptyBundle(): Bundle {
+  return {
+    sessions: [],
+    contributors: {
+      bySession: new Map(),
+      contributors: [],
+      rootKeyConfigured: false,
+      counts: { attributed: 0, unverifiable: 0, unattributed: 0 },
+    },
+  } as unknown as Bundle;
+}
+
+describe('a co-submitter attached concurrently', () => {
+  it("survives the creator's contributor stage instead of being pruned as stale", async () => {
+    await withTestDb(async (db) => {
+      const { semester, job, assignment } = await seedWorld(db);
+      const alice = await seedStudent(db, semester.id, '111111', 'Alice');
+      const bob = await seedStudent(db, semester.id, '222222', 'Bob');
+
+      const sub = await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: assignment.id,
+        ingestJobId: job.id,
+        studentId: alice.id,
+      });
+
+      // Bob's ingest file lost the race for these bytes, so it attached him to
+      // Alice's submission as a co-submitter.
+      await attachCoSubmitter(db, sub.id, semester.id, bob.id);
+
+      // Now Alice's own pipeline reaches its contributor stage. It knows only
+      // about Alice — Bob is not in its submitter list and the bundle names
+      // nobody. It must NOT delete him.
+      //
+      // A "delete anything not in my set" prune removed exactly this partner:
+      // silently, and only under concurrency, so every serial test stayed
+      // green while the real Gradescope path lost a student.
+      const bundle = alreadyStampedEmptyBundle();
+      await storeContributors(db, sub.id, semester.id, bundle, [alice.id]);
+
+      const rows = await db
+        .select({ roster_entry_id: submission_contributors.roster_entry_id })
+        .from(submission_contributors)
+        .where(eq(submission_contributors.submission_id, sub.id));
+
+      expect(rows.map((r) => r.roster_entry_id).sort()).toEqual([alice.id, bob.id].sort());
+    });
+  });
+
+  it('still retracts a stale ATTRIBUTED contributor, which this function does own', async () => {
+    await withTestDb(async (db) => {
+      const { semester, job, assignment } = await seedWorld(db);
+      const alice = await seedStudent(db, semester.id, '111111', 'Alice');
+      const sub = await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: assignment.id,
+        ingestJobId: job.id,
+        studentId: alice.id,
+      });
+
+      // A bundle-derived contributor from an earlier run whose identity no
+      // longer verifies. Nothing else asserts this person, so a re-run must be
+      // able to take the attribution back.
+      await db.insert(submission_contributors).values({
+        submission_id: sub.id,
+        semester_id: semester.id,
+        contributor_key: 'attributed:2.1:institution:berkeley:ghost-ref',
+        kind: 'attributed',
+        student_ref: 'ghost-ref',
+        is_submitter: false,
+      });
+
+      const bundle = alreadyStampedEmptyBundle();
+      await storeContributors(db, sub.id, semester.id, bundle, [alice.id]);
+
+      const rows = await db
+        .select({ contributor_key: submission_contributors.contributor_key })
+        .from(submission_contributors)
+        .where(eq(submission_contributors.submission_id, sub.id));
+
+      expect(rows.map((r) => r.contributor_key)).toEqual([rosterContributorKey(alice.id)]);
     });
   });
 });

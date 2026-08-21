@@ -231,7 +231,7 @@ export async function attachUnmatchedFile(
     //             submission row. Runs as a nested transaction (savepoint) inside
     //             the outer withTransaction.
     // -------------------------------------------------------------------------
-    const submissionResult = await createSubmission(
+    const createOutcome = await createSubmission(
       { db: tx, storageClient },
       {
         semesterId,
@@ -245,6 +245,27 @@ export async function attachUnmatchedFile(
         formatVersion: bundle.manifest.format_version,
       },
     );
+
+    // These exact bytes are already a submission in this semester. On the
+    // MANUAL attach path that is an operator error worth surfacing, not
+    // something to paper over: staff picked an unmatched file and named a
+    // student for it, and the honest answer is that the artifact is already
+    // ingested. Attaching the student silently would leave them believing a new
+    // submission exists.
+    //
+    // Unreachable in practice — phase 2 dedup already marks such a file
+    // `duplicate`, so it never reaches the unmatched tray — but the branch has
+    // to exist, and failing loudly is the right shape for a path with no retry.
+    if (createOutcome.kind === 'duplicate') {
+      throw Errors.internal(
+        undefined,
+        `attachFile: these bundle bytes are already ingested as submission ` +
+          `${createOutcome.existingSubmissionId}; phase 2 dedup should have marked ` +
+          `this file duplicate before it reached the unmatched tray.`,
+      );
+    }
+
+    const submissionResult = createOutcome;
 
     // -------------------------------------------------------------------------
     // Step 7: Handle superseded ingest_files rows (best-effort).

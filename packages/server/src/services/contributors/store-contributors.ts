@@ -317,24 +317,47 @@ export async function storeContributors(
   const resolved = await resolveBundleContributors(db, semesterId, bundle);
   const rows = reconcileContributors(resolved, submitterRosterIds);
 
-  if (rows.length === 0) {
-    // A submission with no nameable contributor at all. Legal — a bundle with
-    // no identity and no roster match — and it must not leave stale rows behind.
-    await db
-      .delete(submission_contributors)
-      .where(eq(submission_contributors.submission_id, submissionId));
-    return rows;
-  }
-
+  // -------------------------------------------------------------------------
+  // Prune stale rows — but ONLY the ones this function owns.
+  //
+  // `'attributed'` rows are derived wholly from the bundle, so this function is
+  // their sole author and a re-run must be able to retract one (a contributor
+  // whose identity no longer verifies must not keep a stale attribution).
+  //
+  // `'roster'` rows are NOT ours to delete. They are facts asserted by the
+  // ROSTER side, and another writer can legitimately add one between our
+  // insert and now: two co-submitters of one group export are separate ingest
+  // files processed CONCURRENTLY, and the one that loses the race attaches
+  // itself to this submission as a contributor. Deleting "anything not in my
+  // set" removed exactly that partner again — silently, and only under
+  // concurrency, which is the shape of defect this whole area keeps producing.
+  //
+  // A roster row is only ever added by someone who really did submit these
+  // bytes, and its `roster_entry_id` is ON DELETE RESTRICT, so nothing here has
+  // to garbage-collect them.
+  // -------------------------------------------------------------------------
   const keys = rows.map((r) => r.contributor_key);
   const existing = await db
-    .select({ id: submission_contributors.id, key: submission_contributors.contributor_key })
+    .select({
+      id: submission_contributors.id,
+      key: submission_contributors.contributor_key,
+      kind: submission_contributors.kind,
+    })
     .from(submission_contributors)
     .where(eq(submission_contributors.submission_id, submissionId));
 
-  const staleIds = existing.filter((e) => !keys.includes(e.key)).map((e) => e.id);
+  const staleIds = existing
+    .filter((e) => e.kind === 'attributed' && !keys.includes(e.key))
+    .map((e) => e.id);
   if (staleIds.length > 0) {
     await db.delete(submission_contributors).where(inArray(submission_contributors.id, staleIds));
+  }
+
+  if (rows.length === 0) {
+    // A submission with no nameable contributor of our own. Legal — a bundle
+    // with no identity and no roster match. Any roster rows another writer
+    // attached stay, for the reason above.
+    return rows;
   }
 
   await db

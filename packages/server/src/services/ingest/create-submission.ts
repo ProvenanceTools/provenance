@@ -76,6 +76,29 @@ export interface CreateSubmissionResult {
   supersededIds: string[];
 }
 
+/**
+ * What phase 5 did.
+ *
+ * `'duplicate'` exists because dedup (phase 2) and this function are NOT in one
+ * transaction, and the ingest worker drains its pg-boss batch with
+ * `Promise.all` — so up to INGEST_CONCURRENCY files run CONCURRENTLY. Two
+ * co-submitters of one group export carry byte-identical bundles, so both can
+ * clear phase 2 before either commits its row, and the phase-2 check alone
+ * would let both create one. That produced exactly the fan-out D9 removed,
+ * silently, and only under concurrency — the serial case looked correct.
+ *
+ * The re-check below runs INSIDE this transaction, under an advisory lock on
+ * the same (semester, blob) key, so the second writer blocks, then sees the
+ * first writer's row and reports it instead of duplicating the artifact.
+ */
+export type CreateSubmissionOutcome =
+  | ({ kind: 'created' } & CreateSubmissionResult)
+  | {
+      kind: 'duplicate';
+      /** The submission whose bytes these are. Attach the submitter to it. */
+      existingSubmissionId: string;
+    };
+
 // ---------------------------------------------------------------------------
 // createSubmission
 // ---------------------------------------------------------------------------
@@ -93,7 +116,7 @@ export interface CreateSubmissionResult {
 export async function createSubmission(
   deps: CreateSubmissionDeps,
   args: CreateSubmissionArgs,
-): Promise<CreateSubmissionResult> {
+): Promise<CreateSubmissionOutcome> {
   const { db, storageClient } = deps;
   const {
     semesterId,
@@ -109,6 +132,45 @@ export async function createSubmission(
   } = args;
 
   return db.transaction(async (tx) => {
+    // -----------------------------------------------------------------------
+    // Step 0: Serialise every writer of THESE BYTES, then re-check dedup.
+    //
+    // `pg_advisory_xact_lock` is held until this transaction commits or rolls
+    // back, and it is keyed on (semester, blob) — the same key dedup uses — so
+    // it serialises only the writers that genuinely collide on one artifact and
+    // leaves the rest of a batch fully parallel, exactly as the version lock
+    // does for a lineage.
+    //
+    // Why this is needed at all: phase 2's dedup and this function are separate
+    // transactions, and the worker runs up to INGEST_CONCURRENCY files
+    // CONCURRENTLY (`Promise.all` over the pg-boss batch). Two co-submitters of
+    // one group export carry byte-identical bundles, so both cleared phase 2
+    // before either inserted, and both created a submission — reinstating the
+    // very fan-out D9 removed, with no error, and only under concurrency.
+    //
+    // `hashtextextended` gives the bigint the lock API wants. A hash collision
+    // between two unrelated blobs is harmless: it costs one needless wait, and
+    // the re-check below is keyed on the real values, so it can never merge two
+    // different artifacts.
+    // -----------------------------------------------------------------------
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${semesterId}:${blobSha256}`}, 0))`,
+    );
+
+    const existingForBlob = await tx
+      .select({ id: submissions.id })
+      .from(submissions)
+      .where(and(eq(submissions.semester_id, semesterId), eq(submissions.blob_sha256, blobSha256)))
+      .limit(1);
+
+    if (existingForBlob.length > 0) {
+      // Someone else committed these exact bytes while we were waiting. The
+      // artifact is theirs; the caller attaches this submitter to it. Note the
+      // staging blob is deliberately left alone here — we have not moved it,
+      // and the retention sweep collects it.
+      return { kind: 'duplicate' as const, existingSubmissionId: existingForBlob[0]!.id };
+    }
+
     // -----------------------------------------------------------------------
     // Step 1: Upsert assignment row.
     //
@@ -311,6 +373,7 @@ export async function createSubmission(
     }
 
     return {
+      kind: 'created' as const,
       submissionId,
       assignmentId,
       versionIndex,

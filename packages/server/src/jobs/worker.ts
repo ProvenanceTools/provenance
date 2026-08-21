@@ -396,7 +396,7 @@ export async function startWorker(): Promise<() => Promise<void>> {
       const recorderVersion = '';
       const formatVersion = bundle.manifest.format_version;
 
-      const submissionResult = await timePhase('create_submission', () =>
+      const createOutcome = await timePhase('create_submission', () =>
         createSubmission(
           { db, storageClient },
           {
@@ -412,6 +412,43 @@ export async function startWorker(): Promise<() => Promise<void>> {
           },
         ),
       );
+
+      // A LATE duplicate: a concurrent file in this same batch committed these
+      // exact bytes while we were between phase 2 and phase 5. Phase 2 cannot
+      // see it (separate transactions, `Promise.all` over the batch), so
+      // createSubmission re-checks under an advisory lock and reports it rather
+      // than creating a second submission for one artifact.
+      //
+      // Same handling as the phase-2 dedup hit: the artifact is not duplicated,
+      // and the co-submitter is attached to it so the person is not lost.
+      if (createOutcome.kind === 'duplicate') {
+        if (studentId !== null) {
+          await timePhase('attach_co_submitter', () =>
+            attachCoSubmitter(db, createOutcome.existingSubmissionId, semesterId, studentId),
+          );
+        }
+
+        await db
+          .update(ingest_files)
+          .set({
+            status: 'duplicate',
+            submission_id: createOutcome.existingSubmissionId,
+            matched_student_id: studentId,
+            matched_assignment_id: null,
+            filename_capture: filenameCapture,
+            resolved_at: new Date(),
+          })
+          .where(eq(ingest_files.id, ingestFileId));
+
+        logger.info(
+          { ingestFileId, attachedCoSubmitter: studentId !== null },
+          'ingest_file: late duplicate detected at create_submission',
+        );
+        await maybeEnqueueFinalize(boss, db, ingestJobId);
+        return;
+      }
+
+      const submissionResult = createOutcome;
       // Blob has been moved out of staging — past here a retry cannot re-parse.
       submissionCreated = true;
 

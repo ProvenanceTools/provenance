@@ -5,7 +5,8 @@
  * submission), drives the worker through pg-boss, and asserts:
  *   - the roster is populated from the metadata (no pre-existing roster needed),
  *   - a single-submitter submission is matched,
- *   - a group submission yields one submission per co-submitter (shared blob),
+ *   - a group submission yields ONE submission with both co-submitters as
+ *     contributors (D9) — not one row per co-submitter,
  *   - a folder with no bundle is reported as skipped.
  *
  * Mirrors ingest-e2e.test.ts: real pg-boss + Postgres + MinIO via testcontainers.
@@ -37,6 +38,7 @@ import {
   ingest_jobs,
   ingest_files,
   submissions,
+  submission_contributors,
 } from '../../../db/schema.js';
 import * as schema from '../../../db/schema.js';
 import { startWorker } from '../../../jobs/worker.js';
@@ -434,23 +436,24 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
       }
       expect(finalStatus).toBe('succeeded');
 
-      // All three files matched.
+      // All three files resolved, and none failed. Since D9 the two
+      // co-submitters of the group bundle carry byte-identical bytes, so ONE of
+      // them creates the submission and the other resolves as `duplicate`
+      // pointing at it — the artifact is not stored twice.
       const fileRows = await db
-        .select({ status: ingest_files.status, match_sid: ingest_files.match_sid })
+        .select({
+          status: ingest_files.status,
+          match_sid: ingest_files.match_sid,
+          submission_id: ingest_files.submission_id,
+          matched_student_id: ingest_files.matched_student_id,
+        })
         .from(ingest_files)
         .where(eq(ingest_files.ingest_job_id, body.job_id));
       expect(fileRows).toHaveLength(3);
-      expect(fileRows.every((f) => f.status === 'matched')).toBe(true);
-
-      // Three submissions; the two co-submitters share one blob.
-      const subs = await db
-        .select({
-          student_id: submissions.student_id,
-          blob_sha256: submissions.blob_sha256,
-        })
-        .from(submissions)
-        .where(eq(submissions.semester_id, semester!.id));
-      expect(subs).toHaveLength(3);
+      expect(fileRows.every((f) => f.status === 'matched' || f.status === 'duplicate')).toBe(true);
+      // Every file still names its student and its submission — nobody is lost.
+      expect(fileRows.every((f) => f.matched_student_id !== null)).toBe(true);
+      expect(fileRows.every((f) => f.submission_id !== null)).toBe(true);
 
       const rosterBySid = new Map(
         (
@@ -460,15 +463,52 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
             .where(eq(roster_entries.semester_id, semester!.id))
         ).map((r) => [r.sid, r.id]),
       );
-      const subByStudent = new Map(subs.map((s) => [s.student_id, s.blob_sha256]));
-      // The pair (222, 333) share blob bytes; the solo (111) differs.
-      const pairBlobs = [
-        subByStudent.get(rosterBySid.get('222')!),
-        subByStudent.get(rosterBySid.get('333')!),
-      ];
-      expect(pairBlobs[0]).toBeTruthy();
-      expect(pairBlobs[0]).toBe(pairBlobs[1]);
-      expect(subByStudent.get(rosterBySid.get('111')!)).not.toBe(pairBlobs[0]);
+
+      // TWO submissions, not three: the solo, and ONE for the pair.
+      //
+      // This assertion replaces one that required three. The requirement
+      // underneath it — both co-submitters survive, and the pair's bytes are
+      // distinct from the solo's — is unchanged and is asserted below; what
+      // changed is the representation (D9). Three rows here would mean the
+      // fan-out is back, which under concurrency is exactly what happened
+      // before `createSubmission` re-checked dedup under an advisory lock.
+      const subs = await db
+        .select({ id: submissions.id, blob_sha256: submissions.blob_sha256 })
+        .from(submissions)
+        .where(eq(submissions.semester_id, semester!.id));
+      expect(subs).toHaveLength(2);
+
+      // The pair's submission is the one BOTH co-submitters contribute to.
+      const contribRows = await db
+        .select({
+          submission_id: submission_contributors.submission_id,
+          roster_entry_id: submission_contributors.roster_entry_id,
+        })
+        .from(submission_contributors)
+        .where(eq(submission_contributors.semester_id, semester!.id));
+
+      const bySubmission = new Map<string, string[]>();
+      for (const row of contribRows) {
+        const bucket = bySubmission.get(row.submission_id) ?? [];
+        bucket.push(row.roster_entry_id!);
+        bySubmission.set(row.submission_id, bucket);
+      }
+
+      const pairSubmissionId = [...bySubmission.entries()].find(([, ids]) => ids.length === 2)?.[0];
+      expect(pairSubmissionId).toBeTruthy();
+      expect(new Set(bySubmission.get(pairSubmissionId!))).toEqual(
+        new Set([rosterBySid.get('222')!, rosterBySid.get('333')!]),
+      );
+
+      // The solo is a separate submission with one contributor and other bytes.
+      const soloSubmissionId = [...bySubmission.entries()].find(
+        ([, ids]) => ids.length === 1 && ids[0] === rosterBySid.get('111'),
+      )?.[0];
+      expect(soloSubmissionId).toBeTruthy();
+      expect(soloSubmissionId).not.toBe(pairSubmissionId);
+
+      const blobById = new Map(subs.map((sub) => [sub.id, sub.blob_sha256]));
+      expect(blobById.get(soloSubmissionId!)).not.toBe(blobById.get(pairSubmissionId!));
     });
   });
 
