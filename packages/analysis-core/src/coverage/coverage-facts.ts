@@ -29,6 +29,21 @@
  *    its own field for the same reason the three identity states are kept apart:
  *    merging it into {@link ConcurrentRecordingFact} would tell a grader two
  *    people collaborated when one person moved between their own machines.
+ *  - **"nobody reported" ≠ "the answer was no".** {@link WitnessCoverage} and
+ *    {@link GitObservationCoverage} each carry an explicit third state for a
+ *    recorder that says nothing (§5.6), which is the permanent state of every
+ *    bundle recorded before those fields existed. Folding it into `unavailable`
+ *    or `impossible` would make years of archived submissions assert that their
+ *    own capture was broken.
+ *
+ * ## The §5.6 readers this module is the production caller for
+ *
+ * `witness/reconcile-witnesses.ts` and `capability/session-capabilities.ts` both
+ * state in their own headers that they produce no findings and exist to feed a
+ * presentation layer. This is that layer's input. Nothing below turns any of it
+ * into a `Flag`, a validation check, or a score contribution, and
+ * `isWitnessAlterationEvidence` is deliberately NOT called here: what a witness
+ * licenses saying about a person is not a question a coverage fact answers.
  *
  * ## Where the concurrency facts come from
  *
@@ -41,11 +56,23 @@
  * tested-after-the-fact one.
  */
 
+import type { PeerObservedPayload } from '@provenance/log-core';
+import { gitObservationGap, readBundleCapabilities } from '../capability/session-capabilities.js';
+import type {
+  BundleCapabilitySummary,
+  GitImpossibleReason,
+} from '../capability/session-capabilities.js';
 import { ASSUMED_SINGLE_REPOSITORY, buildObservedDag } from '../git/observed-dag.js';
 import type { ObservedDagCoverage, ObservedDagDefect } from '../git/observed-dag.js';
 import type { BundleContributors } from '../identity/types.js';
 import type { EventIndex } from '../index/event-index.js';
 import type { Bundle, DroppedArtifact } from '../loader/types.js';
+import { reconcileWitnesses } from '../witness/reconcile-witnesses.js';
+import type {
+  BundleWitnessReconciliation,
+  WitnessAuthority,
+  WitnessVerdict,
+} from '../witness/reconcile-witnesses.js';
 import {
   partitionSessionOverlaps,
   type CollaborationOverlap,
@@ -293,6 +320,234 @@ export function tornTails(bundle: Bundle): TornTailFact[] {
 }
 
 // ---------------------------------------------------------------------------
+// Peer witnessing (§5.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * One partner log a witness could NOT corroborate, aggregated over every
+ * observation that reached the same verdict about the same file.
+ *
+ * ## Why this is aggregated rather than one row per observation
+ *
+ * `peer.observed` is emitted on the checkpoint cadence, so a partner's log that
+ * is not in the archive produces one `absent` witness per drain for the whole
+ * session — hundreds of identical rows saying one thing. Collapsing them on
+ * `(file, verdict)` is lossless for a reader (the verdict is a function of the
+ * file and the bundle, not of which drain saw it) and keeps the wire shape
+ * bounded by partner-files × verdicts rather than by session length.
+ *
+ * `corroborated` never appears here. It is a positive fact and is carried as a
+ * count on {@link WitnessCoverage}; giving it a row in a list of things that did
+ * not line up is how a reader starts scanning the list as a list of problems.
+ *
+ * ## Nothing in here names anybody
+ *
+ * A witness establishes that a LOG was in a particular state, never who put it
+ * there (collaboration spec §5, S26). There is deliberately no contributor field
+ * on this type: the evidence does not support one, so the shape cannot carry
+ * one.
+ */
+export type WitnessDiscrepancy = {
+  /** `.provenance/`-relative filename exactly as the witness saw it. */
+  file: string;
+  /**
+   * The witnessed logical session id, or `null` when the recorder could not read
+   * a chain out of the foreign file at all.
+   */
+  witnessedSessionId: string | null;
+  /** Never `'corroborated'` — see above. */
+  verdict: Exclude<WitnessVerdict, 'corroborated'>;
+  /** How many observations reached this same verdict about this file. */
+  observations: number;
+  /**
+   * Every `state` the recorder recorded for this file, sorted and deduplicated.
+   *
+   * **Descriptive only.** `'disappeared'` in particular is NOT misconduct: a
+   * checkout of a branch that never contained a partner's log removes it from
+   * the working tree, and so does a stash. `'shrank'` and `'unparseable'` have
+   * the same ordinary causes. Carried so a reader can see what the recorder saw,
+   * never so a reader can grade it.
+   */
+  states: readonly PeerObservedPayload['state'][];
+  /**
+   * How far the WITNESSING session's own identity was established. An
+   * `'unverifiable'` witness is recorded and not relied on — an artifact
+   * asserting an identity it cannot back does not get to testify about someone
+   * else's.
+   */
+  authority: WitnessAuthority;
+  /**
+   * `reconcile-witnesses`'s own statement of what was compared and what came of
+   * it. Carried verbatim rather than re-derived: that module is the authority on
+   * this wording, and a second phrasing of a five-way verdict is how two
+   * surfaces start disagreeing about what a witness proves.
+   */
+  detail: string;
+};
+
+/**
+ * What peer witnessing does and does not establish about this bundle.
+ *
+ * Never a `Flag`, never a check, never a score. `reconcileWitnesses` deliberately
+ * produces no findings; this is the presentation input §6 Rule 3 asks for, and
+ * every field below is a statement about the RECORD.
+ *
+ * The load-bearing distinction: {@link WitnessCoverage.capability} and
+ * {@link WitnessCoverage.unwitnessedSessions} are different axes and must never
+ * be read together as one number. `capability` says whether anything here could
+ * have witnessed; `unwitnessedSessions` says how many logs nobody named. An
+ * unwitnessed log is blameless in every combination of the two.
+ */
+export type WitnessCoverage = {
+  /**
+   * Whether ANY session in this bundle could watch `.provenance/` (§5.6 item 3).
+   *
+   * `'unknown'` means at least one session did not report — **the state of every
+   * bundle recorded before the field existed**, and never a defect.
+   */
+  capability: BundleCapabilitySummary;
+  /** Sessions present in the bundle. The denominator for the two below. */
+  sessions: number;
+  /** Logs that at least one reconciled witness names. */
+  witnessedSessions: number;
+  /**
+   * Logs that no witness names. **ORDINARY AND BLAMELESS.** The partner may not
+   * have been recording, their recorder may predate peer witnessing, or their
+   * sessions may simply never have overlapped. Never a finding, and never to be
+   * rendered as "unverified, therefore suspect".
+   */
+  unwitnessedSessions: number;
+  /** Observations whose witnessed prefix is intact in the log that is here. */
+  corroborated: number;
+  /**
+   * Observations read and deliberately not reconciled — a chain witnessing
+   * itself, or a witness about another session of the same PROVEN contributor.
+   * Neither is peer evidence. Hygiene, not a finding.
+   */
+  excluded: number;
+  /**
+   * `peer.observed` payloads that did not narrow to the shape this format
+   * defines. A fact about the recorder that wrote them, never about a student.
+   */
+  malformed: number;
+  /** Non-corroborated verdicts, aggregated per file. */
+  discrepancies: readonly WitnessDiscrepancy[];
+};
+
+function witnessCoverage(r: BundleWitnessReconciliation): WitnessCoverage {
+  // Keyed on `(file, verdict)`; insertion order is the reconciliation's own
+  // (session, seq) order, so the output is deterministic without a sort.
+  type Accumulator = Omit<WitnessDiscrepancy, 'states'> & {
+    states: Set<PeerObservedPayload['state']>;
+  };
+  const byFileVerdict = new Map<string, Accumulator>();
+
+  for (const w of r.witnesses) {
+    if (w.verdict === 'corroborated') continue;
+    const key = `${w.witness.payload.file} ${w.verdict}`;
+    const existing = byFileVerdict.get(key);
+    if (existing === undefined) {
+      byFileVerdict.set(key, {
+        file: w.witness.payload.file,
+        witnessedSessionId: w.witness.payload.session_id,
+        verdict: w.verdict,
+        observations: 1,
+        states: new Set([w.witness.payload.state]),
+        authority: w.witness.authority,
+        detail: w.detail,
+      });
+    } else {
+      existing.observations += 1;
+      existing.states.add(w.witness.payload.state);
+    }
+  }
+
+  const discrepancies: WitnessDiscrepancy[] = [];
+  for (const d of byFileVerdict.values()) {
+    discrepancies.push({
+      file: d.file,
+      witnessedSessionId: d.witnessedSessionId,
+      verdict: d.verdict,
+      observations: d.observations,
+      states: [...d.states].sort(),
+      authority: d.authority,
+      detail: d.detail,
+    });
+  }
+
+  return {
+    capability: r.witnessingCapability,
+    sessions: r.sessions.length,
+    witnessedSessions: r.counts.witnessedSessions,
+    unwitnessedSessions: r.counts.unwitnessedSessions,
+    corroborated: r.counts.corroborated,
+    excluded: r.counts.excluded,
+    malformed: r.counts.malformed,
+    discrepancies,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Git observability (§5.6 item 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether git could be observed at all, paired with what the commit DAG saw.
+ *
+ * This is what lets a coverage surface say **"we could not check"** instead of
+ * silently implying git was fine. Without it an absence of `git.event` is
+ * equally consistent with _no git activity happened_ and with _git was never
+ * observable_, and the second reading is invisible — which is the exact ambiguity
+ * §5.6 item 2 exists to close, and the context `git_unrecorded_in` has to be read
+ * against.
+ *
+ * Never a `Flag`, never a check, never a score. {@link
+ * GitObservationCoverage.silentThoughCapable} in particular is NOT evidence of
+ * anything: a student who ran no git command all session produces it, and that
+ * is the majority of honest sessions.
+ */
+export type GitObservationCoverage = {
+  /**
+   * `'available'` — at least one session reported it could observe git.
+   * `'impossible'` — every session reported, none could.
+   * `'unknown'` — at least one session said nothing. **The state of every bundle
+   * recorded before the field existed**, and never a defect.
+   */
+  availability: BundleCapabilitySummary;
+  /**
+   * Why `availability` came out `'impossible'`; `null` otherwise.
+   *
+   * `'unavailable'` (the machine had no git integration) and `'not_owned'` (git
+   * worked, the assignment sat outside every repository it could see) are
+   * different situations with the same consequence, and a grader acts
+   * differently on the two.
+   */
+  impossibleReason: GitImpossibleReason;
+  /** Sessions in the bundle. */
+  sessions: number;
+  /** Sessions that recorded at least one commit observation. */
+  observing: number;
+  /** Recorded no commits AND reported they could not observe git. Explained. */
+  silentAndIncapable: number;
+  /**
+   * Recorded no commits and reported git WAS available. Their silence is a
+   * statement about git activity, not about capture — and is not a finding.
+   */
+  silentThoughCapable: number;
+  /**
+   * Recorded no commits and said nothing about their capability. **Every session
+   * of every bundle recorded before the field existed lands here**, and their
+   * silence stays exactly as ambiguous as it has always been.
+   */
+  silentAndUnreported: number;
+  /**
+   * Sessions reporting a git-capture value this format does not define, so their
+   * report could not be used. A fact about the recorder, never about a student.
+   */
+  malformed: number;
+};
+
+// ---------------------------------------------------------------------------
 // The aggregate
 // ---------------------------------------------------------------------------
 
@@ -330,6 +585,18 @@ export type CoverageFacts = {
    * `false`. A zero-commit scope has no graph to caveat.
    */
   repositoryAssumedSingle: boolean;
+  /**
+   * What peer witnessing establishes about this bundle (§5.5). Facts only —
+   * `reconcileWitnesses` produces no findings and this carries none.
+   */
+  witnessing: WitnessCoverage;
+  /**
+   * Whether git could be observed at all (§5.6 item 2), paired with what the
+   * commit DAG saw. Kept SEPARATE from `dagCoverage`: that counts what WAS seen,
+   * this says whether seeing was possible at all. Merging them would let
+   * "nothing was observed" pass for "nothing happened".
+   */
+  gitObservation: GitObservationCoverage;
 };
 
 /**
@@ -343,6 +610,12 @@ export type CoverageFacts = {
  */
 export function coverageFacts(bundle: Bundle, index: EventIndex): CoverageFacts {
   const dag = buildObservedDag(bundle);
+  const capabilities = readBundleCapabilities(bundle);
+  // Exactly the set `observed-dag` itself counts as `sessionsObserving`: a
+  // session enters `observations` iff it produced a `git.event` carrying a
+  // readable sha. Taking it from the DAG rather than rewalking the events is
+  // what keeps this from drifting away from the graph it is a caveat on.
+  const gap = gitObservationGap(capabilities, new Set(dag.observations.map((o) => o.sessionId)));
 
   return {
     identity: identityCoverage(bundle.contributors ?? null),
@@ -354,6 +627,17 @@ export function coverageFacts(bundle: Bundle, index: EventIndex): CoverageFacts 
     dagDefects: dag.defects,
     dagCoverage: dag.coverage,
     repositoryAssumedSingle: dag.repositoryScope.repositories.includes(ASSUMED_SINGLE_REPOSITORY),
+    witnessing: witnessCoverage(reconcileWitnesses(bundle)),
+    gitObservation: {
+      availability: capabilities.gitObservation,
+      impossibleReason: capabilities.gitImpossibleReason,
+      sessions: gap.sessions,
+      observing: gap.observing,
+      silentAndIncapable: gap.silentAndIncapable,
+      silentThoughCapable: gap.silentThoughCapable,
+      silentAndUnreported: gap.silentAndUnreported,
+      malformed: capabilities.counts.gitMalformed,
+    },
   };
 }
 
@@ -365,6 +649,17 @@ export function coverageFacts(bundle: Bundle, index: EventIndex): CoverageFacts 
  * question as "is there a bundle" — a caller with no bundle must say the facts
  * were not available rather than call this on an empty one, because a panel of
  * zeroes is a stronger and falser claim than "not available".
+ *
+ * ## The §5.6 rule: a report existing is the trigger, its absence never is
+ *
+ * The capability and witnessing fields are added on exactly one condition —
+ * **something actually reported**. `witnessing.capability === 'unknown'`,
+ * `gitObservation.availability === 'unknown'` and a nonzero
+ * `unwitnessedSessions` are the permanent state of every bundle recorded before
+ * §5.6 existed, so letting any of them tip this predicate would take every
+ * archived submission in the system out of "nothing to note" on the strength of
+ * a field its recorder never had. Absence of a report is not a fact about a
+ * submission; it is a fact about a release date.
  */
 export function hasCoverageFacts(f: CoverageFacts): boolean {
   return (
@@ -377,6 +672,16 @@ export function hasCoverageFacts(f: CoverageFacts): boolean {
     f.dagCoverage.commits > 0 ||
     f.identity.unverifiable > 0 ||
     f.identity.unattributed > 0 ||
-    !f.identity.rootKeyConfigured
+    !f.identity.rootKeyConfigured ||
+    // Someone reported whether they could witness, or a witness was actually
+    // read. Note `unwitnessedSessions` is deliberately NOT here.
+    f.witnessing.capability !== 'unknown' ||
+    f.witnessing.corroborated > 0 ||
+    f.witnessing.discrepancies.length > 0 ||
+    f.witnessing.excluded > 0 ||
+    f.witnessing.malformed > 0 ||
+    // Someone reported whether git was observable. `'unknown'` is not a report.
+    f.gitObservation.availability !== 'unknown' ||
+    f.gitObservation.malformed > 0
   );
 }
