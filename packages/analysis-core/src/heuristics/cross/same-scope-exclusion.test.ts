@@ -72,6 +72,12 @@ type SessionSpec = {
   minute: number;
   /** Commit shas this session was observed AT (`git.event.sha`). */
   observed: readonly string[];
+  /**
+   * Parents recorded for each observed commit. A sha that appears ONLY here is
+   * witnessed-only: proof a commit existed with no session recording work at it,
+   * which is exactly the shape a course-issued skeleton's history takes.
+   */
+  parents?: readonly string[];
   /** Paste this content, if given. */
   paste?: string;
   pasteSha?: string;
@@ -108,7 +114,7 @@ function sessionEvents(spec: SessionSpec) {
         operation: 'commit',
         sha,
         commit_sha: sha,
-        parents: [],
+        parents: spec.parents ?? [],
         branch: 'main',
       },
       ...at(),
@@ -266,6 +272,49 @@ describe('S20 — the negative controls, which are not optional', () => {
 
     const features = [featuresOf(carol), featuresOf(dave)];
     expect(features[0]!.observedCommitKeys).toEqual([]);
+    expect(pasteFlags(runCrossHeuristics(features))).toHaveLength(1);
+  });
+
+  it('STILL fires for two students who cloned the same course skeleton', async () => {
+    // THE case that decides whether this fix is a fix or a course-wide outage.
+    // Every student clones the same starter, so every student's history contains
+    // the same ancestors. Those ancestors are WITNESSED-ONLY — they appear in a
+    // `parents` array and no session ever recorded work at them. Keying the
+    // exclusion on ancestry rather than on observation would put the entire
+    // cohort into one lineage and switch cross-submission detection off for the
+    // whole course, which is strictly worse than the bug being fixed.
+    const sha = await sha256Hex(PASTED_CODE);
+    const SKELETON = '0f'.repeat(20);
+
+    const carol = await buildSubmission('carol_proj1.zip', [
+      {
+        minute: 0,
+        observed: [CAROL_COMMIT],
+        parents: [SKELETON],
+        paste: PASTED_CODE,
+        pasteSha: sha,
+      },
+    ]);
+    const dave = await buildSubmission('dave_proj1.zip', [
+      {
+        minute: 240,
+        observed: [DAVE_COMMIT],
+        parents: [SKELETON],
+        paste: PASTED_CODE,
+        pasteSha: sha,
+      },
+    ]);
+
+    const features = [featuresOf(carol), featuresOf(dave)];
+
+    // The premise: both really do carry the skeleton commit, and neither keys on
+    // it — only their own commits are observed.
+    for (const f of features) {
+      expect(f.observedCommitKeys!.join(' ')).not.toContain(SKELETON);
+      expect(f.observedCommitKeys).toHaveLength(1);
+    }
+
+    expect(partitionCrossScopes(features).exclusions).toEqual([]);
     expect(pasteFlags(runCrossHeuristics(features))).toHaveLength(1);
   });
 

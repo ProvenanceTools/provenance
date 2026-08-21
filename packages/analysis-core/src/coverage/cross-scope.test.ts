@@ -153,6 +153,20 @@ describe('partitionCrossScopes', () => {
     expect(forward.exclusions).toEqual(backward.exclusions);
   });
 
+  it('does not treat a repeated key inside ONE submission as two observers', () => {
+    // `observedCommitKeysOf` never emits a duplicate, but this shape round-trips
+    // through JSON from two producers and is hand-built in tests. One submission
+    // naming a commit twice is corroboration, not a second holder of the
+    // repository, and must not make that commit "proven shared".
+    const p = partitionCrossScopes([
+      { ...features('alice'), observedCommitKeys: [...unlabelled(A), ...unlabelled(A)] },
+      features('carol', unlabelled(B)),
+    ]);
+
+    expect(p.lineageOf.get('alice')).not.toBe(p.lineageOf.get('carol'));
+    expect(p.exclusions).toEqual([]);
+  });
+
   it('reports a singleton lineage as no exclusion at all', () => {
     const p = partitionCrossScopes([features('solo', unlabelled(A))]);
     expect(p.exclusions).toEqual([]);
