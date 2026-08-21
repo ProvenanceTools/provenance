@@ -41,11 +41,7 @@
  * Fail toward not knowing.
  */
 
-import {
-  readFileScope,
-  readGitCapture,
-  readWitnessCapture,
-} from '@provenance/log-core';
+import { readFileScope, readGitCapture, readWitnessCapture } from '@provenance/log-core';
 import type { FileScopeRead, GitCaptureRead, WitnessCaptureRead } from '@provenance/log-core';
 import type { Bundle } from '../loader/types.js';
 

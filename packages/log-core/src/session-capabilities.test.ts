@@ -230,7 +230,9 @@ describe('readFileScope', () => {
   it('reads a complete list', () => {
     expect(
       readFileScope(
-        sessionStart({ file_scope: { watched: ['Solver.java', 'src/Board.java'], complete: true } }),
+        sessionStart({
+          file_scope: { watched: ['Solver.java', 'src/Board.java'], complete: true },
+        }),
       ),
     ).toEqual({ kind: 'recorded', watched: ['Solver.java', 'src/Board.java'], complete: true });
   });
@@ -329,9 +331,11 @@ describe('readFileScope', () => {
       'ünïcode.py',
       './Solver.java',
     ];
-    expect(
-      readFileScope(sessionStart({ file_scope: { watched, complete: true } })),
-    ).toEqual({ kind: 'recorded', watched, complete: true });
+    expect(readFileScope(sessionStart({ file_scope: { watched, complete: true } }))).toEqual({
+      kind: 'recorded',
+      watched,
+      complete: true,
+    });
   });
 
   it('accepts an unknown extra key on the scope object, for forward compatibility', () => {

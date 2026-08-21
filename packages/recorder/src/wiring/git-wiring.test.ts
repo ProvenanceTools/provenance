@@ -1124,7 +1124,10 @@ describe('probeGitCapture', () => {
   it('keeps unavailable and not_owned distinct — they are different situations', () => {
     const roots = ['/ws/proj2'];
     const owned = (p: string) => isRepoOwnedByRoot(p, '/ws/proj2', roots);
-    const noGit = probeGitCapture({ getGitExtension: () => undefined, isRepoOwnedByThisRoot: owned });
+    const noGit = probeGitCapture({
+      getGitExtension: () => undefined,
+      isRepoOwnedByThisRoot: owned,
+    });
     const notMine = probeGitCapture({
       getGitExtension: () => makeGitExtension([makeFakeRepo('a'.repeat(40), '/somewhere/else')]),
       isRepoOwnedByThisRoot: owned,

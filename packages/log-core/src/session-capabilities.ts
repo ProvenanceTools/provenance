@@ -190,10 +190,13 @@ function readEnumCapability<T extends string>(
   data: unknown,
   field: string,
   legal: readonly T[],
-): { kind: 'absent' } | { kind: 'recorded'; capture: T } | {
-  kind: 'malformed';
-  problem: CapabilityValueProblem;
-} {
+):
+  | { kind: 'absent' }
+  | { kind: 'recorded'; capture: T }
+  | {
+      kind: 'malformed';
+      problem: CapabilityValueProblem;
+    } {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return { kind: 'absent' };
   }

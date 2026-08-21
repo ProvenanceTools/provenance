@@ -544,8 +544,7 @@ export function reconcileWitnesses(bundle: Bundle): BundleWitnessReconciliation 
       // usable claim, and neither may be rendered as `'unavailable'` — that
       // would make every bundle recorded to date assert its own witnessing was
       // broken.
-      capability:
-        read !== undefined && read.kind === 'recorded' ? read.capture : 'unreported',
+      capability: read !== undefined && read.kind === 'recorded' ? read.capture : 'unreported',
     };
   });
 

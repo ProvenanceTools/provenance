@@ -871,7 +871,10 @@ describe('startSession — the §5.6 capability reports', () => {
   });
 
   it('reports git as AVAILABLE when a repository this session owns is open', async () => {
-    const repo = { rootUri: { fsPath: assignmentRoot }, state: { onDidChange: () => ({ dispose: () => undefined }) } };
+    const repo = {
+      rootUri: { fsPath: assignmentRoot },
+      state: { onDidChange: () => ({ dispose: () => undefined }) },
+    };
     const gitExtension = {
       id: 'vscode.git',
       exports: {

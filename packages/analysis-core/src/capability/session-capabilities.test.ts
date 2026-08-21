@@ -373,8 +373,6 @@ describe('the three reports are independent', () => {
   it('reports every session, in bundle order, with no session omitted', async () => {
     const bundle = await scope({ git_capture: 'available' }, {}, { witness_capture: 'available' });
     const facts = readBundleCapabilities(bundle);
-    expect(facts.sessions.map((s) => s.sessionId)).toEqual(
-      bundle.sessions.map((s) => s.sessionId),
-    );
+    expect(facts.sessions.map((s) => s.sessionId)).toEqual(bundle.sessions.map((s) => s.sessionId));
   });
 });
