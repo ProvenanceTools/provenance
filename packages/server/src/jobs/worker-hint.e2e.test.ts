@@ -265,13 +265,18 @@ describe('worker match-hint path (Gradescope export ingest)', () => {
       expect(subs).toHaveLength(1);
       expect(subs[0]!.id).toBe(rowA.submission_id);
 
-      // The submission is owned by whichever co-submitter created it, and the
-      // duplicate's student is the other one — asserted without assuming which
-      // side of the race won.
-      const matchedRow = [rowA, rowB].find((r) => r.status === 'matched')!;
-      const duplicateRow = [rowA, rowB].find((r) => r.status === 'duplicate')!;
-      expect(subs[0]!.student_id).toBe(matchedRow.matched_student_id);
-      expect(duplicateRow.matched_student_id).not.toBe(subs[0]!.student_id);
+      // The submitter of record is the LOWER sid of the two co-submitters —
+      // whichever side of the race won.
+      //
+      // This assertion used to read `subs[0].student_id === the row that won`,
+      // which pinned the defect rather than a requirement: the winner is a
+      // `Promise.all` race, so it made "the student" an arbitrary one of two
+      // people and made a re-ingest of the same export able to name the other
+      // one. It is not weakened here, it is inverted: the outcome is now
+      // asserted against a value fixed OUTSIDE the race (`roster_entries.sid`,
+      // which the institution assigns), so it fails if either order produces
+      // anything else. Student A's sid is '111111' and B's is '222222'.
+      expect(subs[0]!.student_id).toBe(studentA!.id);
 
       // The load-bearing assertion: BOTH people are contributors on that one
       // submission. Exactly two rows — one per human. `attachCoSubmitter` going

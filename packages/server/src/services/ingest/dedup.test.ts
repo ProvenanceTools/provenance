@@ -90,6 +90,7 @@ async function seedSubmission(
   ingestJobId: string,
   blobSha256: string,
   versionIndex = 1,
+  extra: { createdAt?: Date; supersededBy?: string } = {},
 ) {
   const [sub] = await db
     .insert(submissions)
@@ -102,6 +103,10 @@ async function seedSubmission(
       source_filename: 'hw01-123456.zip',
       ingest_job_id: ingestJobId,
       version_index: versionIndex,
+      ...(extra.createdAt === undefined ? {} : { created_at: extra.createdAt }),
+      ...(extra.supersededBy === undefined
+        ? {}
+        : { superseded_by_submission_id: extra.supersededBy }),
     })
     .returning();
   return sub!;
@@ -311,9 +316,9 @@ describe('dedupFile', () => {
       // (submission_id, roster_entry_id) does, and a targeted ON CONFLICT would
       // RAISE, failing the ingest of an ordinary group upload. The attach must
       // be an untargeted DO NOTHING.
-      await expect(
-        attachCoSubmitter(db, sub.id, semester.id, studentA.id),
-      ).resolves.toBeUndefined();
+      // Resolving at all is the assertion; the value is the (here empty) list of
+      // submissions the attach superseded.
+      await expect(attachCoSubmitter(db, sub.id, semester.id, studentA.id)).resolves.toEqual([]);
 
       // Still ONE row for the person, and it is the RICHER one — the attributed
       // key, ref and kind survive. Overwriting them with this path's
@@ -348,6 +353,296 @@ describe('dedupFile', () => {
       expect(result.isDuplicate).toBe(true);
       if (!result.isDuplicate) return;
       expect(result.existingSubmissionId).toBe(sub.id);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The submitter of record is deterministic
+// ---------------------------------------------------------------------------
+//
+// Two co-submitters of one group export are separate ingest files processed
+// CONCURRENTLY, and whichever wins the advisory lock in `createSubmission`
+// writes `submissions.student_id` with its own student. Nothing ordered the
+// two, so the same export re-ingested could name the other partner — and every
+// surface that shows "the student" then showed an arbitrary one of two people.
+//
+// `seedSubmission` + `attachCoSubmitter` is exactly that race's outcome: the
+// row as the winner wrote it, then the loser attaching. Running it BOTH ways
+// round is the whole point — an assertion against one order alone would pass on
+// the defect.
+
+describe('the submitter of record', () => {
+  it('is the same student whichever co-submitter wins the race', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      // Two humans, and the sid ordering is the only thing that may decide.
+      const lowSid = await seedRosterEntry(db, semester.id, '111111');
+      const highSid = await seedRosterEntry(db, semester.id, '222222');
+      const job = await seedIngestJob(db, semester.id, user.id);
+
+      // Separate assignments so the two orders are two independent lineages and
+      // can both land at version 1 without colliding on submissions_version_key.
+      const hw01 = await seedAssignment(db, semester.id, 'hw01');
+      const hw02 = await seedAssignment(db, semester.id, 'hw02');
+
+      // Order 1: the HIGH sid won the race and wrote the row.
+      const first = await seedSubmission(
+        db,
+        semester.id,
+        hw01.id,
+        highSid.id,
+        job.id,
+        'e1'.repeat(32),
+      );
+      await attachCoSubmitter(db, first.id, semester.id, lowSid.id);
+
+      // Order 2: the LOW sid won the race and wrote the row.
+      const second = await seedSubmission(
+        db,
+        semester.id,
+        hw02.id,
+        lowSid.id,
+        job.id,
+        'e2'.repeat(32),
+      );
+      await attachCoSubmitter(db, second.id, semester.id, highSid.id);
+
+      const rows = await db
+        .select({ id: submissions.id, student_id: submissions.student_id })
+        .from(submissions)
+        .where(eq(submissions.semester_id, semester.id));
+
+      const byId = new Map(rows.map((r) => [r.id, r.student_id]));
+      expect(byId.get(first.id)).toBe(lowSid.id);
+      expect(byId.get(second.id)).toBe(lowSid.id);
+      // Said once more as the property itself, so a future edit that makes both
+      // orders agree on the WRONG student still fails.
+      expect(byId.get(first.id)).toBe(byId.get(second.id));
+    });
+  });
+
+  it('keeps BOTH co-submitters as contributors while settling on one of them', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const lowSid = await seedRosterEntry(db, semester.id, '111111');
+      const highSid = await seedRosterEntry(db, semester.id, '222222');
+      const assignment = await seedAssignment(db, semester.id);
+      const job = await seedIngestJob(db, semester.id, user.id);
+
+      const sub = await seedSubmission(
+        db,
+        semester.id,
+        assignment.id,
+        highSid.id,
+        job.id,
+        'e3'.repeat(32),
+      );
+      await attachCoSubmitter(db, sub.id, semester.id, highSid.id);
+      await attachCoSubmitter(db, sub.id, semester.id, lowSid.id);
+
+      const contributors = await db
+        .select({ roster_entry_id: submission_contributors.roster_entry_id })
+        .from(submission_contributors)
+        .where(eq(submission_contributors.submission_id, sub.id));
+
+      // Settling on one submitter of record must not demote the other person
+      // out of the attribution table — that is the erasure D9 exists to stop.
+      expect(contributors.map((c) => c.roster_entry_id).sort()).toEqual(
+        [lowSid.id, highSid.id].sort(),
+      );
+    });
+  });
+
+  it('is stable under a repeated attach (ingest stays idempotent)', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const lowSid = await seedRosterEntry(db, semester.id, '111111');
+      const highSid = await seedRosterEntry(db, semester.id, '222222');
+      const assignment = await seedAssignment(db, semester.id);
+      const job = await seedIngestJob(db, semester.id, user.id);
+
+      const sub = await seedSubmission(
+        db,
+        semester.id,
+        assignment.id,
+        highSid.id,
+        job.id,
+        'e4'.repeat(32),
+      );
+
+      await attachCoSubmitter(db, sub.id, semester.id, lowSid.id);
+      // A pg-boss retry, or the same export uploaded again.
+      await attachCoSubmitter(db, sub.id, semester.id, lowSid.id);
+      await attachCoSubmitter(db, sub.id, semester.id, highSid.id);
+
+      const [row] = await db
+        .select({ student_id: submissions.student_id, version_index: submissions.version_index })
+        .from(submissions)
+        .where(eq(submissions.id, sub.id));
+
+      expect(row!.student_id).toBe(lowSid.id);
+      expect(row!.version_index).toBe(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The lineage hazard the reconcile has to carry
+  // -------------------------------------------------------------------------
+  //
+  // `version_owner_key` is GENERATED from `student_id`, and
+  // `submissions_version_key` is UNIQUE (semester, assignment,
+  // version_owner_key, version_index). So re-electing the submitter of record
+  // MOVES the row between lineages, and a bare `SET student_id` raises a unique
+  // violation on any group resubmission whose canonical partner lost the race —
+  // roughly half of them.
+
+  it('re-allocates the version index when the move lands in an occupied lineage', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const lowSid = await seedRosterEntry(db, semester.id, '111111');
+      const highSid = await seedRosterEntry(db, semester.id, '222222');
+      const assignment = await seedAssignment(db, semester.id);
+      const job = await seedIngestJob(db, semester.id, user.id);
+
+      // Version 1 of the pair's work, already settled on the canonical partner.
+      const v1 = await seedSubmission(
+        db,
+        semester.id,
+        assignment.id,
+        lowSid.id,
+        job.id,
+        'f1'.repeat(32),
+        1,
+        { createdAt: new Date(Date.now() - 60_000) },
+      );
+
+      // The resubmission: the OTHER partner won this race, so createSubmission
+      // allocated version 1 in their own (empty) lineage.
+      const v2 = await seedSubmission(
+        db,
+        semester.id,
+        assignment.id,
+        highSid.id,
+        job.id,
+        'f2'.repeat(32),
+        1,
+      );
+
+      const superseded = await attachCoSubmitter(db, v2.id, semester.id, lowSid.id);
+
+      const rows = await db
+        .select({
+          id: submissions.id,
+          student_id: submissions.student_id,
+          version_index: submissions.version_index,
+          superseded_by: submissions.superseded_by_submission_id,
+        })
+        .from(submissions)
+        .where(eq(submissions.assignment_id, assignment.id));
+
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      // The move happened...
+      expect(byId.get(v2.id)!.student_id).toBe(lowSid.id);
+      // ...and took the version sequence with it, rather than colliding at 1.
+      expect(byId.get(v2.id)!.version_index).toBe(2);
+      // ...and the chain formed, which it never did while the lineage key
+      // flipped with the race winner.
+      expect(byId.get(v1.id)!.superseded_by).toBe(v2.id);
+      expect(byId.get(v2.id)!.superseded_by).toBeNull();
+      expect(superseded).toEqual([v1.id]);
+    });
+  });
+
+  it('leaves an already-superseded submission where it is', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const lowSid = await seedRosterEntry(db, semester.id, '111111');
+      const highSid = await seedRosterEntry(db, semester.id, '222222');
+      const assignment = await seedAssignment(db, semester.id);
+      const job = await seedIngestJob(db, semester.id, user.id);
+
+      const head = await seedSubmission(
+        db,
+        semester.id,
+        assignment.id,
+        highSid.id,
+        job.id,
+        'f3'.repeat(32),
+        2,
+      );
+      const old = await seedSubmission(
+        db,
+        semester.id,
+        assignment.id,
+        highSid.id,
+        job.id,
+        'f4'.repeat(32),
+        1,
+        { supersededBy: head.id },
+      );
+
+      const superseded = await attachCoSubmitter(db, old.id, semester.id, lowSid.id);
+
+      const [row] = await db
+        .select({ student_id: submissions.student_id, version_index: submissions.version_index })
+        .from(submissions)
+        .where(eq(submissions.id, old.id));
+
+      // A historical row must not be promoted to the head of another lineage.
+      expect(row!.student_id).toBe(highSid.id);
+      expect(row!.version_index).toBe(1);
+      expect(superseded).toEqual([]);
+
+      // The person is still recorded, which is the part that must never be lost.
+      const contributors = await db
+        .select({ roster_entry_id: submission_contributors.roster_entry_id })
+        .from(submission_contributors)
+        .where(eq(submission_contributors.submission_id, old.id));
+      expect(contributors.map((c) => c.roster_entry_id)).toEqual([lowSid.id]);
+    });
+  });
+
+  it('declines to slot itself under a NEWER submission in the target lineage', async () => {
+    await withTestDb(async (db) => {
+      const user = await seedUser(db);
+      const semester = await seedSemester(db, user.id);
+      const lowSid = await seedRosterEntry(db, semester.id, '111111');
+      const highSid = await seedRosterEntry(db, semester.id, '222222');
+      const assignment = await seedAssignment(db, semester.id);
+      const job = await seedIngestJob(db, semester.id, user.id);
+
+      // The canonical partner already has a newer submission of their own.
+      await seedSubmission(db, semester.id, assignment.id, lowSid.id, job.id, 'f5'.repeat(32), 1);
+
+      const older = await seedSubmission(
+        db,
+        semester.id,
+        assignment.id,
+        highSid.id,
+        job.id,
+        'f6'.repeat(32),
+        1,
+        { createdAt: new Date(Date.now() - 60_000) },
+      );
+
+      const superseded = await attachCoSubmitter(db, older.id, semester.id, lowSid.id);
+
+      const [row] = await db
+        .select({ student_id: submissions.student_id, version_index: submissions.version_index })
+        .from(submissions)
+        .where(eq(submissions.id, older.id));
+
+      // Renumbering a version chain a grader has already seen is a product
+      // decision, so the move is declined rather than half-made.
+      expect(row!.student_id).toBe(highSid.id);
+      expect(row!.version_index).toBe(1);
+      expect(superseded).toEqual([]);
     });
   });
 });

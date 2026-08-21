@@ -37,7 +37,7 @@ import { eq, and } from 'drizzle-orm';
 import type PgBoss from 'pg-boss';
 import { getBoss, stopBoss, JOB_KINDS } from './pg-boss.js';
 import { getLogger } from '../logging.js';
-import { getDb } from '../db/client.js';
+import { getDb, type DrizzleDb } from '../db/client.js';
 import { getConfig } from '../config/index.js';
 import { configuredValidationOptions } from '../config/root-key.js';
 import { ingest_files, ingest_jobs, semesters } from '../db/schema.js';
@@ -84,6 +84,37 @@ import { getNotifier } from '../notify/notifier.js';
 interface IngestFilePayload {
   ingestFileId: string;
   ingestJobId: string;
+}
+
+// ---------------------------------------------------------------------------
+// Supersede bookkeeping
+// ---------------------------------------------------------------------------
+
+/**
+ * Flip the `ingest_files` rows of newly superseded submissions.
+ *
+ * Best-effort status bookkeeping for the ingest job report, deliberately run
+ * OUTSIDE the transaction that produced `submissionIds`: these rows can belong
+ * to OTHER ingest jobs, and pulling them into the writer's transaction would
+ * add a cross-job lock ordering the pipeline does not otherwise have. Both
+ * producers are idempotent — a retry recomputes the same id set and this update
+ * sets the same value — so a crash between the two leaves a stale status, never
+ * a wrong submission.
+ *
+ * Two producers: `createSubmission` (a new version supersedes prior ones) and
+ * `attachCoSubmitter` (a submission moves lineage onto its canonical
+ * co-submitter and supersedes what was already there).
+ */
+async function markIngestFilesSuperseded(
+  db: DrizzleDb,
+  submissionIds: readonly string[],
+): Promise<void> {
+  for (const oldSubId of submissionIds) {
+    await db
+      .update(ingest_files)
+      .set({ status: 'superseded' })
+      .where(eq(ingest_files.submission_id, oldSubId));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -292,9 +323,10 @@ export async function startWorker(): Promise<() => Promise<void>> {
         // A hinted co-submitter joins the existing submission rather than being
         // silently erased by the duplicate (census scenario S20). Idempotent.
         if (hintedStudentId !== null) {
-          await timePhase('attach_co_submitter', () =>
+          const superseded = await timePhase('attach_co_submitter', () =>
             attachCoSubmitter(db, dedupResult.existingSubmissionId, semesterId, hintedStudentId),
           );
+          await markIngestFilesSuperseded(db, superseded);
         }
 
         await db
@@ -423,9 +455,10 @@ export async function startWorker(): Promise<() => Promise<void>> {
       // and the co-submitter is attached to it so the person is not lost.
       if (createOutcome.kind === 'duplicate') {
         if (studentId !== null) {
-          await timePhase('attach_co_submitter', () =>
+          const superseded = await timePhase('attach_co_submitter', () =>
             attachCoSubmitter(db, createOutcome.existingSubmissionId, semesterId, studentId),
           );
+          await markIngestFilesSuperseded(db, superseded);
         }
 
         await db
@@ -466,14 +499,9 @@ export async function startWorker(): Promise<() => Promise<void>> {
         // Update older submissions' ingest_files rows to 'superseded'.
         // Note: older ingest_files rows may be from a different ingest_job,
         // so we look them up by submission_id.
-        await timePhase('supersede', async () => {
-          for (const oldSubId of submissionResult.supersededIds) {
-            await db
-              .update(ingest_files)
-              .set({ status: 'superseded' })
-              .where(eq(ingest_files.submission_id, oldSubId));
-          }
-        });
+        await timePhase('supersede', () =>
+          markIngestFilesSuperseded(db, submissionResult.supersededIds),
+        );
       }
 
       // Lever B: build the chronological index ONCE and share it across the
