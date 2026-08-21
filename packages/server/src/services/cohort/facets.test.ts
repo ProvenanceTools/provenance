@@ -14,6 +14,7 @@ import { vi, describe, it, expect } from 'vitest';
 
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 import { withTestDb } from '../../../test/helpers/db.js';
+import { seedContributor } from '../../../test/helpers/seed-contributor.js';
 import {
   users,
   courses,
@@ -101,12 +102,21 @@ async function seedStudent(
   return entry!;
 }
 
+/**
+ * Seed a submission AND the contributor row every real submission has (0029
+ * backfill + `finalizeContributors` on all three write paths). The facet `q`
+ * predicate goes through `submission_contributors` now, so a fixture without
+ * one would be describing a state production cannot reach.
+ *
+ * `extraContributorIds` are co-submitters who are NOT the submitter of record.
+ */
 async function seedSubmission(
   db: Parameters<typeof buildFacets>[0],
   semesterId: string,
   assignmentId: string,
   studentId: string,
   ingestJobId: string,
+  extraContributorIds: string[] = [],
 ) {
   const id = crypto.randomUUID();
   const [sub] = await db
@@ -126,6 +136,12 @@ async function seedSubmission(
       validation_status: 'pass',
     })
     .returning();
+
+  await seedContributor(db, sub!.id, semesterId, studentId);
+  for (const extra of extraContributorIds) {
+    await seedContributor(db, sub!.id, semesterId, extra);
+  }
+
   return sub!;
 }
 
@@ -168,6 +184,54 @@ describe('buildFacets — protected mode q-oracle guard', () => {
       expect(assignmentFacet).toBeDefined();
       // Only Zara's submission.
       expect(assignmentFacet!.count).toBe(1);
+    });
+  });
+
+  /**
+   * The facets render beside the cohort list. If the facet `q` still matched
+   * only the submitter of record while the list matched any contributor, a
+   * grader searching a partner's name would see one row in the list under a
+   * facet that counted zero — the count contradicting the rows beneath it.
+   */
+  it('counts a group submission when the search matches a NON-submitter partner', async () => {
+    await withTestDb(async (db) => {
+      const { semester, assignment, ingestJob } = await seedBase(db);
+
+      const ada = await seedStudent(db, semester.id, '100001', 'Ada Lovelace', 1);
+      const grace = await seedStudent(db, semester.id, '100002', 'Grace Hopper', 2);
+      const bob = await seedStudent(db, semester.id, '100003', 'Bob Smith', 3);
+
+      // Ada submits; Grace is the partner who never appears in student_id.
+      await seedSubmission(db, semester.id, assignment.id, ada.id, ingestJob.id, [grace.id]);
+      // An unrelated solo submission that must NOT be counted.
+      await seedSubmission(db, semester.id, assignment.id, bob.id, ingestJob.id);
+
+      const facets = await buildFacets(db, semester.id, { q: 'Grace' }, false);
+
+      const assignmentFacet = facets.by_assignment.find((a) => a.id === assignment.id);
+      expect(assignmentFacet).toBeDefined();
+      expect(assignmentFacet!.count).toBe(1);
+      // Counted exactly once despite two contributor rows on the submission —
+      // the EXISTS semi-join does not fan COUNT(*) out.
+      expect(facets.by_validation.pass).toBe(1);
+      expect(facets.by_severity.info).toBe(1);
+    });
+  });
+
+  it('does not count anything for a roster student who contributed to nothing', async () => {
+    await withTestDb(async (db) => {
+      const { semester, assignment, ingestJob } = await seedBase(db);
+
+      const ada = await seedStudent(db, semester.id, '100001', 'Ada Lovelace', 1);
+      const grace = await seedStudent(db, semester.id, '100002', 'Grace Hopper', 2);
+      await seedStudent(db, semester.id, '100003', 'Mallory Quinn', 3);
+
+      await seedSubmission(db, semester.id, assignment.id, ada.id, ingestJob.id, [grace.id]);
+
+      const facets = await buildFacets(db, semester.id, { q: 'Mallory' }, false);
+
+      expect(facets.by_assignment).toHaveLength(0);
+      expect(facets.by_validation.pass).toBe(0);
     });
   });
 });

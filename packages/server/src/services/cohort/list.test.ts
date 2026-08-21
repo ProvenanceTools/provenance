@@ -10,6 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { withTestDb } from '../../../test/helpers/db.js';
+import { seedContributor } from '../../../test/helpers/seed-contributor.js';
 import {
   courses,
   semesters,
@@ -99,6 +100,19 @@ async function seedIngestJob(db: DrizzleDb, semesterId: string, userId: string) 
   return job!;
 }
 
+/**
+ * Seed a submission AND the contributor row every real submission has.
+ *
+ * Migration 0029 backfilled one for every pre-existing row and
+ * `finalizeContributors` writes one inside the same transaction on all three
+ * write paths, so a `submissions` row with no `submission_contributors` row is
+ * a state production cannot reach. The free-text search goes through that table
+ * now (as the `studentId` filter already did), so a fixture without one would
+ * be asserting on an impossible database rather than on the search.
+ *
+ * `extraContributorIds` are the co-submitters who are NOT the submitter of
+ * record — the people the old search could never find.
+ */
 async function seedSubmission(
   db: DrizzleDb,
   opts: {
@@ -108,6 +122,7 @@ async function seedSubmission(
     ingestJobId: string;
     scoreTotal?: number;
     versionIndex?: number;
+    extraContributorIds?: string[];
   },
 ) {
   const id = crypto.randomUUID();
@@ -129,6 +144,14 @@ async function seedSubmission(
       recorder_version: '1.0.0',
     })
     .returning();
+
+  await seedContributor(db, sub!.id, opts.semesterId, opts.studentId, {
+    score: { total: opts.scoreTotal ?? 0, maxSeverity: 'info' },
+  });
+  for (const extra of opts.extraContributorIds ?? []) {
+    await seedContributor(db, sub!.id, opts.semesterId, extra, { isSubmitter: true });
+  }
+
   return sub!;
 }
 
@@ -422,6 +445,316 @@ describe('listCohortSubmissions — protected mode', () => {
         parseInt(i.student!.display_name.replace('Student ', '')),
       );
       expect(indices).toEqual([1, 2, 3]);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Free-text search over CONTRIBUTORS, not just the submitter of record
+// ---------------------------------------------------------------------------
+
+/**
+ * Regression suite for the defect where a grader could not find a student's
+ * GROUP submission by typing that student's name.
+ *
+ * A group submission has one `submission_contributors` row per person but only
+ * ONE `submissions.student_id` — the submitter of record. The search used to be
+ * an ILIKE against the roster row reached through that scalar column, so it
+ * only ever matched the submitter. And since `student_id` is settled
+ * deterministically on the lowest co-submitter SID (`ingest/dedup.ts`), the
+ * same partner was unfindable on every search rather than on a random half of
+ * them: the grader got a consistent "that student has no submission" for work
+ * that was sitting in the system under someone else's name.
+ */
+describe('listCohortSubmissions — free-text search spans contributors', () => {
+  it('finds a group submission by a partner who is NOT the submitter of record', async () => {
+    await withTestDb(async (db) => {
+      const { semester } = await seedCourseAndSemester(db);
+      const user = await seedUser(db);
+      const job = await seedIngestJob(db, semester.id, user.id);
+      const assignment = await seedAssignment(db, semester.id);
+
+      // Ada sorts lower on sid, so she is the submitter of record; Grace is the
+      // partner the old predicate could never reach.
+      const ada = await seedStudent(db, semester.id, '100001', 'Ada Lovelace', 1);
+      const grace = await seedStudent(db, semester.id, '100002', 'Grace Hopper', 2);
+
+      const group = await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: assignment.id,
+        studentId: ada.id,
+        ingestJobId: job.id,
+        extraContributorIds: [grace.id],
+      });
+
+      const res = await listCohortSubmissions(
+        db,
+        semester.id,
+        { q: 'Grace' },
+        'score_desc',
+        null,
+        50,
+        false,
+      );
+
+      expect(res.items.map((i) => i.id)).toEqual([group.id]);
+      // The count must agree with the page, or the pager reports a total it can
+      // never reach.
+      expect(res.totalCount).toBe(1);
+      // The row is still rendered under its submitter of record — the search
+      // widened, the projection did not.
+      expect(res.items[0]!.student!.display_name).toBe('Ada Lovelace');
+      expect(res.items[0]!.contributors.map((c) => c.student!.display_name).sort()).toEqual([
+        'Ada Lovelace',
+        'Grace Hopper',
+      ]);
+    });
+  });
+
+  it("finds a group submission by a partner's SID", async () => {
+    await withTestDb(async (db) => {
+      const { semester } = await seedCourseAndSemester(db);
+      const user = await seedUser(db);
+      const job = await seedIngestJob(db, semester.id, user.id);
+      const assignment = await seedAssignment(db, semester.id);
+
+      const ada = await seedStudent(db, semester.id, '100001', 'Ada Lovelace', 1);
+      const grace = await seedStudent(db, semester.id, '200002', 'Grace Hopper', 2);
+
+      const group = await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: assignment.id,
+        studentId: ada.id,
+        ingestJobId: job.id,
+        extraContributorIds: [grace.id],
+      });
+
+      const res = await listCohortSubmissions(
+        db,
+        semester.id,
+        { q: '200002' },
+        'score_desc',
+        null,
+        50,
+        false,
+      );
+
+      expect(res.items.map((i) => i.id)).toEqual([group.id]);
+      expect(res.totalCount).toBe(1);
+    });
+  });
+
+  it('still finds a solo submission by its submitter of record', async () => {
+    await withTestDb(async (db) => {
+      const { semester } = await seedCourseAndSemester(db);
+      const user = await seedUser(db);
+      const job = await seedIngestJob(db, semester.id, user.id);
+      const assignment = await seedAssignment(db, semester.id);
+
+      const ada = await seedStudent(db, semester.id, '100001', 'Ada Lovelace', 1);
+      const bob = await seedStudent(db, semester.id, '100002', 'Bob Smith', 2);
+
+      const adaSub = await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: assignment.id,
+        studentId: ada.id,
+        ingestJobId: job.id,
+      });
+      await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: assignment.id,
+        studentId: bob.id,
+        ingestJobId: job.id,
+        versionIndex: 2,
+      });
+
+      const res = await listCohortSubmissions(
+        db,
+        semester.id,
+        { q: 'Ada' },
+        'score_desc',
+        null,
+        50,
+        false,
+      );
+
+      expect(res.items.map((i) => i.id)).toEqual([adaSub.id]);
+      expect(res.totalCount).toBe(1);
+    });
+  });
+
+  it('does not match a roster student who contributed to nothing', async () => {
+    await withTestDb(async (db) => {
+      const { semester } = await seedCourseAndSemester(db);
+      const user = await seedUser(db);
+      const job = await seedIngestJob(db, semester.id, user.id);
+      const assignment = await seedAssignment(db, semester.id);
+
+      const ada = await seedStudent(db, semester.id, '100001', 'Ada Lovelace', 1);
+      const grace = await seedStudent(db, semester.id, '100002', 'Grace Hopper', 2);
+      // On the roster, contributor to nothing. Widening the search must not
+      // turn "enrolled" into "has a submission".
+      await seedStudent(db, semester.id, '100003', 'Mallory Quinn', 3);
+
+      await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: assignment.id,
+        studentId: ada.id,
+        ingestJobId: job.id,
+        extraContributorIds: [grace.id],
+      });
+
+      const res = await listCohortSubmissions(
+        db,
+        semester.id,
+        { q: 'Mallory' },
+        'score_desc',
+        null,
+        50,
+        false,
+      );
+
+      expect(res.items).toHaveLength(0);
+      expect(res.totalCount).toBe(0);
+    });
+  });
+
+  it('a submission is returned ONCE even when several contributors match', async () => {
+    await withTestDb(async (db) => {
+      const { semester } = await seedCourseAndSemester(db);
+      const user = await seedUser(db);
+      const job = await seedIngestJob(db, semester.id, user.id);
+      const assignment = await seedAssignment(db, semester.id);
+
+      // Both surnames contain 'Hopper', so BOTH contributor rows match the
+      // pattern. An EXISTS semi-join collapses that to one row; a plain join
+      // would have emitted two and inflated the page and the count.
+      const one = await seedStudent(db, semester.id, '100001', 'Grace Hopper', 1);
+      const two = await seedStudent(db, semester.id, '100002', 'Dennis Hopper', 2);
+
+      const group = await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: assignment.id,
+        studentId: one.id,
+        ingestJobId: job.id,
+        extraContributorIds: [two.id],
+      });
+
+      const res = await listCohortSubmissions(
+        db,
+        semester.id,
+        { q: 'Hopper' },
+        'score_desc',
+        null,
+        50,
+        false,
+      );
+
+      expect(res.items.map((i) => i.id)).toEqual([group.id]);
+      expect(res.totalCount).toBe(1);
+    });
+  });
+
+  it('pages a contributor-matched result set exactly once per row', async () => {
+    await withTestDb(async (db) => {
+      const { semester } = await seedCourseAndSemester(db);
+      const user = await seedUser(db);
+      const job = await seedIngestJob(db, semester.id, user.id);
+      const assignment = await seedAssignment(db, semester.id);
+
+      const grace = await seedStudent(db, semester.id, '900001', 'Grace Hopper', 99);
+
+      // Five group submissions, each with a DIFFERENT submitter of record and
+      // Grace as the non-canonical partner. Identical scores on purpose: the
+      // keyset tiebreak on `id` is then the only thing separating them, which
+      // is the shape that both dropped AND re-served rows before the
+      // microsecond-cursor fix.
+      const expectedIds = new Set<string>();
+      for (let i = 1; i <= 5; i++) {
+        const partner = await seedStudent(db, semester.id, `10000${i}`, `Partner ${i}`, i);
+        const sub = await seedSubmission(db, {
+          semesterId: semester.id,
+          assignmentId: assignment.id,
+          studentId: partner.id,
+          ingestJobId: job.id,
+          scoreTotal: 7,
+          versionIndex: i,
+          extraContributorIds: [grace.id],
+        });
+        expectedIds.add(sub.id);
+      }
+
+      const { decodeCursor } = await import('./list.js');
+
+      for (const sort of ['score_desc', 'ingested_desc', 'student_asc'] as const) {
+        const seen: string[] = [];
+        let cursor = null as ReturnType<typeof decodeCursor>;
+        // limit=2 over 5 rows: three pages, the last one short.
+        for (let page = 0; page < 10; page++) {
+          const res = await listCohortSubmissions(
+            db,
+            semester.id,
+            { q: 'Grace' },
+            sort,
+            cursor,
+            2,
+            false,
+          );
+          expect(res.totalCount).toBe(5);
+          seen.push(...res.items.map((i) => i.id));
+          if (res.nextCursor === null) break;
+          cursor = decodeCursor(res.nextCursor);
+          expect(cursor).not.toBeNull();
+        }
+
+        // Every row exactly once — no drops, no duplicates.
+        expect(seen).toHaveLength(5);
+        expect(new Set(seen)).toEqual(expectedIds);
+      }
+    });
+  });
+
+  it('protected mode still refuses to narrow on a PARTNER name (oracle closure)', async () => {
+    await withTestDb(async (db) => {
+      const { semester } = await seedCourseAndSemester(db);
+      const user = await seedUser(db);
+      const job = await seedIngestJob(db, semester.id, user.id);
+      const assignment = await seedAssignment(db, semester.id);
+
+      const ada = await seedStudent(db, semester.id, '100001', 'Ada Lovelace', 1);
+      const grace = await seedStudent(db, semester.id, '100002', 'Grace Hopper', 2);
+      const bob = await seedStudent(db, semester.id, '100003', 'Bob Smith', 3);
+
+      await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: assignment.id,
+        studentId: ada.id,
+        ingestJobId: job.id,
+        extraContributorIds: [grace.id],
+      });
+      await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: assignment.id,
+        studentId: bob.id,
+        ingestJobId: job.id,
+        versionIndex: 2,
+      });
+
+      // Widening the search to contributors must not widen the oracle: a
+      // protected principal typing a real partner name must learn nothing from
+      // which rows come back, so the predicate stays suppressed entirely.
+      const res = await listCohortSubmissions(
+        db,
+        semester.id,
+        { q: 'Grace' },
+        'score_desc',
+        null,
+        50,
+        true,
+      );
+      expect(res.totalCount).toBe(2);
+      expect(res.items).toHaveLength(2);
+      expect(JSON.stringify(res.items)).not.toMatch(/Grace|Ada|Bob|Lovelace|Hopper|Smith/);
     });
   });
 });

@@ -37,7 +37,13 @@ export const cohortPaths = {
         { name: 'score_min', in: 'query', schema: { type: 'number' } },
         { name: 'score_max', in: 'query', schema: { type: 'number' } },
         { name: 'include_superseded', in: 'query', schema: { type: 'boolean', default: false } },
-        { name: 'q', in: 'query', schema: { type: 'string' } },
+        {
+          name: 'q',
+          in: 'query',
+          schema: { type: 'string' },
+          description:
+            'Free-text search on roster display_name or sid. Matches a submission when ANY of its contributors matches, not only the submitter of record — so a group submission is found under either partner. Ignored (not applied) for a protected-mode principal.',
+        },
         {
           name: 'sort',
           in: 'query',
