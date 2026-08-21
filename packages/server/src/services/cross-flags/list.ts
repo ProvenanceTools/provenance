@@ -76,6 +76,8 @@ export type CrossFlagFilters = {
 export type CrossScopeExclusionMemberRow = {
   submission_id: string;
   source_filename: string;
+  /** Everyone the submission is attributable to, as on a cross-flag participant. */
+  contributors: SubmissionContributor[];
   student: { id: string; sid: string; display_name: string } | null;
   assignment: { id: string; assignment_id_str: string };
 };
@@ -326,6 +328,7 @@ export async function listCrossScopeExclusions(
         memberById.get(id) ?? {
           submission_id: id,
           source_filename: id,
+          contributors: [],
           student: null,
           assignment: { id: '', assignment_id_str: '' },
         },
@@ -362,10 +365,20 @@ async function fetchExclusionMembers(
     .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
     .where(inArray(submissions.id, submissionIds));
 
+  // ONE batched query for every member submission, for the same reason
+  // `fetchParticipants` batches: a per-member fetch would put an N+1 on a list
+  // endpoint.
+  const contributorsBySubmission = await fetchContributorsFor(
+    db,
+    [...new Set(rows.map((r) => r.submission_id))],
+    protectedMode,
+  );
+
   for (const row of rows) {
     result.set(row.submission_id, {
       submission_id: row.submission_id,
       source_filename: row.source_filename,
+      contributors: contributorsBySubmission.get(row.submission_id) ?? [],
       student:
         row.student_id === null || row.student_sid === null || row.student_display_name === null
           ? null

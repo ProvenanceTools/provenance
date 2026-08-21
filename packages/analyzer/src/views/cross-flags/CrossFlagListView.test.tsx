@@ -91,6 +91,7 @@ function makeExclusion(overrides: Partial<Record<string, unknown>> = {}) {
       {
         submission_id: 'aa000000-0000-0000-0000-000000000001',
         source_filename: 'alice_proj1.zip',
+        contributors: [makeSoloContributor(LIST_ALICE, LIST_NO_SCORE)],
         student: {
           id: '30000000-0000-0000-0000-000000000001',
           sid: '3031234',
@@ -101,6 +102,7 @@ function makeExclusion(overrides: Partial<Record<string, unknown>> = {}) {
       {
         submission_id: 'bb000000-0000-0000-0000-000000000001',
         source_filename: 'bob_proj1.zip',
+        contributors: [makeSoloContributor(LIST_BOB, LIST_NO_SCORE)],
         student: {
           id: '30000000-0000-0000-0000-000000000002',
           sid: '3032345',
@@ -321,8 +323,12 @@ describe('CrossFlagListView — the cross-scope exclusion register', () => {
 
   it('falls back to the archive filename when no roster entry owns a member (D9)', async () => {
     const ex = makeExclusion();
+    // NOTHING names this member: no owning roster entry AND no resolved
+    // contributors. Nulling `student` alone is no longer that case — the
+    // contributor list names a group submission that has no single owner,
+    // which is the point of the test below.
     const members = (ex.members as Array<Record<string, unknown>>).map((m, i) =>
-      i === 0 ? { ...m, student: null } : m,
+      i === 0 ? { ...m, student: null, contributors: [] } : m,
     );
     setupListHandler([], null, [{ ...ex, members }]);
     renderListView();
@@ -333,6 +339,36 @@ describe('CrossFlagListView — the cross-scope exclusion register', () => {
     // The member is still LISTED. A group submission with no single owner must
     // not vanish from the register just because it has no name to show.
     expect(screen.getByText('alice_proj1.zip · Bob')).toBeInTheDocument();
+  });
+
+  it('names EVERY contributor of a group member, not one arbitrary submitter', async () => {
+    // The register exists to say "these submissions are one partnership, so
+    // they were deliberately not compared". Naming only `student` — the single
+    // submitter of record — names one arbitrary partner in the one place the
+    // partnership itself is the point.
+    const ex = makeExclusion();
+    const members = (ex.members as Array<Record<string, unknown>>).map((m, i) =>
+      i === 0
+        ? {
+            ...m,
+            student: null,
+            contributors: [
+              makeSoloContributor(LIST_ALICE, LIST_NO_SCORE),
+              makeSoloContributor(LIST_BOB, LIST_NO_SCORE),
+            ],
+          }
+        : m,
+    );
+    setupListHandler([], null, [{ ...ex, members }]);
+    renderListView();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('cross-scope-exclusions')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Alice/)).toBeInTheDocument();
+    expect(screen.getByText(/Bob/)).toBeInTheDocument();
+    // The filename fallback must NOT be reached when contributors resolve.
+    expect(screen.queryByText(/alice_proj1\.zip/)).not.toBeInTheDocument();
   });
 
   it('is NOT rendered as a finding row', async () => {

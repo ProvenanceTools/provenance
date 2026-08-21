@@ -16,6 +16,7 @@ import { useActiveSemester } from '../../api/use-active-semester.js';
 import { RowLink } from '../../components/a11y/RowLink.js';
 import type { CrossFlagDetailItem, CrossScopeExclusionItem } from '@provenance/shared/api-schemas';
 import type { CrossFlagFilters } from '../../api/queries.js';
+import { contributorsLabel } from '../../lib/contributor-display.js';
 
 // ---------------------------------------------------------------------------
 // Severity badge
@@ -78,7 +79,14 @@ function CrossScopeExclusionPanel({ exclusions }: { exclusions: CrossScopeExclus
             data-testid={`cross-scope-exclusion-${ex.id}`}
           >
             <p className="text-xs font-medium text-gray-900">
-              {ex.members.map((m) => m.student?.display_name ?? m.source_filename).join(' · ')}
+              {ex.members
+                .map(
+                  (m) =>
+                    // `fallbackStudent` covers a response that predates `contributors`.
+                    contributorsLabel(m.contributors, { fallbackStudent: m.student }) ||
+                    m.source_filename,
+                )
+                .join(' · ')}
             </p>
             <p className="mt-1 text-xs text-gray-600">
               Same repository lineage —{' '}

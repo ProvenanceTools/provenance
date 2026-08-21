@@ -1570,6 +1570,16 @@ export const CrossScopeExclusionMemberSchema = z.object({
       display_name: z.string(),
     })
     .nullable(),
+  /**
+   * Everyone this submission is attributable to, exactly as
+   * {@link CrossFlagParticipantSchema.contributors}.
+   *
+   * This panel exists to say "these submissions are one partnership, so they
+   * were deliberately not compared". Rendering only `student` — the single
+   * submitter of record — would name one arbitrary partner per submission in
+   * the one place the partnership itself is the point.
+   */
+  contributors: z.array(SubmissionContributorSchema),
   assignment: z.object({
     id: z.string().uuid(),
     assignment_id_str: z.string(),
