@@ -60,6 +60,43 @@
  *
  * `rev-parse` and `rev-list` are local object-database reads. Nothing here
  * fetches, and nothing consults a remote.
+ *
+ * ## Finding git at all — writer correction 8
+ *
+ * Spawning a bare `git` requires git on the `PATH` the editor inherited, which
+ * on Windows is frequently NOT the PATH a GUI-launched application has. VS Code
+ * ships a `git.path` setting for exactly that reason, and its own git extension
+ * publishes the binary it resolved as `api.git.path`. So the recorder can fail
+ * to find a git that VS Code, in the same process, is happily using.
+ *
+ * {@link resolveGitPathCandidates} turns what VS Code knows into an ORDERED
+ * candidate list and {@link createGitRunner} walks it, and the ordering is the
+ * whole design:
+ *
+ *  1. `api.git.path` — the binary VS Code actually resolved. It already honours
+ *     the setting, so it is the most specific answer available.
+ *  2. the `git.path` setting, which is a string OR an array of candidate paths
+ *     (the setting's own documented shape) — the fallback for a git extension
+ *     that is present but does not publish `git.path`.
+ *  3. bare `'git'`, i.e. the PATH lookup, which is what shipped before this and
+ *     is right on every machine where it was already right.
+ *
+ * A candidate that cannot be STARTED (`ENOENT`: not there; `EACCES`/`EPERM`: not
+ * runnable; `ENOTDIR`/`EINVAL`: not a program) falls through to the next one. A
+ * candidate that DID start and then failed — a non-zero exit, a timeout — does
+ * NOT: git was found and answered, and re-running a different binary would only
+ * spend the 5s budget twice to be told the same thing.
+ *
+ * Still no shell (`execFile`), so a path containing spaces —
+ * `C:\Program Files\Git\cmd\git.exe`, the Windows default — needs no quoting
+ * and behaves identically on every platform. The corollary is that a `.cmd` or
+ * `.bat` git wrapper cannot be launched: Node refuses it without a shell, which
+ * lands in the fall-through and finally in an omission. Reintroducing a shell to
+ * support one would buy back every cross-platform quoting difference `execFile`
+ * exists to avoid.
+ *
+ * Every rung of that ladder still ends at OMISSION. Resolution can only ever
+ * find a git that would otherwise have been missed; it can never invent a value.
  */
 
 import { execFile } from 'node:child_process';
@@ -80,10 +117,113 @@ const GIT_TIMEOUT_MS = 5_000;
 /** 1 MiB. A root-commit listing is a handful of lines; anything larger is wrong. */
 const GIT_MAX_BUFFER = 1024 * 1024;
 
-const defaultGitRunner: GitRunner = (args, cwd) =>
+/**
+ * Spawns ONE git executable. The seam beneath {@link GitRunner}, so the
+ * candidate-fall-through logic can be tested without a git binary and without a
+ * process.
+ */
+export type GitSpawn = (
+  file: string,
+  args: readonly string[],
+  cwd: string,
+) => Promise<string>;
+
+/** The PATH lookup — what shipped before `git.path` was consulted. */
+export const BARE_GIT_COMMAND = 'git';
+
+/**
+ * What VS Code knows about where git lives.
+ *
+ * Both fields are `unknown` on purpose: one comes from an extension's untyped
+ * `exports`, the other from a user-editable settings file. Neither is trusted to
+ * be a string, and neither is trusted to exist.
+ */
+export type GitPathHints = {
+  /** `api.git.path` from the vscode.git extension's API v1. */
+  readonly extensionApiGitPath?: unknown;
+  /** The `git.path` setting: a string, an ARRAY of candidate paths, or absent. */
+  readonly configuredGitPath?: unknown;
+};
+
+/** True for a string worth spawning: present, and not blank. */
+function isSpawnableCandidate(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+/**
+ * The ordered list of git executables to try, most specific first, always ending
+ * at the bare PATH lookup.
+ *
+ * Pure, and deliberately so: this is the half of the resolution that has to be
+ * right on a platform none of us can run here, so it is unit-testable against
+ * Windows-shaped inputs without spawning anything.
+ *
+ * Candidates are kept VERBATIM — never trimmed, never quoted, never split. A
+ * path containing spaces is a path containing spaces; `execFile` passes it to
+ * the OS as one argument, and trimming it would corrupt the one platform where
+ * a trailing space in a filename is legal. A blank entry is dropped because it
+ * cannot name anything; a non-string entry is dropped because it cannot either.
+ *
+ * The result is never empty: {@link BARE_GIT_COMMAND} is always last, so a
+ * machine where nothing is configured behaves exactly as it did before this
+ * function existed.
+ */
+export function resolveGitPathCandidates(hints: GitPathHints = {}): readonly string[] {
+  const ordered: string[] = [];
+
+  const push = (value: unknown): void => {
+    if (!isSpawnableCandidate(value)) return;
+    // De-duplicated exactly, not case-insensitively: Windows paths are
+    // case-insensitive but POSIX ones are not, and dropping a genuinely
+    // distinct candidate is worse than spawning a duplicate once at setup.
+    if (!ordered.includes(value)) ordered.push(value);
+  };
+
+  // 1. VS Code's own resolved binary. It already accounts for the setting.
+  push(hints.extensionApiGitPath);
+
+  // 2. The setting itself, string or array — both shapes are documented by the
+  //    setting, and an array is tried in order, which is what VS Code does.
+  const configured = hints.configuredGitPath;
+  if (Array.isArray(configured)) {
+    for (const entry of configured as readonly unknown[]) push(entry);
+  } else {
+    push(configured);
+  }
+
+  // 3. The PATH lookup, always, as the last resort.
+  push(BARE_GIT_COMMAND);
+
+  return ordered;
+}
+
+/**
+ * `error.code` values that mean the candidate never STARTED, so the next
+ * candidate deserves a turn.
+ *
+ * A candidate that started and then failed is absent from this list on purpose:
+ * a non-zero exit ("not a git repository") and a timeout are answers, and
+ * re-asking a different binary spends the budget again to hear the same thing.
+ */
+const CANDIDATE_UNUSABLE_CODES: ReadonlySet<string> = new Set([
+  'ENOENT', // no such executable — the case `git.path` exists for
+  'ENOTDIR', // a path component is not a directory
+  'EACCES', // present but not executable
+  'EPERM', // present, executable, refused by policy
+  'EINVAL', // not a launchable program (e.g. a .cmd/.bat wrapper, no shell)
+]);
+
+function isCandidateUnusable(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' && CANDIDATE_UNUSABLE_CODES.has(code);
+}
+
+/** Spawns one git via `execFile`: no shell, hidden window, bounded time and output. */
+const execFileSpawn: GitSpawn = (file, args, cwd) =>
   new Promise<string>((resolve, reject) => {
     execFile(
-      'git',
+      file,
       [...args],
       { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true },
       (error, stdout) => {
@@ -92,6 +232,33 @@ const defaultGitRunner: GitRunner = (args, cwd) =>
       },
     );
   });
+
+/**
+ * A {@link GitRunner} that tries each candidate in order until one STARTS.
+ *
+ * The rejection it finally propagates is the LAST candidate's, and every
+ * rejection means the same thing to {@link deriveRootCommitSha}: omit. This
+ * function can therefore only ever turn a missing-git omission into a value; it
+ * has no path that turns a value into something else.
+ */
+export function createGitRunner(
+  candidates: readonly string[] = [BARE_GIT_COMMAND],
+  spawn: GitSpawn = execFileSpawn,
+): GitRunner {
+  const ladder = candidates.length > 0 ? candidates : [BARE_GIT_COMMAND];
+  return async (args, cwd) => {
+    let lastError: unknown;
+    for (const file of ladder) {
+      try {
+        return await spawn(file, args, cwd);
+      } catch (e) {
+        if (!isCandidateUnusable(e)) throw e;
+        lastError = e;
+      }
+    }
+    throw lastError;
+  };
+}
 
 /**
  * True iff `value` is what every reader accepts as a repository discriminator.
@@ -118,7 +285,7 @@ function isUsableDiscriminator(value: string): boolean {
  */
 export async function deriveRootCommitSha(
   repoRootFsPath: string,
-  run: GitRunner = defaultGitRunner,
+  run: GitRunner = createGitRunner(),
 ): Promise<string | undefined> {
   try {
     // A shallow clone's boundary commit has no parents and is NOT a root.

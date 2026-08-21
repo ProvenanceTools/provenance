@@ -61,6 +61,12 @@ export const workspace = {
   // Already-open documents at extension activation time. Default empty; tests
   // that exercise the synthetic-open path stub this via vi.mock.
   textDocuments: [] as readonly unknown[],
+  // Used by git-wiring to read the `git.path` setting when resolving the git
+  // executable. Default: nothing configured, i.e. the bare PATH lookup. Tests
+  // that care inject `readConfiguredGitPath` rather than mutating this.
+  getConfiguration: (_section?: string) => ({
+    get: <T>(_key: string): T | undefined => undefined,
+  }),
 };
 
 export const extensions = {
