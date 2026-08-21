@@ -11,6 +11,15 @@
  *     genuine detection for every bundle recorded to date.
  *  4. A scope that observed no commits at all must still be compared.
  *  5. Every exclusion must be VISIBLE, with the commits that proved it.
+ *
+ * Two more the sentinel-tolerant match adds, which pull in opposite directions
+ * and are the whole difficulty of that rule:
+ *
+ *  6. A MIXED partner pair — one partner on a discriminator-emitting build, one
+ *     on an older one — must NOT be compared. A staged rollout guarantees this
+ *     shape, and without the bridge it is a live false accusation.
+ *  7. Two DIFFERENT real repository keys sharing a sha must still be compared,
+ *     including when an unlabelled third scope could bridge them in two hops.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -108,6 +117,83 @@ describe('partitionCrossScopes', () => {
     ]);
 
     expect(p.lineageOf.get('alice')).not.toBe(p.lineageOf.get('carol'));
+  });
+
+  it('merges a MIXED-scope partner pair: one labelled build, one older one', () => {
+    // The live false accusation. A staged recorder rollout puts one partner on a
+    // build that emits the D12 root-commit discriminator and the other on a build
+    // that does not, so the SAME commit gets two different node keys, one
+    // observer each — no union, no exclusion, and the two people the course
+    // assigned to collaborate get compared and flagged.
+    const p = partitionCrossScopes([
+      features('alice', labelled(ROOT_ONE, A)),
+      features('bob', unlabelled(A)),
+    ]);
+
+    expect(p.lineageOf.get('alice')).toBe(p.lineageOf.get('bob'));
+    expect(sameRepositoryLineage(p, 'alice', 'bob')).toBe(true);
+    // Both participating keys are named. Claiming Bob observed
+    // `repository:<root> <sha>` would be evidence the record does not contain.
+    expect(p.exclusions).toHaveLength(1);
+    expect(p.exclusions[0]!.sharedCommits).toEqual(
+      [...labelled(ROOT_ONE, A), ...unlabelled(A)].sort(),
+    );
+  });
+
+  it('does NOT bridge two DIFFERENT real repositories through the sentinel', () => {
+    // The forbidden merge arrived at in two hops. Alice and carol hold two
+    // different repositories that share a sha — legitimate for a submodule, a
+    // fork, or a template-derived repo — and bob is unlabelled. Bridging bob to
+    // both would transitively union alice with carol, which is exactly the
+    // sha-space merge D12 exists to prevent. Ambiguity resolves toward comparing.
+    const p = partitionCrossScopes([
+      features('alice', labelled(ROOT_ONE, A)),
+      features('bob', unlabelled(A)),
+      features('carol', labelled(ROOT_TWO, A)),
+    ]);
+
+    expect(p.lineageOf.get('alice')).not.toBe(p.lineageOf.get('carol'));
+    expect(p.lineageOf.get('alice')).not.toBe(p.lineageOf.get('bob'));
+    expect(p.lineageOf.get('bob')).not.toBe(p.lineageOf.get('carol'));
+    expect(p.exclusions).toEqual([]);
+  });
+
+  it('still bridges when the ONE real repository has several observers', () => {
+    const p = partitionCrossScopes([
+      features('alice', labelled(ROOT_ONE, A)),
+      features('bob', labelled(ROOT_ONE, A)),
+      features('cara', unlabelled(A)),
+    ]);
+
+    expect(p.exclusions).toHaveLength(1);
+    expect(p.exclusions[0]!.bundleIds).toEqual(['alice', 'bob', 'cara']);
+    expect(p.exclusions[0]!.excludedPairCount).toBe(3);
+  });
+
+  it('does not treat ONE mixed-scope submission as two observers of its own commit', () => {
+    // A single bundle whose sessions are partly labelled observes the same sha
+    // under both keys. That is one holder of one repository; it must not become
+    // a lineage with carol, and must not become an exclusion on its own.
+    const p = partitionCrossScopes([
+      { ...features('alice'), observedCommitKeys: [...labelled(ROOT_ONE, A), ...unlabelled(A)] },
+      features('carol', unlabelled(B)),
+    ]);
+
+    expect(p.lineageOf.get('alice')).not.toBe(p.lineageOf.get('carol'));
+    expect(p.exclusions).toEqual([]);
+  });
+
+  it('is order-independent across a mixed-scope bridge', () => {
+    const forward = partitionCrossScopes([
+      features('alice', labelled(ROOT_ONE, A)),
+      features('bob', unlabelled(A)),
+    ]);
+    const backward = partitionCrossScopes([
+      features('bob', unlabelled(A)),
+      features('alice', labelled(ROOT_ONE, A)),
+    ]);
+
+    expect(forward.exclusions).toEqual(backward.exclusions);
   });
 
   it('merges transitively: A~B and B~C puts all three in one lineage', () => {

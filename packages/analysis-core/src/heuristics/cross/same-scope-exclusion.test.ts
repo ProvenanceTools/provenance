@@ -84,6 +84,12 @@ type SessionSpec = {
   /** Paste this content, if given. */
   paste?: string;
   pasteSha?: string;
+  /**
+   * The D12 root-commit discriminator this session's recorder emitted, if any.
+   * Omitted is what every recorder build before D12 produces, and what the
+   * older half of a staged rollout still produces.
+   */
+  rootCommitSha?: string;
 };
 
 function sessionEvents(spec: SessionSpec) {
@@ -119,6 +125,7 @@ function sessionEvents(spec: SessionSpec) {
         commit_sha: sha,
         parents: spec.parents ?? [],
         branch: 'main',
+        ...(spec.rootCommitSha === undefined ? {} : { root_commit_sha: spec.rootCommitSha }),
       },
       ...at(),
     });
@@ -214,6 +221,152 @@ describe('S20 — two honest partners on one shared repository', () => {
     expect(ex.excludedPairCount).toBe(1);
     expect(ex.sharedCommits.join(' ')).toContain(ALICE_COMMIT);
     expect(ex.sharedCommits.join(' ')).toContain(BOB_COMMIT);
+  });
+});
+
+describe('S20/D12 — a MIXED-scope partner pair, one build ahead of the other', () => {
+  // A staged recorder rollout puts one partner on a build that emits the D12
+  // `root_commit_sha` discriminator and the other on a build that does not. The
+  // two then key the SAME commit two different ways —
+  // `repository:<root> <sha>` against `repository:assumed-single <sha>`.
+  //
+  // Note what the fixture has to do to reach the defect: the two archives must
+  // observe the shared commit through DIFFERENT sessions. When `.provenance/` is
+  // fully shared both archives hold both `.slog` files verbatim, so both derive
+  // the identical key and the exact-key match already covers them. The bite is
+  // the separate-clones-off-one-remote shape, where each archive carries only
+  // its own recording and the only thing they have in common is the commit.
+  const SHARED_COMMIT = 'e5'.repeat(20);
+  const ROOT_ONE = 'f1'.repeat(20);
+  const ROOT_TWO = 'f2'.repeat(20);
+
+  it('does not fire paste_shared_across_students across the labelling boundary', async () => {
+    const sha = await sha256Hex(PASTED_CODE);
+
+    const alice = await buildSubmission('alice_proj1.zip', [
+      {
+        minute: 0,
+        observed: [SHARED_COMMIT],
+        rootCommitSha: ROOT_ONE,
+        paste: PASTED_CODE,
+        pasteSha: sha,
+      },
+    ]);
+    const bob = await buildSubmission('bob_proj1.zip', [
+      { minute: 60, observed: [SHARED_COMMIT], paste: PASTED_CODE, pasteSha: sha },
+    ]);
+
+    const features = [featuresOf(alice), featuresOf(bob)];
+
+    // The premise: same commit, two different keys, one observer each. Without
+    // the sentinel-tolerant match there is nothing here for the partition to
+    // union on, and the pair is compared and accused.
+    expect(features[0]!.observedCommitKeys).toEqual([`repository:${ROOT_ONE} ${SHARED_COMMIT}`]);
+    expect(features[1]!.observedCommitKeys).toEqual([`repository:assumed-single ${SHARED_COMMIT}`]);
+
+    expect(pasteFlags(runCrossHeuristics(features))).toEqual([]);
+  });
+
+  it('does not fire editing_pattern_clone across the labelling boundary either', async () => {
+    const alice = await buildSubmission('alice_proj1.zip', [
+      { minute: 0, observed: [SHARED_COMMIT], rootCommitSha: ROOT_ONE },
+    ]);
+    const bob = await buildSubmission('bob_proj1.zip', [{ minute: 60, observed: [SHARED_COMMIT] }]);
+
+    const flags = runCrossHeuristics([featuresOf(alice), featuresOf(bob)]);
+    expect(flags.filter((f) => f.heuristic === 'editing_pattern_clone')).toEqual([]);
+  });
+
+  it('states the mixed exclusion visibly, naming BOTH keys the commit was seen under', async () => {
+    const alice = await buildSubmission('alice_proj1.zip', [
+      { minute: 0, observed: [SHARED_COMMIT], rootCommitSha: ROOT_ONE },
+    ]);
+    const bob = await buildSubmission('bob_proj1.zip', [{ minute: 60, observed: [SHARED_COMMIT] }]);
+
+    const partition = partitionCrossScopes([featuresOf(alice), featuresOf(bob)]);
+
+    expect(partition.exclusions).toHaveLength(1);
+    const ex = partition.exclusions[0]!;
+    expect(ex.reason).toBe('same_repository_lineage');
+    expect(ex.sourceFilenames).toEqual(['alice_proj1.zip', 'bob_proj1.zip']);
+    // Neither key was observed by both, so naming only one of them would be a
+    // claim the record does not support.
+    expect([...ex.sharedCommits].sort()).toEqual(
+      [
+        `repository:${ROOT_ONE} ${SHARED_COMMIT}`,
+        `repository:assumed-single ${SHARED_COMMIT}`,
+      ].sort(),
+    );
+  });
+
+  it('STILL fires between two DIFFERENT real repositories that share a sha', async () => {
+    // The D12 guarantee, and the reason the tolerance is a whitelist. Commit shas
+    // are unique only within a repository; a submodule, a fork, or a repo derived
+    // from a shared template legitimately carries the same sha in a different
+    // object space. Merging those two sha spaces is the thing the discriminator
+    // exists to prevent, and it switches a detector silently off.
+    const sha = await sha256Hex(PASTED_CODE);
+
+    const carol = await buildSubmission('carol_proj1.zip', [
+      {
+        minute: 0,
+        observed: [SHARED_COMMIT],
+        rootCommitSha: ROOT_ONE,
+        paste: PASTED_CODE,
+        pasteSha: sha,
+      },
+    ]);
+    const dave = await buildSubmission('dave_proj1.zip', [
+      {
+        minute: 240,
+        observed: [SHARED_COMMIT],
+        rootCommitSha: ROOT_TWO,
+        paste: PASTED_CODE,
+        pasteSha: sha,
+      },
+    ]);
+
+    const features = [featuresOf(carol), featuresOf(dave)];
+    expect(partitionCrossScopes(features).exclusions).toEqual([]);
+    expect(pasteFlags(runCrossHeuristics(features))).toHaveLength(1);
+  });
+
+  it('STILL fires between two real repositories an unlabelled third could bridge', async () => {
+    // The forbidden merge in two hops. Bridging the unlabelled scope to both
+    // named repositories would transitively union them, so an ambiguous sha
+    // builds no bridge at all and ambiguity resolves toward comparing.
+    const sha = await sha256Hex(PASTED_CODE);
+
+    const carol = await buildSubmission('carol_proj1.zip', [
+      {
+        minute: 0,
+        observed: [SHARED_COMMIT],
+        rootCommitSha: ROOT_ONE,
+        paste: PASTED_CODE,
+        pasteSha: sha,
+      },
+    ]);
+    const dave = await buildSubmission('dave_proj1.zip', [
+      {
+        minute: 240,
+        observed: [SHARED_COMMIT],
+        rootCommitSha: ROOT_TWO,
+        paste: PASTED_CODE,
+        pasteSha: sha,
+      },
+    ]);
+    const erin = await buildSubmission('erin_proj1.zip', [
+      { minute: 480, observed: [SHARED_COMMIT], paste: PASTED_CODE, pasteSha: sha },
+    ]);
+
+    const features = [featuresOf(carol), featuresOf(dave), featuresOf(erin)];
+    const partition = partitionCrossScopes(features);
+
+    expect(partition.exclusions).toEqual([]);
+    expect(partition.lineageOf.get(carol.bundle.id)).not.toBe(
+      partition.lineageOf.get(dave.bundle.id),
+    );
+    expect(pasteFlags(runCrossHeuristics(features))).toHaveLength(1);
   });
 });
 
