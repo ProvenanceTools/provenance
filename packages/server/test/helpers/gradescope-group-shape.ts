@@ -152,12 +152,17 @@ export async function expectSoloPlusPairEndState(
   // Distinct artifacts keep distinct blobs; the pair's ONE blob is stored once.
   expect(pairSub!.blob_sha256).not.toBe(soloSub!.blob_sha256);
 
-  // The row that created the shared submission is the one whose student owns
-  // it; the duplicate's student is the OTHER co-submitter. This ties the three
-  // tables together without assuming which side of the race won.
-  const matchedPairRow = pairFileRows.find((f) => f.status === 'matched')!;
-  expect(pairSub!.student_id).toBe(matchedPairRow.matched_student_id);
-  expect(duplicateRow.matched_student_id).not.toBe(pairSub!.student_id);
+  // The pair's submitter of record is the LOWER of their two sids, whichever
+  // side of the race won.
+  //
+  // This used to assert `pairSub.student_id === the row that created it`, which
+  // pinned a race rather than a requirement: whoever won `Promise.all` became
+  // "the student", so re-ingesting the same export could name the other
+  // partner. It is inverted rather than weakened — the expected value now comes
+  // from `roster_entries.sid`, which the institution assigns and no ingest
+  // ordering can move, so BOTH arrival orders must produce it.
+  const canonicalPairSid = [...PAIR_SIDS].sort()[0]!;
+  expect(pairSub!.student_id).toBe(rosterIdBySid.get(canonicalPairSid));
   expect(soloSub!.student_id).toBe(rosterIdBySid.get(SOLO_SID));
 
   // -------------------------------------------------------------------------
