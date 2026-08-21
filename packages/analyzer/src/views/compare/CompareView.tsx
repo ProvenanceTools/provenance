@@ -190,8 +190,8 @@ function SameScopeExclusionPanel({ exclusions }: { exclusions: SameScopeExclusio
                 ? '1 comparison not applicable'
                 : `${ex.excludedPairCount} comparisons not applicable`}
               . Established by {ex.sharedCommits.length}{' '}
-              {ex.sharedCommits.length === 1 ? 'commit' : 'commits'} recorded in more than one of
-              these archives.
+              {ex.sharedCommits.length === 1 ? 'commit reference' : 'commit references'} shared
+              across these archives.
             </p>
             <ul className="mt-2 space-y-0.5" data-testid="cross-scope-exclusion-commits">
               {ex.sharedCommits.slice(0, 5).map((key) => (

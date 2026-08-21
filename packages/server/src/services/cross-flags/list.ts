@@ -20,6 +20,7 @@ import type { SQL } from 'drizzle-orm';
 import { KEYSET_CURSOR_VERSION, isMicroTimestamp, keysetAfter, microTimestamp } from '../keyset.js';
 import {
   cross_flags,
+  cross_flag_exclusions,
   cross_flag_participants,
   submissions,
   roster_entries,
@@ -61,6 +62,42 @@ export type CrossFlagFilters = {
   severityMin?: Severity;
   submissionId?: string;
 };
+
+/** One member of an excluded lineage, resolved for display. */
+export type CrossScopeExclusionMemberRow = {
+  submission_id: string;
+  source_filename: string;
+  student: { id: string; sid: string; display_name: string } | null;
+  assignment: { id: string; assignment_id_str: string };
+};
+
+/**
+ * One row of the exclusion register — a repository lineage that was NOT
+ * compared against itself.
+ *
+ * Not a flag: no severity, no confidence, no score. See migration 0031 and
+ * `analysis-core/coverage/cross-scope.ts` for why it is its own table.
+ */
+export type CrossScopeExclusionSummary = {
+  id: string;
+  reason: 'same_repository_lineage';
+  members: CrossScopeExclusionMemberRow[];
+  shared_commits: string[];
+  excluded_pair_count: number;
+  created_at: string;
+};
+
+/**
+ * Hard cap on the register returned with one list response.
+ *
+ * The register holds one row per partnered group per semester, so a course
+ * where every submission is a pair is bounded by half the cohort — a few
+ * hundred rows at the very top end. The cap is a backstop against an
+ * unbounded response, not a paging scheme; the register is deliberately not
+ * paginated, because it is read as a whole ("what was withheld?") and a
+ * half-answer to that question is worse than none.
+ */
+export const CROSS_SCOPE_EXCLUSION_LIMIT = 500;
 
 /**
  * Cursor: (created_at, id) compound — created_at DESC, id DESC.
@@ -211,6 +248,135 @@ export async function listCrossFlags(
   }));
 
   return { items, nextCursor };
+}
+
+// ---------------------------------------------------------------------------
+// The exclusion register (spec S20 / §6 Rule 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every repository lineage in this semester whose members were NOT compared.
+ *
+ * Returned alongside the findings rather than from an endpoint of its own,
+ * because it is only meaningful next to them: it is the answer to "why is there
+ * nothing here?", and a grader who has to go and ask a second question to get
+ * it will not ask.
+ *
+ * The `heuristic_id` and `severity_min` filters are deliberately NOT applied. An
+ * exclusion has neither field — it is one suppression that covers every
+ * cross-heuristic at once (both `paste_shared_across_students` and
+ * `editing_pattern_clone` consume the same partition), so narrowing the findings
+ * to one heuristic does not narrow what was withheld. `submission_id` IS
+ * applied: it names one submission, and the honest answer to "show me
+ * everything about this submission" includes the comparisons it was kept out of.
+ */
+export async function listCrossScopeExclusions(
+  db: DrizzleDb,
+  semesterId: string,
+  filters: CrossFlagFilters,
+  protectedMode: boolean,
+): Promise<CrossScopeExclusionSummary[]> {
+  const whereConditions: SQL[] = [eq(cross_flag_exclusions.semester_id, semesterId)];
+
+  if (filters.submissionId !== undefined) {
+    // Containment, which is what the GIN index in migration 0031 answers.
+    whereConditions.push(
+      sql`${cross_flag_exclusions.submission_ids} @> ARRAY[${filters.submissionId}]::uuid[]`,
+    );
+  }
+
+  const rows = await db
+    .select({
+      id: cross_flag_exclusions.id,
+      reason: cross_flag_exclusions.reason,
+      submission_ids: cross_flag_exclusions.submission_ids,
+      shared_commits: cross_flag_exclusions.shared_commits,
+      excluded_pair_count: cross_flag_exclusions.excluded_pair_count,
+      created_at: cross_flag_exclusions.created_at,
+    })
+    .from(cross_flag_exclusions)
+    .where(and(...whereConditions))
+    .orderBy(sql`${cross_flag_exclusions.created_at} DESC`, sql`${cross_flag_exclusions.id} DESC`)
+    .limit(CROSS_SCOPE_EXCLUSION_LIMIT);
+
+  if (rows.length === 0) return [];
+
+  const allIds = [...new Set(rows.flatMap((r) => r.submission_ids))];
+  const memberById = await fetchExclusionMembers(db, allIds, protectedMode);
+
+  return rows.map((row) => ({
+    id: row.id,
+    // The CHECK constraint admits no other value; the cast keeps the API type
+    // honest without a runtime branch that can never be taken.
+    reason: row.reason as 'same_repository_lineage',
+    // `submission_ids` is stored sorted, so this preserves that order. A member
+    // the join could not resolve is NOT dropped — evidence of a withheld
+    // comparison must not disappear because a row went missing.
+    members: row.submission_ids.map(
+      (id) =>
+        memberById.get(id) ?? {
+          submission_id: id,
+          source_filename: id,
+          student: null,
+          assignment: { id: '', assignment_id_str: '' },
+        },
+    ),
+    shared_commits: row.shared_commits,
+    excluded_pair_count: row.excluded_pair_count,
+    created_at: row.created_at.toISOString(),
+  }));
+}
+
+async function fetchExclusionMembers(
+  db: DrizzleDb,
+  submissionIds: string[],
+  protectedMode: boolean,
+): Promise<Map<string, CrossScopeExclusionMemberRow>> {
+  const result = new Map<string, CrossScopeExclusionMemberRow>();
+  if (submissionIds.length === 0) return result;
+
+  const rows = await db
+    .select({
+      submission_id: submissions.id,
+      source_filename: submissions.source_filename,
+      student_id: roster_entries.id,
+      student_sid: roster_entries.sid,
+      student_display_name: roster_entries.display_name,
+      student_protected_index: roster_entries.protected_index,
+      assignment_id: assignments.id,
+      assignment_id_str: assignments.assignment_id_str,
+    })
+    .from(submissions)
+    // LEFT for the same reason `fetchParticipants` uses one (D9): a submission
+    // with no single owning roster entry must still be listed, unnamed.
+    .leftJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
+    .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
+    .where(inArray(submissions.id, submissionIds));
+
+  for (const row of rows) {
+    result.set(row.submission_id, {
+      submission_id: row.submission_id,
+      source_filename: row.source_filename,
+      student:
+        row.student_id === null || row.student_sid === null || row.student_display_name === null
+          ? null
+          : projectStudent(
+              {
+                id: row.student_id,
+                sid: row.student_sid,
+                display_name: row.student_display_name,
+                protected_index: row.student_protected_index,
+              },
+              protectedMode,
+            ),
+      assignment: {
+        id: row.assignment_id,
+        assignment_id_str: row.assignment_id_str,
+      },
+    });
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------

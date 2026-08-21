@@ -23,6 +23,7 @@ import { rateLimit } from '../../middleware/rate-limit.js';
 import { Errors } from '../errors.js';
 import {
   listCrossFlags,
+  listCrossScopeExclusions,
   decodeCrossFlagCursor,
   type CrossFlagFilters,
 } from '../../../services/cross-flags/list.js';
@@ -91,9 +92,21 @@ export function createCrossFlagsRouter(): Hono {
       const protectedMode = requirePrincipal(c).user.protected;
       const result = await listCrossFlags(db, semesterId, filters, cursor, limit, protectedMode);
 
+      // The exclusion register (spec S20 / §6 Rule 3): which comparisons were
+      // NOT made, and why. Returned beside the findings because it is the
+      // answer to "why is there nothing here?", and only on the FIRST page —
+      // it is not paginated, and the list view accumulates pages, so page one
+      // is where it belongs. A grader who has to ask a second question to find
+      // out that a comparison was withheld will not ask.
+      const exclusions =
+        cursor === null
+          ? await listCrossScopeExclusions(db, semesterId, filters, protectedMode)
+          : [];
+
       return c.json({
         items: result.items,
         next_cursor: result.nextCursor,
+        exclusions,
       });
     },
   );

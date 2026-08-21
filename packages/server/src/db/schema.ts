@@ -1126,6 +1126,69 @@ export const cross_flag_participants = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// cross_flag_exclusions  (spec S20 / §6 Rule 3 / migration 0031)
+// ---------------------------------------------------------------------------
+
+/**
+ * The cross-scope exclusion register: one row per repository lineage whose
+ * members were NOT compared against each other.
+ *
+ * **Its own table, deliberately not a row in `cross_flags`.** An exclusion is a
+ * fact about the recording ("these archives are the same repository"), never a
+ * finding about a person — §6 Rule 3, and the header of
+ * `analysis-core/coverage/cross-scope.ts` says so in as many words. A sentinel
+ * `heuristic_id` in the findings table would have given it a severity, a
+ * confidence and a place in a score by association with its neighbours.
+ *
+ * It exists because a suppressed comparison nobody is told about is
+ * indistinguishable from one that came back clean. The browser `/local` route
+ * has always shown this; the server-backed cross-flags view showed the
+ * suppression with no explanation for it until this table landed.
+ *
+ * Semester-scoped and replaced wholesale on every `recompute_cross_flags` run,
+ * in the SAME transaction and under the same advisory lock as the `cross_flags`
+ * DELETE-then-INSERT — so the findings and the register are never a run apart.
+ *
+ * `submission_ids` is an array rather than a child table because the row IS the
+ * lineage group, not a pair, and there is nothing per-member to carry. The cost
+ * is that array elements cannot be foreign keys: a since-deleted submission
+ * would linger until the next cross run rewrites the register. Retention never
+ * deletes submission rows (`docs/admin-guide.md` §6), and the read path LEFT
+ * joins, so a missing one degrades to an id rather than dropping the member.
+ * The array is stored SORTED — the partition's own order is keyed on synthetic
+ * per-run bundle ids, and persisting that would break retry idempotency.
+ */
+export const cross_flag_exclusions = pgTable(
+  'cross_flag_exclusions',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    semester_id: uuid('semester_id')
+      .notNull()
+      .references(() => semesters.id, { onDelete: 'cascade' }),
+    reason: text('reason').notNull(),
+    submission_ids: uuid('submission_ids').array().notNull(),
+    shared_commits: text('shared_commits')
+      .array()
+      .notNull()
+      .default(sql`'{}'`),
+    excluded_pair_count: integer('excluded_pair_count').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    // Both created in the SQL migration; mirrored here for query-builder hints.
+    index('cross_flag_exclusions_sem_idx').on(t.semester_id),
+    check('cross_flag_exclusions_reason_check', sql`${t.reason} IN ('same_repository_lineage')`),
+    // A lineage is 2 or more submissions. A one-member "exclusion" excludes
+    // nothing and would render as a suppression that never happened.
+    check('cross_flag_exclusions_members_check', sql`array_length(${t.submission_ids}, 1) >= 2`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // student_refs / student_enrollments  (program spec §5a — S2 identity)
 // ---------------------------------------------------------------------------
 
