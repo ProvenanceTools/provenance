@@ -920,6 +920,69 @@ export const components = {
       },
     },
 
+    /**
+     * One entry in the cross-scope exclusion register (spec S20 / §6 Rule 3).
+     *
+     * NOT a flag. An exclusion is a statement about the recording ("these two
+     * archives are the same repository, so comparing them says nothing about
+     * sharing between students"), never a finding about a person — which is why
+     * it has no severity, no confidence, and no place in `items`.
+     */
+    CrossScopeExclusion: {
+      type: 'object',
+      required: ['id', 'reason', 'members', 'shared_commits', 'excluded_pair_count', 'created_at'],
+      properties: {
+        id: { $ref: '#/components/schemas/UUID' },
+        reason: { type: 'string', enum: ['same_repository_lineage'] },
+        members: {
+          type: 'array',
+          description: 'Every submission in the lineage, ordered by id. Length >= 2.',
+          items: {
+            type: 'object',
+            required: ['submission_id', 'source_filename', 'assignment'],
+            properties: {
+              submission_id: { $ref: '#/components/schemas/UUID' },
+              source_filename: { type: 'string' },
+              student: {
+                description:
+                  'Null when no single roster entry owns this submission (D9). The member is always listed; only the NAME can be absent.',
+                oneOf: [
+                  {
+                    type: 'object',
+                    properties: {
+                      id: { $ref: '#/components/schemas/UUID' },
+                      sid: { type: 'string' },
+                      display_name: { type: 'string' },
+                    },
+                  },
+                  { type: 'null' },
+                ],
+              },
+              assignment: {
+                type: 'object',
+                properties: {
+                  id: { $ref: '#/components/schemas/UUID' },
+                  assignment_id_str: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        shared_commits: {
+          type: 'array',
+          description:
+            'The (repository, sha) node keys that proved the lineage. A mixed-scope proof — one recorder emitting the D12 root-commit discriminator and one not — lists BOTH keys for one sha, because neither was observed by both sides.',
+          items: { type: 'string' },
+        },
+        excluded_pair_count: {
+          type: 'integer',
+          description:
+            'n*(n-1)/2 for n members — how many pairwise comparisons this exclusion withheld.',
+        },
+        created_at: { $ref: '#/components/schemas/ISODate' },
+      },
+    },
+
     // -------------------------------------------------------------------------
     // Heuristic config
     // -------------------------------------------------------------------------

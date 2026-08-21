@@ -193,6 +193,12 @@ export const cohortPaths = {
                     items: { $ref: '#/components/schemas/CrossFlagSummary' },
                   },
                   next_cursor: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                  exclusions: {
+                    type: 'array',
+                    description:
+                      'The cross-scope exclusion register (spec S20): which comparisons were NOT made, and why. Returned on the FIRST page only — it is not paginated, and describes the whole list rather than one page of it. Not narrowed by heuristic_id or severity_min (one exclusion covers every cross-heuristic); IS narrowed by submission_id.',
+                    items: { $ref: '#/components/schemas/CrossScopeExclusion' },
+                  },
                 },
               },
             },
