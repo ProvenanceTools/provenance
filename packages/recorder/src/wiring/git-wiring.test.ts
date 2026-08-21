@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
 import type * as vscode from 'vscode';
-import { startGitWiring } from './git-wiring.js';
+import { probeGitCapture, startGitWiring } from './git-wiring.js';
 import { createGitRunner, resolveGitPathCandidates } from './root-commit-sha.js';
 import { isRepoOwnedByRoot, resolveOwnerRoot } from '../session/session-router.js';
 import { ExplanationTagger } from '../events/explanation-tags.js';
@@ -1063,6 +1063,170 @@ describe('startGitWiring — finding the git executable', () => {
 
     expect(settingReads).toBe(0);
     expect(vi.mocked(resolveGitPathCandidates)).not.toHaveBeenCalled();
+    wiring.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// probeGitCapture — the §5.6 item 2 capability report
+// ---------------------------------------------------------------------------
+
+describe('probeGitCapture', () => {
+  it('reports unavailable when the git extension is absent', () => {
+    // Exactly the condition on which startGitWiring returns an inert wiring, so
+    // the report is true by construction: no git.event can be produced.
+    expect(probeGitCapture({ getGitExtension: () => undefined })).toBe('unavailable');
+  });
+
+  it('reports unavailable when getAPI(1) throws', () => {
+    expect(
+      probeGitCapture({
+        getGitExtension: () => makeGitExtension([], { throwOnGetAPI: true }),
+      }),
+    ).toBe('unavailable');
+  });
+
+  it('reports unavailable when getAPI(1) yields nothing', () => {
+    const noApi = {
+      id: 'vscode.git',
+      exports: { getAPI: () => undefined },
+      packageJSON: {},
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal mock
+    } as any as vscode.Extension<unknown>;
+    expect(probeGitCapture({ getGitExtension: () => noApi })).toBe('unavailable');
+  });
+
+  it('reports available when a repository this session owns is open', () => {
+    const roots = ['/ws/proj2'];
+    const repo = makeFakeRepo('a'.repeat(40), '/ws');
+    expect(
+      probeGitCapture({
+        getGitExtension: () => makeGitExtension([repo]),
+        isRepoOwnedByThisRoot: (p) => isRepoOwnedByRoot(p, '/ws/proj2', roots),
+      }),
+    ).toBe('available');
+  });
+
+  it('reports NOT_OWNED when git works and no visible repository is in scope', () => {
+    // The distinction §5.6 item 2 exists for. Git observation is live; the
+    // assignment simply sits outside every repository git can see, so every
+    // git.event would be dropped by the same ownership gate the wiring uses.
+    const roots = ['/ws/proj2'];
+    const stranger = makeFakeRepo('a'.repeat(40), '/somewhere/else');
+    expect(
+      probeGitCapture({
+        getGitExtension: () => makeGitExtension([stranger]),
+        isRepoOwnedByThisRoot: (p) => isRepoOwnedByRoot(p, '/ws/proj2', roots),
+      }),
+    ).toBe('not_owned');
+  });
+
+  it('keeps unavailable and not_owned distinct — they are different situations', () => {
+    const roots = ['/ws/proj2'];
+    const owned = (p: string) => isRepoOwnedByRoot(p, '/ws/proj2', roots);
+    const noGit = probeGitCapture({ getGitExtension: () => undefined, isRepoOwnedByThisRoot: owned });
+    const notMine = probeGitCapture({
+      getGitExtension: () => makeGitExtension([makeFakeRepo('a'.repeat(40), '/somewhere/else')]),
+      isRepoOwnedByThisRoot: owned,
+    });
+    expect(noGit).toBe('unavailable');
+    expect(notMine).toBe('not_owned');
+    expect(noGit).not.toBe(notMine);
+  });
+
+  it('reports available when git knows about NO repository at all', () => {
+    // Zero repositories is not "not owned": there is nothing to route, and the
+    // wiring's onDidOpenRepository subscription would pick up one that appeared
+    // later. Calling this not_owned would tell a grader the assignment was
+    // outside a repository git could see, which is a different claim.
+    expect(
+      probeGitCapture({
+        getGitExtension: () => makeGitExtension([]),
+        isRepoOwnedByThisRoot: () => false,
+      }),
+    ).toBe('available');
+  });
+
+  it('OMITS the field when the repository list cannot be read', () => {
+    const hostile = {
+      id: 'vscode.git',
+      exports: {
+        getAPI: () => ({
+          get repositories(): never {
+            throw new Error('repositories unavailable');
+          },
+          onDidOpenRepository: () => ({ dispose: () => undefined }),
+          onDidCloseRepository: () => ({ dispose: () => undefined }),
+        }),
+      },
+      packageJSON: {},
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal mock
+    } as any as vscode.Extension<unknown>;
+    // Neither 'available' nor 'not_owned' is established, so nothing is claimed.
+    // Absent is legal, permanent and blameless; guessing is worse than silence.
+    expect(probeGitCapture({ getGitExtension: () => hostile })).toBeUndefined();
+  });
+
+  it('OMITS the field when the ownership predicate itself throws', () => {
+    expect(
+      probeGitCapture({
+        getGitExtension: () => makeGitExtension([makeFakeRepo('a'.repeat(40), '/ws')]),
+        isRepoOwnedByThisRoot: () => {
+          throw new Error('predicate exploded');
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it('agrees with what the wiring actually does — available means events flow', async () => {
+    // The report and the behaviour go through one resolveGitApi, so this pins
+    // that they cannot disagree.
+    const repo = makeFakeRepo('a'.repeat(40), '/ws');
+    const getGitExtension = () => makeGitExtension([repo]);
+    expect(probeGitCapture({ getGitExtension })).toBe('available');
+
+    const emitted: unknown[] = [];
+    const wiring = startGitWiring({
+      emit: (d) => emitted.push(d),
+      getGitExtension,
+      deriveRepositoryDiscriminator: () => Promise.resolve(undefined),
+    });
+    repo.setCommit('b'.repeat(40));
+    repo.fireStateChange();
+    await wiring.settled();
+    expect(emitted.length).toBeGreaterThan(0);
+    wiring.dispose();
+  });
+
+  it('agrees with what the wiring actually does — unavailable means no events ever', async () => {
+    const getGitExtension = () => undefined;
+    expect(probeGitCapture({ getGitExtension })).toBe('unavailable');
+
+    const emitted: unknown[] = [];
+    const wiring = startGitWiring({ emit: (d) => emitted.push(d), getGitExtension });
+    await wiring.settled();
+    expect(emitted).toHaveLength(0);
+    wiring.dispose();
+  });
+
+  it('agrees with what the wiring actually does — not_owned means events are dropped', async () => {
+    const roots = ['/ws/proj2'];
+    const owned = (p: string) => isRepoOwnedByRoot(p, '/ws/proj2', roots);
+    const stranger = makeFakeRepo('a'.repeat(40), '/somewhere/else');
+    const getGitExtension = () => makeGitExtension([stranger]);
+    expect(probeGitCapture({ getGitExtension, isRepoOwnedByThisRoot: owned })).toBe('not_owned');
+
+    const emitted: unknown[] = [];
+    const wiring = startGitWiring({
+      emit: (d) => emitted.push(d),
+      getGitExtension,
+      isRepoOwnedByThisRoot: owned,
+      deriveRepositoryDiscriminator: () => Promise.resolve(undefined),
+    });
+    stranger.setCommit('b'.repeat(40));
+    stranger.fireStateChange();
+    await wiring.settled();
+    expect(emitted).toHaveLength(0);
     wiring.dispose();
   });
 });

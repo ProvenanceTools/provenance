@@ -6,7 +6,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildRecorderContext } from './recorder-context.js';
+import {
+  buildRecorderContext,
+  resolveFileScope,
+  FILE_SCOPE_MAX_ENTRIES,
+} from './recorder-context.js';
 import type { Manifest, SessionIdentity } from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
@@ -393,5 +397,112 @@ describe('buildRecorderContext — session.start 2.0', () => {
 
   it('keeps format_version at "1.0" — the 2.0 additions are purely additive', () => {
     expect(build(TEST_MANIFEST_V2).format_version).toBe('1.0');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The three capability reports (collaboration spec §5.6)
+// ---------------------------------------------------------------------------
+
+describe('buildRecorderContext — the §5.6 capability reports', () => {
+  const base = {
+    manifest: TEST_MANIFEST,
+    prevSessionId: null,
+    extension: makeExtension({ version: '1.2.0', publisher: 'itsgeagle', name: 'recorder' }),
+    vscodeVersion: '1.100.0',
+    platform: 'darwin-arm64',
+  } as const;
+
+  it('OMITS git_capture and witness_capture when neither is supplied', () => {
+    // A caller that cannot establish a capability must produce a payload
+    // BYTE-IDENTICAL to the pre-§5.6 one, so an omitted key is the only legal
+    // spelling: `null` canonicalizes differently and chains to a different hash.
+    const ctx = buildRecorderContext({ ...base });
+    expect('git_capture' in ctx).toBe(false);
+    expect('witness_capture' in ctx).toBe(false);
+    expect(ctx.git_capture).toBeUndefined();
+    expect(ctx.witness_capture).toBeUndefined();
+  });
+
+  it('emits each capability value verbatim when supplied', () => {
+    for (const gitCapture of ['available', 'unavailable', 'not_owned'] as const) {
+      const ctx = buildRecorderContext({ ...base, gitCapture });
+      expect(ctx.git_capture).toBe(gitCapture);
+    }
+    for (const witnessCapture of ['available', 'unavailable'] as const) {
+      const ctx = buildRecorderContext({ ...base, witnessCapture });
+      expect(ctx.witness_capture).toBe(witnessCapture);
+    }
+  });
+
+  it('resolves file_scope from the manifest\u2019s files_under_review, complete', () => {
+    const ctx = buildRecorderContext({
+      ...base,
+      manifest: { ...TEST_MANIFEST, files_under_review: ['hw03.py', 'src/helpers.py'] },
+    });
+    expect(ctx.file_scope).toEqual({
+      watched: ['hw03.py', 'src/helpers.py'],
+      complete: true,
+    });
+  });
+
+  it('reports an EMPTY resolved set as complete, which is a real answer', () => {
+    // "The scope resolved to nothing" is a positive claim that explains every
+    // file's silence. It is not the same as saying nothing.
+    const ctx = buildRecorderContext({
+      ...base,
+      manifest: { ...TEST_MANIFEST, files_under_review: [] },
+    });
+    expect(ctx.file_scope).toEqual({ watched: [], complete: true });
+  });
+
+  it('caps a very large set and says so, so absence stays UNKNOWN rather than NOT WATCHED', () => {
+    const many = Array.from({ length: FILE_SCOPE_MAX_ENTRIES + 10 }, (_, i) => `f${String(i)}.py`);
+    const scope = resolveFileScope(many);
+    expect(scope?.complete).toBe(false);
+    expect(scope?.watched).toHaveLength(FILE_SCOPE_MAX_ENTRIES);
+    expect(scope?.watched[0]).toBe('f0.py');
+  });
+
+  it('does not cap at exactly the limit', () => {
+    const exact = Array.from({ length: FILE_SCOPE_MAX_ENTRIES }, (_, i) => `f${String(i)}.py`);
+    expect(resolveFileScope(exact)?.complete).toBe(true);
+  });
+
+  it('OMITS file_scope rather than publishing a path the format forbids', () => {
+    // S14(b). A course manifest carrying an absolute path, a remote URL or a
+    // parent escape gets the field omitted — never an absolute path inside a
+    // signed log.
+    for (const bad of [
+      '/Users/student/cs61b/hw03.py',
+      'C:\\Users\\student\\hw03.py',
+      'https://github.com/someone/hw03.py',
+      '../other-course/hw03.py',
+    ]) {
+      const ctx = buildRecorderContext({
+        ...base,
+        manifest: { ...TEST_MANIFEST, files_under_review: ['hw03.py', bad] },
+      });
+      expect(ctx.file_scope).toBeUndefined();
+      expect('file_scope' in ctx).toBe(false);
+    }
+  });
+
+  it('copies the manifest list, so a later mutation cannot reach the chain', () => {
+    const files = ['hw03.py'];
+    const ctx = buildRecorderContext({
+      ...base,
+      manifest: { ...TEST_MANIFEST, files_under_review: files },
+    });
+    files.push('sneaky.py');
+    expect(ctx.file_scope?.watched).toEqual(['hw03.py']);
+  });
+
+  it('the three reports are independent — one may be present with the others absent', () => {
+    const ctx = buildRecorderContext({ ...base, gitCapture: 'not_owned' });
+    expect(ctx.git_capture).toBe('not_owned');
+    expect('witness_capture' in ctx).toBe(false);
+    // file_scope is always resolvable from a well-formed manifest.
+    expect(ctx.file_scope).toEqual({ watched: ['hw03.py'], complete: true });
   });
 });
