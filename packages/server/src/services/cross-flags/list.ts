@@ -17,12 +17,7 @@
 
 import { and, eq, sql, inArray } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
-import {
-  KEYSET_CURSOR_VERSION,
-  isMicroTimestamp,
-  keysetAfter,
-  microTimestamp,
-} from '../keyset.js';
+import { KEYSET_CURSOR_VERSION, isMicroTimestamp, keysetAfter, microTimestamp } from '../keyset.js';
 import {
   cross_flags,
   cross_flag_participants,

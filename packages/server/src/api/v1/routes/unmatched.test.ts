@@ -431,9 +431,12 @@ describe('GET /semesters/:semesterId/unmatched', () => {
 
       const app = createV1App();
       const res = await app.fetch(
-        new Request(`http://localhost/semesters/${semester.id}/unmatched?limit=2&cursor=${legacy}`, {
-          headers: { Cookie: `__Host-prov_sess=${sessionId}` },
-        }),
+        new Request(
+          `http://localhost/semesters/${semester.id}/unmatched?limit=2&cursor=${legacy}`,
+          {
+            headers: { Cookie: `__Host-prov_sess=${sessionId}` },
+          },
+        ),
       );
       expect(res.status).toBe(400);
     });
@@ -451,9 +454,12 @@ describe('GET /semesters/:semesterId/unmatched', () => {
 
       const app = createV1App();
       const res = await app.fetch(
-        new Request(`http://localhost/semesters/${semester.id}/unmatched?limit=2&cursor=not-base64`, {
-          headers: { Cookie: `__Host-prov_sess=${sessionId}` },
-        }),
+        new Request(
+          `http://localhost/semesters/${semester.id}/unmatched?limit=2&cursor=not-base64`,
+          {
+            headers: { Cookie: `__Host-prov_sess=${sessionId}` },
+          },
+        ),
       );
       expect(res.status).toBe(400);
     });

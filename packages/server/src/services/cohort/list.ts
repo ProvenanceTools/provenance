@@ -119,11 +119,7 @@ export function decodeCursor(encoded: string): CohortCursor | null {
     // timestamp. It falls through to `return null` below, which the route turns
     // into a 400: honouring it would mean treating its timestamp as a bucket
     // floor and silently dropping the rest of that millisecond.
-    if (
-      kind === 'wall_us' &&
-      typeof p['wall_us'] === 'string' &&
-      isMicroTimestamp(p['wall_us'])
-    ) {
+    if (kind === 'wall_us' && typeof p['wall_us'] === 'string' && isMicroTimestamp(p['wall_us'])) {
       return { kind: 'wall_us', wall_us: p['wall_us'], id: p['id'] };
     }
     if (kind === 'display_name' && typeof p['display_name'] === 'string') {

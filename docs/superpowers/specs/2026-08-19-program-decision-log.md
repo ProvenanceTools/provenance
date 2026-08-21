@@ -261,7 +261,7 @@ Every one of these was live on the branch and none was on any worklist.
     timestamp-keyed call sites.** Postgres stores `timestamptz` at **microsecond** precision.
     `schema.ts` declares these columns as `timestamp(..., { withTimezone: true })`, and Drizzle's
     default is `mode: 'date'`, which hands back a JS `Date` — **millisecond** precision. So the
-    microseconds were destroyed by the ORM read, *before* the cursor was ever encoded from
+    microseconds were destroyed by the ORM read, _before_ the cursor was ever encoded from
     `last.created_at.toISOString()`. The cursor therefore could not express the true position of
     the last row on a page, and every same-millisecond row had to be decided by the id tiebreak
     instead — a random `gen_random_uuid()`, which contradicts the microsecond ordering the query
@@ -281,7 +281,7 @@ Every one of these was live on the branch and none was on any worklist.
     DESC bucket predicate duplicates as well as drops. `cross-flags/list.ts` was additionally
     broken twice over: its same-ms branch was bounded above by `<= floor`, excluding every
     same-bucket row with a non-zero microsecond remainder (i.e. nearly all of them), and its lower
-    bound of `floor - 1ms` pulled the *previous* millisecond's rows into an id tiebreak they should
+    bound of `floor - 1ms` pulled the _previous_ millisecond's rows into an id tiebreak they should
     never have faced. **Correcting only those two defects still returned 3 of 5** — which is what
     proves the root cause is the truncation and not the predicate shape.
     Fixed in `services/keyset.ts` and applied at all three sites: project the column as a
@@ -294,7 +294,7 @@ Every one of these was live on the branch and none was on any worklist.
     **Index usage improved, measured not assumed.** A row-value comparison is a range condition on
     a matching btree index and is pushed down as an `Index Cond`; the old OR-of-AND form could not
     be and degraded to a `Filter`. Postgres 16, 200k rows, index `(semester_id, created_at DESC, id
-    DESC)`, `LIMIT 51`: row-value 10 buffers / 0.054 ms vs. old 1016 buffers / 3.003 ms with 10 000
+DESC)`, `LIMIT 51`: row-value 10 buffers / 0.054 ms vs. old 1016 buffers / 3.003 ms with 10 000
     rows removed by filter. It also holds under bound parameters, and in the ASC direction as an
     Index Only Scan Backward.
     **Old cursors are rejected (400), not reinterpreted.** A pre-fix cursor carries a
@@ -313,7 +313,7 @@ Every one of these was live on the branch and none was on any worklist.
 - **None of `cross_flags`, `submissions`, or `ingest_files` carries an index on its timestamp
   keyset.** `submissions_cohort_idx` is `(semester_id, score_total DESC, severity_rank, id)` — it
   serves `score_desc`, not `ingested_desc`. So all three of these plans are a sort over a scan
-  today, and the row-value form is the one that *would* benefit from such an index. Adding one is a
+  today, and the row-value form is the one that _would_ benefit from such an index. Adding one is a
   migration, not a read-path fix, so it was left out of scope.
 - **A cursor whose `kind` does not match the requested `sort` is silently ignored**, not rejected:
   `buildCursorCondition` returns `null` and the page is served from the top while the client
