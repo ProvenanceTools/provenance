@@ -11,6 +11,17 @@
  * The API surface is documented in:
  *   https://github.com/microsoft/vscode/blob/main/extensions/git/src/api/git.d.ts
  *
+ * That same API publishes `api.git.path`, the git executable the git extension
+ * itself resolved. We use it — together with the `git.path` SETTING, which the
+ * CALLER reads, because `vscode` is a type-only import in this file and must
+ * stay one: `tools/`'s seal conformance gate imports the built `dist/` of this
+ * module outside any extension host — so the
+ * discriminator's `execFile` finds the same git VS Code is already using, rather
+ * than only a git that happens to be on the PATH a GUI-launched editor
+ * inherited. On Windows those are routinely not the same thing. The ordering and
+ * the fall-through rules live in `root-commit-sha.ts`; both reads here are
+ * defensive, and losing both costs a hint, never the wiring.
+ *
  * Key types we rely on (reproduced minimally to avoid importing the git type defs):
  *   Repository.state: RepositoryState
  *   RepositoryState.HEAD: { commit?: string; name?: string; ... }
@@ -71,7 +82,12 @@
 import type * as vscode from 'vscode';
 import type { GitEventPayload } from '@provenance/log-core';
 import type { ExplanationTagger } from '../events/explanation-tags.js';
-import { deriveRootCommitSha } from './root-commit-sha.js';
+import {
+  createGitRunner,
+  deriveRootCommitSha,
+  resolveGitPathCandidates,
+} from './root-commit-sha.js';
+import type { GitRunner } from './root-commit-sha.js';
 
 // ---------------------------------------------------------------------------
 // Minimal typing for the vscode.git extension API
@@ -82,6 +98,13 @@ type GitAPI = {
   repositories: GitRepository[];
   onDidOpenRepository: (handler: (repo: GitRepository) => void) => vscode.Disposable;
   onDidCloseRepository: (handler: (repo: GitRepository) => void) => vscode.Disposable;
+  /**
+   * `API.git.path` — the git executable the git extension itself resolved and
+   * uses. Optional here because this is a defensive cast over another
+   * extension's untyped `exports`, not an import of its type declarations; a
+   * build that does not publish it simply contributes no hint.
+   */
+  git?: { path?: unknown };
 };
 
 /**
@@ -146,7 +169,9 @@ export type GitWiringDeps = {
    * repository root, or `undefined` to OMIT the field.
    *
    * Defaults to the real `deriveRootCommitSha`, which shells out to two
-   * read-only git plumbing commands. The default is the PRODUCTION one on
+   * read-only git plumbing commands, run against the first git executable that
+   * starts out of `api.git.path`, the `git.path` setting, and bare `git`. The
+   * default is the PRODUCTION one on
    * purpose: a dep that must be remembered is a dep that eventually is not, and
    * a forgotten discriminator is not a loud failure — it is a silently
    * unlabelled repository, which is exactly the shape decision-log bug 3 took
@@ -155,6 +180,25 @@ export type GitWiringDeps = {
    * Overridden in tests, which must not spawn git.
    */
   deriveRepositoryDiscriminator?: (repoRootFsPath: string) => Promise<string | undefined>;
+  /**
+   * Reads the `git.path` SETTING — a string, an array of candidate paths, or
+   * absent. A BACKSTOP hint only; see {@link resolveGitPathCandidates}.
+   *
+   * Unlike every other dep here this one does NOT default to the production
+   * read, and the reason is mechanical rather than stylistic: this module is
+   * imported by `tools/`'s recorder→analyzer seal conformance gate, which runs
+   * the BUILT `dist/` outside any extension host, so a runtime `vscode` import
+   * anywhere in this file is an unresolvable module there. `vscode` is
+   * type-only in this file on purpose, and it must stay that way.
+   *
+   * Forgetting it is cheap, which is what makes the omission acceptable: the
+   * PRIMARY hint is `api.git.path`, read directly off the API above, and that
+   * value already accounts for the setting because the git extension resolved
+   * itself with it. This dep only matters for a git extension that is present
+   * and does not publish its path. `session-registry.ts` supplies it, and
+   * `session-registry.git-wiring.test.ts` pins that it does.
+   */
+  readConfiguredGitPath?: () => unknown;
 };
 
 // ---------------------------------------------------------------------------
@@ -169,8 +213,7 @@ function inertWiring(): GitWiring {
 export function startGitWiring(deps: GitWiringDeps): GitWiring {
   const { emit, getGitExtension, explanationTagger } = deps;
   const isRepoOwnedByThisRoot = deps.isRepoOwnedByThisRoot ?? (() => true);
-  const deriveDiscriminator =
-    deps.deriveRepositoryDiscriminator ?? ((root: string) => deriveRootCommitSha(root));
+  const readConfiguredGitPath = deps.readConfiguredGitPath ?? (() => undefined);
 
   const gitExtension = getGitExtension();
   if (gitExtension === undefined) {
@@ -191,6 +234,39 @@ export function startGitWiring(deps: GitWiringDeps): GitWiring {
     console.warn('[provenance] vscode.git getAPI(1) returned undefined; git.event wiring skipped.');
     return inertWiring();
   }
+
+  /**
+   * The git executables to try, resolved ONCE and only if the production
+   * derivation is actually going to run. Both reads are defensive: `api.git` is
+   * another extension's untyped export and the setting is a user-editable file,
+   * and a throw from either must not take the wiring down — it only costs a
+   * hint, and the bare PATH lookup remains.
+   */
+  let productionRun: GitRunner | undefined;
+  function gitRunner(): GitRunner {
+    if (productionRun === undefined) {
+      let extensionApiGitPath: unknown;
+      try {
+        extensionApiGitPath = api?.git?.path;
+      } catch (e) {
+        console.warn('[provenance] git wiring: failed to read the git API executable path:', e);
+      }
+      let configuredGitPath: unknown;
+      try {
+        configuredGitPath = readConfiguredGitPath();
+      } catch (e) {
+        console.warn('[provenance] git wiring: failed to read the git.path setting:', e);
+      }
+      productionRun = createGitRunner(
+        resolveGitPathCandidates({ extensionApiGitPath, configuredGitPath }),
+      );
+    }
+    return productionRun;
+  }
+
+  const deriveDiscriminator =
+    deps.deriveRepositoryDiscriminator ??
+    ((root: string) => deriveRootCommitSha(root, gitRunner()));
 
   const disposables: vscode.Disposable[] = [];
 

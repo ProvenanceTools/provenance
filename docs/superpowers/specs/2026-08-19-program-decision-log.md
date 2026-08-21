@@ -754,6 +754,56 @@ correct whatever the writer picks — the value is opaque and compared only for 
 contract exists to make three recorders derive the SAME value, which is the only thing that makes
 correlation work at all.
 
+> **CORRECTIONS FROM THE FIRST IMPLEMENTATION (VS Code, 2026-08-20).** The contract below says what
+> value to derive and says nothing about how to reach `git`, which is the half that differs by
+> machine. Hardening the VS Code writer for platforms other than the one it was written on surfaced
+> seven gaps. **provnvim already shells out and has the identical question; provjet will the moment
+> it takes this contract.**
+>
+> 1. **Do not spawn a bare `git`.** `execFile('git', …)` needs git on the `PATH` the editor
+>    INHERITED, and on Windows that is routinely not the PATH a GUI-launched application has — which
+>    is exactly why VS Code ships a `git.path` setting and why its git extension publishes the binary
+>    it resolved as `api.git.path`. A recorder can therefore fail to find a git its own host is
+>    happily using. Resolve an ORDERED ladder, most specific first: the host's own resolved binary,
+>    then the host's configured path, then bare `git`. Each port asks its own host the same two
+>    questions; the ladder and the fall-through rules are what must match.
+> 2. **The configured path may be an ARRAY, not only a string.** `git.path` is documented as "a path,
+>    or an array of paths to look up", and a port that assumes a string gets `undefined` — or worse,
+>    coerces the array to `"a,b"`, a path that exists nowhere. Try the entries in order. Drop entries
+>    that are blank or not strings; keep the rest VERBATIM, never trimmed and never quoted.
+> 3. **Fall through only for a candidate that never STARTED.** `ENOENT`, `ENOTDIR`, `EACCES`,
+>    `EPERM`, `EINVAL` mean "this is not a runnable git", so the next candidate deserves a turn. A
+>    non-zero exit and a TIMEOUT mean git was found and answered, and must NOT ladder: three
+>    candidates each burning the 5s timeout puts a 15s stall in front of activation, and re-asking a
+>    different binary in the same directory can only hear the same thing.
+> 4. **Trim EVERY LINE, not just the whole output.** On Windows git's stdout is CRLF:
+>    `'false\r\n' !== 'false'` silently makes every repository look shallow, and a `\r`-suffixed sha
+>    is not lowercase hex, so rule 7 rejects it. Neither produces an error — they produce an entire
+>    platform that omits the field and quietly fails to correlate. Trim at the point the sha is
+>    parsed, not only once at the end.
+> 5. **No shell, and accept its corollary.** `execFile`/`spawn` with an argv, never `exec` with a
+>    command line: the Windows default install is `C:\Program Files\Git\cmd\git.exe`, and passing an
+>    argv means that space needs no quoting and behaves identically on every platform. The corollary
+>    is that a `.cmd`/`.bat` git wrapper cannot be launched at all — it gives way to the next
+>    candidate like anything else that will not start. Adding a shell to support one buys back every
+>    cross-platform quoting difference the argv form exists to avoid.
+> 6. **"Git could not be found" is rule 5's omission, not a new answer.** No sentinel value, no
+>    diagnostic field on the payload, no defect count — the same silent omit as a shallow clone. Note
+>    also that an unreachable `cwd` and a missing binary are BOTH `ENOENT` from spawn and cannot be
+>    told apart, so a repository root that has vanished walks the whole ladder before omitting. That
+>    is harmless — once per repository, at setup — but a port that logs "git is not installed" for it
+>    will be wrong.
+> 7. **Resolve the executable once per WIRING; derive the value once per REPOSITORY.** Rule 1 is
+>    about the value. Re-reading host configuration for every repository in the scope is waste on top
+>    of it, and the answer cannot differ between two repositories in one session.
+>
+> **What is NOT proved.** All of the above is pinned by unit tests over Windows- and Linux-shaped
+> inputs through an injectable spawn seam, plus real-git tests on macOS. No CI runner and no
+> developer machine on this program has yet executed the writer on Windows or Linux, so the parsing
+> and the resolution are pinned, and the platform behaviour of the spawn itself is not. A port that
+> can run its own CI on Windows should say so, because it would be the first real evidence anyone
+> has.
+
 1. **Derive once per repository, at git-wiring setup**, not per event. It cannot change for the life
    of a repository, and it must not cost anything on the event path.
 2. **The value is the root of HEAD's first-parent lineage** — `rev-list --max-parents=0
