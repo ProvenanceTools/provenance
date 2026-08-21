@@ -43,8 +43,19 @@ import { buildFacets } from '../cohort/facets.js';
 import { listAssignments } from '../cohort/assignments.js';
 import { applyContributorScores } from './contributor-scores.js';
 import { rosterContributorKey, storeContributors } from './store-contributors.js';
+import { attributeFlags, SCOPE_LEVEL } from './attribute-flags.js';
 import { attachCoSubmitter } from '../ingest/dedup.js';
+import { runAndStoreHeuristics } from '../heuristics/run-per-submission.js';
 import type { Bundle } from '@provenance/analysis-core/loader/types.js';
+import { runValidation } from '@provenance/analysis-core/validation/run-validation.js';
+import {
+  buildCollabScope,
+  collabDocOpen,
+  collabDocSave,
+  collabPartnerSession,
+  COLLAB_ALICE,
+  COLLAB_BOB,
+} from '@provenance/analysis-core/test-support/build-collab-scope.js';
 
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
@@ -461,6 +472,195 @@ describe('group submissions', () => {
       const first = await applyContributorScores(db, sub.id);
       const second = await applyContributorScores(db, sub.id);
       expect(second).toEqual(first);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2a. Where the per-partner scores above actually COME FROM
+// ---------------------------------------------------------------------------
+
+/**
+ * The cases above hand `applyContributorScores` a `flags.contributor_key` that
+ * the fixture wrote by hand. This block closes the loop: it runs the REAL
+ * heuristics over a REAL two-partner bundle, lets `runAndStoreHeuristics`
+ * derive `flags.session_id` and `attributeFlags` resolve it, and asserts the
+ * finding lands on the partner who did the thing.
+ *
+ * ## Why these particular heuristics
+ *
+ * Eight of the eighteen per-submission heuristics are already effectively
+ * per-contributor: their evidence never leaves one session, so `session_id` is
+ * populated and `contributorKeyForSession` can name a person. The rest must run
+ * whole-scope — see
+ * `analysis-core/src/heuristics/contributor-scope-boundary.test.ts`, which is
+ * the other half of this argument.
+ *
+ * The three below are one per distinct evidence shape rather than one per
+ * heuristic, because eight near-identical cases would test the fixture builder
+ * eight times and this rule once:
+ *
+ *  - `large_paste` — one flag per paste EVENT, `supportingSeqs` a single seq.
+ *  - `ai_extension_active` — one flag per (session, extension) from a scan of
+ *    `index.bySessionId`, so the session is the unit rather than the event.
+ *  - `shell_integration_disabled` — the same session-scoped shape reached
+ *    through terminal evidence rather than the extension host, which is the
+ *    other capture-policy signal and the other `isSignalCaptured` gate.
+ *
+ * The fourth case is the rule's negative half, and it is the one that protects
+ * a student: an identical finding by a partner who never enrolled is charged to
+ * NOBODY. It is still visible on the submission at full severity — §6 Rule 2
+ * withholds the name, not the finding.
+ */
+
+/** A `paste` event large enough to trip `large_paste` (≥ 200 chars). */
+function bigPaste(path: string): { kind: string; data: Record<string, unknown> } {
+  const content = 'x'.repeat(260);
+  return {
+    kind: 'paste',
+    data: {
+      path,
+      content,
+      length: content.length,
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+    },
+  };
+}
+
+const aiSnapshot = {
+  kind: 'ext.snapshot',
+  data: { extensions: [{ id: 'GitHub.copilot', version: '1.2.3', enabled: true }] },
+};
+
+const terminalWithoutShellIntegration = {
+  kind: 'terminal.open',
+  data: { terminal_id: 't-1', shell: '/bin/zsh', shell_integration: false },
+};
+
+/**
+ * Bob writes the implementation; Alice does one extra thing in her own session.
+ * Run the real pipeline over it and return the persisted flags plus each
+ * partner's resolved contributor key.
+ */
+async function attributeRealFlags(
+  db: DrizzleDb,
+  aliceExtra: ReadonlyArray<{ kind: string; data: Record<string, unknown> }>,
+  opts: {
+    aliceEnrolled?: boolean;
+    bobExtra?: ReadonlyArray<{ kind: string; data: Record<string, unknown> }>;
+  } = {},
+) {
+  const { semester, job, assignment } = await seedWorld(db);
+  const work = 'def solve(values):\n    return sum(values)\n';
+
+  const bundle = (
+    await buildCollabScope([
+      {
+        who: { studentRef: COLLAB_BOB },
+        events: [...collabPartnerSession(work), ...(opts.bobExtra ?? [])],
+      },
+      {
+        who: opts.aliceEnrolled === false ? 'anonymous' : { studentRef: COLLAB_ALICE },
+        events: [collabDocOpen(work), ...aliceExtra, collabDocSave(work)],
+      },
+    ])
+  ).bundle;
+
+  const sub = await seedSubmission(db, {
+    semesterId: semester.id,
+    assignmentId: assignment.id,
+    ingestJobId: job.id,
+    studentId: null,
+  });
+
+  const report = await runValidation(bundle);
+  await runAndStoreHeuristics(db, sub.id, semester.id, bundle, report);
+  await attributeFlags(db, sub.id, bundle);
+
+  const rows = await db
+    .select({ heuristic_id: flags.heuristic_id, contributor_key: flags.contributor_key })
+    .from(flags)
+    .where(eq(flags.submission_id, sub.id));
+
+  // Sessions are ordered oldest-first, so Bob (built first) is 0 and Alice is 1.
+  const keyOf = (i: number): string => {
+    const verdict = bundle.contributors!.bySession.get(bundle.sessions[i]!.sessionId)!;
+    return verdict.contributorKey;
+  };
+
+  return { rows, bobKey: keyOf(0), aliceKey: keyOf(1) };
+}
+
+describe('the already-scoped heuristics charge their acting contributor', () => {
+  it('large_paste — an event-shaped finding names whoever pasted', async () => {
+    await withTestDb(async (db) => {
+      const { rows, bobKey, aliceKey } = await attributeRealFlags(db, [bigPaste('hw1.py')]);
+
+      const paste = rows.filter((r) => r.heuristic_id === 'large_paste');
+      expect(paste, 'the fixture must actually fire large_paste').toHaveLength(1);
+      expect(
+        paste[0]!.contributor_key,
+        `large_paste is charged to ${paste[0]!.contributor_key || 'NOBODY (scope level)'} — ` +
+          `it must name Alice, whose session carries the paste. Scope-level here would ` +
+          `mean her partner shares a finding he had no part in.`,
+      ).toBe(aliceKey);
+      expect(paste[0]!.contributor_key).not.toBe(bobKey);
+    });
+  });
+
+  it('ai_extension_active — a session-shaped finding names whoever ran the tool', async () => {
+    await withTestDb(async (db) => {
+      const { rows, bobKey, aliceKey } = await attributeRealFlags(db, [aiSnapshot]);
+
+      const ai = rows.filter((r) => r.heuristic_id === 'ai_extension_active');
+      expect(ai, 'the fixture must actually fire ai_extension_active').toHaveLength(1);
+      expect(ai[0]!.contributor_key).toBe(aliceKey);
+      expect(
+        ai[0]!.contributor_key,
+        `Bob's extension host is not Alice's. A session-scoped environment finding that ` +
+          `landed scope-level would put "was running Copilot" on a partner whose own ` +
+          `ext.snapshot says otherwise.`,
+      ).not.toBe(bobKey);
+    });
+  });
+
+  it('shell_integration_disabled — terminal evidence names whose terminal it was', async () => {
+    await withTestDb(async (db) => {
+      const { rows, bobKey, aliceKey } = await attributeRealFlags(db, [
+        terminalWithoutShellIntegration,
+      ]);
+
+      const shell = rows.filter((r) => r.heuristic_id === 'shell_integration_disabled');
+      expect(shell, 'the fixture must actually fire shell_integration_disabled').toHaveLength(1);
+      expect(shell[0]!.contributor_key).toBe(aliceKey);
+      expect(shell[0]!.contributor_key).not.toBe(bobKey);
+    });
+  });
+
+  it('charges NOBODY when the acting partner never enrolled — the finding stays, the name does not', async () => {
+    await withTestDb(async (db) => {
+      // BOTH partners paste, and only Bob is enrolled. Two flags of the same
+      // heuristic, in the same bundle, resolving differently is what makes this
+      // a real assertion: `contributor_key` defaults to the empty string, so a
+      // case where nothing is attributed would pass even if attributeFlags
+      // never ran.
+      const { rows, bobKey } = await attributeRealFlags(db, [bigPaste('hw1.py')], {
+        aliceEnrolled: false,
+        bobExtra: [bigPaste('hw1.py')],
+      });
+
+      const paste = rows.filter((r) => r.heuristic_id === 'large_paste');
+      // Neither finding is dropped. Under-attribution costs the pair nothing —
+      // the flag is still on the submission, at full severity, in the scope
+      // roll-up a grader reads.
+      expect(paste, 'both findings must survive; only the name is withheld').toHaveLength(2);
+      expect(
+        paste.map((r) => r.contributor_key).sort(),
+        `Bob's paste must name Bob and the unenrolled partner's must name nobody. An ` +
+          `unenrolled partner has no verified chain, so nothing establishes WHO pasted; ` +
+          `charging it to the only contributor the bundle CAN name would move a finding ` +
+          `onto the partner who did not do it — §6 Rule 2 exists to stop exactly that.`,
+      ).toEqual([SCOPE_LEVEL, bobKey].sort());
     });
   });
 });
