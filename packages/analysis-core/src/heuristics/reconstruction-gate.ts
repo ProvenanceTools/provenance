@@ -35,9 +35,24 @@
  * The skip is not yet a visible `not_applicable` flag with a reason attached.
  * Spec §5.4 step 8 wants one ("a heuristic is never silently disabled", R1), but
  * that means a new flag id, its registration in `known-flag-ids.ts`, and a slot
- * in the analyzer's flag-tuning UI — Tier 3.5's per-contributor scoping work,
- * and a product decision about the catalogue rather than a coding one. Until
- * then the fact is recorded on the file's stats as
+ * in the analyzer's flag-tuning UI — a product decision about the catalogue
+ * rather than a coding one.
+ *
+ * This was previously written as deferred to "Tier 3.5's per-contributor
+ * scoping work". That work will not happen: per-contributor heuristic
+ * *scoping* (as opposed to *attribution* and *scoring* of a whole-scope run)
+ * is closed as out-of-scope-by-analysis — see decision D14 in
+ * `docs/superpowers/specs/2026-08-19-program-decision-log.md` and the pinned
+ * analysis in `contributor-scope-boundary.test.ts`. Slicing a heuristic's
+ * input to one contributor is exactly what would defeat *this* gate (a file
+ * only reaches `concurrent` when its events span two verified contributors;
+ * narrow the scope to one and every suppressed verdict becomes a firing one),
+ * re-manufacturing the false accusations this gate exists to prevent.
+ *
+ * So the `not_applicable` flag is not blocked on scoping work — that
+ * dependency no longer exists. Whether and how to add it is an open,
+ * separately owned product decision (not resolved here). Until it is made,
+ * the fact is recorded on the file's stats as
  * {@link FileStats.reconstructionAmbiguity}, so it is visible rather than lost.
  */
 
