@@ -25,6 +25,7 @@ import { collectActiveExtensions } from '../../extensions/collect-active-extensi
 import { ActiveExtensionsCard } from '../../extensions/ActiveExtensionsCard.js';
 import { AssignmentManifestCard } from '../../components/AssignmentManifestCard.js';
 import { CoveragePanel } from '../coverage/CoveragePanel.js';
+import { coverageFacts } from '@provenance/analysis-core/coverage/coverage-facts.js';
 import { summarizeBundleManifest } from '@provenance/analysis-core/manifest/bundle-manifest.js';
 import type { BundleManifestSummary } from '@provenance/analysis-core/manifest/bundle-manifest.js';
 import { getRootPublicKeyHex } from '../../lib/root-key.js';
@@ -83,6 +84,16 @@ export function OverviewView() {
     return map;
   }, [bundles, selectedBundleId]);
 
+  // `/local` has no server, so it runs the coverage stage itself — the SAME
+  // pure, isomorphic function the server calls in its summary route, not a
+  // second implementation. Above the guard below because it is a hook; `null`
+  // here is unreachable in the render path, since that guard already returns
+  // for a missing bundle or index.
+  const coverage = useMemo(
+    () => (activeBundle === undefined || !index ? null : coverageFacts(activeBundle, index)),
+    [activeBundle, index],
+  );
+
   if (!index || !validationReport || bundles.length === 0) {
     return null;
   }
@@ -106,7 +117,7 @@ export function OverviewView() {
         above the flags rather than below them. Never a finding — see
         `views/coverage/CoveragePanel.tsx`.
       */}
-      <CoveragePanel bundle={bundle} index={index} />
+      <CoveragePanel facts={coverage} />
       <ValidationReportPanel report={validationReport} />
       <SummaryStatsPanel index={index} bundle={bundle} />
       <AssignmentManifestCard manifest={manifestSummary ?? undefined} />

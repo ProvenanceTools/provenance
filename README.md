@@ -14,16 +14,17 @@ The full design lives in [`docs/prd.md`](docs/prd.md). Code conventions for work
 
 ## Packages
 
-Provenance is an npm workspace of five packages. Each builds on `log-core`; none of the
+Provenance is an npm workspace of six packages. Each builds on `log-core`; none of the
 top-level packages depend on each other's source.
 
-| Package                                  | What it is                                                                                                                                                                                                                                                                                                                                                                       |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`packages/log-core`](packages/log-core) | The log format shared by every other package: event types, JCS canonicalization, the hash chain, the validator, ndjson serialization, bundle and manifest shapes, and ed25519 manifest verification. Pure TypeScript with zero dependencies on VS Code, Node, or the DOM, so the same code runs in the extension, the browser, and the server.                                   |
-| [`packages/recorder`](packages/recorder) | The VS Code extension that records a tamper-evident `.provenance` log while a student works: all PRD §4 event types, three-signal paste detection, external-change detection, a per-session signing keypair, signed checkpoints, chain recovery, bundle sealing, and a disk-full degraded mode.                                                                                  |
-| [`packages/shared`](packages/shared)     | The Zod schemas that define the HTTP API contract, imported by both the server and the analyzer so the two stay in sync.                                                                                                                                                                                                                                                         |
-| [`packages/analyzer`](packages/analyzer) | The React/Vite single-page app course staff use to review submissions: Google OAuth login, semester switcher, a virtualized cohort list, per-submission drill-in (overview / timeline / replay / validation), a 29-flag heuristics tuning UI (per-flag weight + on/off), and cross-submission flags. A standalone `/local` route runs entirely in-browser from a dropped `.zip`. |
-| [`packages/server`](packages/server)     | The Node.js + Hono API server: PostgreSQL via Drizzle ORM, Google OAuth with sessions and API tokens, the ZIP ingest pipeline (parse → match → heuristics → cross-flags), a pg-boss job queue, an OpenAPI 3.1 spec with Redoc, Prometheus metrics, and retention/purge cron jobs. Object storage is S3-compatible (MinIO in dev).                                                |
+| Package                                            | What it is                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`packages/log-core`](packages/log-core)           | The log format shared by every other package: event types, JCS canonicalization, the hash chain, the validator, ndjson serialization, bundle and manifest shapes, and ed25519 manifest verification. Pure TypeScript with zero dependencies on VS Code, Node, or the DOM, so the same code runs in the extension, the browser, and the server.                                                                                     |
+| [`packages/recorder`](packages/recorder)           | The VS Code extension that records a tamper-evident `.provenance` log while a student works: all PRD §4 event types, three-signal paste detection, external-change detection, a per-session signing keypair, signed checkpoints, chain recovery, bundle sealing, and a disk-full degraded mode.                                                                                                                                    |
+| [`packages/shared`](packages/shared)               | The Zod schemas that define the HTTP API contract, imported by both the server and the analyzer so the two stay in sync.                                                                                                                                                                                                                                                                                                           |
+| [`packages/analysis-core`](packages/analysis-core) | The analysis engine shared by the analyzer and the server: the bundle loader (unzip + parse), the validation checks, the event index and file reconstruction, and the per-submission and cross-submission heuristics. Isomorphic — the same code runs in the browser and in Node — so it depends only on `log-core` plus `jszip`, `diff`, and `@noble/ed25519`.                                                                    |
+| [`packages/analyzer`](packages/analyzer)           | The React/Vite single-page app course staff use to review submissions: Google OAuth login, semester switcher, a virtualized cohort list, per-submission drill-in (overview / timeline / replay / validation / export / source — the Export tab is a v3.1 stub), a 29-flag heuristics tuning UI (per-flag weight + on/off), and cross-submission flags. A standalone `/local` route runs entirely in-browser from a dropped `.zip`. |
+| [`packages/server`](packages/server)               | The Node.js + Hono API server: PostgreSQL via Drizzle ORM, Google OAuth with sessions and API tokens, the ZIP ingest pipeline (parse → match → heuristics → cross-flags), a pg-boss job queue, an OpenAPI 3.1 spec with Redoc, Prometheus metrics, and retention/purge cron jobs. Object storage is S3-compatible (MinIO in dev).                                                                                                  |
 
 ## Quickstart — development environment
 
@@ -128,10 +129,12 @@ npm run dev --workspace=packages/analyzer
 
 Visit `http://localhost:5173`. Sign in with a Google account in `AUTH_ALLOWED_HOSTED_DOMAINS`.
 
-### Offline / local mode (no server required)
+### Offline / local mode (no server round-trip)
 
-Visit `http://localhost:5173/local/load` and drop a `.zip` bundle. No authentication
-is required, and it runs entirely in-browser — no data leaves your machine.
+Visit `http://localhost:5173/local/load` and drop a `.zip` bundle. It runs entirely
+in-browser on top of `analysis-core` — no bundle data leaves your machine. You still
+have to be **signed in as staff**: the route sits behind `RequireAuth` +
+`RequireStaff` like the rest of the app.
 
 ### Run the recorder extension
 
@@ -162,6 +165,7 @@ provenance/
 │   ├── log-core/              # shared event types, hash chain, format
 │   ├── recorder/              # VS Code extension
 │   ├── shared/                # Zod API schemas shared by server + analyzer
+│   ├── analysis-core/         # isomorphic analysis engine (loader, validation, heuristics)
 │   ├── analyzer/              # React/Vite SPA frontend
 │   └── server/                # Node.js + Hono API server
 ├── tools/                     # dev scripts (key generation, manifest signing)
@@ -181,7 +185,7 @@ provenance/
 
 | Command                                                  | What it does                                                                      |
 | -------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `npm run build`                                          | TypeScript build for both packages.                                               |
+| `npm run build`                                          | Build all six workspace packages.                                                 |
 | `npm run test`                                           | Vitest unit tests across all workspaces (~1200 total).                            |
 | `npm run typecheck`                                      | `tsc --noEmit` across the workspace.                                              |
 | `npm run lint`                                           | ESLint + Prettier check.                                                          |

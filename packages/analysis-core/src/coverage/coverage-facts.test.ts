@@ -41,6 +41,7 @@ import {
   identityCoverage,
   unattestedTails,
 } from './coverage-facts.js';
+import { ASSUMED_SINGLE_REPOSITORY, buildObservedDag } from '../git/observed-dag.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -55,6 +56,31 @@ const endsAt = (min: number) => ({
   wall: wallAt(min),
   t: min * 60_000,
 });
+
+/**
+ * A commit observation. `rootCommitSha` OMITTED models a recorder that names no
+ * repository — every bundle recorded before D12's writer half, and every
+ * shallow clone — and is what lands in `ASSUMED_SINGLE_REPOSITORY`.
+ */
+type CommitSpec = { sha: string; rootCommitSha?: string; atMin: number };
+
+const commitAt = (c: CommitSpec) => ({
+  kind: 'git.event',
+  data: {
+    operation: 'commit',
+    sha: c.sha,
+    parents: [],
+    ...(c.rootCommitSha === undefined ? {} : { root_commit_sha: c.rootCommitSha }),
+  },
+  wall: wallAt(c.atMin),
+  t: c.atMin * 60_000,
+});
+
+/** Readable stand-ins. Opaque to the reader, which only compares for equality. */
+const SHA_A = 'a'.repeat(40);
+const SHA_B = 'b'.repeat(40);
+const ROOT_ONE = '1'.repeat(40);
+const ROOT_TWO = '2'.repeat(40);
 
 let cachedKeys: IdentityTestKeys | null = null;
 async function keys(): Promise<IdentityTestKeys> {
@@ -73,7 +99,7 @@ type Who = { studentRef: string } | 'anonymous';
  * control the overlap fixtures need.
  */
 async function buildScope(
-  specs: Array<{ who: Who; startMin: number; endMin: number }>,
+  specs: Array<{ who: Who; startMin: number; endMin: number; commits?: CommitSpec[] }>,
   opts: { stamp?: boolean; rootKey?: string } = {},
 ): Promise<{ bundle: Bundle; index: EventIndex }> {
   const k = await keys();
@@ -82,7 +108,7 @@ async function buildScope(
     const spec = specs[i]!;
     const sk = await seededKeypair(0x70 + i);
     sessions.push({
-      events: [endsAt(spec.endMin)],
+      events: [...(spec.commits ?? []).map(commitAt), endsAt(spec.endMin)],
       walls: [wallAt(spec.startMin)],
       sessionStart: {
         session_pubkey: sk.pubkeyHex,
@@ -402,6 +428,124 @@ describe('unattested seal tails', () => {
     const { bundle } = await buildScope([{ who: 'anonymous', startMin: 0, endMin: 60 }]);
     expect(bundle.rollingSeal?.coverage).toBeUndefined();
     expect(unattestedTails(bundle)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The single-repository caveat (D12)
+// ---------------------------------------------------------------------------
+
+/**
+ * `repositoryAssumedSingle` answers "is any part of this graph folded into the
+ * sentinel repository?" — NOT "did nothing name a repository?".
+ *
+ * The two agree everywhere except a `'mixed'` scope, which is the whole point of
+ * this suite. Mixed is reachable in production as of 2026-08-20: all three
+ * recorders emit `root_commit_sha`, so one partner on a newer recorder — or on a
+ * shallow clone, where the writer contract says OMIT — puts labelled and
+ * unlabelled observations in one scope. There `discriminatorRecorded` is true
+ * while the unlabelled half really is merged, so the old `!discriminatorRecorded`
+ * form went silent on exactly the scope the caveat exists for.
+ *
+ * Every assertion below guards its premise by naming the scope `kind`, because a
+ * test that believes it drives a mixed scope and actually drives an
+ * `assumed_single` one proves nothing about the predicate.
+ */
+describe('the assumed-single-repository caveat', () => {
+  it('states the caveat when nothing named a repository — every bundle to date', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        commits: [{ sha: SHA_A, atMin: 10 }],
+      },
+    ]);
+    const scope = buildObservedDag(bundle).repositoryScope;
+    expect(scope.kind).toBe('assumed_single');
+    expect(scope.repositories).toEqual([ASSUMED_SINGLE_REPOSITORY]);
+
+    expect(coverageFacts(bundle, index).repositoryAssumedSingle).toBe(true);
+  });
+
+  it('STILL states the caveat in a mixed scope, where only one partner labels', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        commits: [{ sha: SHA_A, rootCommitSha: ROOT_ONE, atMin: 10 }],
+      },
+      {
+        who: { studentRef: 'bob' },
+        startMin: 120,
+        endMin: 180,
+        commits: [{ sha: SHA_B, atMin: 130 }],
+      },
+    ]);
+    // The premise, guarded: a genuinely MIXED scope. `discriminatorRecorded` is
+    // TRUE here, so the old `!discriminatorRecorded` predicate reports `false`
+    // and the caveat disappears — while Bob's commit is folded into the
+    // sentinel exactly as it always was.
+    const scope = buildObservedDag(bundle).repositoryScope;
+    expect(scope.kind).toBe('mixed');
+    expect(scope.discriminatorRecorded).toBe(true);
+    expect(scope.repositories).toContain(ASSUMED_SINGLE_REPOSITORY);
+
+    expect(coverageFacts(bundle, index).repositoryAssumedSingle).toBe(true);
+  });
+
+  it('drops the caveat when every observation named its repository', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        commits: [
+          { sha: SHA_A, rootCommitSha: ROOT_ONE, atMin: 10 },
+          { sha: SHA_B, rootCommitSha: ROOT_TWO, atMin: 20 },
+        ],
+      },
+    ]);
+    const scope = buildObservedDag(bundle).repositoryScope;
+    expect(scope.kind).toBe('discriminated');
+    expect(scope.repositories).not.toContain(ASSUMED_SINGLE_REPOSITORY);
+
+    // Two repositories, both named: nothing is merged, so there is nothing to
+    // caveat. Two is not a finding either — see observed-dag's header.
+    expect(scope.repositories).toHaveLength(2);
+    expect(coverageFacts(bundle, index).repositoryAssumedSingle).toBe(false);
+  });
+
+  it('says nothing about a scope that observed no commits at all', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, startMin: 0, endMin: 60 },
+    ]);
+    // This is what the old `commits > 0` guard was for, and sentinel membership
+    // subsumes it: the sentinel only enters `repositories` when a node keyed to
+    // it exists, so an empty graph carries no caveat rather than one about a
+    // graph that is not there.
+    const dag = buildObservedDag(bundle);
+    expect(dag.coverage.commits).toBe(0);
+    expect(dag.repositoryScope.repositories).toEqual([]);
+
+    expect(coverageFacts(bundle, index).repositoryAssumedSingle).toBe(false);
+  });
+
+  it('is never a defect — the caveat brings no dagDefect and no dropped artifact', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        commits: [{ sha: SHA_A, atMin: 10 }],
+      },
+    ]);
+    const facts = coverageFacts(bundle, index);
+    expect(facts.repositoryAssumedSingle).toBe(true);
+    expect(facts.dagDefects).toEqual([]);
+    expect(facts.droppedArtifacts).toEqual([]);
+    expect(facts.dagCoverage.gitEventsWithUnreadableRepository).toBe(0);
   });
 });
 

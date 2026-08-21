@@ -26,23 +26,23 @@
 
 ## File Structure
 
-| File | Responsibility |
-|---|---|
-| `packages/analyzer/src/lib/format.ts` | `formatWall`, `summarizeTerminalCommand` |
-| `packages/analyzer/src/views/replay/EventSidebar.tsx` | Wall time + terminal summary on rows |
-| `packages/analyzer/src/views/timeline/EventList.tsx` | Use terminal helper (exit code on timeline too) |
-| `packages/server/db/migrations/0021_submissions_active_idle_ms.sql` | Nullable bigint columns |
-| `packages/server/db/migrations/meta/_journal.json` | Journal entry idx 19 |
-| `packages/server/src/db/schema.ts` | Drizzle columns |
-| `packages/server/src/services/ingest/stats.ts` | Always UPDATE submissions times; skip per_file insert only when no files |
-| `packages/shared/src/api-schemas.ts` | `total_active_ms` / `total_idle_ms` on `SubmissionRow` |
-| `packages/server/src/openapi/spec/components.ts` | Same, not in `required[]` |
-| `packages/server/src/services/cohort/list.ts` | SELECT + map the two columns |
-| `packages/analyzer/src/views/cohort/CohortTable.tsx` | Time columns + flag-count dropdown |
-| `packages/analyzer/src/views/cohort/ExportCurrentView.tsx` | CSV columns |
-| `packages/analyzer/src/test/msw-handlers.ts` | Fixture defaults |
-| `packages/analyzer/src/views/architecture/content/nodes/er.ts` | submissions denorm prose |
-| `packages/analyzer/src/views/architecture/content/nodes/readpath.ts` | cohort list prose |
+| File                                                                 | Responsibility                                                           |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `packages/analyzer/src/lib/format.ts`                                | `formatWall`, `summarizeTerminalCommand`                                 |
+| `packages/analyzer/src/views/replay/EventSidebar.tsx`                | Wall time + terminal summary on rows                                     |
+| `packages/analyzer/src/views/timeline/EventList.tsx`                 | Use terminal helper (exit code on timeline too)                          |
+| `packages/server/db/migrations/0021_submissions_active_idle_ms.sql`  | Nullable bigint columns                                                  |
+| `packages/server/db/migrations/meta/_journal.json`                   | Journal entry idx 19                                                     |
+| `packages/server/src/db/schema.ts`                                   | Drizzle columns                                                          |
+| `packages/server/src/services/ingest/stats.ts`                       | Always UPDATE submissions times; skip per_file insert only when no files |
+| `packages/shared/src/api-schemas.ts`                                 | `total_active_ms` / `total_idle_ms` on `SubmissionRow`                   |
+| `packages/server/src/openapi/spec/components.ts`                     | Same, not in `required[]`                                                |
+| `packages/server/src/services/cohort/list.ts`                        | SELECT + map the two columns                                             |
+| `packages/analyzer/src/views/cohort/CohortTable.tsx`                 | Time columns + flag-count dropdown                                       |
+| `packages/analyzer/src/views/cohort/ExportCurrentView.tsx`           | CSV columns                                                              |
+| `packages/analyzer/src/test/msw-handlers.ts`                         | Fixture defaults                                                         |
+| `packages/analyzer/src/views/architecture/content/nodes/er.ts`       | submissions denorm prose                                                 |
+| `packages/analyzer/src/views/architecture/content/nodes/readpath.ts` | cohort list prose                                                        |
 
 ---
 
@@ -124,9 +124,7 @@ export function formatWall(wall: string): string {
 
 const COMMAND_MAX = 60;
 
-export function summarizeTerminalCommand(
-  payload: Record<string, unknown> | null,
-): string {
+export function summarizeTerminalCommand(payload: Record<string, unknown> | null): string {
   if (payload === null) return '';
   const cmd = typeof payload['command'] === 'string' ? payload['command'] : '';
   const truncated = cmd.length > COMMAND_MAX ? cmd.slice(0, COMMAND_MAX) + '…' : cmd;
@@ -259,22 +257,23 @@ npx vitest run packages/analyzer/src/views/replay/EventSidebar.test.ts packages/
 - After the file span, if `event.kind === 'terminal.command'`:
 
 ```tsx
-{event.kind === 'terminal.command' && (() => {
-  const summary = summarizeTerminalCommand(
-    event.payload as Record<string, unknown> | null,
-  );
-  if (!summary) return null;
-  const full =
-    event.payload !== null &&
-    typeof (event.payload as Record<string, unknown>)['command'] === 'string'
-      ? ((event.payload as Record<string, unknown>)['command'] as string)
-      : summary;
-  return (
-    <span className="min-w-0 truncate text-foreground/80" title={full}>
-      {summary}
-    </span>
-  );
-})()}
+{
+  event.kind === 'terminal.command' &&
+    (() => {
+      const summary = summarizeTerminalCommand(event.payload as Record<string, unknown> | null);
+      if (!summary) return null;
+      const full =
+        event.payload !== null &&
+        typeof (event.payload as Record<string, unknown>)['command'] === 'string'
+          ? ((event.payload as Record<string, unknown>)['command'] as string)
+          : summary;
+      return (
+        <span className="min-w-0 truncate text-foreground/80" title={full}>
+          {summary}
+        </span>
+      );
+    })();
+}
 ```
 
 Prefer a small helper `function terminalSummary(event: IndexedEvent): { text: string; title: string } | null` in the same file rather than an IIFE if it reads cleaner.
@@ -494,7 +493,7 @@ Replace the inert `SeverityBadge` in the Flags column with a `FlagCountBadge` th
 - `apiFetch('/submissions/${id}/flags', undefined, z.object({ flags: z.array(FlagRowSchema) }))`.
 - Filter `flags.filter((f) => f.severity === sev)`.
 - Loading: "Loading…" in the menu. Empty: "No flags". Error: "Couldn't load flags".
-- Each item: `DropdownMenuItem asChild` wrapping `<Link to={`${basePath}/sub/${id}?tab=overview&flag=${heuristic_id}`}>`. Label: `title` if non-empty, else `heuristic_id.replace(/_/g, ' ')`.
+- Each item: `DropdownMenuItem asChild` wrapping ``<Link to={`${basePath}/sub/${id}?tab=overview&flag=${heuristic_id}`}>``. Label: `title` if non-empty, else `heuristic_id.replace(/_/g, ' ')`.
 - `data-testid={`flag-count-${sev}-${submissionId}`}`.
 
 MSW: `test-setup` already runs the default handlers. Override per test:
@@ -507,8 +506,21 @@ mswServer.use(
   http.get('/api/v1/submissions/:id/flags', () =>
     HttpResponse.json({
       flags: [
-        { id: '...', heuristic_id: 'large_paste', severity: 'high', confidence: 1, score_contribution: 1, title: 'Large paste in hw.py' },
-        { id: '...', heuristic_id: 'external_edits', severity: 'medium', confidence: 1, score_contribution: 1 },
+        {
+          id: '...',
+          heuristic_id: 'large_paste',
+          severity: 'high',
+          confidence: 1,
+          score_contribution: 1,
+          title: 'Large paste in hw.py',
+        },
+        {
+          id: '...',
+          heuristic_id: 'external_edits',
+          severity: 'medium',
+          confidence: 1,
+          score_contribution: 1,
+        },
       ],
     }),
   ),

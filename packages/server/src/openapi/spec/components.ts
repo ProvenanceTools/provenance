@@ -474,9 +474,190 @@ export const components = {
               oneOf: [{ $ref: '#/components/schemas/UUID' }, { type: 'null' }],
             },
             assignment_manifest: { $ref: '#/components/schemas/AssignmentManifest' },
+            coverage: { $ref: '#/components/schemas/CoverageFacts' },
           },
         },
       ],
+    },
+
+    CoverageFacts: {
+      type: 'object',
+      description:
+        'What the recording contains and what it cannot show, for this submission. ' +
+        'NONE of it is a finding: every field states a property of the RECORD or of ' +
+        'the deployment, never of the student. In particular `rootKeyConfigured: ' +
+        'false` means no identity check was POSSIBLE (one unset server key), not ' +
+        'that identities failed; and `unverifiable` and `unattributed` are different ' +
+        'populations with opposite meanings and must never be summed. Absent on a ' +
+        'server that predates the field — absence means "not sent", and must not be ' +
+        'rendered as zeroes.',
+      required: [
+        'identity',
+        'concurrentRecording',
+        'droppedArtifacts',
+        'unattestedTails',
+        'dagDefects',
+        'dagCoverage',
+        'repositoryAssumedSingle',
+      ],
+      properties: {
+        identity: {
+          type: 'object',
+          required: ['resolved', 'rootKeyConfigured', 'attributed', 'unverifiable', 'unattributed'],
+          properties: {
+            resolved: { type: 'boolean' },
+            rootKeyConfigured: { type: 'boolean' },
+            attributed: { type: 'integer' },
+            unverifiable: { type: 'integer' },
+            unattributed: { type: 'integer' },
+          },
+        },
+        concurrentRecording: {
+          type: 'array',
+          description:
+            'Pairs of PROVABLY DIFFERENT verified contributors who recorded at the ' +
+            'same wall-clock time. Exculpatory context — the expected shape of ' +
+            'collaboration — and never evidence of anything.',
+          items: {
+            type: 'object',
+            required: [
+              'sessionA',
+              'sessionB',
+              'contributorA',
+              'contributorB',
+              'overlapMs',
+              'crashBounded',
+            ],
+            properties: {
+              sessionA: { type: 'string' },
+              sessionB: { type: 'string' },
+              contributorA: { type: 'string' },
+              contributorB: { type: 'string' },
+              overlapMs: { type: 'number' },
+              crashBounded: { type: 'boolean' },
+            },
+          },
+        },
+        droppedArtifacts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['kind', 'filename', 'detail'],
+            properties: {
+              kind: {
+                type: 'string',
+                enum: [
+                  'orphaned_meta',
+                  'orphaned_slog',
+                  'empty_slog',
+                  'quarantined_log',
+                  'staging_leftover',
+                  'orphaned_rolling_seal',
+                ],
+              },
+              filename: { type: 'string' },
+              detail: { type: 'string' },
+            },
+          },
+        },
+        unattestedTails: {
+          type: 'array',
+          description:
+            'A rolling seal that committed only to a PREFIX of its log. Ordinary — a ' +
+            'crash, a power cut or an archive taken mid-session produces one — and ' +
+            'never evidence that the tail was altered.',
+          items: {
+            type: 'object',
+            required: ['sessionId', 'file', 'sealed', 'total', 'unit'],
+            properties: {
+              sessionId: { type: 'string' },
+              file: { type: 'string', enum: ['slog', 'meta'] },
+              sealed: { type: 'number' },
+              total: { type: 'number' },
+              unit: { type: 'string', enum: ['bytes', 'checkpoints'] },
+            },
+          },
+        },
+        dagDefects: {
+          type: 'array',
+          description:
+            'Things the commit observations say that cannot all be true. No edge is ' +
+            'asserted from a defect and nothing downstream is ordered on it.',
+          items: {
+            type: 'object',
+            required: ['kind', 'repository'],
+            properties: {
+              kind: {
+                type: 'string',
+                enum: ['conflicting_parents', 'cycle', 'unreadable_parents'],
+              },
+              repository: { type: 'string' },
+              sha: { type: 'string' },
+              shas: { type: 'array', items: { type: 'string' } },
+              sessionId: { type: 'string' },
+              seq: { type: 'integer' },
+              reason: { type: 'string', enum: ['not_an_array', 'non_string_entry'] },
+              claims: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  required: ['parents', 'observations'],
+                  properties: {
+                    parents: { type: 'array', items: { type: 'string' } },
+                    observations: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        required: ['sessionId', 'seq'],
+                        properties: {
+                          sessionId: { type: 'string' },
+                          seq: { type: 'integer' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        dagCoverage: {
+          type: 'object',
+          required: [
+            'sessionsObserving',
+            'observations',
+            'commits',
+            'observedCommits',
+            'witnessedOnlyCommits',
+            'commitsWithUnrecordedParents',
+            'commitsWithConflictingParents',
+            'recordedRoots',
+            'gitEventsWithoutSha',
+            'gitEventsWithUnreadableRepository',
+          ],
+          properties: {
+            sessionsObserving: { type: 'integer' },
+            observations: { type: 'integer' },
+            commits: { type: 'integer' },
+            observedCommits: { type: 'integer' },
+            witnessedOnlyCommits: { type: 'integer' },
+            commitsWithUnrecordedParents: { type: 'integer' },
+            commitsWithConflictingParents: { type: 'integer' },
+            recordedRoots: { type: 'integer' },
+            gitEventsWithoutSha: { type: 'integer' },
+            gitEventsWithUnreadableRepository: { type: 'integer' },
+          },
+        },
+        repositoryAssumedSingle: {
+          type: 'boolean',
+          description:
+            'Some observation named no usable repository (D12), so its commits were ' +
+            'folded into one assumed repository. True for a wholly unlabelled scope ' +
+            'AND for a mixed one where only some observations are labelled. Never a ' +
+            'finding: a recorder that predates the field, and a shallow clone whose ' +
+            'root commit is not reachable, both produce it.',
+        },
+      },
     },
 
     AssignmentManifest: {

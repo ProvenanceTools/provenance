@@ -15,6 +15,7 @@ import {
   validateRollingSessionManifest,
 } from '@provenance/log-core';
 import type { Manifest } from '@provenance/log-core';
+import * as vscodeMock from 'vscode';
 import { startSession, SessionRegistry } from './session-registry.js';
 import type { ActiveSession } from './session-registry.js';
 
@@ -800,5 +801,203 @@ describe('startSession — rolling seal', () => {
         false,
       );
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The §5.6 capability reports, as they reach the chain
+// ---------------------------------------------------------------------------
+
+describe('startSession — the §5.6 capability reports', () => {
+  let tmpDir: string;
+  let assignmentRoot: string;
+  let provenanceDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'provenance-cap-'));
+    assignmentRoot = path.join(tmpDir, 'workspace');
+    provenanceDir = path.join(tmpDir, 'provenance');
+    await fs.mkdir(assignmentRoot, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** The `session.start` payload actually written to disk, parsed back. */
+  async function sessionStartOnDisk(
+    extra: Partial<Parameters<typeof startSession>[0]> = {},
+    files: string[] = ['hw.py'],
+  ): Promise<Record<string, unknown>> {
+    const manifest = await signedManifest({
+      assignment_id: 'proj2',
+      semester: 'fa26',
+      issued_at: '2026-09-15T00:00:00Z',
+      files_under_review: files,
+    });
+    const session = await startSession({
+      assignmentRoot,
+      manifest,
+      extension: makeExtension(),
+      vscodeVersion: '1.100.0',
+      platform: 'darwin-arm64',
+      clock: new FixedClock(0, new Date('2026-01-01T00:00:00.000Z')),
+      provenanceDirOverride: provenanceDir,
+      ...extra,
+    });
+    await session.dispose();
+    const parsed = parseEntries(await fs.readFile(session.slogPath, 'utf8'));
+    if (!parsed.ok) throw new Error('slog did not parse');
+    const start = parsed.value[0]!;
+    expect(start.kind).toBe('session.start');
+    return start.data as Record<string, unknown>;
+  }
+
+  it('reports the file scope it actually watched, and it chains', async () => {
+    const data = await sessionStartOnDisk({}, ['hw.py', 'src/helpers.py']);
+    expect(data['file_scope']).toEqual({
+      watched: ['hw.py', 'src/helpers.py'],
+      complete: true,
+    });
+  });
+
+  it('reports git as UNAVAILABLE when there is no git extension to observe with', async () => {
+    // The mock host publishes no `vscode.git`, which is exactly the condition on
+    // which `startGitWiring` returns an inert wiring. The absence of any
+    // `git.event` in this session is therefore FULLY EXPLAINED, and this field
+    // is the only thing that says so.
+    const data = await sessionStartOnDisk();
+    expect(data['git_capture']).toBe('unavailable');
+  });
+
+  it('reports git as AVAILABLE when a repository this session owns is open', async () => {
+    const repo = {
+      rootUri: { fsPath: assignmentRoot },
+      state: { onDidChange: () => ({ dispose: () => undefined }) },
+    };
+    const gitExtension = {
+      id: 'vscode.git',
+      exports: {
+        getAPI: () => ({
+          repositories: [repo],
+          onDidOpenRepository: () => ({ dispose: () => undefined }),
+          onDidCloseRepository: () => ({ dispose: () => undefined }),
+        }),
+      },
+      packageJSON: {},
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal mock
+    } as any;
+    const spy = vi
+      .spyOn(vscodeMock.extensions, 'getExtension')
+      .mockImplementation((id: string) => (id === 'vscode.git' ? gitExtension : undefined));
+    try {
+      const data = await sessionStartOnDisk();
+      expect(data['git_capture']).toBe('available');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reports git as NOT_OWNED when git works and nothing it sees is in scope', async () => {
+    // Distinct from `unavailable`, and the difference is what a grader acts on:
+    // git observation was live, the assignment simply sat outside every
+    // repository git could see, so every git.event was dropped by the ownership
+    // gate rather than never produced.
+    const stranger = {
+      rootUri: { fsPath: path.join(tmpDir, 'unrelated-repo') },
+      state: { onDidChange: () => ({ dispose: () => undefined }) },
+    };
+    const gitExtension = {
+      id: 'vscode.git',
+      exports: {
+        getAPI: () => ({
+          repositories: [stranger],
+          onDidOpenRepository: () => ({ dispose: () => undefined }),
+          onDidCloseRepository: () => ({ dispose: () => undefined }),
+        }),
+      },
+      packageJSON: {},
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal mock
+    } as any;
+    const spy = vi
+      .spyOn(vscodeMock.extensions, 'getExtension')
+      .mockImplementation((id: string) => (id === 'vscode.git' ? gitExtension : undefined));
+    try {
+      const data = await sessionStartOnDisk({
+        isRepoOwnedByThisRoot: (p: string) => p === assignmentRoot,
+      });
+      expect(data['git_capture']).toBe('not_owned');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reports witnessing as AVAILABLE when the .provenance/ watcher was created', async () => {
+    const data = await sessionStartOnDisk();
+    expect(data['witness_capture']).toBe('available');
+  });
+
+  it('reports witnessing as UNAVAILABLE when the watcher could not be created', async () => {
+    // The capability IS the artifact: one watcher, one answer. There is no way
+    // for the report to say "available" while the wiring watches nothing.
+    const data = await sessionStartOnDisk({
+      createProvenanceDirWatcher: () => {
+        throw new Error('no file system watcher here');
+      },
+    });
+    expect(data['witness_capture']).toBe('unavailable');
+  });
+
+  it('records witnessing UNAVAILABLE rather than crashing the session', async () => {
+    // A watcher that cannot be created costs witnessing, never recording.
+    const manifest = await signedManifest({
+      assignment_id: 'proj2',
+      semester: 'fa26',
+      issued_at: '2026-09-15T00:00:00Z',
+      files_under_review: ['hw.py'],
+    });
+    const session = await startSession({
+      assignmentRoot,
+      manifest,
+      extension: makeExtension(),
+      vscodeVersion: '1.100.0',
+      platform: 'darwin-arm64',
+      clock: new FixedClock(0, new Date('2026-01-01T00:00:00.000Z')),
+      provenanceDirOverride: provenanceDir,
+      createProvenanceDirWatcher: () => {
+        throw new Error('no file system watcher here');
+      },
+    });
+    await session.dispose();
+    const parsed = parseEntries(await fs.readFile(session.slogPath, 'utf8'));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(validateChain(parsed.value).ok).toBe(true);
+    expect(parsed.value[parsed.value.length - 1]!.kind).toBe('session.end');
+  });
+
+  it('never writes null for a capability it cannot establish', async () => {
+    // Omission and `null` canonicalize differently and therefore chain to
+    // different hashes, so a `null` here would make this recorder's entries hash
+    // differently from every other recorder's for the same session.
+    //
+    // Deliberately driven on a session where a report is genuinely UNESTABLISHED
+    // — the manifest's absolute path makes `file_scope` unanswerable. Asserting
+    // "no nulls" on a session that could answer everything would be vacuous:
+    // there would be nothing there to spell wrongly. (Decision-log bug 12: an
+    // assertion about an absent value is only meaningful once you know what
+    // produces the absence.)
+    const data = await sessionStartOnDisk({}, ['/Users/student/proj2/hw.py']);
+    expect('file_scope' in data).toBe(false);
+    for (const field of ['git_capture', 'witness_capture', 'file_scope']) {
+      expect(data[field]).not.toBeNull();
+      if (field in data) expect(data[field]).not.toBeNull();
+    }
+  });
+
+  it('OMITS file_scope rather than writing a path the format forbids', async () => {
+    // S14(b): an absolute path in a course manifest must not reach a signed log.
+    const data = await sessionStartOnDisk({}, ['/Users/student/proj2/hw.py']);
+    expect('file_scope' in data).toBe(false);
   });
 });

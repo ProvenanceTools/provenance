@@ -103,10 +103,24 @@ export const nodes: Record<string, ArchNode> = {
   },
   bundle: {
     title: 'The bundle .zip',
-    body: 'This is the only artefact that ever leaves the student’s machine, and it is a snapshot rather than a stream: the session keeps recording after the zip is written, and sealing again produces another one. Nothing is uploaded in the background, and there is no channel from the recorder to any server at any point.\n\nThe student’s source travels inside it, at the zip root, mirroring the workspace layout. That is required at this stage: validation check 8 compares the submitted bytes against the last on-disk hash the recorder observed, and it can only do that with the bytes present. The server strips them immediately after that comparison, so source lives in this artefact and in the ingest process’s memory, and nowhere else.',
+    body: 'A snapshot rather than a stream: the session keeps recording after the zip is written, and sealing again produces another one. Nothing is uploaded in the background, and there is no channel from the recorder to any server at any point.\n\nIt used to be the only artefact that ever left the student’s machine. It is now one of two — a git-submitted assignment never runs seal at all, and what leaves is a pushed .provenance/ directory carrying a rolling seal per session. The two shapes converge again at the loader, which produces the same flat bundle either way.\n\nThe student’s source travels inside it, at the zip root, mirroring the workspace layout. That is required at this stage: validation check 8 compares the submitted bytes against the last on-disk hash the recorder observed, and it can only do that with the bytes present. The server strips them immediately after that comparison, so source lives in this artefact and in the ingest process’s memory, and nowhere else.',
     links: [
       { label: 'Recorder PRD §5.3', href: `${GH}/docs/prd.md` },
       { label: 'seal.ts', href: `${GH}/packages/recorder/src/commands/seal.ts` },
+    ],
+  },
+
+  push: {
+    title: 'Git push',
+    body: 'The second way work leaves a student’s machine, and the one with no submit moment in it. There is no seal command, no zip, and no instant at which the recorder is told the work is finished: the student commits and pushes, and whatever is in .provenance/ at that commit IS the submission.\n\nThat is the entire reason the rolling seal exists. Sealing on submit assumes a submit, so the seal moves off the submission event and onto the recording: a per-session manifest rewritten at session start, on every checkpoint, and at shutdown, so whatever gets committed is always a valid seal of that moment. It also means the archived log routinely runs PAST its own last seal, which is why those digests are read as prefix commitments and why only the shutdown roll may claim to cover a whole file.\n\nPer-session filenames are what make a shared repository work at all. Two partners recording into one .provenance/ both write into the same directory, and a single shared manifest.json conflicts on every push — tested rather than assumed. One file per session makes the directory add-only and therefore merge-conflict-free, exactly as the logs already were.\n\nA pushed directory also loses a guarantee the zip path takes for granted. Seal can exclude an artifact the analyzer could not open; nothing filters a working tree, and the leftovers that guard exists to catch — a sidecar stranded by a crash-recovery quarantine, a zero-byte log from a session torn down before its first flush — are precisely the ones a git submission carries. The loader therefore applies the same rule on the read side, dropping what it cannot analyse from the ANALYSIS and reporting it, never touching disk.\n\nGetting one to the server is an ordinary upload of a clone, with the batch declared a repo so ingest fans it out into one submission per assignment scope rather than staging the whole repository as a single malformed bundle.',
+    invariant:
+      'No seal step, ever. The rolling seal is the git path’s only seal, and its digests commit to a prefix unless the writer marked one final.',
+    links: [
+      {
+        label: 'rolling-manifest.ts',
+        href: `${GH}/packages/log-core/src/rolling-manifest.ts`,
+      },
+      { label: 'repo-zip.ts', href: `${GH}/packages/server/src/services/ingest/repo-zip.ts` },
     ],
   },
 
@@ -197,7 +211,7 @@ export const nodes: Record<string, ArchNode> = {
   },
   pipe: {
     title: 'The ingest pipeline',
-    body: 'One job runs one file through ordered phases: dedup, parse, match the student to the roster, create the submission, then compute statistics, validation and heuristics inside a single transaction. Ordering is not incidental: dedup has to precede parsing so that a repeat costs one indexed lookup rather than a full unzip, and the submission row has to exist before anything derived from it can be written.\n\nA retry must produce the same flags and the same statistics, and the tests assert it. The phases are therefore either idempotent or guarded by status: an already-resolved file is skipped, version allocation is row-locked so two concurrent workers cannot claim the same index, and a transient database failure before the submission exists re-throws so pg-boss retries rather than marking the file permanently failed.',
+    body: 'One job runs one file through ordered phases: dedup, parse, match the student to the roster, create the submission, then compute statistics, validation, heuristics and finally contributors, inside a single transaction. Two of those are newer than the rest. Scope resolution runs before any of it, at staging, deciding from the batch’s declared submission type which .provenance/ directories inside an archive become submissions at all; and the contributor stage runs last, after heuristics, because it mutates the bundle in a way several heuristics read. Ordering is not incidental: dedup has to precede parsing so that a repeat costs one indexed lookup rather than a full unzip, and the submission row has to exist before anything derived from it can be written.\n\nA retry must produce the same flags and the same statistics, and the tests assert it. The phases are therefore either idempotent or guarded by status: an already-resolved file is skipped, version allocation is row-locked so two concurrent workers cannot claim the same index, and a transient database failure before the submission exists re-throws so pg-boss retries rather than marking the file permanently failed.',
     invariant: 'Stages are ordered and idempotent. A retry produces the same flags and stats.',
     links: [
       { label: 'worker.ts', href: `${GH}/packages/server/src/jobs/worker.ts` },
@@ -221,7 +235,7 @@ export const nodes: Record<string, ArchNode> = {
   },
   pg: {
     title: 'Postgres',
-    body: 'Twenty-one tables hold identity, roster, submissions, per-file statistics, validation results, flags, heuristic configs and cross-flags. There is no events table, and reintroducing one needs explicit approval: events were the dominant and never-purged storage cost, and every read path that needs them can re-derive them from the bundle blob instead.\n\nRows are kept forever. Retention deletes blobs only, so a semester that has been swept still shows its cohort, its scores and its flags. What it loses is the ability to open the underlying evidence. Deleting the rows would make the system unable to answer questions about a case that is still open years later, which is the situation the product exists to serve.',
+    body: 'Twenty-six tables hold identity, roster, submissions and their contributors, per-file statistics, validation results, flags, heuristic configs and cross-flags. There is no events table, and reintroducing one needs explicit approval: events were the dominant and never-purged storage cost, and every read path that needs them can re-derive them from the bundle blob instead.\n\nRows are kept forever. Retention deletes blobs only, so a semester that has been swept still shows its cohort, its scores and its flags. What it loses is the ability to open the underlying evidence. Deleting the rows would make the system unable to answer questions about a case that is still open years later, which is the situation the product exists to serve.',
     invariant: 'No events table. Retention deletes blobs only; submission rows persist for audit.',
     links: [
       { label: 'schema.ts', href: `${GH}/packages/server/src/db/schema.ts` },

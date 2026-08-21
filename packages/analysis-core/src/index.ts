@@ -10,6 +10,7 @@ export * from './identity/resolve-contributors.js';
 export * from './git/observed-dag.js';
 export * from './order/happens-before.js';
 export * from './witness/reconcile-witnesses.js';
+export * from './capability/session-capabilities.js';
 export * from './coverage/session-overlap.js';
 export * from './coverage/coverage-facts.js';
 export * from './validation/run-validation.js';

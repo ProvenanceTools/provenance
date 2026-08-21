@@ -70,6 +70,9 @@ digraph master {
     upl   [label="staff upload\nstreamed · chunked+resumable ≥16 MiB\n(nginx caps a body at ~20 MiB)"
            fillcolor="#0e2422" color="#17bfae" fontsize=9.5]
 
+    push  [label="git push — the SECOND way work leaves the machine\nThere is no submit moment: .provenance/ IS the submission,\nno seal step ever runs, and the ROLLING seal is its only seal.\nPer-session filenames keep a shared directory add-only\nand therefore merge-conflict-free."
+           fillcolor="#0e2422" color="#17bfae" fontsize=9]
+
     local [label="/local offline mode\nthe same analysis-core runs in the\nbrowser — no server, nothing uploaded"
            fillcolor="#0d2416" color="#3fbf62" style="filled,rounded,dashed" fontsize=9.5]
   }
@@ -93,13 +96,13 @@ digraph master {
     queue [label="pg-boss\none job per submission"
            shape=cds fillcolor="#0d1c33" color="#4b90f7" margin="0.28,0.10"]
 
-    pipe  [label="ingest pipeline\nparse → match → stats · validation · heuristics"
+    pipe  [label="ingest pipeline\nscope → parse → match → stats · validation ·\nheuristics → contributors"
            fillcolor="#0d1c33" color="#4b90f7"]
 
     strip [label="strip student source\nstore provenance-only"
            fillcolor="#241a0c" color="#F97316" fontsize=9.5]
 
-    pg    [label="Postgres\n25 tables · no events table"
+    pg    [label="Postgres\n26 tables · no events table"
            shape=cylinder fillcolor="#0d1c33" color="#4b90f7" height=0.62]
 
     blob  [label="Blob store\n/home/submit/provenance · 1TB"
@@ -182,6 +185,9 @@ digraph master {
   ckpt  -> slog   [style=dashed color="#9d7bf5" constraint=false]
   slog  -> seal   [label="on submit"]
   seal  -> bundle [color="#17bfae"]
+  ckpt  -> push   [label="a rolling seal per session, rewritten on\nEVERY checkpoint — so whatever is committed\nis always a valid seal of that moment"
+                   color="#17bfae" constraint=false]
+  push  -> upl    [label="a clone, zipped. Ingest declares the batch\na repo and fans it out per assignment scope" color="#17bfae"]
 
   bundle -> gs   [label="student uploads" color="#17bfae"]
   bundle -> upl  [label="or staff uploads\nthe whole export" color="#17bfae" style=dashed]

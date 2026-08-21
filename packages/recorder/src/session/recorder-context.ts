@@ -9,7 +9,83 @@
 import * as os from 'node:os';
 import * as crypto from 'node:crypto';
 import * as vscode from 'vscode';
-import type { Manifest, SessionIdentity, SessionStartPayload } from '@provenance/log-core';
+import { buildFileScope } from '@provenance/log-core';
+import type {
+  GitCaptureCapability,
+  Manifest,
+  SessionFileScope,
+  SessionIdentity,
+  SessionStartPayload,
+  WitnessCaptureCapability,
+} from '@provenance/log-core';
+
+/**
+ * The cap on {@link SessionFileScope.watched}, in entries.
+ *
+ * Today's resolver is the manifest's own `files_under_review`, a hand-authored
+ * course list of a handful of files, so this never bites. It exists because the
+ * field's whole value is that a consumer can read a path's ABSENCE from the
+ * list as "not watched", and an unbounded list inside a single hash-chained
+ * entry is not something a future `scope: 'repo'` resolver should be able to
+ * produce by accident. When the cap bites the recorder emits `complete: false`,
+ * and every reader then downgrades absence to _unknown_ rather than to _not
+ * watched_.
+ *
+ * Part of the writer contract: the three recorders must cap at the same number,
+ * or two ports disagree about when `complete` goes false.
+ */
+export const FILE_SCOPE_MAX_ENTRIES = 4096;
+
+/**
+ * Resolve the EFFECTIVE FILE SET this session will watch — collaboration spec
+ * §5.6 item 1, S25.
+ *
+ * ## Why the list and not the rule
+ *
+ * S25's problem is that "no events for this file" is ambiguous between _nothing
+ * happened_ and _it was never watched_. Only the resolved LIST answers that: a
+ * count cannot be asked whether it contains `Solver.java`, and publishing the
+ * unresolved glob set instead would require three hand-written recorder ports
+ * and one analyzer to agree on a matcher — the divergence risk S25 itself names
+ * and parent spec §10 exists to prevent. Publishing the RESULT keeps exactly one
+ * matcher, wherever it eventually lives.
+ *
+ * ## Why this is not merely a copy of the manifest
+ *
+ * Today the recorder's resolver is the identity function: `files_under_review`
+ * is an exact-string list, `ExpectedContentRegistry` does `new Set(...)` and
+ * `fs-watcher.ts` builds one `RelativePattern` per entry, so the effective set
+ * IS the declared set. So for a 2.0 session — whose payload already carries the
+ * full signed manifest — this field is currently byte-equal to something the
+ * analyzer already has.
+ *
+ * It is still the right field, for three reasons. It is a DIFFERENT assertion:
+ * the manifest is the course's declaration of what should be watched, this is
+ * the recorder's report of what it actually watched, and the whole §5.6 rule is
+ * that the recorder must say what it did rather than let a reader infer it. It
+ * is the only form available to a 1.x session, whose payload carries no
+ * manifest. And it is what makes the still-open `scope: 'repo'` format decision
+ * (collaboration spec §8.7) a change to ONE resolver rather than a change to the
+ * format and all three ports — the field, the readers and the vectors are
+ * already in place.
+ *
+ * ## Privacy
+ *
+ * Entries travel VERBATIM and are never made absolute. `files_under_review` is
+ * assignment-root-relative by construction (`fs-watcher.ts` feeds each entry to
+ * `new RelativePattern(assignmentRoot, entry)`), which is the same category of
+ * path `doc.open.path` already carries, so this introduces no new identifier.
+ * `buildFileScope` rejects an absolute path, a colon (every remote-URL spelling)
+ * and any `..` segment; a course that put one in its manifest gets the field
+ * OMITTED rather than an absolute path in a signed log — S14(b).
+ */
+export function resolveFileScope(
+  filesUnderReview: readonly string[],
+): SessionFileScope | undefined {
+  const complete = filesUnderReview.length <= FILE_SCOPE_MAX_ENTRIES;
+  const watched = complete ? filesUnderReview : filesUnderReview.slice(0, FILE_SCOPE_MAX_ENTRIES);
+  return buildFileScope(watched, complete);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,6 +152,17 @@ export function buildRecorderContext(args: {
   platform: string;
   sessionPubkeyHex?: string;
   identity?: SessionIdentity;
+  /**
+   * §5.6 item 2 — whether git observation was available. `undefined` OMITS the
+   * field, which is the blameless answer whenever the probe could not establish
+   * one. See `wiring/git-wiring.ts`'s `probeGitCapture`.
+   */
+  gitCapture?: GitCaptureCapability;
+  /**
+   * §5.6 item 3 — whether `.provenance/` witnessing was available. `undefined`
+   * OMITS the field.
+   */
+  witnessCapture?: WitnessCaptureCapability;
 }): RecorderContext {
   const {
     manifest,
@@ -85,7 +172,13 @@ export function buildRecorderContext(args: {
     platform,
     sessionPubkeyHex,
     identity,
+    gitCapture,
+    witnessCapture,
   } = args;
+
+  // §5.6 item 1. `undefined` when the resolved set carries something the format
+  // forbids — OMIT rather than publish it.
+  const fileScope = resolveFileScope(manifest.files_under_review);
 
   const sessionId = crypto.randomUUID();
   const machineId = computeMachineId(sessionId);
@@ -152,6 +245,20 @@ export function buildRecorderContext(args: {
     // fails to verify is dropped upstream in `identity/session-identity.ts` rather
     // than written, because a broken claim inside a signed chain is permanent.
     ...(identity !== undefined ? { identity } : {}),
+    // The three CAPABILITY REPORTS (collaboration spec §5.6). Each key is
+    // SPREAD, never assigned, because the format pins OMISSION for the unknown
+    // case: an absent key and a `null` value canonicalize differently and
+    // therefore chain to different hashes, exactly as `parents: []` and an
+    // absent `parents` do. Emitting `null` here would make this recorder's
+    // entries hash differently from every other recorder's for the same
+    // session, which is the one thing the shared vectors exist to prevent.
+    //
+    // Absence is a legal, permanent, blameless answer: a reader treats it as
+    // "this recorder does not report", which is what every bundle recorded
+    // before §5.6 landed says.
+    ...(gitCapture !== undefined ? { git_capture: gitCapture } : {}),
+    ...(witnessCapture !== undefined ? { witness_capture: witnessCapture } : {}),
+    ...(fileScope !== undefined ? { file_scope: fileScope } : {}),
     vscode: {
       version: vscodeVersion,
       // vscode.version is the only publicly available version string in the extension API.

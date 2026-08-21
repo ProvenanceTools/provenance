@@ -104,10 +104,16 @@ write-once; retention still deletes only blobs, never DB rows.
 ### 2.3 Run database migrations
 
 ```bash
-node packages/server/dist/index.js --mode=migrate
+npm run db:migrate --workspace=packages/server
 ```
 
-Or use `npm run db:migrate --workspace=packages/server` (requires dev deps installed).
+There is **no `--mode=migrate`**. `node dist/index.js` accepts only `--mode=api`,
+`--mode=worker`, or `--mode=all` (`packages/server/src/run-mode.ts`) and throws on
+anything else. Migrations are applied by a separate entry point,
+`packages/server/src/db/migrate.ts`, which the `db:migrate` script runs under `tsx`
+— so this step needs the workspace's dev dependencies installed. It reads
+`DATABASE_URL` directly from the environment (the script passes `--env-file=.env`),
+independently of the server's own config schema.
 
 ### 2.4 Start the server
 
@@ -136,8 +142,14 @@ The default `PORT` is 3000. Override with `PORT=8080`.
 The SPA (`packages/analyzer/dist/`) can be served by any static file host:
 
 - **Nginx:** configure `try_files $uri /index.html` for client-side routing.
-- **Same server:** the Hono server can serve static files if you configure
-  `STATIC_DIR=<path-to-dist>` (not yet wired in v3.0 — use a CDN or Nginx).
+- **Same server:** the Hono server serves the SPA itself. Point **`PUBLIC_DIR`**
+  at the built `packages/analyzer/dist/` (default `./public`, relative to the
+  server's cwd; the production Dockerfile bakes the build into
+  `/app/packages/server/public`). `src/api/static.ts` mounts an asset middleware
+  plus an SPA `index.html` fallback for client-side routing. If the directory does
+  not exist, static serving is silently disabled and the server logs
+  `SPA static serving disabled: PUBLIC_DIR not found` — which is the normal state
+  in dev. There is no `STATIC_DIR`.
 - **Vite preview** (dev only): `npm run preview --workspace=packages/analyzer`
 
 Point the frontend's `VITE_API_BASE_URL` build-time variable at your API origin:
@@ -275,7 +287,11 @@ Expected: `"is_superadmin": true`.
 
 ## 5. Creating courses and semesters
 
-Via the API (or, in a future release, via the UI):
+Superadmins can do this in the UI at **`/admin/courses`** (create/archive a course)
+and **`/admin/courses/:courseId/semesters`** (create/archive a semester). Both routes
+sit behind `RequireAuth` + `RequireSuperadmin`.
+
+The equivalent API calls, for scripting:
 
 ```bash
 # Create a course
@@ -408,11 +424,15 @@ recovery.
 Cron jobs are managed by pg-boss and run automatically when the worker process is
 running. They are registered on every worker startup (idempotent).
 
-| Job name                 | Schedule (UTC) | Description                                       |
-| ------------------------ | -------------- | ------------------------------------------------- |
-| `retention_sweep`        | 2:00 daily     | Delete blobs past retention window (PRD §16)      |
-| `purge_expired_sessions` | Every hour     | Delete `sessions` rows where `expires_at < now()` |
-| `purge_expired_exports`  | 3:00 daily     | Stub — will purge export artifacts in v3.1        |
+| Job name                 | Cron (UTC)  | Schedule   | Description                                                     |
+| ------------------------ | ----------- | ---------- | --------------------------------------------------------------- |
+| `retention_sweep`        | `0 2 * * *` | 2:00 daily | Delete blobs past retention window (PRD §16)                    |
+| `purge_expired_sessions` | `0 * * * *` | Every hour | Delete `sessions` rows where `expires_at < now()`               |
+| `purge_expired_exports`  | `0 3 * * *` | 3:00 daily | Stub — will purge export artifacts in v3.1                      |
+| `reap_stale_uploads`     | `0 4 * * *` | 4:00 daily | Reclaim multipart staging dirs older than                       |
+|                          |             |            | `BLOB_STORAGE_FS_STAGING_TTL_SECONDS` (fs backend; no-op on s3) |
+| `storage_quota_check`    | `0 * * * *` | Every hour | Measure used bytes against `STORAGE_QUOTA_BYTES`, set the       |
+|                          |             |            | `provenance_storage_*` gauges, alert at the warn/critical pcts  |
 
 To verify cron jobs are registered:
 
@@ -422,7 +442,7 @@ FROM pgboss.schedule
 ORDER BY name;
 ```
 
-Expected output shows all three job names with their cron expressions.
+Expected output shows all five job names with their cron expressions.
 
 To manually trigger a cron job (e.g. for testing):
 
@@ -557,35 +577,124 @@ Document the time taken and any issues found. Update this runbook if needed.
 
 ## 10. Environment variable reference
 
-| Variable                           | Required   | Default                                             | Description                                                                    |
-| ---------------------------------- | ---------- | --------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `DATABASE_URL`                     | Yes        | —                                                   | PostgreSQL connection string                                                   |
-| `DATABASE_POOL_MAX`                | No         | `10`                                                | Per-process Postgres connection cap. Must exceed `INGEST_CONCURRENCY` (§2.6)   |
-| `INGEST_CONCURRENCY`               | No         | `4`                                                 | Concurrent `ingest_file` jobs per worker. See §2.6 (Scaling the ingest worker) |
-| `PORT`                             | No         | `3000`                                              | HTTP port                                                                      |
-| `NODE_ENV`                         | No         | `development`                                       | `development` or `production`                                                  |
-| `GOOGLE_OAUTH_CLIENT_ID`           | Yes        | —                                                   | Google OAuth 2.0 client ID                                                     |
-| `GOOGLE_OAUTH_CLIENT_SECRET`       | Yes        | —                                                   | Google OAuth 2.0 client secret                                                 |
-| `GOOGLE_OAUTH_REDIRECT_URI`        | No         | `http://localhost:3000/api/v1/auth/google/callback` | OAuth callback URL                                                             |
-| `AUTH_ALLOWED_HOSTED_DOMAINS`      | No         | `berkeley.edu`                                      | Comma-separated allowed `hd` values                                            |
-| `AUTH_SUPERADMIN_EMAILS`           | Yes (prod) | `[]`                                                | Comma-separated superadmin emails                                              |
-| `AUTH_COOKIE_SIGNING_SECRET`       | Yes (prod) | dev sentinel                                        | HMAC signing key for OAuth state cookie                                        |
-| `AUTH_SESSION_TTL_DAYS`            | No         | `14`                                                | Session lifetime in days                                                       |
-| `OBJECT_STORAGE_ENDPOINT`          | Yes        | —                                                   | S3-compatible endpoint URL                                                     |
-| `OBJECT_STORAGE_REGION`            | No         | `us-east-1`                                         | S3 region                                                                      |
-| `OBJECT_STORAGE_BUCKET`            | Yes        | —                                                   | Bucket name                                                                    |
-| `OBJECT_STORAGE_ACCESS_KEY_ID`     | Yes        | —                                                   | S3 access key                                                                  |
-| `OBJECT_STORAGE_SECRET_ACCESS_KEY` | Yes        | —                                                   | S3 secret key                                                                  |
-| `METRICS_AUTH_TOKEN`               | No         | —                                                   | Bearer token required for `GET /metrics`. If unset, /metrics returns 403.      |
-| `RECONSTRUCTION_CACHE_SIZE`        | No         | `100`                                               | LRU cache capacity for file reconstruction                                     |
-| `SMTP_HOST`                        | No         | —                                                   | SMTP server for invitation emails                                              |
-| `SMTP_PORT`                        | No         | `587`                                               | SMTP port                                                                      |
-| `SMTP_USER`                        | No         | —                                                   | SMTP username                                                                  |
-| `SMTP_PASS`                        | No         | —                                                   | SMTP password                                                                  |
-| `SMTP_FROM`                        | No         | `provenance@example.edu`                            | From address for invitation emails                                             |
-| `LOG_LEVEL`                        | No         | `info`                                              | Pino log level: `trace`, `debug`, `info`, `warn`, `error`                      |
-| `PROVENANCE_ROOT_PUBLIC_KEY_HEX`   | No         | —                                                   | Hex ed25519 ROOT public key for the Manifest 2.0 trust chain. See below.       |
-| `PROVENANCE_INSTITUTION_KEY`       | No         | `{}`                                                | The institution credential signing key (identity 2.1). **Secret.** See below.  |
+`packages/server/src/config/env.ts` is the authority: it is a Zod schema parsed
+once at boot, and an invalid or missing required value fails the process loudly
+rather than defaulting. The tables below follow that schema, plus the handful of
+variables read directly from `process.env` outside it (§10.7).
+
+"Required" means the server refuses to start without it. Several variables are
+**conditionally** required — only under `BLOB_STORAGE_BACKEND=s3`, only under
+`=fs`, or only when `NODE_ENV=production`; those say so.
+
+### 10.1 Core
+
+| Variable            | Required | Default       | Meaning                                                                                                                             |
+| ------------------- | -------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`          | No       | `development` | One of `development`, `production`, `test`. Turns on the production-only requirements below.                                        |
+| `PORT`              | No       | `3000`        | TCP port for the API. Ignored when `SOCKET_PATH` is set.                                                                            |
+| `PUBLIC_BASE_URL`   | **Yes**  | —             | Absolute origin the app is reached at. The OAuth redirect URI and invitation login links are derived from it.                       |
+| `DATABASE_URL`      | **Yes**  | —             | Postgres connection string.                                                                                                         |
+| `DATABASE_POOL_MAX` | No       | `10`          | Per-process Postgres connection cap. Keep comfortably above `INGEST_CONCURRENCY` + `INGEST_STAGE_CONCURRENCY` (§2.6).               |
+| `LOG_LEVEL`         | No       | `info`        | Pino level: `trace`, `debug`, `info`, `warn`, `error`.                                                                              |
+| `SOCKET_PATH`       | No       | unset         | Listen on this Unix domain socket instead of `PORT` (apphost deployment). Empty or unset falls back to TCP.                         |
+| `PUBLIC_DIR`        | No       | `./public`    | Directory of the built analyzer SPA, served same-origin with an `index.html` fallback. Missing directory = static serving disabled. |
+| `GIT_SHA`           | No       | unset         | Build commit, surfaced in the `app.startup` notification. See the note in §10.8.                                                    |
+
+### 10.2 Blob storage
+
+`BLOB_STORAGE_BACKEND` selects which of the two groups below is required. Setting
+a variable from the other group is harmless but has no effect.
+
+| Variable                              | Required          | Default | Meaning                                                                                                           |
+| ------------------------------------- | ----------------- | ------- | ----------------------------------------------------------------------------------------------------------------- |
+| `BLOB_STORAGE_BACKEND`                | No                | `s3`    | `s3` (S3-compatible object storage) or `fs` (a plain directory, e.g. an NFS mount).                               |
+| `OBJECT_STORAGE_ENDPOINT`             | **Yes when `s3`** | —       | S3-compatible endpoint URL.                                                                                       |
+| `OBJECT_STORAGE_REGION`               | No                | `auto`  | S3 region. `auto` suits MinIO and Cloudflare R2; set a real region for AWS.                                       |
+| `OBJECT_STORAGE_BUCKET`               | **Yes when `s3`** | —       | Bucket name.                                                                                                      |
+| `OBJECT_STORAGE_ACCESS_KEY_ID`        | **Yes when `s3`** | —       | S3 access key id.                                                                                                 |
+| `OBJECT_STORAGE_SECRET_ACCESS_KEY`    | **Yes when `s3`** | —       | S3 secret access key.                                                                                             |
+| `BLOB_STORAGE_FS_ROOT`                | **Yes when `fs`** | —       | Directory bundles are stored under.                                                                               |
+| `BLOB_URL_SIGNING_SECRET`             | **Yes when `fs`** | —       | HMAC secret (**≥32 chars**) signing `GET /api/v1/blob` download URLs — the `fs` stand-in for an S3 presigned URL. |
+| `BLOB_STORAGE_FS_STAGING_TTL_SECONDS` | No                | `86400` | Age at which `reap_stale_uploads` reclaims an abandoned multipart staging dir (`fs` only).                        |
+| `BLOB_DOWNLOAD_URL_TTL_SECONDS`       | No                | `300`   | Lifetime of a bundle download URL, on either backend.                                                             |
+
+### 10.3 Authentication and sessions
+
+| Variable                      | Required        | Default            | Meaning                                                                                                                                                  |
+| ----------------------------- | --------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GOOGLE_OAUTH_CLIENT_ID`      | **Yes**         | —                  | Google OAuth 2.0 client id.                                                                                                                              |
+| `GOOGLE_OAUTH_CLIENT_SECRET`  | **Yes**         | —                  | Google OAuth 2.0 client secret.                                                                                                                          |
+| `AUTH_ALLOWED_HOSTED_DOMAINS` | No              | `["berkeley.edu"]` | **JSON array** of allowed Google `hd` values — not a comma-separated list. Must be non-empty. The only thing keeping outsiders out; do not loosen it.    |
+| `AUTH_SUPERADMIN_EMAILS`      | **Yes in prod** | `[]`               | **JSON array** of superadmin email addresses. Must be non-empty when `NODE_ENV=production`.                                                              |
+| `AUTH_COOKIE_SIGNING_SECRET`  | **Yes in prod** | dev-only sentinel  | HMAC key for the `__Host-prov_oauth` state cookie. Boot fails in production while it still holds the dev sentinel.                                       |
+| `SESSION_COOKIE_NAME`         | No              | `__Host-prov_sess` | Session cookie name. Must start with `__Host-` when `NODE_ENV=production`.                                                                               |
+| `SESSION_TTL_DAYS`            | No              | `14`               | Session lifetime in days. (There is no `AUTH_SESSION_TTL_DAYS`.)                                                                                         |
+| `RATE_LIMIT_REDIS_URL`        | No              | empty              | Presence signals a multi-process deployment. Empty **and** non-production ⇒ in-memory rate limiting; otherwise Postgres-backed. No Redis client is used. |
+
+There is no `GOOGLE_OAUTH_REDIRECT_URI`. The callback URL is always
+`${PUBLIC_BASE_URL}/api/v1/auth/google/callback`, built in
+`src/api/v1/routes/auth.ts` — register exactly that in the Google console.
+
+### 10.4 Ingest and analysis
+
+| Variable                     | Required | Default                | Meaning                                                                                                    |
+| ---------------------------- | -------- | ---------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `INGEST_MAX_BUNDLE_BYTES`    | No       | `52428800` (50 MiB)    | Per-bundle upload ceiling.                                                                                 |
+| `INGEST_MAX_BATCH_BYTES`     | No       | `5368709120` (5 GiB)   | Ceiling for a batch held in memory.                                                                        |
+| `INGEST_MAX_BATCH_FILES`     | No       | `10000`                | Max bundles staged from one export.                                                                        |
+| `INGEST_MAX_UPLOAD_BYTES`    | No       | `10737418240` (10 GiB) | Ceiling for a streamed Gradescope upload, which goes straight to a temp file — disk-bound, not heap-bound. |
+| `INGEST_CONCURRENCY`         | No       | `4`                    | Concurrent `ingest_file` jobs per worker. See §2.6.                                                        |
+| `INGEST_STAGE_CONCURRENCY`   | No       | `1`                    | Bundles staged concurrently while unpacking an export; >1 also sizes the ZIP-rebuild worker-thread pool.   |
+| `INGEST_POLLING_INTERVAL_MS` | No       | `500`                  | pg-boss polling interval for the ingest queues (the library default is 2000).                              |
+| `ROSTER_CSV_MAX_BYTES`       | No       | `10485760` (10 MiB)    | Roster CSV upload ceiling.                                                                                 |
+| `RECONSTRUCTION_CACHE_SIZE`  | No       | `100`                  | LRU capacity for reconstructed file content + per-character provenance.                                    |
+| `RECOMPUTE_MAX_PARALLEL`     | No       | `4`                    | Parsed and validated, but **no code currently reads it** — recompute fan-out is not yet governed by it.    |
+
+### 10.5 Email, alerts and storage quota
+
+| Variable                      | Required | Default                 | Meaning                                                                                                                                                                                           |
+| ----------------------------- | -------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SMTP_URL`                    | No       | empty                   | Single connection URL for outbound mail (`smtps://user:pass@host:port`). Empty ⇒ invitations log to stderr instead. There are no `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` variables. |
+| `SMTP_FROM`                   | No       | empty                   | From address. Empty lets the transport pick its own default.                                                                                                                                      |
+| `ALERT_WEBHOOK_URL`           | No       | unset                   | Incoming webhook (Discord-compatible) for operational alerts. Unset disables the sink.                                                                                                            |
+| `ALERT_WEBHOOK_MIN_SEVERITY`  | No       | `warn`                  | Minimum severity forwarded to the webhook: `info`, `warn`, `critical`.                                                                                                                            |
+| `ALERT_WEBHOOK_TIMEOUT_MS`    | No       | `5000`                  | Webhook POST timeout.                                                                                                                                                                             |
+| `ALERT_EMAIL_RECIPIENTS`      | No       | `[]`                    | **JSON array** of addresses for the SMTP alert sink. Requires `SMTP_URL`. Empty disables it.                                                                                                      |
+| `ALERT_SMTP_MIN_SEVERITY`     | No       | `critical`              | Minimum severity forwarded to the SMTP sink.                                                                                                                                                      |
+| `ALERT_DEDUPE_WINDOW_SECONDS` | No       | `300`                   | Per kind/severity de-duplication window, so a repeating check does not re-notify on every run.                                                                                                    |
+| `STORAGE_QUOTA_BYTES`         | No       | `1099511627776` (1 TiB) | Quota the hourly `storage_quota_check` measures against (`fs` backend; no-op on `s3`).                                                                                                            |
+| `STORAGE_QUOTA_WARN_PCT`      | No       | `80`                    | Percentage of the quota that raises a `warn` alert.                                                                                                                                               |
+| `STORAGE_QUOTA_CRITICAL_PCT`  | No       | `90`                    | Percentage of the quota that raises a `critical` alert.                                                                                                                                           |
+
+### 10.6 Trust-chain keys
+
+| Variable                         | Required | Default | Meaning                                                                                                                              |
+| -------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `PROVENANCE_ROOT_PUBLIC_KEY_HEX` | No       | empty   | 64 lowercase hex chars, or empty. Anchors validation check 2 for Manifest 2.0 bundles. See below.                                    |
+| `PROVENANCE_INSTITUTION_KEY`     | No       | `{}`    | JSON object holding the institution private key + its root-signed certificate. **The only private key the server holds.** See below. |
+
+### 10.7 Read outside the config schema
+
+These four are the easiest to miss, because they are not in `env.ts` and so are
+never mentioned by a config validation error.
+
+| Variable             | Read by                                  | Meaning                                                                                                                                                                                                           |
+| -------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `METRICS_AUTH_TOKEN` | `src/api/middleware/metrics.ts`          | Bearer token for `GET /metrics`. **Unset ⇒ 403 in every environment**, development included: the endpoint fails closed rather than exposing metrics unauthenticated. Scrape with `Authorization: Bearer <token>`. |
+| `DATABASE_URL`       | `src/db/migrate.ts`, directly            | The migration CLI reads `process.env.DATABASE_URL` itself and exits 1 if unset. It never parses the config schema, so migrations run with nothing else configured.                                                |
+| `INGEST_PROFILE`     | `src/jobs/ingest-profile.ts`             | `INGEST_PROFILE=1` enables per-stage ingest timing output. Dev/profiling only — leave unset in production.                                                                                                        |
+| `ANALYZE_PERF`       | `vitest.config.ts` (server and analyzer) | `ANALYZE_PERF=1` keeps the `test/perf` suites in the default Vitest run instead of excluding them. **Test-time only** — the running server never reads it.                                                        |
+
+### 10.8 The `GIT_SHA` empty-value subtlety
+
+`GIT_SHA` is baked into the image as an `ENV` by the Dockerfile build arg. Compose's
+`env_file` is applied at _runtime_ and overrides that `ENV`, so a bare `GIT_SHA=`
+line in the deploy `.env` clobbers the baked value with an empty string.
+
+The schema therefore coerces an empty string to `undefined`
+(`.transform((v) => (v ? v : undefined))`) specifically so the empty value falls
+through to the `?? 'unknown'` default instead of surfacing as `sha: ""`. Best is
+still not to write a `GIT_SHA=` line into the deploy `.env` at all.
 
 ### The Manifest 2.0 root public key
 

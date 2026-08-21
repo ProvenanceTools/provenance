@@ -77,7 +77,7 @@ digraph analysis {
   }
 
   subgraph cluster_collab {
-    label="  COLLABORATION SPINE — built, and deliberately not yet wired into the pipeline  "
+    label="  COLLABORATION SPINE — the three primitives  "
     fontsize=9.5 fontcolor="#9d7bf5" color="#2e2450" penwidth=1.5 style=rounded
     bgcolor="#0e0b18" labeljust="l"
     node [fillcolor="#1e1830" color="#9d7bf5" fontsize=9]
@@ -87,6 +87,23 @@ digraph analysis {
     dag [label="observed commit DAG\nnode identity is (repository, sha)\nabsent parents are null, NEVER []\ntwo claims disagreeing on one sha ⇒\nno edge asserted in either direction"]
 
     order [label="happens-before  ≺\npartial by nature — before · after ·\nconcurrent · same · unknown.\nReturns a STRING, so it can never reach\nArray.sort. globalIdx is NOT re-keyed and\nthere is no parallel integer beside it."]
+  }
+
+  subgraph cluster_creaders {
+    label="  WHAT READS THE SPINE  " fontsize=9.5 fontcolor="#9d7bf5" color="#2e2450"
+    penwidth=1.5 style=rounded bgcolor="#0e0b18" labeljust="l"
+    node [fillcolor="#1e1830" color="#9d7bf5" fontsize=9]
+
+    extclass [label="external-change reclassification\ngit_merge_in · git_unrecorded_in ·\nexternal · unclassified.\nOnly git_merge_in suppresses, and only on an\nexact sha256 match against a state a PROVABLY\nDIFFERENT verified contributor recorded on the\nsame path — never on a clock. Reclassified\nevents stay in the index and in the verdict map."]
+
+    split [label="partitionSessionOverlaps\nONE enumeration of overlapping session pairs\nand ONE ‘different’ decision, split two ways.\njudged.comparison is typed same | unknown,\nso a suppressed pair is UNREPRESENTABLE in\nthe heuristic — drift is a compile error."]
+
+    coverage [label="COVERAGE STAGE — facts, never findings\nconcurrent recording · identity counts +\nrootKeyConfigured · commit-graph coverage +\nDAG defects · the single-repository caveat ·\nunattested rolling-seal tails · dropped artifacts.\nAnswers in all three states: not available,\nnothing to note, or the facts."
+              fillcolor="#0d2416" color="#3fbf62" penwidth=1.8]
+
+    witness [label="peer witnessing — READER ONLY\ncorroborated · absent · short ·\ntip_mismatch · indeterminate, plus\nunwitnessed per SESSION.\nFacts only: no Flag, no check, no score,\nand it never names a person.\nNothing in the pipeline calls it yet."
+             fillcolor="#15171d" color="#5d677d" fontcolor="#98a2b6"
+             style="filled,rounded,dashed"]
   }
 
   rkpub [label="ROOT PUBLIC KEY\nconfigured server-side and in the browser build —\nthe same one value every recorder compiles in"
@@ -110,6 +127,26 @@ digraph analysis {
   dag -> order  [label="L2 — the only trustworthy\ncross-contributor relation" color="#9d7bf5"]
   order -> recon [label="segments a file only when two provably\ndifferent contributors touched it" color="#9d7bf5" style=dashed constraint=false]
   order -> v8 [label="the ≺-maximal recorded states,\nnot whichever laptop clock ran last" color="#9d7bf5" style=dashed]
+
+  /* Tier 3.1 — content decides, not the recorder's 2 s timing tag */
+  index -> extclass [label="fs.external_change" color="#9d7bf5"]
+  contrib -> extclass [label="gated on a COLLABORATIVE scope —\na solo bundle short-circuits and is\nbyte-for-byte unaffected" color="#9d7bf5" style=dashed]
+  dag -> extclass [label="corroboration only:\nancestor · same_commit ·\nunordered · no_observations" color="#9d7bf5" style=dashed]
+  extclass -> hp [label="external_edits and\nmass_external_replacement skip\nonly the git_merge_in set" color="#9d7bf5"]
+  extclass -> he [label="⇒ terminal_active_during_\nexternal_change too" color="#9d7bf5" style=dashed]
+
+  /* peer witnessing: the reader landed first, exactly as 2.0 and the seal did */
+  index -> witness [label="peer.observed —\nno recorder emitted this\nuntil 2026-08-20" color="#5d677d" style=dashed]
+  contrib -> witness [label="a witness is worth what the chain\ncarrying it is worth: attributed ⇒\nestablished · unattributed ⇒ inferred ·\nunverifiable ⇒ unknown" color="#5d677d" style=dashed]
+
+  /* the one enumeration of overlapping sessions, split two ways */
+  contrib -> split [color="#9d7bf5" style=dashed constraint=false]
+  index -> split [color="#9d7bf5"]
+  split -> hi [label="judged — one person's own two\nsessions, or an unproven pair" color="#9d7bf5"]
+  split -> coverage [label="collaboration — two VERIFIED, DISTINCT people\nrecording at once. Exculpatory, and until this\nstage existed it was computed and thrown away" color="#3fbf62"]
+
+  unzip -> coverage [label="dropped artifacts + unattested seal tails" color="#3fbf62"
+                     style=dashed constraint=false]
   index -> v1 [lhead=cluster_val color="#9d7bf5"]
   v1 -> report [ltail=cluster_val color="#9d7bf5"]
   report -> integ
