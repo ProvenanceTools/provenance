@@ -10,8 +10,6 @@ import { findMembership, type MembershipCache } from './membership-cache.js';
 import { users, courses, semesters, memberships } from '../db/schema.js';
 import type { DrizzleDb } from '../db/client.js';
 
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
-
 // ---------------------------------------------------------------------------
 // Test data helpers
 // ---------------------------------------------------------------------------

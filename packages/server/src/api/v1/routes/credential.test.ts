@@ -58,8 +58,6 @@ import {
 } from '../../../services/enrollment/credential-history.js';
 import type { DrizzleDb } from '../../../db/client.js';
 
-vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
-
 // ---------------------------------------------------------------------------
 // Deterministic key material — HKDF over fixed bytes, no randomness anywhere.
 // ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-import { vi, describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { eq, count } from 'drizzle-orm';
 import { withTestDb } from '../../../test/helpers/db.js';
 import { seedSubmission } from '../../../test/helpers/seed-submission.js';
@@ -7,8 +7,6 @@ import { per_file_stats, submissions } from '../../db/schema.js';
 import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
 import { computeStats } from '@provenance/analysis-core/index/stats.js';
 import type { Bundle, ParsedSession } from '@provenance/analysis-core/loader/types.js';
-
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 // ---------------------------------------------------------------------------
 // Helpers

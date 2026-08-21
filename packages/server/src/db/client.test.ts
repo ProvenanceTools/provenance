@@ -5,14 +5,11 @@
  * Integration tests that spawn containers can take a while.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { withTestDb } from '../../test/helpers/db.js';
 import { withTransaction } from './client.js';
 import { courses } from './schema.js';
-
-// testcontainers needs a long startup budget
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 describe('createDb / withTestDb', () => {
   it('connects and executes SELECT 1', async () => {

@@ -86,8 +86,6 @@ import {
 } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 
-vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
-
 const BASE_ENV: Record<string, string> = {
   NODE_ENV: 'test',
   PUBLIC_BASE_URL: 'http://localhost:3000',

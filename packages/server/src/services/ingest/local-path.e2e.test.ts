@@ -15,7 +15,7 @@
  * testcontainers.
  */
 
-import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
@@ -51,8 +51,6 @@ import { ingestLocalPath } from './local-path.js';
 import { enqueueIngestJob } from './job-control.js';
 import { expectSoloPlusPairEndState } from '../../../test/helpers/gradescope-group-shape.js';
 import type { DrizzleDb } from '../../db/client.js';
-
-vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../../db/migrations');

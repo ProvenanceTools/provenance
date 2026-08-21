@@ -4,7 +4,7 @@
  * plus abort. Requires Docker.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { withTestMinio } from '../../../test/helpers/minio.js';
 import { getBlob } from './blobs.js';
 import {
@@ -15,8 +15,6 @@ import {
   abortMultipartUpload,
   S3_MIN_PART_BYTES,
 } from './multipart.js';
-
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 function makeBytes(size: number, fill: number): Uint8Array {
   const b = new Uint8Array(size);

@@ -27,8 +27,6 @@ import { runPurgeExpiredSessions } from './purge-expired-sessions.js';
 import { users, sessions } from '../db/schema.js';
 import { eq, sql } from 'drizzle-orm';
 
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
-
 // ---------------------------------------------------------------------------
 // Seed helpers
 // ---------------------------------------------------------------------------

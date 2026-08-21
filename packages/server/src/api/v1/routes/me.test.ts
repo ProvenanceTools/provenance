@@ -14,8 +14,6 @@ import { createMeRouter } from './me.js';
 import { users, sessions, courses, semesters, memberships } from '../../../db/schema.js';
 import type { DrizzleDb } from '../../../db/client.js';
 
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
-
 // ---------------------------------------------------------------------------
 // Test env
 // ---------------------------------------------------------------------------

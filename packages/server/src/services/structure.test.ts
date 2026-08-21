@@ -8,12 +8,11 @@
  * - Membership queries
  */
 
-import { vi, describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { withTestDb } from '../../test/helpers/db.js';
 import { semesters } from '../db/schema.js';
 
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 import * as structureService from './structure.js';
 import type { Principal } from '../api/middleware/auth-session.js';
 

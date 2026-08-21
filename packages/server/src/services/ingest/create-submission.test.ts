@@ -4,7 +4,7 @@
  * Uses withTestDb (Postgres) + withTestMinio (blob storage).
  */
 
-import { vi, describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { eq, and, asc } from 'drizzle-orm';
 import { withTestDb } from '../../../test/helpers/db.js';
 import { withTestMinio } from '../../../test/helpers/minio.js';
@@ -40,8 +40,6 @@ function created(outcome: CreateSubmissionOutcome): CreateSubmissionResult {
   }
   return outcome;
 }
-
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 // createSubmission strips source files from the staging bundle before storing,
 // so the staging blob must be a real bundle ZIP (in production it has already

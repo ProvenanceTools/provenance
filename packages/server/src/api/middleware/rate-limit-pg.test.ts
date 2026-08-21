@@ -4,15 +4,13 @@
  * Uses withTestDb and clock injection for deterministic refill behavior.
  */
 
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { withTestDb } from '../../../test/helpers/db.js';
 import { consumeTokenPg } from './rate-limit-pg.js';
 import { _resetConfigForTest, _setConfigForTest } from '../../config/index.js';
 import { _resetLoggerForTest } from '../../logging.js';
 import { parseEnv } from '../../config/env.js';
 import type { BucketConfig } from './rate-limit.js';
-
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 // ---------------------------------------------------------------------------
 // Test env

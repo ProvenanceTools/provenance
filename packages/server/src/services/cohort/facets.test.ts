@@ -10,9 +10,8 @@
  * buildFacets({ q: 'Zara' }, protectedMode=false) should include only 'Zara'.
  */
 
-import { vi, describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 import { withTestDb } from '../../../test/helpers/db.js';
 import {
   users,

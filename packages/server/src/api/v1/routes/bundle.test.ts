@@ -39,8 +39,6 @@ import {
 import type { DrizzleDb } from '../../../db/client.js';
 import { createToken } from '../../../auth/tokens.js';
 
-vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
-
 // ---------------------------------------------------------------------------
 // Mock presignGetUrl to avoid needing a real MinIO container.
 // blobs.test.ts covers the actual S3 signing; here we test route wiring.

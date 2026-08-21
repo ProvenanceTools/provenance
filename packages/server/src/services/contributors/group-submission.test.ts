@@ -22,7 +22,7 @@
  *    both shapes.
  */
 
-import { vi, describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { withTestDb } from '../../../test/helpers/db.js';
 import {
@@ -56,8 +56,6 @@ import {
   COLLAB_ALICE,
   COLLAB_BOB,
 } from '@provenance/analysis-core/test-support/build-collab-scope.js';
-
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 /**
  * Assert a promise rejects with a specific Postgres constraint violation.

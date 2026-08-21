@@ -7,12 +7,10 @@
  * Per V12 convention: integration test files set generous timeouts at the top.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { createHash } from 'node:crypto';
 import { withTestMinio } from '../../../test/helpers/minio.js';
 import { putBlob, getBlob, presignGetUrl, deleteBlob } from './blobs.js';
-
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 // ---------------------------------------------------------------------------
 // Helpers

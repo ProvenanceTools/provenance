@@ -27,8 +27,6 @@ import { users, sessions, audit_log, courses, semesters, memberships } from '../
 import type { DrizzleDb } from '../../../db/client.js';
 import { AdminUserDetailResponseSchema } from '@provenance/shared/api-schemas';
 
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
-
 // ---------------------------------------------------------------------------
 // DB injection
 // ---------------------------------------------------------------------------

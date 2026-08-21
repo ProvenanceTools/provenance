@@ -18,7 +18,7 @@
  * hash so extension_hash_mismatch doesn't fire unexpectedly.
  */
 
-import { vi, describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha2.js';
 import { eq, count } from 'drizzle-orm';
@@ -32,8 +32,6 @@ import { buildTestBundle } from '@provenance/analysis-core/test-support/build-te
 import { loadBundle } from '@provenance/analysis-core/loader/parse-bundle.js';
 import { runValidation } from '@provenance/analysis-core/validation/run-validation.js';
 import type { Bundle, ParsedSession } from '@provenance/analysis-core/loader/types.js';
-
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 // ---------------------------------------------------------------------------
 // Wire SHA-512 for @noble/ed25519 (required in non-browser environments).

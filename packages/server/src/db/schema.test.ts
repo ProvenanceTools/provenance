@@ -4,13 +4,10 @@
  * Requires Docker (testcontainers).
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { withTestDb } from '../../test/helpers/db.js';
 import { users, courses, semesters, memberships, pending_invitations } from './schema.js';
 import { sql } from 'drizzle-orm';
-
-// testcontainers needs a long startup budget
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 // ---------------------------------------------------------------------------
 // Helpers

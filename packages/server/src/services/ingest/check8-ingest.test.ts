@@ -17,7 +17,7 @@
  * Timeout: 180s per vitest.setConfig (container start + pipeline).
  */
 
-import { vi, describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { MinioContainer, type StartedMinioContainer } from '@testcontainers/minio';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -48,8 +48,6 @@ import {
 } from '../../db/schema.js';
 import * as schema from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
-
-vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
 
 // ---------------------------------------------------------------------------
 // Module-level path resolution
