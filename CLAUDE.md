@@ -137,7 +137,7 @@ Per-workspace (run from root with `--workspace=packages/<name>`):
 - `npm run db:migrate --workspace=packages/server` — apply Drizzle migrations.
 - `npm run test:integration --workspace=packages/recorder` — download VS Code and run real-Extension-Host tests.
 - `npm run bench --workspace=packages/recorder` — SessionWriter perf benchmark (p99 << 1ms).
-- `npm run build:prod --workspace=packages/recorder` — production VSIX with course public key embedded (requires `PROVENANCE_COURSE_PUBLIC_KEY_HEX`).
+- `npm run build:prod --workspace=packages/recorder` — production VSIX with the Manifest 2.0 root public key embedded (requires `PROVENANCE_ROOT_PUBLIC_KEY_HEX`; optionally `PROVENANCE_LEGACY_COURSE_PUBLIC_KEY_HEX` for a build that still activates on Manifest 1.x). Setting the legacy variable changes the built bytes and therefore the `extension_hash`, so a two-variant release needs `npm run update-hashes` run once per variant.
 
 Dev infra:
 
