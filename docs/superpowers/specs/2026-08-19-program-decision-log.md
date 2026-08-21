@@ -757,8 +757,17 @@ correlation work at all.
 > **CORRECTIONS FROM THE FIRST IMPLEMENTATION (VS Code, 2026-08-20).** The contract below says what
 > value to derive and says nothing about how to reach `git`, which is the half that differs by
 > machine. Hardening the VS Code writer for platforms other than the one it was written on surfaced
-> seven gaps. **provnvim already shells out and has the identical question; provjet will the moment
-> it takes this contract.**
+> seven gaps. **provnvim already shells out and has the identical question.**
+>
+> **CORRECTED 2026-08-20 by the provjet port: items 1-3 and 5-6 do NOT apply to provjet.** It uses
+> the IntelliJ VCS API (`git4idea`'s `Git.runCommand` + `GitLineHandler`), whose `GitExecutable`
+> _is_ the resolved-path ladder these items prescribe — so it already works where `git` is off the
+> IDE's PATH, and on WSL / remote / IJent. Fixed argv, no shell, subcommands from a closed
+> two-entry map. Item 4 (per-line CRLF trim) **did** bite — `"false\r" != "false"` would have made
+> every Windows repository look shallow and omit the field — and item 7 (resolve once per wiring)
+> applied. **The lesson for a future port: read your host's VCS integration before assuming you
+> must spawn.** provjet's residual cost is that `Git.runCommand` exposes no timeout knob; accepted
+> for a local object-DB read on a bounded background executor.
 >
 > 1. **Do not spawn a bare `git`.** `execFile('git', …)` needs git on the `PATH` the editor
 >    INHERITED, and on Windows that is routinely not the PATH a GUI-launched application has — which
