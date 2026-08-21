@@ -770,9 +770,15 @@ describe('multiple_sessions_overlap — contributor keying', () => {
       expect(f.heuristic).toBe('multiple_sessions_overlap');
       expect(f.severity).toBe('low');
       expect(f.confidence).toBeLessThan(0.95);
-      // Rule 1: what would have resolved it, named.
       expect(f.description).toContain('not established');
-      expect(f.description).toMatch(/enrol/i);
+      // Rule 1: what would have resolved it, named. Asserted on a string that
+      // appears ONLY in the resolution clause — `/enrol/i` and 'not
+      // established' are both satisfied by the fixed frame and by
+      // describeSessionContributor, so neither pins this. Mutation testing
+      // found exactly that: deleting the whole clause left the suite green.
+      expect(f.description).toContain(
+        'Every collaborator on this scope being enrolled is what would decide this',
+      );
       expect(f.detail!['unresolvedBy']).toBe('no_identity_block');
     });
 
@@ -818,8 +824,12 @@ describe('multiple_sessions_overlap — contributor keying', () => {
       // And it must say WHOSE problem this is. A grader reading this must not
       // think a student did something.
       expect(f.detail!['unresolvedBy']).toBe('no_root_key');
-      expect(f.description).toContain('root public key');
-      expect(f.description).toMatch(/deployment/i);
+      // Both of these appear ONLY in the no-root-key resolution clause.
+      // 'root public key' and /deployment/i alone do NOT pin it: they are
+      // already in `describeSessionContributor`'s no_root_key detail, which is
+      // interpolated into the same description.
+      expect(f.description).toContain('in this bundle or any other');
+      expect(f.description).toContain('deployment setting, not anything this submission did');
     });
 
     it('separates "we could not check" from "we checked and it failed"', async () => {
@@ -860,8 +870,12 @@ describe('multiple_sessions_overlap — contributor keying', () => {
       const f = flags[0]!;
       expect(f.severity).toBe('low');
       expect(f.detail!['unresolvedBy']).toBe('identity_did_not_verify');
-      // The no-root-key sentence must NOT appear here — the check DID run.
-      expect(f.description).not.toContain('no root public key');
+      expect(f.description).toContain('is reported on its own terms elsewhere');
+      // The no-root-key resolution clause must NOT appear here: the check DID
+      // run, and telling staff to configure a key they have configured sends
+      // them after the wrong thing.
+      expect(f.description).not.toContain('in this bundle or any other');
+      expect(f.description).not.toContain('deployment setting');
     });
 
     it('never names a person on an undecidable overlap (§6 Rule 2)', async () => {
@@ -875,7 +889,78 @@ describe('multiple_sessions_overlap — contributor keying', () => {
       const f = flags[0]!;
       expect(f.severity).toBe('low');
       expect(f.description).toContain('not established');
+      expect(f.description).toContain(
+        'Every collaborator on this scope being enrolled is what would decide this',
+      );
       expect(f.detail!['unresolvedBy']).toBe('no_identity_block');
+      // Alice IS named as one session's contributor, which is honest. What must
+      // not appear is the clause that asserts one person recorded BOTH.
+      expect(f.description).not.toContain("one person's single enrolled machine");
+    });
+
+    it('names all three resolutions distinctly — none is the fallback for another', async () => {
+      // Mutation testing turned up that deleting the entire resolution clause
+      // left every assertion green, because the strings being matched were
+      // also produced by the fixed frame. Three distinct sentences, asserted
+      // to be mutually exclusive, is what makes each one load-bearing.
+      const seen = new Map<string, string>();
+
+      const { index: i1, bundle: b1 } = await overlappingPair('anonymous', 'anonymous');
+      seen.set(
+        'no_identity_block',
+        multipleSessionsOverlapHeuristic.run(i1, b1, defaultConfig)[0]!.description,
+      );
+
+      const k = await keys();
+      const wrongRoot = await seededKeypair(0x77);
+      for (const [label, rootKey, forge] of [
+        ['no_root_key', undefined, false],
+        ['identity_did_not_verify', k.root.pubkeyHex, true],
+      ] as const) {
+        const sessions = [];
+        for (let i = 0; i < 2; i++) {
+          const sk = await seededKeypair(0x60 + i);
+          sessions.push({
+            events: [endsAt(30)],
+            walls: [wallAt(i * 10)],
+            sessionStart: {
+              session_pubkey: sk.pubkeyHex,
+              identity: await buildInstitutionIdentity({
+                keys: k,
+                sessionPubkeyHex: sk.pubkeyHex,
+                studentRef: i === 0 ? ALICE : BOB,
+                ...(forge && i === 0 ? { certSignedBy: wrongRoot.privkey } : {}),
+              }),
+            },
+          });
+        }
+        const { zipBuffer } = await buildTestBundle({ sessions });
+        const result = await loadBundle(new Blob([zipBuffer]), 'test.zip');
+        if (!result.ok) throw new Error('load failed');
+        await establishBundleContributors(result.value, rootKey);
+        seen.set(
+          label,
+          multipleSessionsOverlapHeuristic.run(
+            buildIndex(result.value),
+            result.value,
+            defaultConfig,
+          )[0]!.description,
+        );
+      }
+
+      const marker: Record<string, string> = {
+        no_identity_block: 'Every collaborator on this scope being enrolled is what would decide',
+        no_root_key: 'deployment setting, not anything this submission did',
+        identity_did_not_verify: 'is reported on its own terms elsewhere',
+      };
+      expect([...seen.keys()].sort()).toEqual(Object.keys(marker).sort());
+      for (const [label, description] of seen) {
+        // Each description carries its OWN marker and no other's, so no
+        // resolution can silently become the fallback for the rest.
+        for (const [other, text] of Object.entries(marker)) {
+          expect(description.includes(text), `${label} vs ${other}`).toBe(other === label);
+        }
+      }
     });
   });
 

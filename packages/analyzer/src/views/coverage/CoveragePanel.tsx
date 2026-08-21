@@ -51,6 +51,11 @@
  *  - **`concurrent` is not `unknown`.** A concurrent-recording row is only ever
  *    two verified, provably different people — guaranteed upstream by the type
  *    of `CollaborationOverlap`, not by this file's care.
+ *  - **Two machines is not two people.** One student on two independently
+ *    enrolled machines (D5) gets its OWN section, never a concurrent-recording
+ *    row. Merging them would tell a grader that two students collaborated when
+ *    one person moved between their own machines — the same class of fabricated
+ *    relationship as the rules above, pointing the other way.
  *
  * Presentation is deliberately the `IncompleteRecordingBanner` family — slate,
  * `role="status"`, no icons that read as warnings — and deliberately NOT the

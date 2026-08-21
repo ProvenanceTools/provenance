@@ -87,9 +87,11 @@
  * ## Where the suppression actually lives
  *
  * Not in this file. `coverage/session-overlap.ts` owns the ONE enumeration of
- * overlapping session pairs and the ONE `'different'` decision, and returns a
- * partition: `judged` (what this heuristic flags) and `collaboration` (what the
- * §5.4 step 5 coverage stage states as an exculpatory fact).
+ * overlapping session pairs and the ONE place both suppressions are decided,
+ * and returns a three-part partition: `judged` (what this heuristic flags),
+ * `collaboration` (two proven-different people) and `multiMachine` (one person,
+ * two enrolled machines) — the last two being what the §5.4 step 5 coverage
+ * stage states as exculpatory facts.
  *
  * That move is the whole point. The suppression used to be a bare `continue`
  * here, taken before `pairId`, before `emittedPairs`, and before the `detail`
@@ -98,10 +100,8 @@
  * Rule 3 intends. Reading the fact back out now requires no second copy of the
  * range rules, the strict-`<` overlap test, or the three-valued comparison.
  * `JudgedOverlap.comparison` cannot be `'different'`, so this file cannot
- * re-admit a suppressed pair even by accident.
- *
- * The BEHAVIOUR of this heuristic is unchanged by that move: the same pairs
- * flag, at the same severity, with the same ids, description and `detail`.
+ * re-admit a suppressed pair even by accident, and a two-machine pair has no
+ * arm to arrive in at all.
  *
  * The verdict is read through `contributorOf`, which answers `unattributed` for
  * a bundle no caller has stamped via `establishBundleContributors`. That is the
@@ -267,18 +267,19 @@ function contributorClause(pair: JudgedOverlap): string {
 // ---------------------------------------------------------------------------
 
 function run(index: EventIndex, bundle: Bundle, _config: HeuristicConfig): Flag[] {
-  // Tier 3.2: two PROVEN-different contributors recording at once is the
-  // expected shape of pair work, not evidence of forgery. That suppression is
-  // NOT made here — `coverage/session-overlap.ts` owns the single enumeration
-  // of overlapping pairs and the single suppression decision, and hands back a
-  // partition. This heuristic judges the `judged` half; the coverage stage
-  // states the `collaboration` half as a fact, which is how a suppressed
+  // Two PROVEN-different contributors recording at once is the expected shape
+  // of pair work, and one person on two independently enrolled machines is
+  // D5's supported flow. Neither is evidence of forgery, and NEITHER
+  // suppression is made here — `coverage/session-overlap.ts` owns the single
+  // enumeration of overlapping pairs and the single place both are decided,
+  // and hands back a partition. This heuristic judges the `judged` part; the
+  // coverage stage states the other two as facts, which is how a suppressed
   // overlap stopped being invisible.
   //
-  // `JudgedOverlap.comparison` is typed `'same' | 'unknown'`, so a suppressed
-  // pair is not merely filtered out here — it is unrepresentable. The two
-  // consumers cannot drift apart about which pairs were suppressed because
-  // neither of them computes it.
+  // `JudgedOverlap.comparison` is typed `'same_machine' | 'unknown'`, so a
+  // suppressed pair is not merely filtered out here — it is unrepresentable.
+  // The consumers cannot drift apart about which pairs were suppressed because
+  // none of them computes it.
   const { judged } = partitionSessionOverlaps(bundle, index);
 
   const flags: Flag[] = [];
