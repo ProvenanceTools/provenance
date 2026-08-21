@@ -19,6 +19,11 @@ per-section checklists as regression passes.
 
 ---
 
+> **For the 2026-08-21 changes**, run
+> [`manual-test-guide-2026-08-21.md`](manual-test-guide-2026-08-21.md) alongside this guide. It covers
+> the false-accusation fixes, group-work surfaces, capability reports and operator changes from
+> that date, and is weighted toward checks that a green automated suite cannot make.
+
 ## 0. Before anything
 
 ```sh
