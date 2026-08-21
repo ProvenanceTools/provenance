@@ -88,7 +88,7 @@ digraph ingest {
     penwidth=1.5 style=rounded bgcolor="#0a130d" labeljust="l"
     node [fillcolor="#0d2416" color="#3fbf62" fontsize=9.5]
     xf [label="cohort-wide correlation\nshared paste · editing-pattern clone"]
-    xp [label="cross_flags + participants"]
+    xp [label="cross_flags + participants\n+ exclusion register"]
   }
 
   done [label="cohort is ready\na retry of this whole pipeline produces\nbyte-identical flags and stats — tests assert it"

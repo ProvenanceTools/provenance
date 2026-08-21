@@ -24,7 +24,7 @@ digraph readpath {
     fontcolor="#4b90f7" color="#16294a" penwidth=1.5 style=rounded
     bgcolor="#0a0f18" labeljust="l"
     node [fillcolor="#0d1c33" color="#4b90f7" fontsize=9.5]
-    pgq [label="SELECT\nsubmissions · flags · per_file_stats\nvalidation_results · cross_flags"]
+    pgq [label="SELECT\nsubmissions · flags · per_file_stats\nvalidation_results · cross_flags\ncross_flag_exclusions"]
     pg  [label="Postgres" shape=cylinder height=0.55]
   }
 

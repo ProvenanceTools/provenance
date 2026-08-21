@@ -125,7 +125,7 @@ digraph master {
     heur  [label="18 per-submission heuristics\nprocess · environment · integrity"
            fillcolor="#0d2416" color="#3fbf62"]
 
-    cross [label="2 cross-submission heuristics\nshared paste · pattern clone\nNOT a pipeline stage → cross_flags.\nCompared PER ASSIGNMENT, and never across\ntwo bundles of one git-shared scope;\nthe semester's set is still replaced atomically"
+    cross [label="2 cross-submission heuristics\nshared paste · pattern clone\nNOT a pipeline stage → cross_flags\n+ cross_flag_exclusions.\nCompared PER ASSIGNMENT, and never across\ntwo bundles of one git-shared scope;\nthe semester's set is still replaced atomically"
            fillcolor="#0d2416" color="#3fbf62"]
 
     flags [label="ranked flags\nseverity ↓ confidence ↓ seq ↑"

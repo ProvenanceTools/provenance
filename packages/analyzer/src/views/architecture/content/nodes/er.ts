@@ -255,6 +255,23 @@ export const nodes: Record<string, ArchNode> = {
       },
     ],
   },
+  xexcl: {
+    title: 'cross_flag_exclusions',
+    body: 'The register of comparisons the cross run deliberately WITHHELD, and why. It is its own table rather than a sentinel heuristic_id inside cross_flags because those two things are opposite in kind: a cross flag is a finding about people, and an exclusion is a fact about the recording that says a finding was NOT made. Collapsing them would put a non-finding in the table every read path treats as findings, one join away from being counted, scored, or shown to a grader as evidence.\n\nOne row per repository lineage, not per suppressed pair — the partition already groups the submissions, and a pair table would multiply out a fact that is really about a shared scope. submission_ids is a SORTED uuid[]: the partition orders its members by a synthetic bundle id, and persisting that order would make a re-ingest of identical input produce a different row, breaking the retry-idempotency the ingest pipeline is required to hold. shared_commits carries the observed commit node keys that proved the lineage, which is what makes the register auditable rather than a bare assertion.\n\nWritten in the SAME transaction and under the same advisory lock as the cross_flags replace, with the same delete-then-insert contract — including on the early return when there is nothing comparable, because a register left behind from a previous run would outlive the comparison it describes and explain an absence that no longer has that cause.',
+    invariant:
+      'Never a finding about a person. An exclusion says a comparison was withheld — it is evidence about the recording, not about a student.',
+    links: [
+      { label: 'run-cross.ts', href: `${GH}/packages/server/src/services/heuristics/run-cross.ts` },
+      {
+        label: '0031_cross_flag_exclusions.sql',
+        href: `${GH}/packages/server/db/migrations/0031_cross_flag_exclusions.sql`,
+      },
+      {
+        label: 'coverage/cross-scope.ts',
+        href: `${GH}/packages/analysis-core/src/coverage/cross-scope.ts`,
+      },
+    ],
+  },
   xparts: {
     title: 'cross_flag_participants',
     body: 'The join between a semester-scoped finding and the submissions it implicates. Composite primary key (cross_flag_id, submission_id), plus a separate index on submission_id alone so a submission’s drill-in can ask the question from the other end.\n\nBoth foreign keys cascade, for different reasons. Cascade on cross_flag_id is the mechanism the whole-set replacement relies on: one DELETE over the semester’s cross_flags takes every participant row with it, with no second statement to get wrong. Cascade on submission_id means removing a submission detaches it from a finding without destroying the finding: the other participants and the evidence against them remain, which matters because a paste shared by three students is still a finding when one of them is gone.\n\nsupporting_seqs carries the same globalIdx integers as per-submission flags, so evidence resolves through the same path.',

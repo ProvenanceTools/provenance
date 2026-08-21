@@ -58,6 +58,7 @@ digraph er {
     node [fillcolor="#2a0f1e" color="#e8559c"]
     xflags    [label="cross_flags"]
     xparts    [label="cross_flag_participants"]
+    xexcl     [label="cross_flag_exclusions"]
   }
 
   subgraph cluster_ing {
@@ -90,6 +91,7 @@ digraph er {
   semesters -> roster
   semesters -> pending
   semesters -> hcfg
+  semesters -> xexcl
   semesters -> ijobs
   assignments -> submissions
   roster -> submissions [label="the SUBMITTER of record —\nNULLABLE since 0029, so every\nread-path join is LEFT" style=dashed]
