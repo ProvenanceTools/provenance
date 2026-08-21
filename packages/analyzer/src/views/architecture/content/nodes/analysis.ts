@@ -86,6 +86,70 @@ export const nodes: Record<string, ArchNode> = {
     ],
   },
 
+  // ── What reads the spine ──────────────────────────────────────────────────
+  extclass: {
+    title: 'External-change reclassification',
+    body: 'The recorder answers "was this external write innocent?" with a two-second timing window. This answers it with the bytes. Every fs.external_change in a collaborative scope is classified into one of four states — git_merge_in, git_unrecorded_in, external, unclassified — and only the first suppresses anything.\n\ngit_merge_in requires an exact sha256 match between the change’s resulting content and a state that a PROVABLY DIFFERENT verified contributor recorded on the same path. Every word of that is load-bearing. Exact, because a near match is a different file. Provably different, because a state this contributor recorded themselves proves nothing about a write that arrived from outside their editor. Verified, because an unverified identity block is exactly how a forger would manufacture a partner to be merged from. The commit DAG is consulted only as corroboration (ancestor, same_commit, unordered, no_observations) and can never promote a content mismatch into a merge; there is a sixty-second git-adjacency window, but it narrows the search, it does not decide.\n\nWhere the tagger and the content test disagree, content wins. An external change the recorder tagged explanation: "git" but whose bytes match nothing anyone in the submission recorded is now reclassified git_unrecorded_in and flagged, where the tag used to silence it. A two-second window that suppresses a finding the cryptography says is real is a hole a student can learn to time an out-of-editor paste into. git_merge_in still suppresses, and the severity of what survives is unchanged.\n\nThe accepted cost is stated rather than hidden: an honest pair whose partner simply was not recording produces bytes nobody recorded, which is git_unrecorded_in by definition. So the flag asserts no authorship at all. It says the content has no recorded authorship IN THIS SCOPE, names the unenrolled-partner reading alongside the other one, and says that confirming every collaborator is enrolled is what tells them apart. Enrolment coverage closes this; a threshold cannot.\n\nNothing is hidden and nothing is mutated. The verdicts live in a side table memoized against the EventIndex, never on it, so ordered, byKind and byFile are byte-for-byte what they were, and a reclassified event is still in the timeline and still in the verdict map. The whole pass is gated on a collaborative scope — a group manifest, or two contributors compareContributors calls different — so a solo bundle short-circuits in microseconds and is unaffected by construction rather than by a second code path kept in step.\n\nOne timing consequence is worth knowing. Ingest runs heuristics BEFORE the contributor stamp lands, deliberately, so that stamping cannot change which flags an ingest produces. At ingest time, therefore, the two-different-contributors half of the gate cannot fire and only a manifest that declares itself a group scope reaches this classifier; the full gate applies on any later recompute or read-path call, where the bundle is already stamped.',
+    invariant:
+      'Only a cryptographic content match against a provably different verified contributor may suppress a finding. Never a clock, and never a tag.',
+    links: [
+      {
+        label: 'classify-external-changes.ts',
+        href: `${GH}/packages/analysis-core/src/index/classify-external-changes.ts`,
+      },
+      {
+        label: 'explanation-tags.ts (recorder)',
+        href: `${GH}/packages/recorder/src/events/explanation-tags.ts`,
+      },
+    ],
+  },
+  split: {
+    title: 'partitionSessionOverlaps',
+    body: 'One enumeration of the overlapping session pairs in a bundle, one bounding rule for a session that has no session.end, and exactly one decision about whether the two sides are the same contributor. It returns a partition rather than a filtered list: judged pairs go to the multiple_sessions_overlap heuristic, collaboration pairs go to the coverage stage, and every overlapping pair is in exactly one of them.\n\nThis exists because the alternative had already been built twice. The heuristic suppressed a two-verified-people overlap with a bare continue taken before the flag’s detail object existed, and run returns nothing but flags, so the strongest exculpatory evidence in the system was computed and discarded. The panel that wanted to show it therefore recomputed the overlap itself, in the analyzer, and defended the duplicate with a test proving the two implementations agreed. The test was good and the duplicate was still wrong: two implementations that agree today drift later, which this repo has already paid for as "26 versus 25 flags" and "21 versus 25 tables".\n\nWhat prevents the drift now is the type system, not a comparison test. JudgedOverlap.comparison is typed same | unknown, so a suppressed pair is not merely filtered out of the heuristic — it is unrepresentable there, and re-adding a local comparison === "different" check is a TypeScript build failure rather than a silent divergence. CollaborationOverlap carries its two contributors already narrowed to the attributed arm, so an unverifiable or unattributed session cannot appear on the collaboration side at all: the unverifiable-is-not-unattributed rule is enforced by the compiler instead of by care. The partition property itself — disjoint, and exhaustive over the overlapping pairs — is asserted directly, which is a smaller and stronger claim than "the two copies still match".\n\nThe comparison is three-valued and is never a string compare on the contributor key. Every unattributed session carries its own singleton key, so comparing keys would read "unproven" as "different people" and delete the finding through the back door.',
+    invariant:
+      'One enumeration, one “different” decision. A suppressed pair must be unrepresentable in the heuristic, not merely filtered out of it.',
+    links: [
+      {
+        label: 'session-overlap.ts',
+        href: `${GH}/packages/analysis-core/src/coverage/session-overlap.ts`,
+      },
+      {
+        label: 'multiple-sessions-overlap.ts',
+        href: `${GH}/packages/analysis-core/src/heuristics/multiple-sessions-overlap.ts`,
+      },
+    ],
+  },
+  coverage: {
+    title: 'The coverage stage',
+    body: 'Everything the analysis established that is not a finding. Concurrent recording by two verified, distinct contributors; how many sessions came out attributed, unverifiable and unattributed, and whether a root key was configured at all; how much of the commit graph was observed, and what the DAG could not read; whether any session ever named a repository; how many bytes and checkpoints sit past each rolling seal; and which artifacts the loader dropped. Facts, in the neutral palette, never scored and never ranked.\n\nIt exists because a system that only ever emits findings can only ever say worse things about a student. An overlap between two proven partners is the assignment being done as assigned, and it was previously computed and thrown away. A partner’s log that could not be opened is a fact about the archive, not about the person. A deployment with no root key produces a page of unverifiable sessions that mean "we could not check", and saying so is the difference between a misconfiguration and a cohort-wide integrity finding.\n\n"Always visible" is taken literally, and it means answering in all three states, because silence and "nothing to report" are different claims. With no parsed bundle the panel says NOT AVAILABLE — it must never zero, because a zeroed panel asserts no commits observed, no contributors and no root key, which is a stronger statement than the truth and a false one. With a bundle and nothing to note, it says so. With facts, it shows them. Its home is the submission, above the verdict surfaces on both overview surfaces, because dropped artifacts and "no root key configured" describe the submission rather than the replay; it shipped inside the Replay tab, collapsed, which failed "always visible" twice over.\n\nOne predicate here is knowingly wrong and is written down rather than papered over: repositoryAssumedSingle is computed as "no discriminator was recorded", which under-reports a MIXED scope, where part of the graph genuinely is folded into the sentinel while another part is labelled. The correct predicate asks whether the sentinel appears among the repositories. It is unreachable today because it needs a scope where some sessions name a repository and others do not.\n\nThe stage is pure and isomorphic and is computed in the browser. The server cannot send these facts yet: the shared API schemas contain no notion of a contributor, while the read path already stamps them on every parse, so the server-backed panel reports NOT AVAILABLE rather than showing real facts. Closing that is additive and small — a coverage object on the submission summary, serialized at the call site that already holds the parsed index — with one trap recorded: BundleContributors.bySession is a ReadonlyMap and does not serialize, so the wire shape has to be the flat CoverageFacts aggregate.',
+    invariant:
+      'Facts, never findings — and never zeroes. “We have no bundle” and “we looked and there is nothing” are different answers and must read differently.',
+    links: [
+      {
+        label: 'coverage-facts.ts',
+        href: `${GH}/packages/analysis-core/src/coverage/coverage-facts.ts`,
+      },
+      {
+        label: 'CoveragePanel.tsx',
+        href: `${GH}/packages/analyzer/src/views/coverage/CoveragePanel.tsx`,
+      },
+    ],
+  },
+  witness: {
+    title: 'Peer witnessing (reader half)',
+    body: 'A recorder that watches its own .provenance/ directory can record what it saw of a PARTNER’s log: the file, its sha256 and length, and the chain position it reached — session_id, seq_high, last_hash. That is peer.observed, and this module is the half that reads it. Readers before writers, exactly as Manifest 2.0 and the rolling seal did.\n\nReconciled against the logs actually present, one witness yields five different facts, and collapsing any two is a wrongful accusation. corroborated is the clean case. absent means the witnessed session has no log in this bundle — and on its own that is emphatically not a finding, because a partner who has not pushed produces it. short and tip_mismatch are the evidentiary ones, subject to authority. indeterminate means we could not check, which is the same distinction the ambiguous-seal coverage and the unclassified external change already draw. Beside them, tracked per SESSION rather than as a sixth verdict so it cannot acquire one by accident, is unwitnessed: a present log that no witness names. That is the ordinary case for every bundle in existence and it is entirely blameless.\n\nsha256 is deliberately NOT the corroboration test. A foreign log is append-only and its owner keeps recording, so the bytes a witness saw are normally a PREFIX of the bytes finally committed, and digest inequality is the normal case. Comparing digests instead of chain positions is precisely the prefix-versus-whole-file error behind three separate high-severity false accusations in this system’s history, and a test drives exactly that shape and requires corroborated. seq_high plus last_hash is the commitment; seq_high alone would make a truncation detectable only by length, which a forger can match.\n\nA witness is a claim about somebody else’s artifact, so it is worth exactly what the chain carrying it is worth: attributed grades as established, unattributed as inferred, unverifiable as unknown. Grading unattributed as real evidence is deliberate — that chain still verifies, and discounting it would discard honest evidence from every unenrolled student, which is the majority today. Two witnesses that prove nothing are excluded rather than counted: a self-witness, because a chain cannot corroborate itself, and one about another session of a PROVEN same contributor, because that is not independent — and that exclusion fires only on a proven match, so an unproven relationship can never discard evidence.\n\nThis produces no Flag, no ninth check, no severity and no score, and nothing here ever names a person: a witness establishes that a LOG was altered, never who altered it. What it finally buys is the distinction check 1 could not draw. A rolling seal whose .slog is missing cannot, from the archive alone, separate a log that was never pushed from one that was removed; an absent verdict naming that same log is the second half of the pair that separates them.\n\nNothing in the pipeline calls this yet. All three recorders now emit the kind, so the evidence has started arriving; what a grader is shown, and in what wording, is a presentation decision that belongs with the contributor schema and has not been taken.',
+    invariant:
+      'Chain position is the commitment, never the digest — a partner’s log growing past what a witness saw is the NORMAL case. And a witness names a log, never a person.',
+    links: [
+      {
+        label: 'reconcile-witnesses.ts',
+        href: `${GH}/packages/analysis-core/src/witness/reconcile-witnesses.ts`,
+      },
+      { label: 'peer-observed.ts', href: `${GH}/packages/log-core/src/peer-observed.ts` },
+      { label: 'peer-watcher.ts', href: `${GH}/packages/recorder/src/wiring/peer-watcher.ts` },
+    ],
+  },
+
   // ── Validation ────────────────────────────────────────────────────────────
   v1: {
     title: 'verify-chain · check 3',
