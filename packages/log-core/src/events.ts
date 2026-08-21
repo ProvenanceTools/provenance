@@ -100,6 +100,77 @@ export type SessionStartPayload = {
   manifest?: Manifest;
   identity?: SessionIdentity;
   host?: HostInfo;
+
+  // --- The three CAPABILITY REPORTS (collaboration spec §5.6). All optional
+  // --- PERMANENTLY: every bundle recorded before they landed carries none of
+  // --- them, and a reader must treat their absence as "this recorder does not
+  // --- report", never as "the capability was missing". A writer OMITS a field
+  // --- it cannot answer — it never writes `null`, which canonicalizes
+  // --- differently and therefore chains to a different hash.
+  // ---
+  // --- These are capability reports, not capture knobs: they say "I could
+  // --- not", where `policy.capture` says "I was told not to". Nothing here is
+  // --- policy-gated and nothing here is ever a finding. The narrowing lives in
+  // --- `session-capabilities.ts`.
+
+  /**
+   * Whether git observation was available to this session (§5.6 item 2).
+   *
+   * Without it, a scope with no `git.event` is indistinguishable from a scope
+   * where git capture was impossible — which is exactly the context a grader
+   * needs to read a `git_unrecorded_in` flag correctly (decision D16).
+   *
+   * @see {@link import('./session-capabilities.js').GIT_CAPTURE_VALUES}
+   */
+  git_capture?: 'available' | 'unavailable' | 'not_owned';
+
+  /**
+   * Whether `.provenance/` peer witnessing was available to this session
+   * (§5.6 item 3).
+   *
+   * Without it, "no witnesses" cannot be told from "witnessing was impossible".
+   *
+   * @see {@link import('./session-capabilities.js').WITNESS_CAPTURE_VALUES}
+   */
+  witness_capture?: 'available' | 'unavailable';
+
+  /**
+   * The effective resolved file set — the files this session actually watched
+   * (§5.6 item 1, S25).
+   *
+   * Without it, "no events for this file" is ambiguous between _nothing
+   * happened_ and _it was never watched_, and every file-scoped heuristic
+   * silently mis-fires on the difference.
+   *
+   * @see {@link import('./session-capabilities.js').readFileScope}
+   */
+  file_scope?: SessionFileScope;
+};
+
+/**
+ * The effective resolved file set, as recorded on `session.start`.
+ *
+ * Paths are ASSIGNMENT-ROOT-RELATIVE, exactly as every other path in the log.
+ * An absolute path or a URL is nonconforming and is rejected by
+ * `readFileScope` — S14(b) forbids both.
+ */
+export type SessionFileScope = {
+  /**
+   * Every path this session watched, assignment-root-relative.
+   *
+   * An EMPTY array with `complete: true` is a real answer meaning "the scope
+   * resolved to nothing", and must not be folded into absence.
+   */
+  watched: string[];
+  /**
+   * `false` when {@link SessionFileScope.watched} was capped and is a strict
+   * subset of what was watched. A consumer must then read a path's absence from
+   * the list as _unknown_, never as _not watched_.
+   *
+   * Required rather than an optional `truncated` flag: this field exists to
+   * remove an inference, so it must never itself require one.
+   */
+  complete: boolean;
 };
 
 export type SessionHeartbeatPayload = {
