@@ -691,6 +691,14 @@ describe('failure mode C — the question is not about one contributor', () => {
     // that is where the loss lives. A rolling-sealed group bundle carries one
     // signed manifest per session, so each partner's build is checked; keep only
     // one partner's and the other's build goes unexamined.
+    //
+    // The two seals below are SYNTHESISED, not produced by the fixture builder,
+    // which emits a classic bundle. Stated plainly rather than dressed up: this
+    // heuristic reads exactly two fields, and the pair below is a faithful
+    // picture of what it would see for a two-build rolling-sealed scope and for
+    // the same scope with one contributor's sessions removed. Building a real
+    // two-partner rolling-sealed bundle would exercise the seal reader, which is
+    // a different module's test.
     const bothBuilds: Scope = {
       ...pair,
       bundle: {
