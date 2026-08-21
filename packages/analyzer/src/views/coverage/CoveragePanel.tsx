@@ -504,9 +504,10 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
       <Section title="Git observation" testId="coverage-git-observation">
         {gitObservation.availability === 'available' && (
           <p data-testid="coverage-git-available">
-            Git observation was reported as available to at least one session here. Where a session
-            recorded no commits, that is a statement about git activity rather than about what could
-            be captured.
+            Git observation was reported as available to at least one session here. What each
+            session did and did not see is broken down below — deliberately per session, because
+            &ldquo;available to one of them&rdquo; is not &ldquo;available to all of them&rdquo;,
+            and a bundle can carry sessions from more than one machine.
           </p>
         )}
         {gitObservation.availability === 'impossible' && (
