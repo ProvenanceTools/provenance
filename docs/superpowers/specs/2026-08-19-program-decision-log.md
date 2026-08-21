@@ -30,7 +30,7 @@ overtaken by evidence (each such case is called out below with the reason).
 | D11 | **Manifest composer signs in the browser**; the course private key never leaves staff's machine.                                                                                                                                                               | The course key is deliberately offline — that is why a server-held _enrollment_ subkey exists. A server that could sign manifests could weaken any course's capture policy.                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | D12 | **Repository discriminator = root-commit sha.** Reader half landed 2026-08-20; the writer half is deliberately outstanding.                                                                                                                                    | Both partners on one repo derive the same value offline, which is what makes cross-contributor DAG correlation possible. A submodule has a different root commit, so it discriminates correctly.                                                                                                                                                                                                                                                                                                                                                                                             |
 | D13 | **Unenrolled contributors show as `unattributed`**, not blocked and not flagged.                                                                                                                                                                               | An administrative gap must never present to a grader as an integrity signal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| D14 | **Group scoring is per-contributor _and_ per-scope.**                                                                                                                                                                                                          | Only shape where a grader can act on one partner without implicating the other.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| D14 | **Group scoring is per-contributor _and_ per-scope.** Per-contributor **scoping** closed as out-of-scope-by-analysis 2026-08-21 — see below.                                                                                                                   | Only shape where a grader can act on one partner without implicating the other. In practice D14 means per-contributor **attribution** and **scoring** of the flags from ONE whole-scope heuristic run; 10 of the 18 per-submission heuristics cannot be scoped per contributor without manufacturing findings against honest pairs.                                                                                                                                                                                                                                                          |
 | D15 | **IRB/CPHS approval is the user's problem.** S6 is not an engineering blocker.                                                                                                                                                                                 | Stated by the user.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | D16 | **Content overrides the timing tag.** A content-derived `git_unrecorded_in` is no longer suppressed by the recorder's `explanation: 'git'` tag in `external_edits`. `git_merge_in` still suppresses, severity is unchanged, and the tagger itself is retained. | A two-second timing window must not silence a finding the cryptographic content test says is real: it is a hole a student could learn to exploit by timing an out-of-editor paste right after any git command. Fail toward surfacing evidence. **Accepted cost:** it also fires for an honest pair whose partner simply was not recording, so the flag asserts no authorship — it says the content has no recorded authorship _in this scope_, names the unenrolled-partner reading alongside the guilty one, and says confirming every collaborator is enrolled is what distinguishes them. |
 
@@ -604,8 +604,10 @@ completion contract, not a wish list.
   **visible fact**.~~ **DONE 2026-08-20.** See "The coverage stage" below — and read the
   correction there before repeating the briefing that was given for it.
 - ~~`submission_contributors` cut-over (D9), `Flag.contributor_id`.~~ **DONE 2026-08-21**, see
-  below. **Per-contributor heuristic scoping is still owed** — heuristics still run ONCE over the
-  whole scope; what landed is per-contributor ATTRIBUTION and SCORING of the resulting flags.
+  below. ~~**Per-contributor heuristic scoping is still owed**~~ — **CLOSED 2026-08-21 as
+  out-of-scope-by-analysis**, see "the per-contributor scoping boundary" below. Heuristics run ONCE
+  over the whole scope and must keep doing so; what D14 means in practice is per-contributor
+  ATTRIBUTION and SCORING of the resulting flags, and that is what landed.
 - Peer witnessing (`peer.observed`) — **reader half DONE 2026-08-20** (see below). The
   **writer half is deliberately not built**: the directory watcher in the three recorders.
   ~~and the `session.start` witnessing-availability capability report §5.6 item 3 calls for.~~
@@ -1858,3 +1860,92 @@ the validation cluster on the far left and the loader on the right, which is a w
 green with three new nodes), tools **188**. Build, typecheck, lint clean. No server test run and no
 production code outside `tools/architecture/**` and
 `packages/analyzer/src/views/architecture/**` touched.
+
+---
+
+### Landed 2026-08-21 — the per-contributor scoping boundary (D14 closed)
+
+D14 reads "per-contributor **and** per-scope", and the bullet above used to say per-contributor
+heuristic **scoping** was still owed. It is now closed, and closed as **out-of-scope-by-analysis**
+rather than as work deferred: the safe subset is empty as new engineering. What D14 means in
+practice is per-contributor **attribution** (`server/src/services/contributors/attribute-flags.ts`)
+and **scoring** (`contributor-scores.ts`) of the flags produced by ONE whole-scope run — which is
+what shipped, and is the shape a grader can act on.
+
+The analysis is pinned as a test rather than left as prose:
+`packages/analysis-core/src/heuristics/contributor-scope-boundary.test.ts`.
+
+**Eight of the eighteen per-submission heuristics are ALREADY effectively per-contributor.**
+Contributor identity resolves per session (`identity/resolve-contributors.ts`, `contributorOf`),
+and these eight either iterate `index.bySessionId` or emit one flag per event, so
+`supportingSeqs` never leaves one session, `run-per-submission.ts` populates `flags.session_id`,
+and `attributeFlags` charges them to a person already: `no_intermediate_errors`,
+`ai_extension_active`, `shell_integration_disabled`, `extension_set_changed_mid_assignment`,
+`clock_jumps`, `gap_in_heartbeats`, `paste_matches_known_source`, and `large_paste`'s OUTPUT.
+Four of those are now driven end to end in
+`server/src/services/contributors/group-submission.test.ts` — one per distinct evidence shape,
+plus the negative half (an unenrolled partner's finding is charged to nobody and still shown).
+
+**Ten must stay whole-scope, in three failure modes.**
+
+- **A — slicing defeats the Tier 2.2 reconstruction gate.** `reconstruction-gate.ts` returns
+  `null` when `reconstructFileSegmented` answers `concurrent`, and a file only reaches
+  `concurrent` when its events span two verified contributors. Narrow the scope to one and
+  `reconstructFileSegmented` short-circuits to the solo path: every suppressed `concurrent`
+  verdict becomes a FIRING verdict. `low_typing_high_output`, `paste_is_solution`,
+  `time_to_first_save_anomaly`, `idle_then_complete`, `mass_external_replacement`.
+- **B — slicing destroys the content evidence the suppression is built on.**
+  `classify-external-changes.ts` DEFINES `git_merge_in` as "the post-change sha256 equals a
+  sha256 a provably different verified contributor recorded on this path"; both operands live in
+  the other contributor's events. `external_edits`,
+  `terminal_active_during_external_change`, and — by a different mechanism, see the corrections
+  below — `inter_session_external_change` and `large_paste`'s INPUT.
+- **C — the question is not about one person.** `multiple_sessions_overlap` is defined over
+  PAIRS of sessions and `extension_hash_mismatch` reads no events at all.
+
+The nine validation-derived integrity flags are an adapter over `ValidationReport`
+(`integrity-flags.ts`) with no event input to slice. The two cross-submission heuristics are
+already pair-level and already carry the same-scope exclusion.
+
+**Two corrections to the design note this implements**, both found by building the fixtures and
+both recorded in the test file:
+
+- `inter_session_external_change` is NOT suppressed by `classify-external-changes` — it never
+  imports it. Its gate is the Tier 3.3 comparison of CONSECUTIVE sessions' contributors
+  (`inter-session-external-change.ts`). So the slice that makes it fire is one that removes the
+  partner's session from BETWEEN two of the same student's, not one that removes a content match.
+  The fixture is therefore Alice / Bob / Alice, not Bob / Alice.
+- `large_paste`'s scope dependency is `internal-move.ts`'s deletion ledger and per-character
+  provenance, not the external-change classifier — `classifyInternalMoves` takes no `Bundle` at
+  all. Whole-scope, a partner's typed code makes a cut-and-paste an `internal_move` and the flag
+  drops to `info`; sliced, the ledger entry does not exist and the same paste is `medium`. It is
+  also identity-INDEPENDENT, so unlike A and B this is a plain scope dependency rather than a
+  contributor gate.
+
+**The literal form of the boundary assertion is FALSE for mode C, and the test says so instead
+of asserting it anyway.** "Restrict to one contributor and the flag fires" does not hold for
+`multiple_sessions_overlap` (a one-contributor scope never enumerates a cross-contributor pair,
+so it loses the exculpatory `collaboration` fact §5.4 step 5 states — a lost FACT, not a gained
+accusation) or for `extension_hash_mismatch` (its `index` parameter is unused; the only thing a
+runner could narrow is the set of observed builds, and narrowing it drops a partner's build from
+the check). Both are asserted in that honest form.
+
+**What makes the whole-scope zeroes non-vacuous.** Every mode-A/B case runs the same fixture a
+third time with the contributor stamp OMITTED. Unstamped is the ordinary 1.x / unenrolled /
+no-root-key state, where `compareContributors` answers `'unknown'` and every gate fails open —
+and each fixture then fires at full severity. A "no flags on honest pair work" assertion that
+survived the stamp being removed would be an inert fixture, not a gate. This is the same
+discipline §3's "why no test caught bug 12" section demands.
+
+**Noticed and deliberately not changed.** In the merge-shape fixture (`merge: true`, Alice pulls
+onto a descendant commit and the file re-anchors to `determinate`),
+`low_typing_high_output` fires at **high** severity on the puller, whole-scope, on honest pair
+work. `mass_external_replacement` and `external_edits` are suppressed there by `git_merge_in`;
+`low_typing_high_output` never consults the classifier at all, so nothing in Tier 3.1 protects
+it, and Tier 2.2 has already answered. That is a live false-positive against the
+"no false accusations" row of the definition of done, in a shape a student cannot avoid, and it
+is outside this change's scope.
+
+**Suites.** analysis-core **1222** (+11, one new file). server `group-submission.test.ts`
+**17** (+4). Typecheck clean; lint clean apart from two pre-existing Prettier table-padding
+warnings in `docs/admin-guide.md` and `docs/heuristics.md` that predate this change.
