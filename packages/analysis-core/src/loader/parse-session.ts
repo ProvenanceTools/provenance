@@ -8,7 +8,7 @@
  * parsing or validation.
  */
 
-import { parseEntries, validateMetaShape, ok, err } from '@provenance/log-core';
+import { parseEntriesToleratingTornTail, validateMetaShape, ok, err } from '@provenance/log-core';
 import type { HashedEnvelope, SessionStartPayload, Result } from '@provenance/log-core';
 import type { ParsedSession, SessionParseError } from './types.js';
 import { lfNormalizedSha256 } from './line-endings.js';
@@ -50,8 +50,28 @@ export function parseSession(
 ): Result<ParsedSession, SessionParseError> {
   // ---------------------------------------------------------------------------
   // 1. Parse NDJSON entries.
+  //
+  // A TORN FINAL LINE — a fragment with no terminator, left by a write
+  // interrupted part-way through — is tolerated, truncated away and REPORTED.
+  // It is the one corruption an honest student produces by doing nothing at
+  // all (a power cut, a full disk, an OS kill mid-flush), it arrives under the
+  // log's completely normal filename so no name-based guard can see it, and
+  // failing on it cost that student every session in the submission because
+  // `parse-bundle.ts` returns this error for the whole bundle.
+  //
+  // A corrupt line in the MIDDLE is a different fact and still fails here. See
+  // `log-core/ndjson.ts` for the byte-level rule that separates them.
+  //
+  // NOTHING BELOW IS RECOMPUTED FROM THE TRUNCATED VIEW. `hashes` come from the
+  // unzipper's read of the raw archive bytes and are carried through verbatim,
+  // and `slogSha256Lf` is derived from the FULL `slogText`. That is what keeps
+  // truncation from being able to launder a modification: a caller that hashed
+  // only what was kept would let someone append past a seal, tear the last
+  // line, and turn a failing `log_bytes_match` into a passing one. The rolling
+  // seal's prefix search is likewise run by `parse-bundle.ts` over
+  // `SessionFiles.slogText`, the full text, never over this parse.
   // ---------------------------------------------------------------------------
-  const entriesResult = parseEntries(slogText);
+  const entriesResult = parseEntriesToleratingTornTail(slogText);
   if (!entriesResult.ok) {
     const e = entriesResult.error;
     return err({
@@ -64,7 +84,7 @@ export function parseSession(
     });
   }
 
-  const events = entriesResult.value;
+  const { entries: events, tornTail } = entriesResult.value;
 
   // ---------------------------------------------------------------------------
   // 2. Check first event is session.start.
@@ -131,5 +151,31 @@ export function parseSession(
     slogSha256Lf: lfNormalizedSha256(slogText, hashes.slogSha256),
     metaSha256: hashes.metaSha256,
     firstEvent,
+    tornTail:
+      tornTail === null
+        ? null
+        : {
+            line: tornTail.line,
+            discardedChars: tornTail.discardedChars,
+            // Staff-facing prose. It states what is established (the file ends
+            // mid-line, and those bytes are not an entry), names the innocent
+            // reading FIRST because it is the only one a recorder can produce,
+            // and warns about the one downstream reading that could otherwise
+            // be misread as deletion. It asserts nothing about how it got
+            // there — the same discipline D16 and the `no_session_log` rewrite
+            // applied.
+            detail:
+              `This log ends part-way through line ${tornTail.line}: ` +
+              `${tornTail.discardedChars} character(s) with no line terminator, which are not a ` +
+              `complete entry (${tornTail.reason}). The recorder appends a whole line at a ` +
+              `time, so an unterminated final line is the signature of an INTERRUPTED WRITE — a ` +
+              `power cut, a full disk, or the editor being killed mid-flush. Everything before ` +
+              `it was read and analysed in full, and the hash chain, the signed checkpoints and ` +
+              `the seal all still cover it. The fragment was left out of the analysis only; ` +
+              `nothing was altered or deleted, and the archived bytes are still what every ` +
+              `digest check compares against. Note that if a signed checkpoint names a sequence ` +
+              `number inside the lost fragment, it will read as a missing entry: that is this ` +
+              `same interruption, not a removal.`,
+          },
   });
 }

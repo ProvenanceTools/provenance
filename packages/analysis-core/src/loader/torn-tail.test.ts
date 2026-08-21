@@ -177,7 +177,7 @@ describe('a corrupt line in the MIDDLE is a different fact and stays fatal', () 
 // ---------------------------------------------------------------------------
 
 describe('truncation cannot launder a modification', () => {
-  it('the session carries the ARCHIVED digest, never the truncated view\'s', async () => {
+  it("the session carries the ARCHIVED digest, never the truncated view's", async () => {
     const built = await buildTestBundle({
       sessions: [{ eventCount: 4 }],
       tamper: { tornTail: { sessionIndex: 0 } },
@@ -219,7 +219,7 @@ describe('truncation cannot launder a modification', () => {
     expect(result.value.sessions[0]!.tornTail).not.toBeNull();
 
     const report = await runValidation(result.value);
-    const bytes = report.bundleDetections.find((d) => d.id === 'log_bytes_match');
+    const bytes = (report.bundleDetections ?? []).find((d) => d.id === 'log_bytes_match');
     expect(bytes?.status).toBe('fail');
   });
 
@@ -237,7 +237,7 @@ describe('truncation cannot launder a modification', () => {
     if (!result.ok) return;
 
     const report = await runValidation(result.value);
-    const bytes = report.bundleDetections.find((d) => d.id === 'log_bytes_match');
+    const bytes = (report.bundleDetections ?? []).find((d) => d.id === 'log_bytes_match');
     expect(bytes?.status).toBe('pass');
 
     // The seal is STILL resolved against this session — it must not have been
@@ -286,7 +286,9 @@ describe('truncation cannot launder a modification', () => {
     expect(a.ok).toBe(true);
     if (!a.ok) return;
     const reportA = await runValidation(a.value);
-    expect(reportA.bundleDetections.find((d) => d.id === 'log_bytes_match')?.status).toBe('pass');
+    expect((reportA.bundleDetections ?? []).find((d) => d.id === 'log_bytes_match')?.status).toBe(
+      'pass',
+    );
 
     const after = await buildTestBundle({
       sessions: [{ eventCount: 4 }],
@@ -296,7 +298,9 @@ describe('truncation cannot launder a modification', () => {
     expect(b.ok).toBe(true);
     if (!b.ok) return;
     const reportB = await runValidation(b.value);
-    expect(reportB.bundleDetections.find((d) => d.id === 'log_bytes_match')?.status).toBe('fail');
+    expect((reportB.bundleDetections ?? []).find((d) => d.id === 'log_bytes_match')?.status).toBe(
+      'fail',
+    );
   });
 });
 
@@ -314,7 +318,7 @@ describe('the surviving prefix is analysed at full strength', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const report = await runValidation(result.value);
-    expect(report.checks.find((c) => c.id === 'hash_chain_valid')?.status).toBe('pass');
+    expect(report.checks.find((c) => c.id === 'chain_integrity')?.status).toBe('pass');
   });
 
   it('a broken chain inside the kept prefix still fails', async () => {
@@ -329,6 +333,6 @@ describe('the surviving prefix is analysed at full strength', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const report = await runValidation(result.value);
-    expect(report.checks.find((c) => c.id === 'hash_chain_valid')?.status).toBe('fail');
+    expect(report.checks.find((c) => c.id === 'chain_integrity')?.status).toBe('fail');
   });
 });

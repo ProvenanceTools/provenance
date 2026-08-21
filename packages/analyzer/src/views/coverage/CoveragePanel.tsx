@@ -141,6 +141,7 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
     identity,
     concurrentRecording,
     droppedArtifacts,
+    tornTails,
     unattestedTails,
     dagDefects,
     dagCoverage,
@@ -272,6 +273,34 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
                 `The parent list for commit ${d.sha.slice(0, 8)}… could not be read (${d.reason}). Its incoming edges are treated as unknown rather than as absent.`}
             </p>
           ))}
+        </Section>
+      )}
+
+      {/* -----------------------------------------------------------------
+          Torn final lines — an interrupted write, absorbed rather than fatal.
+
+          Separate from "Files not analysed" on purpose. That section says a
+          file was left out; this one says a file WAS analysed, minus an
+          incomplete fragment on the end. Folding them together would tell a
+          grader that a session they can see in full was excluded.
+          ----------------------------------------------------------------- */}
+      {tornTails.length > 0 && (
+        <Section title="Interrupted writes" testId="coverage-torn-tails">
+          {tornTails.map((t) => (
+            <p key={t.sessionId} data-testid="coverage-torn-row">
+              Session {t.sessionId.slice(0, 8)}… ends part-way through line {t.line}:{' '}
+              {t.discardedChars} character(s) with no line terminator, which are not a complete
+              entry. Everything before that point was analysed in full.
+            </p>
+          ))}
+          <p data-testid="coverage-torn-note">
+            The recorder appends one whole line at a time, so an unterminated final line is the
+            signature of a write that was interrupted — a power cut, a full disk, the editor killed
+            mid-flush. The fragment was left out of the analysis only; nothing was altered or
+            deleted, and the digest checks still compare the archived bytes in full. If a signed
+            checkpoint names a sequence number inside the lost fragment it will read as a missing
+            entry — that is this same interruption, not a removal.
+          </p>
         </Section>
       )}
 

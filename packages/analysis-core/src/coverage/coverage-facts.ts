@@ -189,6 +189,50 @@ export function unattestedTails(bundle: Bundle): UnattestedTail[] {
 }
 
 // ---------------------------------------------------------------------------
+// Torn final lines
+// ---------------------------------------------------------------------------
+
+/**
+ * A session whose `.slog` ended part-way through a line, so the loader read it
+ * up to its last COMPLETE entry and left the fragment out.
+ *
+ * The signature of an INTERRUPTED WRITE — a power cut, a full disk, the editor
+ * killed mid-flush — and the only corruption an honest student produces by
+ * doing nothing at all. It used to fail the whole submission to load; it is now
+ * absorbed, and this is the channel that keeps the absorption from being
+ * SILENT. A truncation nobody is told about is worse than the fatal error it
+ * replaced, for the same reason `droppedArtifacts` exists.
+ *
+ * Never a `Flag`, never a check failure, never a score. The digests
+ * `log_bytes_match` compares are still taken over the FULL archived bytes, so
+ * nothing here weakens any verdict. See `loader/types.ts` / `ParsedSession`.
+ */
+export type TornTailFact = {
+  sessionId: string;
+  /** 1-indexed line number of the incomplete final line. */
+  line: number;
+  /** How many characters were left out of the analysis. */
+  discardedChars: number;
+  /** Staff-facing prose: what was left out, and why it is not a finding. */
+  detail: string;
+};
+
+export function tornTails(bundle: Bundle): TornTailFact[] {
+  const facts: TornTailFact[] = [];
+  for (const session of bundle.sessions) {
+    const t = session.tornTail;
+    if (t === null) continue;
+    facts.push({
+      sessionId: session.sessionId,
+      line: t.line,
+      discardedChars: t.discardedChars,
+      detail: t.detail,
+    });
+  }
+  return facts;
+}
+
+// ---------------------------------------------------------------------------
 // The aggregate
 // ---------------------------------------------------------------------------
 
@@ -196,6 +240,7 @@ export type CoverageFacts = {
   identity: IdentityCoverage;
   concurrentRecording: readonly ConcurrentRecordingFact[];
   droppedArtifacts: readonly DroppedArtifact[];
+  tornTails: readonly TornTailFact[];
   unattestedTails: readonly UnattestedTail[];
   dagDefects: readonly ObservedDagDefect[];
   dagCoverage: ObservedDagCoverage;
@@ -237,6 +282,7 @@ export function coverageFacts(bundle: Bundle, index: EventIndex): CoverageFacts 
     identity: identityCoverage(bundle.contributors ?? null),
     concurrentRecording: concurrentRecordingFacts(bundle, index),
     droppedArtifacts: bundle.droppedArtifacts,
+    tornTails: tornTails(bundle),
     unattestedTails: unattestedTails(bundle),
     dagDefects: dag.defects,
     dagCoverage: dag.coverage,
@@ -257,6 +303,7 @@ export function hasCoverageFacts(f: CoverageFacts): boolean {
   return (
     f.concurrentRecording.length > 0 ||
     f.droppedArtifacts.length > 0 ||
+    f.tornTails.length > 0 ||
     f.unattestedTails.length > 0 ||
     f.dagDefects.length > 0 ||
     f.dagCoverage.commits > 0 ||

@@ -79,6 +79,7 @@ function makeBundle(): Bundle {
         meta: {} as import('@provenance/log-core').SlogMeta,
         slogSha256: 'a'.repeat(64),
         slogSha256Lf: null,
+        tornTail: null,
         metaSha256: 'b'.repeat(64),
         firstEvent: events[0] as HashedEnvelope<'session.start'> & {
           data: import('@provenance/log-core').SessionStartPayload;

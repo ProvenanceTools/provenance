@@ -100,6 +100,7 @@ function makeBundle(opts: {
     // and carried through from the loader (see verify-log-bytes.ts).
     slogSha256: 'a'.repeat(64),
     slogSha256Lf: null,
+    tornTail: null,
     metaSha256: 'b'.repeat(64),
     firstEvent: allEvents[0] as ParsedSession['firstEvent'],
   };
@@ -377,6 +378,7 @@ describe('Check 8 — two contributors with concurrent recorded states', () => {
         meta: {} as ParsedSession['meta'],
         slogSha256: 'c'.repeat(64),
         slogSha256Lf: null,
+        tornTail: null,
         metaSha256: 'd'.repeat(64),
         firstEvent: events[0] as ParsedSession['firstEvent'],
       };
@@ -561,6 +563,7 @@ describe('Check 8 — the concurrency gate is per path', () => {
       meta: {} as ParsedSession['meta'],
       slogSha256: 'c'.repeat(64),
       slogSha256Lf: null,
+      tornTail: null,
       metaSha256: 'd'.repeat(64),
       firstEvent: events[0] as ParsedSession['firstEvent'],
     };

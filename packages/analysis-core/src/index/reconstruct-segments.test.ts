@@ -140,6 +140,7 @@ function parsedSession(sessionId: string, events: readonly HashedEnvelope[]): Pa
     meta: {} as ParsedSession['meta'],
     slogSha256: '3'.repeat(64),
     slogSha256Lf: null,
+    tornTail: null,
     metaSha256: '4'.repeat(64),
     firstEvent: events[0] as ParsedSession['firstEvent'],
   };

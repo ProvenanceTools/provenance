@@ -1,6 +1,6 @@
 // NDJSON serialization
-export { serializeEntry, parseEntries } from './ndjson.js';
-export type { ParseError } from './ndjson.js';
+export { serializeEntry, parseEntries, parseEntriesToleratingTornTail } from './ndjson.js';
+export type { ParseError, TornTail, TolerantParse } from './ndjson.js';
 
 // Buffer policy
 export { shouldFlush, DEFAULT_BUFFER_POLICY } from './buffer-policy.js';

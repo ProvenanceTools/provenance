@@ -455,6 +455,54 @@ export type ParsedSession = {
   metaSha256: string;
   /** Narrowed to session.start — guaranteed to be the first event. */
   firstEvent: HashedEnvelope<'session.start'> & { data: SessionStartPayload };
+  /**
+   * A TORN FINAL LINE that was truncated away, or `null` — which is the normal
+   * case and means the log ended cleanly.
+   *
+   * ## Why the session is kept rather than dropped
+   *
+   * This is the read-side orphan guard's missing case, and it is different in
+   * kind from the artifacts that guard drops. A stranded `.slog.meta`, a
+   * zero-byte `.slog` and a `.corrupt-<ISO>` quarantine all carry NO analysable
+   * evidence, so dropping them costs nothing. A `.slog` with a torn tail is a
+   * complete, chained, checkpointed recording of real work with forty bad bytes
+   * on the end. Dropping it would throw away every event the student recorded —
+   * and would do worse than that: check 8 (`submitted_code_match`) resolves the
+   * last recorded state of each file by scanning `bundle.sessions`, so removing
+   * a session removes the saves that explain the submitted code, and the crash
+   * would come back as "code appeared that the log never recorded". That is a
+   * STRONGER accusation than the load failure it replaced, which is the exact
+   * trap the seal half of the orphan guard was built to avoid one layer up.
+   *
+   * So the session is kept, truncated to its last complete entry, and the
+   * truncation is reported here.
+   *
+   * ## What must never be derived from the truncation
+   *
+   * {@link ParsedSession.slogSha256} and {@link ParsedSession.slogSha256Lf} are
+   * taken over the FULL archived bytes and are never recomputed from the kept
+   * prefix, and `parse-bundle.ts` runs the rolling seal's prefix search over
+   * `SessionFiles.slogText`, also the full text. Both are load-bearing. If a
+   * digest were taken over the truncated view, appending past a seal and then
+   * tearing the last line would convert a FAILING `log_bytes_match` into a
+   * PASSING one — a laundering path strictly worse than the bug this field
+   * exists to fix. If the coverage search ran over the truncated view, the text
+   * would fail to re-encode to the archived digest, `computeSlogCoverage` would
+   * answer `unavailable`, and `verify-log-bytes.ts` would fall back to
+   * whole-file equality against a prefix commitment — the same false accusation
+   * as bugs 5, 10 and 12, fired at the crash victim this fix is for.
+   *
+   * Never a `Flag`, never a check failure, never a score. A fact about the
+   * archive, on the same footing as {@link DroppedArtifact}.
+   */
+  tornTail: {
+    /** 1-indexed line number of the incomplete final line. */
+    line: number;
+    /** How many characters were discarded. */
+    discardedChars: number;
+    /** Staff-facing prose: what was left out, and why that is not a finding. */
+    detail: string;
+  } | null;
 };
 
 // ---------------------------------------------------------------------------
