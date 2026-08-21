@@ -2370,6 +2370,85 @@ describe('a both-shapes bundle keeps WHOLE-FILE semantics', () => {
 // output and reads it back with the REAL loadBundle + runValidation.
 // ===========================================================================
 
+/**
+ * GIT REWROTE THE LINE ENDINGS.
+ *
+ * Composition, not simulation: a REAL recorder session, sealed by the REAL
+ * rolling-seal writer, then put through git's end-of-line filter and driven back
+ * through the REAL loader. This is the layer where the defect actually lived —
+ * the writer is correct, the reader is correct, and the transport between them
+ * is what nobody modelled.
+ *
+ * The git submission path delivers a WORKING TREE (Gradescope clones the repo;
+ * there is no `.git` and no seal step), so a repository carrying
+ * `* text=auto eol=crlf`, a checkout under `core.eol=crlf`, or
+ * `core.autocrlf=true` on the machine that materializes that tree hands the
+ * analyzer exactly the bytes constructed here. Verified against real `git clone`
+ * before this test was written.
+ */
+describe('GIT LINE ENDINGS: a CRLF-translated .slog is not tampering', () => {
+  let scenario: RollingScenario;
+  let slogName: string;
+
+  beforeAll(async () => {
+    const root = await makeRoot('rolling-crlf');
+    scenario = await buildRollingSealedBundle({
+      root,
+      sessionCount: 1,
+      files: [{ path: 'main.py', initial: 'def solve():\n    pass\n', append: 'solve()\n' }],
+    });
+    slogName = `session-${scenario.sessions[0]!.fileUuid}.slog`;
+  });
+
+  /** git's smudge filter, over the sealed bundle. */
+  async function widened(): Promise<ArrayBuffer> {
+    return mutateZip(scenario.bundlePath, async (zip) => {
+      const text = await zip.file(slogName)!.async('string');
+      zip.file(slogName, text.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n'));
+    });
+  }
+
+  it('the widened .slog really does differ from the sealed bytes', async () => {
+    // Without this the rest of the block could pass while testing nothing.
+    const buf = await widened();
+    const zip = await JSZip.loadAsync(buf);
+    const text = await zip.file(slogName)!.async('string');
+    expect(text).toContain('\r\n');
+  });
+
+  it('still parses, still chains — which is what made this read as a surgical edit', async () => {
+    const report = await validateMutated(await widened());
+    expect(statusOf(report, 'chain_integrity')).toBe('pass');
+    expect(statusOf(report, 'manifest_sig')).toBe('pass');
+    expect(statusOf(report, 'seq_gaps')).toBe('pass');
+  });
+
+  it('does NOT fire log_bytes_match', async () => {
+    const report = await validateMutated(await widened());
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('pass');
+  });
+
+  it('says the line endings were translated, and that it is not a modification', async () => {
+    const report = await validateMutated(await widened());
+    const detection = report.bundleDetections!.find((c) => c.id === 'log_bytes_match')!;
+    expect(detection.detail).toContain("undoing git's LF→CRLF");
+    expect(detection.detail).toContain('THIS IS NOT A MODIFICATION OF THE LOG');
+  });
+
+  it('but an append hidden inside the translation STILL fails', async () => {
+    // The retry must not become a laundering channel. Undoing the widening
+    // leaves the extra entry in place, so the digest still misses.
+    const buf = await mutateZip(scenario.bundlePath, async (zip) => {
+      const text = await zip.file(slogName)!.async('string');
+      const lines = text.split('\n').filter((l) => l.length > 0);
+      const widenedText = lines.join('\r\n') + '\r\n' + lines[lines.length - 1]! + '\r\n';
+      zip.file(slogName, widenedText);
+    });
+    const report = await validateMutated(buf);
+    expect(detectionStatusOf(report, 'log_bytes_match')).toBe('fail');
+  });
+});
+
 describe('a FINAL rolling seal closes the append hole', () => {
   let scenario: RollingScenario;
   let verified: Verified;
