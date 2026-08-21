@@ -36,7 +36,7 @@
  * one.
  */
 
-import { buildObservedDag } from '../git/observed-dag.js';
+import { ASSUMED_SINGLE_REPOSITORY, buildObservedDag } from '../git/observed-dag.js';
 import type { ObservedDagCoverage, ObservedDagDefect } from '../git/observed-dag.js';
 import type { BundleContributors } from '../identity/types.js';
 import type { EventIndex } from '../index/event-index.js';
@@ -200,9 +200,23 @@ export type CoverageFacts = {
   dagDefects: readonly ObservedDagDefect[];
   dagCoverage: ObservedDagCoverage;
   /**
-   * True when the scope observed commits but the repository discriminator is not
-   * in the signed format yet (D12), so every sha was folded into one assumed
-   * repository. A caveat on the DAG's soundness, stated rather than assumed.
+   * True when SOME observation in this scope named no usable repository, so its
+   * commits were folded into {@link ASSUMED_SINGLE_REPOSITORY} (D12). A caveat
+   * on the DAG's soundness, stated rather than assumed.
+   *
+   * The predicate is membership of the sentinel in the DAG's
+   * `repositoryScope.repositories`, NOT `!discriminatorRecorded`. Those
+   * two agree on `'assumed_single'` and on `'discriminated'` and disagree on
+   * `'mixed'` — where some observations carry `root_commit_sha` and some do not
+   * (one partner on a newer recorder, or on a shallow clone). In a mixed scope
+   * `discriminatorRecorded` is TRUE while part of the graph genuinely IS folded
+   * into the sentinel, so the negated form goes silent on exactly the scope the
+   * caveat is about.
+   *
+   * There is no separate `commits > 0` guard because the predicate already
+   * implies one: the sentinel only enters `repositories` when a node keyed to it
+   * was created, so a scope that observed nothing has an empty list and reports
+   * `false`. A zero-commit scope has no graph to caveat.
    */
   repositoryAssumedSingle: boolean;
 };
@@ -226,7 +240,7 @@ export function coverageFacts(bundle: Bundle, index: EventIndex): CoverageFacts 
     unattestedTails: unattestedTails(bundle),
     dagDefects: dag.defects,
     dagCoverage: dag.coverage,
-    repositoryAssumedSingle: dag.coverage.commits > 0 && !dag.repositoryScope.discriminatorRecorded,
+    repositoryAssumedSingle: dag.repositoryScope.repositories.includes(ASSUMED_SINGLE_REPOSITORY),
   };
 }
 
