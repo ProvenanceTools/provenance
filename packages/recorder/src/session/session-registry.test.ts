@@ -980,8 +980,17 @@ describe('startSession — the §5.6 capability reports', () => {
     // Omission and `null` canonicalize differently and therefore chain to
     // different hashes, so a `null` here would make this recorder's entries hash
     // differently from every other recorder's for the same session.
-    const data = await sessionStartOnDisk();
+    //
+    // Deliberately driven on a session where a report is genuinely UNESTABLISHED
+    // — the manifest's absolute path makes `file_scope` unanswerable. Asserting
+    // "no nulls" on a session that could answer everything would be vacuous:
+    // there would be nothing there to spell wrongly. (Decision-log bug 12: an
+    // assertion about an absent value is only meaningful once you know what
+    // produces the absence.)
+    const data = await sessionStartOnDisk({}, ['/Users/student/proj2/hw.py']);
+    expect('file_scope' in data).toBe(false);
     for (const field of ['git_capture', 'witness_capture', 'file_scope']) {
+      expect(data[field]).not.toBeNull();
       if (field in data) expect(data[field]).not.toBeNull();
     }
   });
