@@ -2,8 +2,25 @@ import { describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
 import type * as vscode from 'vscode';
 import { startGitWiring } from './git-wiring.js';
+import { createGitRunner, resolveGitPathCandidates } from './root-commit-sha.js';
 import { isRepoOwnedByRoot, resolveOwnerRoot } from '../session/session-router.js';
 import { ExplanationTagger } from '../events/explanation-tags.js';
+
+/**
+ * The two resolution entry points are spied on, DELEGATING to the real ones, so
+ * the rest of this file behaves exactly as it did. The spies exist only for the
+ * "finding the git executable" block at the bottom, which is the one place that
+ * has to prove the wiring passes VS Code's answer along instead of quietly
+ * spawning a bare `git`.
+ */
+vi.mock('./root-commit-sha.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./root-commit-sha.js')>();
+  return {
+    ...actual,
+    resolveGitPathCandidates: vi.fn(actual.resolveGitPathCandidates),
+    createGitRunner: vi.fn(actual.createGitRunner),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -46,7 +63,7 @@ type OpenHandler = (repo: unknown) => void;
 
 function makeGitExtension(
   repos: FakeRepo[],
-  opts?: { throwOnGetAPI?: boolean },
+  opts?: { throwOnGetAPI?: boolean; gitPath?: unknown },
 ): vscode.Extension<unknown> {
   let openHandler: OpenHandler | undefined;
   return {
@@ -61,6 +78,10 @@ function makeGitExtension(
         if (v !== 1) return undefined;
         return {
           repositories: repos,
+          // `API.git.path` — present only when the test asked for it, because a
+          // git extension build that does not publish it is a shape this wiring
+          // has to survive.
+          ...(opts?.gitPath === undefined ? {} : { git: { path: opts.gitPath } }),
           onDidOpenRepository: (h: OpenHandler) => {
             openHandler = h;
             return { dispose: () => undefined };
@@ -901,6 +922,147 @@ describe('startGitWiring — the repository discriminator (D12)', () => {
       'root_commit_sha',
       'sha',
     ]);
+    wiring.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding the git executable — writer correction 8
+//
+// The derivation shells out. Spawning a bare `git` needs git on the PATH the
+// editor inherited, which on Windows is routinely NOT the PATH a GUI-launched
+// application has — so the recorder could miss a git that VS Code, in the same
+// process, is already using. These pin that VS Code's answer actually reaches
+// the spawn: the resolution rules themselves live in root-commit-sha.test.ts.
+// ---------------------------------------------------------------------------
+
+describe('startGitWiring — finding the git executable', () => {
+  const WINDOWS_GIT = 'C:\\Program Files\\Git\\cmd\\git.exe';
+  const CONFIGURED_GIT = 'C:\\tools\\git\\cmd\\git.exe';
+  const ROOT_SHA = 'c'.repeat(40);
+
+  /** A runner that answers both plumbing commands without spawning anything. */
+  function scriptedRunner(): (args: readonly string[], cwd: string) => Promise<string> {
+    return async (args) => (args[0] === 'rev-parse' ? 'false\n' : `${ROOT_SHA}\n`);
+  }
+
+  it('resolves it from api.git.path AND the git.path setting, not from PATH alone', async () => {
+    vi.mocked(resolveGitPathCandidates).mockClear();
+    vi.mocked(createGitRunner).mockClear();
+    vi.mocked(createGitRunner).mockReturnValueOnce(scriptedRunner());
+
+    const repo = makeFakeRepo('a'.repeat(40), '/ws/fake');
+    const emitted: Array<Record<string, unknown>> = [];
+    // No `deriveRepositoryDiscriminator` override: the PRODUCTION path is the
+    // whole point of this test.
+    const wiring = startGitWiring({
+      emit: (d) => emitted.push(d as Record<string, unknown>),
+      getGitExtension: () => makeGitExtension([repo], { gitPath: WINDOWS_GIT }),
+      readConfiguredGitPath: () => [CONFIGURED_GIT],
+    });
+
+    repo.setCommit('b'.repeat(40));
+    repo.fireStateChange();
+    await wiring.settled();
+
+    // MUTATION GUARD: dropping either hint — always spawning bare `git` — makes
+    // this an empty-hints call, and the ladder below collapses to ['git'].
+    expect(vi.mocked(resolveGitPathCandidates).mock.calls).toEqual([
+      [{ extensionApiGitPath: WINDOWS_GIT, configuredGitPath: [CONFIGURED_GIT] }],
+    ]);
+    // The array-valued setting is expanded, in order, ahead of the PATH lookup.
+    expect(vi.mocked(createGitRunner).mock.calls[0]?.[0]).toEqual([
+      WINDOWS_GIT,
+      CONFIGURED_GIT,
+      'git',
+    ]);
+    // …and the runner built from that ladder is the one the derivation used.
+    expect(emitted[0]?.root_commit_sha).toBe(ROOT_SHA);
+
+    wiring.dispose();
+  });
+
+  it('resolves ONCE for the whole wiring, not once per repository', async () => {
+    // Two read-only plumbing commands per repository is the budget; re-reading
+    // configuration per repository is not.
+    vi.mocked(resolveGitPathCandidates).mockClear();
+    vi.mocked(createGitRunner).mockClear();
+    vi.mocked(createGitRunner).mockReturnValueOnce(scriptedRunner());
+
+    let settingReads = 0;
+    const repos = [makeFakeRepo(undefined, '/ws/a'), makeFakeRepo(undefined, '/ws/b')];
+    const wiring = startGitWiring({
+      emit: () => undefined,
+      getGitExtension: () => makeGitExtension(repos, { gitPath: WINDOWS_GIT }),
+      readConfiguredGitPath: () => {
+        settingReads += 1;
+        return undefined;
+      },
+    });
+    await wiring.settled();
+
+    expect(settingReads).toBe(1);
+    expect(vi.mocked(resolveGitPathCandidates)).toHaveBeenCalledTimes(1);
+    wiring.dispose();
+  });
+
+  it('survives a git extension that publishes no path and a setting that throws', async () => {
+    // Both reads are hints. Losing them costs a hint — never the wiring, and
+    // never the recording.
+    vi.mocked(resolveGitPathCandidates).mockClear();
+    vi.mocked(createGitRunner).mockClear();
+    vi.mocked(createGitRunner).mockReturnValueOnce(scriptedRunner());
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const repo = makeFakeRepo('a'.repeat(40), '/ws/fake');
+    const emitted: Array<Record<string, unknown>> = [];
+    const wiring = startGitWiring({
+      emit: (d) => emitted.push(d as Record<string, unknown>),
+      getGitExtension: () => makeGitExtension([repo]),
+      readConfiguredGitPath: () => {
+        throw new Error('settings.json is a directory');
+      },
+    });
+
+    repo.setCommit('b'.repeat(40));
+    repo.fireStateChange();
+    await wiring.settled();
+
+    expect(vi.mocked(resolveGitPathCandidates).mock.calls).toEqual([
+      [{ extensionApiGitPath: undefined, configuredGitPath: undefined }],
+    ]);
+    // Which is the pre-existing behaviour, exactly: the bare PATH lookup.
+    expect(vi.mocked(createGitRunner).mock.calls[0]?.[0]).toEqual(['git']);
+    expect(emitted[0]?.root_commit_sha).toBe(ROOT_SHA);
+
+    warn.mockRestore();
+    wiring.dispose();
+  });
+
+  it('does not resolve anything when the derivation is overridden', async () => {
+    // Every other test in this file injects the derivation, and none of them
+    // should touch configuration — a unit test must not read the user's
+    // settings, and it must not spawn.
+    vi.mocked(resolveGitPathCandidates).mockClear();
+    let settingReads = 0;
+
+    const repo = makeFakeRepo('a'.repeat(40), '/ws/fake');
+    const wiring = startGitWiring({
+      emit: () => undefined,
+      getGitExtension: () => makeGitExtension([repo], { gitPath: WINDOWS_GIT }),
+      readConfiguredGitPath: () => {
+        settingReads += 1;
+        return WINDOWS_GIT;
+      },
+      deriveRepositoryDiscriminator: () => Promise.resolve(undefined),
+    });
+
+    repo.setCommit('b'.repeat(40));
+    repo.fireStateChange();
+    await wiring.settled();
+
+    expect(settingReads).toBe(0);
+    expect(vi.mocked(resolveGitPathCandidates)).not.toHaveBeenCalled();
     wiring.dispose();
   });
 });
