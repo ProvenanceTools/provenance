@@ -25,7 +25,11 @@ import { withTestMinio } from '../../../test/helpers/minio.js';
 import { seedSubmission } from '../../../test/helpers/seed-submission.js';
 import { putSubmissionBundle } from '../../../test/helpers/seed-bundle.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
-import { runAndStoreCrossHeuristics, translateCrossFlagsToRows } from './run-cross.js';
+import {
+  runAndStoreCrossHeuristics,
+  translateCrossFlagsToRows,
+  translateExclusionsToRows,
+} from './run-cross.js';
 import { translateFlagsToRows } from '../scoring/recompute-submission.js';
 import { ALL_FLAG_IDS } from '@provenance/analysis-core/heuristics/known-flag-ids.js';
 import type { CrossFlag } from '@provenance/analysis-core/heuristics/cross/types.js';
@@ -33,6 +37,7 @@ import type { Flag } from '@provenance/analysis-core/heuristics/types.js';
 import { _resetBundleIndexCacheForTest } from '../bundle/load-index.js';
 import {
   cross_flags,
+  cross_flag_exclusions,
   cross_flag_participants,
   submissions,
   roster_entries,
@@ -182,6 +187,55 @@ async function putPasteBundle(
               sha256: opts.sha256,
               content: opts.content,
               length: opts.content.length,
+            },
+          },
+        ],
+      },
+    ],
+  });
+  await putSubmissionBundle(db, storage, submissionId, new Uint8Array(zipBuffer));
+}
+
+/**
+ * Like {@link putPasteBundle}, but the session also records a `git.event`
+ * observed AT `commitSha` — the S20 key. Two submissions built with the same
+ * `commitSha` are two views of ONE repository and must not be compared.
+ *
+ * `rootCommitSha`, when given, is the D12 repository discriminator. Passing it
+ * on one side and omitting it on the other is a staged recorder rollout: the
+ * same commit then carries two different node keys, which is the mixed-scope
+ * case `analysis-core/coverage/cross-scope.ts` bridges.
+ */
+async function putPartnerBundle(
+  db: DrizzleDb,
+  storage: StorageClient,
+  submissionId: string,
+  opts: { sha256: string; content: string; commitSha: string; rootCommitSha?: string },
+): Promise<void> {
+  const sessionId = crypto.randomUUID();
+  const { zipBuffer } = await buildTestBundle({
+    sessions: [
+      {
+        sessionId,
+        events: [
+          {
+            kind: 'paste',
+            data: {
+              path: 'main.py',
+              sha256: opts.sha256,
+              content: opts.content,
+              length: opts.content.length,
+            },
+          },
+          {
+            kind: 'git.event',
+            data: {
+              operation: 'commit',
+              sha: opts.commitSha,
+              commit_sha: opts.commitSha,
+              parents: [],
+              branch: 'main',
+              ...(opts.rootCommitSha === undefined ? {} : { root_commit_sha: opts.rootCommitSha }),
             },
           },
         ],
@@ -864,5 +918,322 @@ describe('cross / per-submission config parity', () => {
     // but not persisted on the cross path.
     expect(perSubmissionRows[0]!.score_contribution).toBe(0);
     expect(translateCross([makeCrossFlag('editing_pattern_clone')], config)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The exclusion register (spec S20 / §6 Rule 3, migration 0031)
+//
+// The findings say what was found. The register says what was NOT compared, and
+// why. Before this table the server wrote only the first half, so the
+// server-backed cross-flags view showed the suppression with no explanation —
+// an absence indistinguishable from a clean result.
+// ---------------------------------------------------------------------------
+
+const SHARED_COMMIT = 'e5'.repeat(20);
+const ROOT_ONE = 'f1'.repeat(20);
+const ROOT_TWO = 'f2'.repeat(20);
+
+/** Seed two submissions in ONE assignment; caller stores their bundles. */
+async function seedPairInOneAssignment(
+  db: DrizzleDb,
+  sidPrefix: string,
+): Promise<{ semesterId: string; sub1: string; sub2: string }> {
+  const {
+    submissionId: sub1,
+    semesterId,
+    assignmentId,
+    ingestJobId,
+  } = await seedSubmissionWithSemester(db);
+
+  const sub2 = await seedSecondSubmissionInSemester(db, {
+    semesterId,
+    sidPrefix,
+    displayName: 'Partner',
+    assignmentId,
+    sourceFilename: `hw1-${sidPrefix}.zip`,
+    ingestJobId,
+  });
+
+  return { semesterId, sub1, sub2 };
+}
+
+describe('runAndStoreCrossHeuristics — the exclusion register', () => {
+  it('writes a register row for a partner pair, and no finding against them', async () => {
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const { semesterId, sub1, sub2 } = await seedPairInOneAssignment(db, 'ex1');
+
+        // Both observe the same commit AND share a paste. Without the exclusion
+        // this is a high-severity paste_shared_across_students against the two
+        // people the course assigned to collaborate.
+        for (const id of [sub1, sub2]) {
+          await putPartnerBundle(db, client, id, {
+            sha256: 'reg-sha',
+            content: SHARED_PASTE_CONTENT,
+            commitSha: SHARED_COMMIT,
+          });
+        }
+
+        const result = await runAndStoreCrossHeuristics(db, client, semesterId);
+
+        expect(result.flag_count, 'the partner pair must not be accused').toBe(0);
+        expect(result.exclusion_count).toBe(1);
+
+        const rows = await db
+          .select()
+          .from(cross_flag_exclusions)
+          .where(eq(cross_flag_exclusions.semester_id, semesterId));
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.reason).toBe('same_repository_lineage');
+        expect(rows[0]!.excluded_pair_count).toBe(1);
+        // Stored SORTED, not in the partition's synthetic-bundle-id order.
+        expect(rows[0]!.submission_ids).toEqual([sub1, sub2].sort());
+        expect(rows[0]!.shared_commits.join(' ')).toContain(SHARED_COMMIT);
+      });
+    });
+  });
+
+  it('writes a register row for a MIXED-scope pair (one D12 build, one older)', async () => {
+    // The same fix Task A made in `coverage/cross-scope.ts`, proven on the
+    // SERVER path — the two feature producers must not disagree about which
+    // pairs are one repository.
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const { semesterId, sub1, sub2 } = await seedPairInOneAssignment(db, 'ex2');
+
+        await putPartnerBundle(db, client, sub1, {
+          sha256: 'mix-sha',
+          content: SHARED_PASTE_CONTENT,
+          commitSha: SHARED_COMMIT,
+          rootCommitSha: ROOT_ONE,
+        });
+        await putPartnerBundle(db, client, sub2, {
+          sha256: 'mix-sha',
+          content: SHARED_PASTE_CONTENT,
+          commitSha: SHARED_COMMIT,
+        });
+
+        const result = await runAndStoreCrossHeuristics(db, client, semesterId);
+
+        expect(result.flag_count).toBe(0);
+        expect(result.exclusion_count).toBe(1);
+
+        const rows = await db
+          .select()
+          .from(cross_flag_exclusions)
+          .where(eq(cross_flag_exclusions.semester_id, semesterId));
+        // Both keys the commit was seen under, because neither was observed by
+        // both sides.
+        expect(rows[0]!.shared_commits.sort()).toEqual(
+          [
+            `repository:${ROOT_ONE} ${SHARED_COMMIT}`,
+            `repository:assumed-single ${SHARED_COMMIT}`,
+          ].sort(),
+        );
+      });
+    });
+  });
+
+  it('writes NO register row for two DIFFERENT real repositories sharing a sha', async () => {
+    // The D12 guarantee. A false exclusion switches a detector silently off, so
+    // the flag must still fire and the register must stay empty.
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const { semesterId, sub1, sub2 } = await seedPairInOneAssignment(db, 'ex3');
+
+        await putPartnerBundle(db, client, sub1, {
+          sha256: 'd12-sha',
+          content: SHARED_PASTE_CONTENT,
+          commitSha: SHARED_COMMIT,
+          rootCommitSha: ROOT_ONE,
+        });
+        await putPartnerBundle(db, client, sub2, {
+          sha256: 'd12-sha',
+          content: SHARED_PASTE_CONTENT,
+          commitSha: SHARED_COMMIT,
+          rootCommitSha: ROOT_TWO,
+        });
+
+        const result = await runAndStoreCrossHeuristics(db, client, semesterId);
+
+        expect(result.flag_count).toBe(1);
+        expect(result.exclusion_count).toBe(0);
+
+        const rows = await db
+          .select()
+          .from(cross_flag_exclusions)
+          .where(eq(cross_flag_exclusions.semester_id, semesterId));
+        expect(rows).toHaveLength(0);
+      });
+    });
+  });
+
+  it('is idempotent: two runs leave exactly one register row with the same content', async () => {
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const { semesterId, sub1, sub2 } = await seedPairInOneAssignment(db, 'ex4');
+
+        for (const id of [sub1, sub2]) {
+          await putPartnerBundle(db, client, id, {
+            sha256: 'idem-reg-sha',
+            content: SHARED_PASTE_CONTENT,
+            commitSha: SHARED_COMMIT,
+          });
+        }
+
+        const first = await runAndStoreCrossHeuristics(db, client, semesterId);
+        const rowsAfterFirst = await db
+          .select()
+          .from(cross_flag_exclusions)
+          .where(eq(cross_flag_exclusions.semester_id, semesterId));
+
+        const second = await runAndStoreCrossHeuristics(db, client, semesterId);
+        const rowsAfterSecond = await db
+          .select()
+          .from(cross_flag_exclusions)
+          .where(eq(cross_flag_exclusions.semester_id, semesterId));
+
+        expect(second.exclusion_count).toBe(first.exclusion_count);
+        expect(rowsAfterSecond).toHaveLength(1);
+        // The row id is regenerated by the replace; everything a reader sees
+        // must be byte-identical, or a retry would look like a changed answer.
+        expect(rowsAfterSecond[0]!.submission_ids).toEqual(rowsAfterFirst[0]!.submission_ids);
+        expect(rowsAfterSecond[0]!.shared_commits).toEqual(rowsAfterFirst[0]!.shared_commits);
+        expect(rowsAfterSecond[0]!.excluded_pair_count).toBe(
+          rowsAfterFirst[0]!.excluded_pair_count,
+        );
+      });
+    });
+  });
+
+  it('flushes a stale register row from a prior run', async () => {
+    // The register is on the same DELETE-then-INSERT contract as the flags. A
+    // stale row claims a comparison was withheld when this run made it.
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const { semesterId, sub1, sub2 } = await seedPairInOneAssignment(db, 'ex5');
+
+        // Not partners this time: different commits, but a shared paste.
+        await putPartnerBundle(db, client, sub1, {
+          sha256: 'stale-sha',
+          content: SHARED_PASTE_CONTENT,
+          commitSha: 'aa'.repeat(20),
+        });
+        await putPartnerBundle(db, client, sub2, {
+          sha256: 'stale-sha',
+          content: SHARED_PASTE_CONTENT,
+          commitSha: 'bb'.repeat(20),
+        });
+
+        await db.insert(cross_flag_exclusions).values({
+          semester_id: semesterId,
+          reason: 'same_repository_lineage',
+          submission_ids: [sub1, sub2].sort(),
+          shared_commits: ['repository:assumed-single ' + 'cc'.repeat(20)],
+          excluded_pair_count: 1,
+        });
+
+        const result = await runAndStoreCrossHeuristics(db, client, semesterId);
+
+        expect(result.exclusion_count).toBe(0);
+        // And the finding they genuinely earn is reported.
+        expect(result.flag_count).toBe(1);
+
+        const rows = await db
+          .select()
+          .from(cross_flag_exclusions)
+          .where(eq(cross_flag_exclusions.semester_id, semesterId));
+        expect(rows).toHaveLength(0);
+      });
+    });
+  });
+
+  it('clears the register when a semester drops below two comparable submissions', async () => {
+    // The early-return branch: no assignment has two submissions, so nothing is
+    // loaded at all. It must still replace the register, or last run's panel
+    // outlives the comparison it described.
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const { submissionId, semesterId } = await seedSubmissionWithSemester(db);
+        await putEmptyBundle(db, client, submissionId);
+
+        await db.insert(cross_flag_exclusions).values({
+          semester_id: semesterId,
+          reason: 'same_repository_lineage',
+          submission_ids: [submissionId, crypto.randomUUID()].sort(),
+          shared_commits: ['repository:assumed-single ' + 'dd'.repeat(20)],
+          excluded_pair_count: 1,
+        });
+
+        const result = await runAndStoreCrossHeuristics(db, client, semesterId);
+
+        expect(result.exclusion_count).toBe(0);
+        const rows = await db
+          .select()
+          .from(cross_flag_exclusions)
+          .where(eq(cross_flag_exclusions.semester_id, semesterId));
+        expect(rows).toHaveLength(0);
+      });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('translateExclusionsToRows', () => {
+  const bundleMap = new Map([
+    ['bundle-b', '00000000-0000-0000-0000-0000000000b0'],
+    ['bundle-a', '00000000-0000-0000-0000-0000000000a0'],
+  ]);
+
+  const exclusion = {
+    reason: 'same_repository_lineage' as const,
+    bundleIds: ['bundle-b', 'bundle-a'],
+    sourceFilenames: ['b.zip', 'a.zip'],
+    sharedCommits: ['repository:assumed-single ' + 'a1'.repeat(20)],
+    excludedPairCount: 1,
+  };
+
+  it('sorts submission ids rather than persisting the partition order', () => {
+    // The partition orders by `sourceFilename`, which on the server is the
+    // synthetic `reconstruct-stub-<uuid>` stub tie-broken by a random bundle id.
+    // Persisting that order would make two identical recompute runs differ.
+    const rows = translateExclusionsToRows([exclusion], 'sem-1', bundleMap);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.submission_ids).toEqual([
+      '00000000-0000-0000-0000-0000000000a0',
+      '00000000-0000-0000-0000-0000000000b0',
+    ]);
+  });
+
+  it('drops an exclusion left with fewer than two resolvable members', () => {
+    // An unmapped bundle id is not guessed at, and a one-member lineage excludes
+    // nothing — the table's CHECK rejects it, and a register row claiming a
+    // suppression that never happened is worse than no row.
+    const rows = translateExclusionsToRows(
+      [exclusion],
+      'sem-1',
+      new Map([['bundle-a', '00000000-0000-0000-0000-0000000000a0']]),
+    );
+
+    expect(rows).toEqual([]);
+  });
+
+  it('recomputes excluded_pair_count from the members that survived', () => {
+    const three = {
+      ...exclusion,
+      bundleIds: ['bundle-a', 'bundle-b', 'bundle-c'],
+      sourceFilenames: ['a.zip', 'b.zip', 'c.zip'],
+      excludedPairCount: 3,
+    };
+    const rows = translateExclusionsToRows([three], 'sem-1', bundleMap);
+
+    // Only two of the three resolved, so the count is 1 — a count that
+    // disagrees with the list beside it is worse than no count.
+    expect(rows[0]!.submission_ids).toHaveLength(2);
+    expect(rows[0]!.excluded_pair_count).toBe(1);
   });
 });

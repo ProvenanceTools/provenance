@@ -14,7 +14,7 @@ import { useState } from 'react';
 import { useCrossFlagList } from '../../api/queries.js';
 import { useActiveSemester } from '../../api/use-active-semester.js';
 import { RowLink } from '../../components/a11y/RowLink.js';
-import type { CrossFlagDetailItem } from '@provenance/shared/api-schemas';
+import type { CrossFlagDetailItem, CrossScopeExclusionItem } from '@provenance/shared/api-schemas';
 import type { CrossFlagFilters } from '../../api/queries.js';
 
 // ---------------------------------------------------------------------------
@@ -38,6 +38,77 @@ function SeverityBadge({ severity }: { severity: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// CrossScopeExclusionPanel — what was NOT compared, and why.
+//
+// The same register the `/local` CompareView renders, in the same visual
+// language, now that the server persists it (migration 0031). Deliberately not
+// a row in the findings table: spec S20 requires suppressed comparisons be
+// VISIBLY suppressed, and §6 Rule 3 fixes what a register entry is — a
+// statement about the recording ("these archives are the same repository"),
+// never a finding about a person. So it has no severity badge, no confidence,
+// no link to a detail page, and it renders in neutral styling above the table
+// rather than inside it.
+//
+// Without this, a grader looking at the server-backed view saw the suppression
+// with no explanation for it: an absence that reads exactly like a clean result.
+// ---------------------------------------------------------------------------
+
+function CrossScopeExclusionPanel({ exclusions }: { exclusions: CrossScopeExclusionItem[] }) {
+  if (exclusions.length === 0) return null;
+
+  return (
+    <section
+      aria-labelledby="cross-exclusions-heading"
+      className="mb-4 rounded border border-gray-200 bg-gray-50 p-3"
+      data-testid="cross-scope-exclusions"
+    >
+      <h2 id="cross-exclusions-heading" className="text-sm font-semibold text-gray-900">
+        Not cross-compared
+      </h2>
+      <p className="mt-1 text-xs text-gray-600">
+        These submissions are the same repository: each archive contains the other&rsquo;s recorded
+        sessions, so a match between them says nothing about sharing between students.
+        Cross-comparison between them is not applicable. Every other pair was compared normally.
+      </p>
+      <ul className="mt-3 space-y-2" role="list">
+        {exclusions.map((ex) => (
+          <li
+            key={ex.id}
+            className="rounded border border-gray-200 bg-white p-2"
+            data-testid={`cross-scope-exclusion-${ex.id}`}
+          >
+            <p className="text-xs font-medium text-gray-900">
+              {ex.members.map((m) => m.student?.display_name ?? m.source_filename).join(' · ')}
+            </p>
+            <p className="mt-1 text-xs text-gray-600">
+              Same repository lineage —{' '}
+              {ex.excluded_pair_count === 1
+                ? '1 comparison not applicable'
+                : `${ex.excluded_pair_count} comparisons not applicable`}
+              . Established by {ex.shared_commits.length}{' '}
+              {ex.shared_commits.length === 1 ? 'commit' : 'commits'} recorded in more than one of
+              these archives.
+            </p>
+            <ul className="mt-1.5 space-y-0.5" data-testid="cross-scope-exclusion-commits">
+              {ex.shared_commits.slice(0, 5).map((key) => (
+                <li key={key} className="font-mono text-[11px] text-gray-500 break-all">
+                  {key}
+                </li>
+              ))}
+              {ex.shared_commits.length > 5 && (
+                <li className="text-[11px] italic text-gray-500">
+                  and {ex.shared_commits.length - 5} more
+                </li>
+              )}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // CrossFlagListView
 // ---------------------------------------------------------------------------
 
@@ -52,6 +123,10 @@ export function CrossFlagListView() {
   // Accumulated items across pages
   const [allItems, setAllItems] = useState<CrossFlagDetailItem[]>([]);
   const [activeCursor, setActiveCursor] = useState<string | undefined>(undefined);
+  // The exclusion register arrives with the FIRST page only (it is not
+  // paginated). Held here so it stays on screen as the user pages through the
+  // findings — the register explains the whole list, not one page of it.
+  const [pageOneExclusions, setPageOneExclusions] = useState<CrossScopeExclusionItem[]>([]);
 
   const filters: CrossFlagFilters = {
     ...(heuristicId ? { heuristicId } : {}),
@@ -67,16 +142,22 @@ export function CrossFlagListView() {
   function applyFilters() {
     setActiveCursor(undefined);
     setAllItems([]);
+    setPageOneExclusions([]);
   }
 
   // Merge new page into accumulated list
   const currentItems = data?.items ?? [];
   const displayItems = activeCursor !== undefined ? [...allItems, ...currentItems] : currentItems;
+  const displayExclusions =
+    activeCursor === undefined ? (data?.exclusions ?? []) : pageOneExclusions;
 
   function handleLoadMore() {
     if (data?.next_cursor) {
       const prevItems = displayItems;
       setAllItems(prevItems);
+      // Capture the register on the way off page one; later pages carry an
+      // empty array and must not blank it.
+      if (activeCursor === undefined) setPageOneExclusions(data.exclusions ?? []);
       setActiveCursor(data.next_cursor);
     }
   }
@@ -147,6 +228,10 @@ export function CrossFlagListView() {
         </div>
       ) : (
         <>
+          {/* Above the table on purpose: "no findings" must not be read before
+              the reason some comparisons were never made. */}
+          <CrossScopeExclusionPanel exclusions={displayExclusions} />
+
           <div className="bg-white border border-gray-200 rounded overflow-hidden">
             <table className="w-full text-sm">
               <thead>

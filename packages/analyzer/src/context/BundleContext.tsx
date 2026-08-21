@@ -49,9 +49,8 @@ import type { EventIndex } from '@provenance/analysis-core/index/event-index.js'
 import type { ValidationReport } from '@provenance/analysis-core/validation/check-types.js';
 import type { Flag } from '@provenance/analysis-core/heuristics/types.js';
 import type { CrossFlag } from '@provenance/analysis-core/heuristics/cross/types.js';
-import { runCrossHeuristics } from '@provenance/analysis-core/heuristics/cross/run-cross-heuristics.js';
+import { runCrossAnalysis } from '@provenance/analysis-core/heuristics/cross/run-cross-heuristics.js';
 import { extractCrossFeatures } from '@provenance/analysis-core/heuristics/cross/features.js';
-import { partitionCrossScopes } from '@provenance/analysis-core/coverage/cross-scope.js';
 import type { SameScopeExclusion } from '@provenance/analysis-core/coverage/cross-scope.js';
 
 // ---------------------------------------------------------------------------
@@ -378,13 +377,13 @@ export function BundleProvider({ children }: { children: ReactNode }) {
       const index = indicesByBundle.get(bundle.id);
       if (index !== undefined) features.push(extractCrossFeatures(bundle, index));
     }
-    setCrossFlags(runCrossHeuristics(features));
-    // The other half of the SAME partition runCrossHeuristics used. Recomputed
-    // rather than returned because `runCrossHeuristics` is also the server's
-    // entry point and its signature is a cross-package contract;
-    // `partitionCrossScopes` is pure and deterministic, so the two calls cannot
-    // produce different answers from the same features.
-    setCrossScopeExclusions([...partitionCrossScopes(features).exclusions]);
+    // Both halves of ONE pass. This used to be `runCrossHeuristics` plus a
+    // second, side-door `partitionCrossScopes` call to recover the register —
+    // which worked here and left the server, which never made that second call,
+    // showing the suppression with no explanation for it.
+    const { flags, exclusions } = runCrossAnalysis(features);
+    setCrossFlags(flags);
+    setCrossScopeExclusions([...exclusions]);
   }, [bundles, indicesByBundle]);
 
   // ---------------------------------------------------------------------------

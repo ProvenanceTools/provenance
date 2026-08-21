@@ -1436,9 +1436,75 @@ export const CrossFlagDetailItemSchema = z.object({
 });
 export type CrossFlagDetailItem = z.infer<typeof CrossFlagDetailItemSchema>;
 
+// ---------------------------------------------------------------------------
+// The cross-scope exclusion register (spec S20, §6 Rule 3).
+//
+// NOT a finding, and deliberately not carried as a sentinel row in `items`. An
+// exclusion is a statement about the RECORDING — "these two archives are the
+// same repository, so comparing them says nothing about sharing between
+// students" — never a statement about a person. It has no severity, no
+// confidence, and no score contribution, and folding one into the findings list
+// would give it all three by association.
+//
+// It exists because S20 requires suppressed comparisons be VISIBLY suppressed:
+// a grader reading "no findings" must be able to tell a comparison that was
+// searched from one that was withheld.
+// ---------------------------------------------------------------------------
+
+export const CrossScopeExclusionMemberSchema = z.object({
+  submission_id: z.string().uuid(),
+  /** The archive as uploaded — the name a grader actually recognises. */
+  source_filename: z.string(),
+  /** Null when no single roster entry owns the submission (D9). */
+  student: z
+    .object({
+      id: z.string().uuid(),
+      sid: z.string(),
+      display_name: z.string(),
+    })
+    .nullable(),
+  assignment: z.object({
+    id: z.string().uuid(),
+    assignment_id_str: z.string(),
+  }),
+});
+export type CrossScopeExclusionMember = z.infer<typeof CrossScopeExclusionMemberSchema>;
+
+export const CrossScopeExclusionItemSchema = z.object({
+  id: z.string().uuid(),
+  /**
+   * Spelled as a literal union rather than a bare string so a second exclusion
+   * reason has to be added to the contract on purpose, at both ends.
+   */
+  reason: z.literal('same_repository_lineage'),
+  /** Every submission in the lineage, ordered by submission id. Length >= 2. */
+  members: z.array(CrossScopeExclusionMemberSchema),
+  /**
+   * The `(repository, sha)` node keys that proved it. For a mixed-scope proof
+   * the same sha appears under more than one key and every participating key is
+   * listed — see `analysis-core/coverage/cross-scope.ts`.
+   */
+  shared_commits: z.array(z.string()),
+  /** `n*(n-1)/2` — how much of the comparison space was withheld. */
+  excluded_pair_count: z.number().int(),
+  created_at: z.string().datetime(),
+});
+export type CrossScopeExclusionItem = z.infer<typeof CrossScopeExclusionItemSchema>;
+
 export const CrossFlagListResponseSchema = z.object({
   items: z.array(CrossFlagDetailItemSchema),
   next_cursor: z.string().nullable(),
+  /**
+   * The register for the whole semester, returned on the FIRST page only
+   * (empty on every cursor-continued page — it is not paginated and repeating
+   * it per page would be payload for nothing). The list view accumulates pages,
+   * so it renders from page one.
+   *
+   * `.default([])` so a response from a server that predates this field parses
+   * instead of blanking the whole cross-flags view during a rolling deploy. The
+   * OUTPUT type is required — no consumer has to handle `undefined`.
+   */
+  exclusions: z.array(CrossScopeExclusionItemSchema).default([]),
 });
 export type CrossFlagListResponse = z.infer<typeof CrossFlagListResponseSchema>;
 

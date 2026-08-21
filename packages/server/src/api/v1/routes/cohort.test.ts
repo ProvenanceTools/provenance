@@ -30,6 +30,7 @@ import {
   submissions,
   flags,
   cross_flags,
+  cross_flag_exclusions,
   cross_flag_participants,
 } from '../../../db/schema.js';
 import type { DrizzleDb } from '../../../db/client.js';
@@ -1518,6 +1519,131 @@ describe('GET /semesters/:semesterId/assignments', () => {
 // ---------------------------------------------------------------------------
 // §4. GET /semesters/:semesterId/cross-flags
 // ---------------------------------------------------------------------------
+
+describe('GET /semesters/:semesterId/cross-flags — the exclusion register', () => {
+  it('returns the register beside the findings, on the first page only', async () => {
+    // Spec S20 / §6 Rule 3. The register is a sibling array, NOT an item: an
+    // exclusion is a fact about the recording, never a finding about a person,
+    // and folding it into `items` would give it a severity by association.
+    await withTestDb(async (db) => {
+      _testDb = db;
+      _setConfigForTest(parseEnv(makeTestEnv()));
+
+      const user = await seedUser(db);
+      const sessionId = await seedSession(db, user.id);
+      const { semester } = await seedCourseAndSemester(db);
+      await seedMembership(db, user.id, semester.id, 'admin');
+
+      const s1 = await seedStudent(db, semester.id, 'stu101');
+      const s2 = await seedStudent(db, semester.id, 'stu102');
+      const a = await seedAssignment(db, semester.id);
+      const job = await seedIngestJob(db, semester.id, user.id);
+      const sub1 = await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: a.id,
+        studentId: s1.id,
+        ingestJobId: job.id,
+        versionIndex: 1,
+      });
+      const sub2 = await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: a.id,
+        studentId: s2.id,
+        ingestJobId: job.id,
+        versionIndex: 1,
+      });
+
+      const commitKey = `repository:assumed-single ${'a1'.repeat(20)}`;
+      await db.insert(cross_flag_exclusions).values({
+        semester_id: semester.id,
+        reason: 'same_repository_lineage',
+        submission_ids: [sub1.id, sub2.id].sort(),
+        shared_commits: [commitKey],
+        excluded_pair_count: 1,
+      });
+
+      // Two flags so there is a second page to ask for.
+      for (const heuristicId of ['paste_shared_across_students', 'editing_pattern_clone']) {
+        const [cf] = await db
+          .insert(cross_flags)
+          .values({
+            semester_id: semester.id,
+            heuristic_id: heuristicId,
+            severity: 'high',
+            confidence: 0.95,
+            heuristic_config_version: 1,
+          })
+          .returning();
+        await db.insert(cross_flag_participants).values([
+          { cross_flag_id: cf!.id, submission_id: sub1.id, supporting_seqs: [1] },
+          { cross_flag_id: cf!.id, submission_id: sub2.id, supporting_seqs: [2] },
+        ]);
+      }
+
+      const app = createV1App();
+      const base = `http://localhost/semesters/${semester.id}/cross-flags`;
+      const headers = { Cookie: `__Host-prov_sess=${sessionId}` };
+
+      type Body = {
+        items: { id: string }[];
+        next_cursor: string | null;
+        exclusions: {
+          id: string;
+          reason: string;
+          members: { submission_id: string; source_filename: string; student: unknown }[];
+          shared_commits: string[];
+          excluded_pair_count: number;
+        }[];
+      };
+
+      const page1 = await app.fetch(new Request(`${base}?limit=1`, { headers }));
+      expect(page1.status).toBe(200);
+      const body1 = (await page1.json()) as Body;
+
+      expect(body1.exclusions).toHaveLength(1);
+      expect(body1.exclusions[0]!.reason).toBe('same_repository_lineage');
+      expect(body1.exclusions[0]!.excluded_pair_count).toBe(1);
+      expect(body1.exclusions[0]!.shared_commits).toEqual([commitKey]);
+      expect(body1.exclusions[0]!.members.map((m) => m.submission_id).sort()).toEqual(
+        [sub1.id, sub2.id].sort(),
+      );
+      // No exclusion leaked into the findings list.
+      expect(body1.items).toHaveLength(1);
+
+      // The register is not paginated: it belongs to the whole list, and
+      // repeating it on every page would be payload for nothing.
+      expect(body1.next_cursor).not.toBeNull();
+      const page2 = await app.fetch(
+        new Request(`${base}?limit=1&cursor=${body1.next_cursor!}`, { headers }),
+      );
+      const body2 = (await page2.json()) as Body;
+      expect(body2.exclusions).toEqual([]);
+    });
+  });
+
+  it('returns an empty register for a semester that excluded nothing', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      _setConfigForTest(parseEnv(makeTestEnv()));
+
+      const user = await seedUser(db);
+      const sessionId = await seedSession(db, user.id);
+      const { semester } = await seedCourseAndSemester(db);
+      await seedMembership(db, user.id, semester.id, 'admin');
+
+      const app = createV1App();
+      const res = await app.fetch(
+        new Request(`http://localhost/semesters/${semester.id}/cross-flags`, {
+          headers: { Cookie: `__Host-prov_sess=${sessionId}` },
+        }),
+      );
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { exclusions: unknown[] };
+      expect(body.exclusions).toEqual([]);
+    });
+  });
+});
 
 describe('GET /semesters/:semesterId/cross-flags', () => {
   it('returns cross-flags with participants', async () => {

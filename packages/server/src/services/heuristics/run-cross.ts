@@ -86,12 +86,18 @@
 
 import { eq, isNull, and } from 'drizzle-orm';
 import { sql } from 'drizzle-orm';
-import { runCrossHeuristics } from '@provenance/analysis-core/heuristics/cross/run-cross-heuristics.js';
+import { runCrossAnalysis } from '@provenance/analysis-core/heuristics/cross/run-cross-heuristics.js';
 import type {
   CrossFlag,
   CrossSubmissionFeatures,
 } from '@provenance/analysis-core/heuristics/cross/types.js';
-import { cross_flags, cross_flag_participants, submissions } from '../../db/schema.js';
+import type { SameScopeExclusion } from '@provenance/analysis-core/coverage/cross-scope.js';
+import {
+  cross_flags,
+  cross_flag_exclusions,
+  cross_flag_participants,
+  submissions,
+} from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import { withTransaction } from '../../db/client.js';
 import type { StorageClient } from '../storage/client.js';
@@ -107,6 +113,12 @@ import type { ServerHeuristicConfig } from './config.js';
 export type RunCrossResult = {
   flag_count: number;
   participant_count: number;
+  /**
+   * Rows written to the exclusion register — repository lineages whose members
+   * were NOT compared against each other. A non-finding count, reported
+   * alongside the findings so a run that suppressed comparisons says so.
+   */
+  exclusion_count: number;
 };
 
 type CrossFlagRow = typeof cross_flags.$inferInsert;
@@ -295,8 +307,15 @@ export async function runAndStoreCrossHeuristics(
         )
       `);
       await tx.delete(cross_flags).where(eq(cross_flags.semester_id, semesterId));
+      // The register is replaced on the SAME contract. A semester that has
+      // nothing left to compare must not keep showing last run's "not
+      // cross-compared" panel — a stale exclusion is a claim that a comparison
+      // was withheld when in fact none was possible.
+      await tx
+        .delete(cross_flag_exclusions)
+        .where(eq(cross_flag_exclusions.semester_id, semesterId));
     });
-    return { flag_count: 0, participant_count: 0 };
+    return { flag_count: 0, participant_count: 0, exclusion_count: 0 };
   }
 
   // -------------------------------------------------------------------------
@@ -342,8 +361,15 @@ export async function runAndStoreCrossHeuristics(
   // no repository-lineage partition spans the two.
   // -------------------------------------------------------------------------
   const crossFlags: CrossFlag[] = [];
+  const crossExclusions: SameScopeExclusion[] = [];
   for (const features of featuresByGroup) {
-    for (const f of runCrossHeuristics(features, undefined)) crossFlags.push(f);
+    // BOTH halves of the pass. The exclusions are not a second computation on
+    // the side — recomputing them separately is exactly how the browser and the
+    // server drifted into disagreeing about whether a grader gets told why a
+    // comparison is missing.
+    const { flags, exclusions } = runCrossAnalysis(features, undefined);
+    for (const f of flags) crossFlags.push(f);
+    for (const e of exclusions) crossExclusions.push(e);
   }
 
   // -------------------------------------------------------------------------
@@ -370,11 +396,22 @@ export async function runAndStoreCrossHeuristics(
     configVersion,
   );
 
+  const exclusionRows = translateExclusionsToRows(
+    crossExclusions,
+    semesterId,
+    bundleIdToSubmissionId,
+  );
+
   // -------------------------------------------------------------------------
-  // Step 6: Atomically replace cross_flags for the semester.
+  // Step 6: Atomically replace cross_flags AND the exclusion register.
   //
   // DELETE all existing cross_flags for this semester (CASCADE removes
   // cross_flag_participants). INSERT new cross_flags + participants.
+  //
+  // The register goes in the SAME transaction, on the SAME delete-then-insert
+  // contract, because the two are two halves of one answer: findings, plus what
+  // was withheld from the search that produced them. A register a run out of
+  // step with its flags would explain the wrong absence.
   //
   // This is the DELETE-then-INSERT contract (V32). The advisory lock held by
   // the caller prevents concurrent semester-level cross runs from racing here.
@@ -401,10 +438,90 @@ export async function runAndStoreCrossHeuristics(
         totalParticipants += participants.length;
       }
     }
+
+    // The register. No CASCADE reaches it — it hangs off the semester, not off
+    // a cross_flags row — so it gets its own DELETE, in this same transaction.
+    await tx.delete(cross_flag_exclusions).where(eq(cross_flag_exclusions.semester_id, semesterId));
+    if (exclusionRows.length > 0) {
+      await tx.insert(cross_flag_exclusions).values(exclusionRows);
+    }
   });
 
   return {
     flag_count: crossFlagRows.length,
     participant_count: totalParticipants,
+    exclusion_count: exclusionRows.length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Exclusion register translation
+// ---------------------------------------------------------------------------
+
+type ExclusionRow = {
+  semester_id: string;
+  reason: string;
+  submission_ids: string[];
+  shared_commits: string[];
+  excluded_pair_count: number;
+};
+
+/**
+ * `SameScopeExclusion[]` → `cross_flag_exclusions` rows.
+ *
+ * NOT gated on any heuristic config. The partition is derived from signed
+ * `git.event` payloads alone; no weight, threshold or enable flag can change
+ * which submissions are one repository, and letting a disabled heuristic
+ * suppress the register would hide a suppression that still happened for the
+ * other heuristic.
+ *
+ * Two orderings are deliberate and both exist for retry idempotency, which the
+ * ingest tests assert:
+ *
+ *  - `submission_ids` is SORTED. The partition orders members by
+ *    `sourceFilename`, which on this path is the synthetic
+ *    `reconstruct-stub-<uuid>` stub, tie-broken by a `crypto.randomUUID()`
+ *    bundle id. Persisting that order would make two identical recompute runs
+ *    write different arrays.
+ *  - the rows themselves are sorted by their first member, so the register is
+ *    diffable across runs.
+ *
+ * A bundleId with no submission mapping is dropped rather than guessed at; if
+ * that leaves fewer than two members the exclusion is dropped entirely, because
+ * a one-member lineage excludes nothing and the table's CHECK rejects it.
+ */
+export function translateExclusionsToRows(
+  exclusions: readonly SameScopeExclusion[],
+  semesterId: string,
+  bundleIdToSubmissionId: Map<string, string>,
+): ExclusionRow[] {
+  const rows: ExclusionRow[] = [];
+
+  for (const ex of exclusions) {
+    const submissionIds = ex.bundleIds
+      .map((bundleId) => bundleIdToSubmissionId.get(bundleId))
+      .filter((id): id is string => id !== undefined)
+      .sort();
+
+    if (submissionIds.length < 2) continue;
+
+    rows.push({
+      semester_id: semesterId,
+      reason: ex.reason,
+      submission_ids: submissionIds,
+      shared_commits: [...ex.sharedCommits],
+      // Recomputed from the members that actually survived translation, not
+      // copied — a count that disagrees with the list it accompanies is worse
+      // than no count.
+      excluded_pair_count: (submissionIds.length * (submissionIds.length - 1)) / 2,
+    });
+  }
+
+  rows.sort((a, b) => {
+    const x = a.submission_ids[0]!;
+    const y = b.submission_ids[0]!;
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
+
+  return rows;
 }
