@@ -133,6 +133,14 @@ async function seedSubmission(
     groupKey?: string;
     ingestJobId: string;
     sourceFilename?: string;
+    /**
+     * Defaults to 1. A test seeding a SECOND submission for the same student and
+     * assignment must bump this: `submissions_version_key` is
+     * `(semester_id, assignment_id, version_owner_key, version_index)` and
+     * `version_owner_key` is GENERATED as `'student:' || student_id`, so two
+     * version-1 rows for one student collide exactly as migration 0029 intends.
+     */
+    versionIndex?: number;
   },
 ) {
   const id = crypto.randomUUID();
@@ -148,7 +156,7 @@ async function seedSubmission(
       blob_sha256: `sha256-${id}`,
       source_filename: opts.sourceFilename ?? 'test.zip',
       ingest_job_id: opts.ingestJobId,
-      version_index: 1,
+      version_index: opts.versionIndex ?? 1,
       score_total: 0,
       score_max_severity: 'info',
       validation_status: 'pass',
@@ -686,11 +694,14 @@ describe('getSubmissionSummary — coverage facts', () => {
         // A bundle whose commit names no repository — every recorder before
         // 2026-08-20, and every shallow clone. Folded into the sentinel, so the
         // caveat is stated.
+        // A resubmission by the same student for the same assignment, so it needs
+        // version 2 — version 1 is taken by `quiet` above.
         const withCommit = await seedSubmission(db, {
           semesterId: semester.id,
           assignmentId: assignment.id,
           studentId: student.id,
           ingestJobId: job.id,
+          versionIndex: 2,
         });
         const { zipBuffer } = await buildTestBundle({
           sessions: [
