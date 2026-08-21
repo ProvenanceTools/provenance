@@ -14,9 +14,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { sha256Hex } from '@provenance/log-core';
+import type { PeerObservedPayload } from '@provenance/log-core';
 import { buildIndex } from '../index/build-index.js';
 import { loadBundle } from '../loader/parse-bundle.js';
 import { buildTestBundle } from '../test-support/build-test-bundle.js';
+import type { EventSpec } from '../test-support/build-test-bundle.js';
+import { buildCollabScope, collabGitEvent } from '../test-support/build-collab-scope.js';
 import {
   buildIdentityKeys,
   buildInstitutionIdentity,
@@ -704,6 +708,326 @@ describe('coverageFacts', () => {
       { who: { studentRef: 'bob' }, startMin: 60, endMin: 240 },
       { who: { studentRef: 'alice' }, startMin: 90, endMin: 300 },
     ]);
+    expect(coverageFacts(bundle, index)).toEqual(coverageFacts(bundle, index));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §5.6 — peer witnessing and git observability, as coverage FACTS
+// ---------------------------------------------------------------------------
+
+/**
+ * These two blocks are the production caller for `reconcileWitnesses` and for
+ * `gitImpossibleReason` / `gitObservationGap`, all three of which shipped with
+ * no caller at all.
+ *
+ * What they are protecting is one rule stated twice: **"nobody reported" is a
+ * third answer, and it is the answer for every bundle in the archive.** If the
+ * unreported state ever tips `hasCoverageFacts`, every submission recorded
+ * before §5.6 leaves "nothing to note" on the strength of a field its recorder
+ * never had — the same class of error as reading absence of a witness as
+ * absence of a log.
+ */
+
+const DOC_CHANGE = {
+  path: 'hw1.py',
+  deltas: [{ range: null, text: 'x = 1\n' }],
+  source: 'keystroke',
+};
+
+/**
+ * Two sessions where the second witnesses the first, built in two passes: once
+ * to learn the witnessed chain's real tip, then again with a witness naming it.
+ *
+ * `buildCollabScope` derives session ids and keys from the session INDEX, so
+ * the witnessed session reproduces exactly as long as it keeps index 0. With
+ * `omitWitnessed` the witness names an id one index PAST the end, which is what
+ * makes the witnessed log genuinely missing rather than merely different.
+ */
+async function witnessedScope(
+  opts: {
+    state?: PeerObservedPayload['state'];
+    omitWitnessed?: boolean;
+    repeats?: number;
+  } = {},
+): Promise<{ bundle: Bundle; index: EventIndex }> {
+  const witnessedIndex = opts.omitWitnessed === true ? 2 : 0;
+  const work: EventSpec[] = [{ kind: 'doc.change', data: DOC_CHANGE }];
+
+  const probe = await buildCollabScope(
+    Array.from({ length: witnessedIndex + 1 }, () => ({
+      who: { studentRef: 'bob' } as const,
+      events: work,
+    })),
+  );
+  const witnessed = probe.bundle.sessions[witnessedIndex]!;
+  const tip = witnessed.events[witnessed.events.length - 1]!;
+
+  const payload: PeerObservedPayload = {
+    file: 'session-0badf00d-0000-4000-8000-00000000beef.slog',
+    // Deliberately NOT the archived digest: a witness sees a PREFIX, so
+    // inequality here is the normal case.
+    sha256: sha256Hex('bytes as seen at observation time'),
+    bytes: 2048,
+    session_id: witnessed.sessionId,
+    seq_high: tip.seq,
+    last_hash: tip.hash,
+    state: opts.state ?? 'appeared',
+  };
+
+  const witnessEvents: EventSpec[] = Array.from({ length: opts.repeats ?? 1 }, () => ({
+    kind: 'peer.observed',
+    data: { ...payload },
+  }));
+
+  const built = await buildCollabScope([
+    { who: { studentRef: 'bob' }, events: work },
+    { who: { studentRef: 'alice' }, events: witnessEvents },
+  ]);
+  if (opts.omitWitnessed === true) {
+    // Load-bearing: were the witnessed id present after all, the `absent`
+    // assertions would be testing something else entirely.
+    expect(built.bundle.sessions.map((s) => s.sessionId)).not.toContain(witnessed.sessionId);
+  }
+  return built;
+}
+
+/** A bundle + index whose sessions carry exactly the given `session.start` extras. */
+async function capabilityScope(
+  ...sessionStarts: Array<Record<string, unknown>>
+): Promise<{ bundle: Bundle; index: EventIndex }> {
+  const { zipBuffer } = await buildTestBundle({
+    sessions: sessionStarts.map((sessionStart) => ({ eventCount: 2, sessionStart })),
+  });
+  const result = await loadBundle(zipBuffer, 'test.zip');
+  if (!result.ok) throw new Error(`Bundle load failed: ${JSON.stringify(result.error)}`);
+  const bundle = result.value;
+  return { bundle, index: buildIndex(bundle) };
+}
+
+describe('an unreported §5.6 capability never makes the panel speak', () => {
+  it('a clean solo bundle whose recorder predates §5.6 still reports "nothing to note"', async () => {
+    // THE LOAD-BEARING TEST. Every submission in the archive is in exactly this
+    // state: `capability`/`availability` unknown and every log unwitnessed. If
+    // any of that tipped `hasCoverageFacts`, the whole archive would grow a
+    // coverage panel on the strength of a field its recorder never had — and a
+    // panel that appears is read as a panel that found something.
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: 'alice' }, events: [{ kind: 'doc.change', data: DOC_CHANGE }] },
+    ]);
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.witnessing.capability).toBe('unknown');
+    expect(facts.witnessing.unwitnessedSessions).toBe(1);
+    expect(facts.gitObservation.availability).toBe('unknown');
+    expect(facts.gitObservation.silentAndUnreported).toBe(1);
+    expect(hasCoverageFacts(facts)).toBe(false);
+  });
+
+  it('but a capability that WAS reported does, in either direction', async () => {
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: 'alice' }, events: [{ kind: 'doc.change', data: DOC_CHANGE }] },
+    ]);
+    const base = coverageFacts(bundle, index);
+
+    expect(
+      hasCoverageFacts({
+        ...base,
+        gitObservation: { ...base.gitObservation, availability: 'available' },
+      }),
+    ).toBe(true);
+    expect(
+      hasCoverageFacts({
+        ...base,
+        witnessing: { ...base.witnessing, capability: 'impossible' },
+      }),
+    ).toBe(true);
+    // …and an unwitnessed log on its own still does NOT.
+    expect(
+      hasCoverageFacts({
+        ...base,
+        witnessing: { ...base.witnessing, unwitnessedSessions: 99 },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('git observability is a coverage fact, not a finding', () => {
+  it('a recorder that reports nothing reads UNKNOWN, and does not make the panel speak', async () => {
+    // EVERY bundle recorded before §5.6. `{}` is production, not a fixture.
+    const { bundle, index } = await capabilityScope({}, {});
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.gitObservation.availability).toBe('unknown');
+    expect(facts.gitObservation.impossibleReason).toBeNull();
+    expect(facts.gitObservation.silentAndUnreported).toBe(2);
+    expect(facts.gitObservation.silentAndIncapable).toBe(0);
+    expect(facts.gitObservation.silentThoughCapable).toBe(0);
+  });
+
+  it('every session reporting `unavailable` reads impossible/unavailable', async () => {
+    const { bundle, index } = await capabilityScope(
+      { git_capture: 'unavailable' },
+      { git_capture: 'unavailable' },
+    );
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.gitObservation.availability).toBe('impossible');
+    expect(facts.gitObservation.impossibleReason).toBe('unavailable');
+    expect(facts.gitObservation.silentAndIncapable).toBe(2);
+    // A report existed, so the panel now has something true to say.
+    expect(hasCoverageFacts(facts)).toBe(true);
+  });
+
+  it('every session reporting `not_owned` reads impossible/not_owned — a DIFFERENT fact', async () => {
+    const { bundle, index } = await capabilityScope(
+      { git_capture: 'not_owned' },
+      { git_capture: 'not_owned' },
+    );
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.gitObservation.availability).toBe('impossible');
+    // Collapsing this onto `unavailable` is what §5.6 item 2 exists to prevent:
+    // one says the machine had no git, the other says git worked and the
+    // assignment sat outside every repository it could see.
+    expect(facts.gitObservation.impossibleReason).toBe('not_owned');
+  });
+
+  it('a mixed incapacity is reported as mixed, not as either half', async () => {
+    const { bundle, index } = await capabilityScope(
+      { git_capture: 'unavailable' },
+      { git_capture: 'not_owned' },
+    );
+    expect(coverageFacts(bundle, index).gitObservation.impossibleReason).toBe('mixed');
+  });
+
+  it('one unreported session takes the answer to unknown — never to impossible', async () => {
+    // Fail toward not knowing: the silent session might have been the capable
+    // one, and a bundle is a set of machines.
+    const { bundle, index } = await capabilityScope({ git_capture: 'unavailable' }, {});
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.gitObservation.availability).toBe('unknown');
+    expect(facts.gitObservation.impossibleReason).toBeNull();
+    expect(facts.gitObservation.silentAndIncapable).toBe(1);
+    expect(facts.gitObservation.silentAndUnreported).toBe(1);
+  });
+
+  it('git available and no commits is a statement about git ACTIVITY, and is not a defect', async () => {
+    const { bundle, index } = await capabilityScope({ git_capture: 'available' });
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.gitObservation.availability).toBe('available');
+    expect(facts.gitObservation.silentThoughCapable).toBe(1);
+    expect(facts.gitObservation.observing).toBe(0);
+    // Nothing about this is a flag, a check, or a score.
+    expect(facts.gitObservation.impossibleReason).toBeNull();
+  });
+
+  it('an undefined git_capture value is malformed — a recorder fact, never a student fact', async () => {
+    const { bundle, index } = await capabilityScope({ git_capture: 'sort-of' });
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.gitObservation.malformed).toBe(1);
+    // Malformed is not `unavailable`: nothing was established about capture.
+    expect(facts.gitObservation.availability).toBe('unknown');
+    expect(facts.gitObservation.silentAndUnreported).toBe(1);
+  });
+
+  it('counts observing sessions from the DAG it is a caveat on', async () => {
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: 'alice' }, events: [collabGitEvent('a'.repeat(40), [])] },
+      { who: { studentRef: 'bob' }, events: [{ kind: 'doc.change', data: DOC_CHANGE }] },
+    ]);
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.gitObservation.observing).toBe(1);
+    expect(facts.gitObservation.observing).toBe(facts.dagCoverage.sessionsObserving);
+    expect(facts.gitObservation.sessions).toBe(2);
+  });
+});
+
+describe('peer witnessing is a coverage fact, not a finding', () => {
+  it('a bundle with no witnesses says nothing and stays "nothing to note"', async () => {
+    const { bundle, index } = await capabilityScope({}, {});
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.witnessing.capability).toBe('unknown');
+    expect(facts.witnessing.sessions).toBe(2);
+    // Unwitnessed is the ORDINARY state of every log ever recorded. It is
+    // reported, and it deliberately does not make the panel speak.
+    expect(facts.witnessing.unwitnessedSessions).toBe(2);
+    expect(facts.witnessing.witnessedSessions).toBe(0);
+    expect(facts.witnessing.discrepancies).toEqual([]);
+  });
+
+  it('a witnessing capability report alone is enough to have something to state', async () => {
+    const { bundle, index } = await capabilityScope(
+      { witness_capture: 'unavailable' },
+      { witness_capture: 'unavailable' },
+    );
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.witnessing.capability).toBe('impossible');
+    expect(hasCoverageFacts(facts)).toBe(true);
+  });
+
+  it('a corroborated witness is counted, and never becomes a discrepancy row', async () => {
+    const { bundle, index } = await witnessedScope();
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.witnessing.corroborated).toBe(1);
+    expect(facts.witnessing.discrepancies).toEqual([]);
+    expect(facts.witnessing.witnessedSessions).toBe(1);
+    expect(facts.witnessing.unwitnessedSessions).toBe(1);
+  });
+
+  it('a `disappeared` observation is carried DESCRIPTIVELY and does not change the verdict', async () => {
+    // The trap: `disappeared` is what a branch checkout and a stash both look
+    // like. It must never promote a verdict or produce a finding.
+    const { bundle, index } = await witnessedScope({ state: 'disappeared' });
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.witnessing.corroborated).toBe(1);
+    expect(facts.witnessing.discrepancies).toEqual([]);
+  });
+
+  it('an absent witnessed log is a discrepancy row that carries no name', async () => {
+    const { bundle, index } = await witnessedScope({ omitWitnessed: true, state: 'disappeared' });
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.witnessing.discrepancies).toHaveLength(1);
+    const d = facts.witnessing.discrepancies[0]!;
+    expect(d.verdict).toBe('absent');
+    expect(d.states).toEqual(['disappeared']);
+    // The detail is `reconcile-witnesses`'s own wording, carried verbatim so a
+    // second surface cannot rephrase a five-way verdict.
+    expect(d.detail).toContain('NOT established as a deletion');
+    // A witness shows that a LOG was in a state, never who put it there.
+    expect(Object.keys(d).sort()).toEqual([
+      'authority',
+      'detail',
+      'file',
+      'observations',
+      'states',
+      'verdict',
+      'witnessedSessionId',
+    ]);
+  });
+
+  it('repeats of one observation collapse to one row with a count', async () => {
+    // `peer.observed` fires on the checkpoint cadence, so an absent partner log
+    // produces one witness per drain. Hundreds of identical rows saying one
+    // thing is both a wire-size problem and a reading problem.
+    const { bundle, index } = await witnessedScope({ omitWitnessed: true, repeats: 4 });
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.witnessing.discrepancies).toHaveLength(1);
+    expect(facts.witnessing.discrepancies[0]!.observations).toBe(4);
+  });
+
+  it('is deterministic over a bundle carrying witnesses', async () => {
+    const { bundle, index } = await witnessedScope({ omitWitnessed: true, repeats: 3 });
     expect(coverageFacts(bundle, index)).toEqual(coverageFacts(bundle, index));
   });
 });

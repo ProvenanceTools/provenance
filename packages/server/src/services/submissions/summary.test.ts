@@ -726,4 +726,78 @@ describe('getSubmissionSummary — coverage facts', () => {
       });
     });
   });
+
+  /**
+   * §5.6 — the git-capture report crossing the wire, RECOMPUTED from the stored
+   * bundle rather than read from a column.
+   *
+   * The reason there is no column: the inputs live inside the signed chains,
+   * which are exactly what survives source stripping, so the stored bundle can
+   * always answer. A persisted copy could only go stale against a fixed reader,
+   * and the ingest that wrote it can never be re-run for an archived
+   * submission. This test is what proves the read path actually re-derives it.
+   */
+  it('recomputes the §5.6 capability report off the stored bundle', async () => {
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const user = await seedUser(db);
+        const { semester } = await seedCourseAndSemester(db);
+        const student = await seedStudent(db, semester.id, {
+          sid: 'cov-3',
+          displayName: 'Cov Three',
+        });
+        const assignment = await seedAssignment(db, semester.id);
+        const job = await seedIngestJob(db, semester.id, user.id);
+
+        // A bundle whose recorder predates §5.6 — every submission in the
+        // archive. It must read UNKNOWN, never `impossible` and never a defect.
+        const legacy = await seedSubmission(db, {
+          semesterId: semester.id,
+          assignmentId: assignment.id,
+          studentId: student.id,
+          ingestJobId: job.id,
+        });
+        await seedBundleForSubmission(db, client, legacy.id);
+        const legacySummary = await getSubmissionSummary(db, client, legacy.id, false);
+        expect(legacySummary!.coverage.gitObservation.availability).toBe('unknown');
+        expect(legacySummary!.coverage.gitObservation.impossibleReason).toBeNull();
+        expect(legacySummary!.coverage.gitObservation.silentAndUnreported).toBe(1);
+        expect(legacySummary!.coverage.witnessing.capability).toBe('unknown');
+        expect(legacySummary!.coverage.witnessing.unwitnessedSessions).toBe(1);
+        expect(legacySummary!.coverage.witnessing.discrepancies).toEqual([]);
+
+        // A bundle that DOES report, and reports the case a grader acts on
+        // differently: git worked, the assignment sat outside any repository.
+        const reporting = await seedSubmission(db, {
+          semesterId: semester.id,
+          assignmentId: assignment.id,
+          studentId: student.id,
+          ingestJobId: job.id,
+          versionIndex: 2,
+        });
+        const { zipBuffer } = await buildTestBundle({
+          sessions: [
+            {
+              sessionId: crypto.randomUUID(),
+              eventCount: 2,
+              sessionStart: { git_capture: 'not_owned', witness_capture: 'unavailable' },
+            },
+          ],
+        });
+        await putSubmissionBundle(db, client, reporting.id, new Uint8Array(zipBuffer));
+        const summary = await getSubmissionSummary(db, client, reporting.id, false);
+
+        expect(summary!.coverage.gitObservation.availability).toBe('impossible');
+        // NOT collapsed onto `unavailable` — that is the whole point of §5.6
+        // item 2, and the two lead a grader to different actions.
+        expect(summary!.coverage.gitObservation.impossibleReason).toBe('not_owned');
+        expect(summary!.coverage.gitObservation.silentAndIncapable).toBe(1);
+        expect(summary!.coverage.witnessing.capability).toBe('impossible');
+
+        // And the whole thing still survives JSON and the shared schema.
+        const parsed = CoverageFactsSchema.parse(JSON.parse(JSON.stringify(summary!.coverage)));
+        expect(parsed).toEqual(summary!.coverage);
+      });
+    });
+  });
 });

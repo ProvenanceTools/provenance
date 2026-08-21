@@ -1176,6 +1176,93 @@ export const CoverageFactsSchema = z.object({
    * mixed one where only some observations are labelled.
    */
   repositoryAssumedSingle: z.boolean(),
+  /**
+   * What peer witnessing establishes about this bundle (collaboration spec
+   * §5.5). **Facts, never findings** — `reconcileWitnesses` produces no `Flag`
+   * and this carries none.
+   *
+   * Two fields here are permanently, blamelessly nonzero on legacy data and a
+   * consumer must render them as such:
+   *
+   *  - `unwitnessedSessions` is the ORDINARY case. A log no partner's chain
+   *    names may belong to a partner who was not recording, whose recorder
+   *    predates peer witnessing, or whose sessions never overlapped. It must
+   *    never render as "unverified, therefore suspect".
+   *  - `capability: 'unknown'` means at least one session did not report whether
+   *    it could witness — the state of every bundle recorded before the field
+   *    existed. It is NOT `'impossible'`.
+   *
+   * There is deliberately no contributor field on a discrepancy: a witness
+   * establishes that a LOG was in a state, never who put it there (§5, S26), so
+   * the wire shape cannot carry a name.
+   */
+  witnessing: z.object({
+    capability: z.enum(['available', 'impossible', 'unknown']),
+    sessions: z.number().int(),
+    witnessedSessions: z.number().int(),
+    /** ORDINARY AND BLAMELESS. See above. */
+    unwitnessedSessions: z.number().int(),
+    corroborated: z.number().int(),
+    /** Read and deliberately not used: self-witness, or same proven contributor. */
+    excluded: z.number().int(),
+    /** Payloads that did not narrow. A recorder fact, never a student fact. */
+    malformed: z.number().int(),
+    /**
+     * Non-corroborated verdicts, aggregated on `(file, verdict)` so a
+     * checkpoint-cadence repeat of one observation is one row rather than
+     * hundreds. `detail` is `reconcile-witnesses`'s own wording, carried
+     * verbatim so two surfaces cannot phrase a five-way verdict differently.
+     */
+    discrepancies: z.array(
+      z.object({
+        file: z.string(),
+        witnessedSessionId: z.string().nullable(),
+        /** Never `corroborated` — that is a count, not a discrepancy. */
+        verdict: z.enum(['absent', 'short', 'tip_mismatch', 'indeterminate']),
+        observations: z.number().int(),
+        /**
+         * DESCRIPTIVE ONLY. `'disappeared'` is not misconduct — a checkout of a
+         * branch that never contained a partner's log removes it, and so does a
+         * stash.
+         */
+        states: z.array(z.enum(['appeared', 'grew', 'shrank', 'disappeared', 'unparseable'])),
+        authority: z.enum(['attributed', 'unattributed', 'unverifiable']),
+        detail: z.string(),
+      }),
+    ),
+  }),
+  /**
+   * Whether git could be observed at all (collaboration spec §5.6 item 2),
+   * paired with what the commit DAG actually saw.
+   *
+   * This is what lets a surface say **"we could not check"** instead of silently
+   * implying git was fine. SEPARATE from `dagCoverage`, which counts what was
+   * seen: merging the two would let "nothing was observed" pass for "nothing
+   * happened".
+   *
+   * `availability: 'unknown'` and `silentAndUnreported` are the permanent state
+   * of every bundle recorded before the field existed. Neither is a defect and
+   * neither may render as one. `silentThoughCapable` is likewise not evidence of
+   * anything — a session in which no git command ran produces it, which is most
+   * honest sessions.
+   */
+  gitObservation: z.object({
+    availability: z.enum(['available', 'impossible', 'unknown']),
+    /**
+     * Why `availability` is `'impossible'`; `null` otherwise. `'unavailable'`
+     * (no git integration on the machine) and `'not_owned'` (git worked, the
+     * assignment sat outside every repository it could see) are different
+     * situations a grader acts differently on.
+     */
+    impossibleReason: z.enum(['unavailable', 'not_owned', 'mixed']).nullable(),
+    sessions: z.number().int(),
+    observing: z.number().int(),
+    silentAndIncapable: z.number().int(),
+    silentThoughCapable: z.number().int(),
+    /** Every session of every pre-§5.6 bundle lands here. Never a defect. */
+    silentAndUnreported: z.number().int(),
+    malformed: z.number().int(),
+  }),
 });
 export type CoverageFacts = z.infer<typeof CoverageFactsSchema>;
 

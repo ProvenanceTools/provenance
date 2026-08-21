@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import type { PeerObservedPayload } from '@provenance/log-core';
 import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
 import { loadBundle } from '@provenance/analysis-core/loader/parse-bundle.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
@@ -78,6 +79,14 @@ async function buildScope(
     endMin: number;
     commits?: CommitSpec[];
     machine?: IdentityTestKeys;
+    /**
+     * §5.6 `session.start` capability reports. OMITTED is the ordinary case —
+     * every bundle recorded before the fields existed — and the tests below
+     * depend on it staying the default.
+     */
+    capabilities?: Record<string, unknown>;
+    /** `peer.observed` payloads this session recorded about other logs. */
+    witnesses?: PeerObservedPayload[];
   }>,
   opts: { rootKey?: string } = {},
 ): Promise<{ bundle: Bundle; index: EventIndex }> {
@@ -99,6 +108,12 @@ async function buildScope(
           wall: wallAt(c.atMin),
           t: c.atMin * 60_000,
         })),
+        ...(spec.witnesses ?? []).map((w) => ({
+          kind: 'peer.observed',
+          data: { ...w },
+          wall: wallAt(spec.startMin),
+          t: spec.startMin * 60_000,
+        })),
         {
           kind: 'session.end',
           data: { reason: 'deactivate' },
@@ -109,6 +124,7 @@ async function buildScope(
       walls: [wallAt(spec.startMin)],
       sessionStart: {
         session_pubkey: sk.pubkeyHex,
+        ...(spec.capabilities ?? {}),
         ...(spec.who === 'anonymous'
           ? {}
           : {
@@ -534,6 +550,252 @@ describe('when the facts were not sent', () => {
     renderOpen(bundle, index);
     expect(screen.getByTestId('coverage-nothing-to-note')).not.toBeNull();
     expect(screen.queryByTestId('coverage-not-available')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §5.6 — git observability
+// ---------------------------------------------------------------------------
+
+/**
+ * The whole reason this section exists: an absence of git evidence is equally
+ * consistent with "no git activity happened" and with "git was never
+ * observable", and until the capability reports there was no way to say which.
+ * Every assertion below is about keeping those two sentences apart, and about
+ * the third sentence — "nobody told us" — never reading as either of them.
+ */
+describe('git observation says which kind of silence this is', () => {
+  it('an unreported capability reads as an open question, never as a defect', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        commits: [{ sha: SHA_A, atMin: 5 }],
+      },
+    ]);
+    renderOpen(bundle, index);
+
+    const note = screen.getByTestId('coverage-git-unknown');
+    expect(note.textContent).toMatch(/does not report whether git observation was available/i);
+    expect(note.textContent).toMatch(/unresolved/i);
+    expect(note.textContent).toMatch(/it is not a defect and it is not a finding/i);
+    // The state of the entire archive must not read as a fault in the archive.
+    expect(note.textContent).not.toMatch(/unavailable/i);
+    expect(note.textContent).not.toMatch(/failed|missing|suspicious|should have/i);
+    expect(screen.queryByTestId('coverage-git-impossible')).toBeNull();
+  });
+
+  it('"could not observe" is stated as incapacity, and explicitly not as absence of activity', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        capabilities: { git_capture: 'unavailable' },
+      },
+    ]);
+    renderOpen(bundle, index);
+
+    const note = screen.getByTestId('coverage-git-impossible');
+    expect(note.textContent).toMatch(/no git evidence could be collected/i);
+    expect(note.textContent).toMatch(/because none could be gathered/i);
+    expect(note.textContent).toMatch(/not because nothing was done/i);
+    expect(note.textContent).not.toMatch(/failed/i);
+  });
+
+  it('keeps "no git integration" and "outside any repository" apart in the copy', async () => {
+    // Same consequence, different facts. A grader acts differently on the two,
+    // and collapsing them is what §5.6 item 2 exists to prevent.
+    const notOwned = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        capabilities: { git_capture: 'not_owned' },
+      },
+    ]);
+    const first = renderOpen(notOwned.bundle, notOwned.index);
+    const notOwnedText = screen.getByTestId('coverage-git-impossible').textContent ?? '';
+    expect(notOwnedText).toMatch(/sat outside any repository it could see/i);
+    expect(notOwnedText).toMatch(/there was no repository to observe/i);
+    first.unmount();
+
+    const unavailable = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        capabilities: { git_capture: 'unavailable' },
+      },
+    ]);
+    renderOpen(unavailable.bundle, unavailable.index);
+    const unavailableText = screen.getByTestId('coverage-git-impossible').textContent ?? '';
+    expect(unavailableText).toMatch(/git integration was not present/i);
+    // The two must not be the same sentence.
+    expect(unavailableText).not.toBe(notOwnedText);
+  });
+
+  it('a capable session that recorded no commits is stated as ordinary, not as silence to explain', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        capabilities: { git_capture: 'available' },
+      },
+    ]);
+    renderOpen(bundle, index);
+
+    const note = screen.getByTestId('coverage-git-silent-capable');
+    expect(note.textContent).toMatch(/no git command ran/i);
+    expect(note.textContent).toMatch(/ordinary shape of most honest sessions/i);
+    expect(note.textContent).toMatch(/is not a finding/i);
+  });
+
+  it('never renders in the flag vocabulary', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        capabilities: { git_capture: 'unavailable' },
+      },
+    ]);
+    renderOpen(bundle, index);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByTestId('coverage-git-observation').textContent).not.toMatch(
+      /warning|violation|suspicious|misconduct/i,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §5.6 / §5.5 — peer witnessing
+// ---------------------------------------------------------------------------
+
+const WITNESSED_FILE = 'session-0badf00d-0000-4000-8000-00000000beef.slog';
+
+/** A witness naming a session id that is NOT in the bundle — the `absent` shape. */
+function absentWitness(state: PeerObservedPayload['state']): PeerObservedPayload {
+  return {
+    file: WITNESSED_FILE,
+    sha256: 'f'.repeat(64),
+    bytes: 4096,
+    session_id: '00000000-0000-4000-8000-0000deadbeef',
+    seq_high: 12,
+    last_hash: 'a'.repeat(64),
+    state,
+  };
+}
+
+describe('peer witnessing reads as evidence about a log, never about a person', () => {
+  it('stays away entirely when nothing witnessed and nothing reported', async () => {
+    // Every bundle in the archive. "0 of 2 logs are witnessed" said about one of
+    // these is an invitation to read absence as suspicion, so it is not said.
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 180,
+        commits: [{ sha: SHA_A, atMin: 5 }],
+      },
+      { who: { studentRef: 'bob' }, startMin: 60, endMin: 240 },
+    ]);
+    renderOpen(bundle, index);
+    expect(screen.queryByTestId('coverage-witnessing')).toBeNull();
+  });
+
+  it('an unwitnessed log is stated as the ordinary case once the section is on screen', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 180,
+        capabilities: { witness_capture: 'available' },
+      },
+      { who: { studentRef: 'bob' }, startMin: 60, endMin: 240 },
+    ]);
+    renderOpen(bundle, index);
+
+    const note = screen.getByTestId('coverage-unwitnessed-note');
+    expect(note.textContent).toMatch(/ordinary case/i);
+    expect(note.textContent).toMatch(/it is not a finding/i);
+    expect(note.textContent).toMatch(/may not have been recording/i);
+    expect(note.textContent).toMatch(/never have overlapped/i);
+    // The reading this whole module exists to prevent.
+    expect(note.textContent).not.toMatch(/unverified|suspicious|deleted|removed/i);
+  });
+
+  it('`disappeared` is described, with a checkout and a stash named as causes', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 180,
+        witnesses: [absentWitness('disappeared')],
+      },
+      { who: { studentRef: 'bob' }, startMin: 60, endMin: 240 },
+    ]);
+    renderOpen(bundle, index);
+
+    const note = screen.getByTestId('coverage-witness-state-note');
+    expect(note.textContent).toMatch(/descriptive, not a finding/i);
+    expect(note.textContent).toMatch(/checking out a branch/i);
+    expect(note.textContent).toMatch(/stash/i);
+    // `disappeared` must not import the vocabulary of an act.
+    expect(note.textContent).not.toMatch(/deleted|removed by|tamper/i);
+  });
+
+  it('an absent witnessed log never becomes an accusation, and never names anyone', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 180,
+        witnesses: [absentWitness('disappeared')],
+      },
+      { who: { studentRef: 'bob' }, startMin: 60, endMin: 240 },
+    ]);
+    renderOpen(bundle, index);
+
+    const row = screen.getByTestId('coverage-witness-discrepancy');
+    expect(row.getAttribute('data-verdict')).toBe('absent');
+    // reconcile-witnesses' own wording, carried through rather than rephrased.
+    expect(row.textContent).toMatch(/NOT established as a deletion/i);
+    expect(row.textContent).toMatch(/had not yet pushed/i);
+
+    const note = screen.getByTestId('coverage-witness-discrepancy-note');
+    expect(note.textContent).toMatch(/says nothing about who altered anything/i);
+    expect(note.textContent).toMatch(/not so anyone can be accused/i);
+
+    // No contributor name is reachable from a witness row. `alice` witnessed,
+    // and a witness establishes nothing about who acted (§5, S26).
+    const section = screen.getByTestId('coverage-witnessing');
+    expect(section.textContent).not.toMatch(/alice|bob/i);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('every session being unable to witness is stated as a limit, not as a deficiency', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 180,
+        capabilities: { witness_capture: 'unavailable' },
+      },
+      {
+        who: { studentRef: 'bob' },
+        startMin: 60,
+        endMin: 240,
+        capabilities: { witness_capture: 'unavailable' },
+      },
+    ]);
+    renderOpen(bundle, index);
+
+    const note = screen.getByTestId('coverage-witness-capability-impossible');
+    expect(note.textContent).toMatch(/limit on what this record can show/i);
+    expect(note.textContent).toMatch(/not something anyone did/i);
   });
 });
 
