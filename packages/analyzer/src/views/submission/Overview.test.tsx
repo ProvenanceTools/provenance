@@ -622,6 +622,7 @@ const COVERAGE_WITH_FACTS: NonNullable<SubmissionSummary['coverage']> = {
     },
   ],
   droppedArtifacts: [],
+  tornTails: [],
   unattestedTails: [],
   dagDefects: [],
   dagCoverage: {

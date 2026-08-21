@@ -246,6 +246,28 @@ export async function loadBundle(
 
   // Collect results — fail fast on the first error.
   //
+  // This `return` used to be reachable by a student who did nothing wrong: a
+  // write interrupted mid-flush leaves a torn final line under the log's
+  // completely NORMAL filename, so none of the unzipper's drop patterns match
+  // it, `parseSession` returned `ndjson_parse_failed`, and one crashed session
+  // cost the whole submission before a single check ran. That case is now
+  // absorbed INSIDE `parseSession`, which truncates to the last complete entry,
+  // keeps the session, and reports the truncation on
+  // `ParsedSession.tornTail` — see `loader/types.ts` for why keeping beats
+  // dropping here, and `log-core/ndjson.ts` for the byte-level rule.
+  //
+  // What still reaches this line is a corrupt line in the MIDDLE of a log, a
+  // malformed `.slog.meta`, a first event that is not `session.start`, or a
+  // `session_id` that disagrees with its sidecar. None of those is a crash
+  // artifact; a chain break in the middle is real evidence, and it is
+  // deliberately NOT softened by the fix for the tail.
+  //
+  // Note also what does NOT happen for a torn session: it is not a dropped
+  // artifact, so it never enters `droppedLogicalIds` above and its rolling seal
+  // is NOT dropped with it. Dropping the seal of a session that is still here
+  // would produce an `unsealed_session` defect — a finding manufactured against
+  // work the bundle actually holds.
+  //
   // The pairing between a parsed session and the FILES it was parsed from is
   // established HERE, by index, because `Promise.all` preserves input order and
   // this is the last point at which that correspondence exists — step 4 sorts

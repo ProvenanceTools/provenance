@@ -308,6 +308,80 @@ DESC)`, `LIMIT 51`: row-value 10 buffers / 0.054 ms vs. old 1016 buffers / 3.003
     on values that survive the ORM read intact and were left alone. The per-student list
     (`cohort/students.ts`) has no timestamp key and slices in memory; also untouched.
 
+15. **A torn last line destroyed the whole submission — and the read-side guard could not see it.**
+    Bug 11 taught the loader to absorb a crash's leftovers, matching on their NAMES:
+    `.corrupt-<ISO>`, `.tmp`, zero bytes, a stranded `.slog.meta`. A write interrupted part-way
+    through a flush — a power cut, a full disk, an OS kill — leaves something none of those
+    patterns can match: a half-written trailing line **in the log's completely normal file**,
+    `session-<uuid>.slog`. It reached `parseSession`, which returned `ndjson_parse_failed`, and
+    `parse-bundle.ts` returned that error for the WHOLE bundle before a single check ran.
+    `loadSubmissionIndex` throws on a load failure, so every server read path threw with it. Every
+    session the student recorded, lost, for a crash they could not have prevented. **It is the only
+    corruption an honest student produces by doing nothing at all**, and it is the one shape a
+    name-based guard structurally cannot reach.
+    **Fixed by TRUNCATING to the last complete entry and KEEPING the session** — not by dropping
+    it as bug 11 drops an unreadable artifact. The two cases look alike and are not. Bug 11's
+    artifacts carry NO analysable evidence: a zero-byte log has no events, a stranded sidecar has
+    no log, a quarantined copy was already renamed away. A `.slog` with a torn tail is a complete,
+    chained, checkpointed recording of real work with forty bad bytes on the end. Dropping it
+    throws all of that away — and does worse than that: `verify-submitted-code.ts` (check 8)
+    resolves the last recorded state of each file by scanning `bundle.sessions`, so removing a
+    session removes the saves that explain the submitted code, and the crash comes back as "code
+    appeared that the log never recorded". **A STRONGER accusation than the load failure it
+    replaced** — the same trap the seal half of bug 11 was built to avoid, one layer up. Driven,
+    not asserted: implementing the drop-instead-of-truncate design turns **12** of this change's
+    tests red, including the two that prove a post-seal append still fails.
+    **The rule is byte-level, not a judgement, and that is what protects the middle.** Tolerance
+    covers the characters after the FINAL `'\n'`, and only when the text does not end in `'\n'` at
+    all. A completed append always terminates its line, so that absence IS the signature and
+    nothing else can borrow it. A file ending in a newline has no torn tail by construction, so
+    every parse failure in it is a MIDDLE failure and stays fatal — including when a torn tail is
+    ALSO present, which is the obvious way to try to use the tail as cover. A complete final entry
+    that merely lost its terminator is KEPT: discarding a real chained event over a missing byte
+    would be its own small injustice.
+    **The adversarial half, which is the whole design.** The discarded fragment is by definition
+    unparseable, so it never carried an event and there is nothing in it to hide — the danger is
+    entirely in what the reader does NEXT. **Truncate-to-seal** is the attack: a FINAL rolling seal
+    commits to the whole file, so appending anything unterminated to a finished log makes the KEPT
+    PREFIX exactly the sealed bytes. A reader that re-hashed its own truncated view would
+    reproduce the committed digest and report `exact` — converting a FAILING `log_bytes_match` into
+    a PASSING one, which is strictly worse than the bug being fixed. So `slogSha256`,
+    `slogSha256Lf` and the rolling seal's prefix search all still run over the **archived** bytes
+    and the truncation is invisible to every digest comparison. (That is not a false accusation
+    against a crash victim: `dispose()` writes the final seal only after `session.end` is emitted
+    and both files are flushed and closed, so a recorder that produced a final seal can no longer
+    tear its own file.) The mirror hazard is just as live and fails the other way: running
+    `computeSlogCoverage` over the truncated text makes it fail to re-encode to the archived digest,
+    which is `unavailable`, which `verify-log-bytes.ts` reads as a fallback to WHOLE-FILE equality
+    against a prefix commitment — **the sixth route to the bugs 5/10/12 false accusation**, fired
+    at exactly the crash victim this fix exists for. Both directions are driven by mutation.
+    **The seal half, which bug 11 says is easy to miss.** Because the session is KEPT, its rolling
+    seal is kept with it and is resolved as normal — there is no `no_session_log` and no
+    `unsealed_session`. The equivalent hazard here is the seal's COVERAGE rather than the seal
+    itself: abandoning coverage for a torn session leaves an empty entry, and absent coverage is
+    read as "classic whole-file seal", which is the same accusation reached by a fifth route.
+    Mutation-tested.
+    **Reported, never silent** — `ParsedSession.tornTail` → `CoverageFacts.tornTails` → the
+    coverage panel's own **"Interrupted writes"** section, and over the wire on
+    `SubmissionSummary.coverage`. Deliberately **NOT** `droppedArtifacts`: that field means a file
+    was left out entirely, and both of its renderers say so in prose ("N files could not be
+    analysed"). A torn session WAS analysed; merging the two would tell a grader that a session
+    they can see in full was excluded.
+    `parseEntries` is **unchanged** — the tolerance is a separate, explicitly named
+    `parseEntriesToleratingTornTail`, used only by the loader. `chain-recovery.ts`, `seal.ts` and
+    `peer-watcher.ts` all call `parseEntries`, and quarantining a damaged log is recorder FAILURE
+    HANDLING and a separate product decision; making the shared primitive lenient underneath them
+    would have reached it silently.
+    **Noticed, not fixed:** `verify-checkpoint-chain.ts` fails `seq_absent` at high severity when a
+    signed checkpoint names a seq no entry carries. A crash can produce that — the recorder buffers
+    the `.slog` append and writes the checkpoint into `.slog.meta` on an async chain, so a power cut
+    can land the checkpoint while the entry's bytes are still in the buffer. It is **pre-existing
+    and more reachable without a torn tail than with one** (a lost buffer flush leaves a clean log
+    that already loads today), but this change does newly expose it on the torn path. Not fixed
+    here: it needs a product call on severity and wording, and the file is outside this change's
+    scope. The torn-tail prose warns about it explicitly so a grader who meets both facts on one
+    submission reads them together.
+
 ### Migration 0030 — the indexes bug 14's fix unlocked
 
 **None of `cross_flags`, `submissions`, or `ingest_files` carried an index on its timestamp

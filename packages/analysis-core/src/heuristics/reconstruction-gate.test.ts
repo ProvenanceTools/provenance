@@ -72,6 +72,7 @@ function bundleOf(specs: readonly Spec[]): Bundle {
     meta: {} as ParsedSession['meta'],
     slogSha256: 'a'.repeat(64),
     slogSha256Lf: null,
+    tornTail: null,
     metaSha256: 'b'.repeat(64),
     firstEvent: s.events[0] as ParsedSession['firstEvent'],
   }));

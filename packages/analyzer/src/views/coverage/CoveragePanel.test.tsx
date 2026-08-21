@@ -535,3 +535,60 @@ describe('the CoverageFacts wire shape', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Torn final lines
+//
+// The loader now absorbs a `.slog` that ends part-way through a line — the
+// residue of an interrupted write, which used to fail the WHOLE submission to
+// load. Absorbing it is only the right trade if the truncation is VISIBLE: a
+// silent one is worse than the fatal error it replaced, because nobody can tell
+// that anything was left out.
+// ---------------------------------------------------------------------------
+
+describe('a torn final line is stated, and stated as an interruption', () => {
+  async function tornScope(): Promise<{ bundle: Bundle; index: EventIndex }> {
+    const { zipBuffer } = await buildTestBundle({
+      sessions: [{ eventCount: 4 }],
+      tamper: { tornTail: { sessionIndex: 0 } },
+    });
+    const result = await loadBundle(new Blob([zipBuffer]), 'crashed.zip');
+    if (!result.ok) throw new Error('load failed');
+    return { bundle: result.value, index: buildIndex(result.value) };
+  }
+
+  it('renders the truncation rather than swallowing it', async () => {
+    const { bundle, index } = await tornScope();
+    renderOpen(bundle, index);
+    expect(screen.getByTestId('coverage-torn-tails')).toBeInTheDocument();
+    expect(screen.getByTestId('coverage-torn-row').textContent).toMatch(/part-way through line/i);
+  });
+
+  it('is NOT rendered as a file that was left out of the analysis', async () => {
+    // `droppedArtifacts` says a file was excluded; this says a file was
+    // analysed and a fragment on its end was not. Merging the two would tell a
+    // grader that a session they can see in full was excluded.
+    const { bundle, index } = await tornScope();
+    renderOpen(bundle, index);
+    expect(screen.queryByTestId('coverage-dropped-artifacts')).toBeNull();
+    expect(bundle.droppedArtifacts).toHaveLength(0);
+  });
+
+  it('names the innocent cause and denies that anything was altered', async () => {
+    const { bundle, index } = await tornScope();
+    renderOpen(bundle, index);
+    const note = screen.getByTestId('coverage-torn-note').textContent ?? '';
+    expect(note).toMatch(/interrupted/i);
+    expect(note).toMatch(/nothing was altered or deleted/i);
+    // The one downstream reading that could otherwise look like a deletion.
+    expect(note).toMatch(/checkpoint/i);
+  });
+
+  it('says nothing at all when no log was torn', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, startMin: 0, endMin: 60 },
+    ]);
+    renderOpen(bundle, index);
+    expect(screen.queryByTestId('coverage-torn-tails')).toBeNull();
+  });
+});

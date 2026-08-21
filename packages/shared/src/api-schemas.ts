@@ -1108,6 +1108,27 @@ export const CoverageFactsSchema = z.object({
       detail: z.string(),
     }),
   ),
+  /**
+   * Sessions whose `.slog` ended part-way through a line, so the loader read it
+   * to the last COMPLETE entry and left the fragment out.
+   *
+   * The signature of an interrupted write — a power cut, a full disk, the
+   * editor killed mid-flush — and the only corruption an honest student
+   * produces by doing nothing. It used to fail the whole submission to load.
+   *
+   * DISTINCT from `droppedArtifacts`, which says a file was left out entirely.
+   * Here the file WAS analysed; a fragment on the end was not. Merging the two
+   * would tell a grader that a session they can see in full was excluded.
+   * Never a finding.
+   */
+  tornTails: z.array(
+    z.object({
+      sessionId: z.string(),
+      line: z.number(),
+      discardedChars: z.number(),
+      detail: z.string(),
+    }),
+  ),
   /** A rolling seal committing only to a PREFIX. Ordinary; never tampering. */
   unattestedTails: z.array(
     z.object({

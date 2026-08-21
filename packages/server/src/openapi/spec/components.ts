@@ -495,6 +495,7 @@ export const components = {
         'identity',
         'concurrentRecording',
         'droppedArtifacts',
+        'tornTails',
         'unattestedTails',
         'dagDefects',
         'dagCoverage',
@@ -556,6 +557,28 @@ export const components = {
                 ],
               },
               filename: { type: 'string' },
+              detail: { type: 'string' },
+            },
+          },
+        },
+        tornTails: {
+          type: 'array',
+          description:
+            'A session whose .slog ended part-way through a line, so the loader read it ' +
+            'to its last COMPLETE entry and left the fragment out. The signature of an ' +
+            'INTERRUPTED WRITE (a power cut, a full disk, the editor killed mid-flush) ' +
+            'and the only corruption an honest student produces by doing nothing at ' +
+            'all. Distinct from droppedArtifacts, which says a file was left out ' +
+            'entirely: here the file WAS analysed and only a trailing fragment was not. ' +
+            'Never a finding, and it weakens no digest check — log_bytes_match still ' +
+            'compares the full archived bytes.',
+          items: {
+            type: 'object',
+            required: ['sessionId', 'line', 'discardedChars', 'detail'],
+            properties: {
+              sessionId: { type: 'string' },
+              line: { type: 'number' },
+              discardedChars: { type: 'number' },
               detail: { type: 'string' },
             },
           },
