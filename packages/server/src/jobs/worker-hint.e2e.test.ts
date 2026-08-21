@@ -4,10 +4,16 @@
  * When an ingest_files row carries `match_sid`, the worker must:
  *   - match the bundle to the roster by that sid (NOT the filename_convention),
  *   - take the assignment from the signed bundle manifest,
- *   - dedup per (semester, student, blob) so two co-submitters of ONE group
- *     bundle (identical blob bytes) each get their OWN submission instead of
- *     the second being collapsed into a duplicate,
+ *   - dedup per (semester, blob) so two co-submitters of ONE group bundle
+ *     (identical blob bytes) end up on ONE submission carrying both of them as
+ *     contributors — the second resolves as `duplicate` and is ATTACHED, not
+ *     fanned out into a second row and a second copy of the blob (D9,
+ *     migration 0029),
  *   - and route an unknown sid to the unmatched tray.
+ *
+ * Until 0029 this file asserted the opposite: two submissions, one per
+ * co-submitter, "no duplicate collapse". The artifact is not duplicated any
+ * more; the PERSON still must not be lost, and that is what is asserted here.
  *
  * This stages blobs + ingest_files rows directly (the route is built in a later
  * phase) and drives the real worker through pg-boss, mirroring ingest-e2e.test.ts.
@@ -35,6 +41,7 @@ import {
   ingest_files,
   ingest_jobs,
   submissions,
+  submission_contributors,
 } from '../db/schema.js';
 import * as schema from '../db/schema.js';
 import { startWorker } from './worker.js';
@@ -128,7 +135,7 @@ describe('worker match-hint path (Gradescope export ingest)', () => {
     await pgContainer.stop();
   });
 
-  it('matches two co-submitters of one group bundle to their own submissions (no duplicate collapse)', async () => {
+  it('puts two co-submitters of one group bundle on ONE submission, both attached as contributors', async () => {
     await withTestMinio(async ({ client, bucketName }) => {
       const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
@@ -208,7 +215,6 @@ describe('worker match-hint path (Gradescope export ingest)', () => {
       const finalStatus = await waitForJobTerminal(db, jobId);
       expect(finalStatus).toBe('succeeded');
 
-      // Both files matched, each to its own student.
       const fileRows = await db
         .select({
           id: ingest_files.id,
@@ -218,30 +224,78 @@ describe('worker match-hint path (Gradescope export ingest)', () => {
         })
         .from(ingest_files)
         .where(eq(ingest_files.ingest_job_id, jobId));
+      expect(fileRows).toHaveLength(2);
 
       const rowA = fileRows.find((r) => r.id === fileA)!;
       const rowB = fileRows.find((r) => r.id === fileB)!;
-      expect(rowA.status).toBe('matched');
-      expect(rowB.status).toBe('matched');
+
+      // The EXACT status multiset: one creates the submission, the other is a
+      // duplicate of it. Which one wins is a race — the worker drains the batch
+      // with `Promise.all` up to INGEST_CONCURRENCY — so this is asserted as a
+      // sorted pair rather than per row.
+      //
+      // Deliberately not `every(s => s === 'matched' || s === 'duplicate')`:
+      // that spelling passes both when the fan-out is gone AND when it comes
+      // back, which makes it no test at all. `['duplicate','matched']` fails on
+      // two matched (fan-out reinstated) and on two duplicates (the first
+      // submitter's own submission lost).
+      expect([rowA.status, rowB.status].sort()).toEqual(['duplicate', 'matched']);
+
+      // NEITHER row loses its student. The duplicate above all: it is the row
+      // whose person exists only in `matched_student_id` and in the contributor
+      // table, so a null here — or the other partner's id — is the co-submitter
+      // being silently erased (census scenario S20) while the job still reports
+      // `succeeded`.
       expect(rowA.matched_student_id).toBe(studentA!.id);
       expect(rowB.matched_student_id).toBe(studentB!.id);
-      expect(rowA.submission_id).toBeTruthy();
-      expect(rowB.submission_id).toBeTruthy();
-      expect(rowA.submission_id).not.toBe(rowB.submission_id);
 
-      // TWO submissions exist, same blob bytes, different students — the group
-      // bundle was NOT collapsed into a single duplicate.
+      // Both point at the SAME submission. The old assertion here was
+      // `not.toBe` — the fan-out — and its requirement (the second submitter is
+      // not dropped) is now carried by the two assertions above plus the
+      // contributor rows below, which is strictly more than it checked.
+      expect(rowA.submission_id).not.toBeNull();
+      expect(rowB.submission_id).toBe(rowA.submission_id);
+
+      // ONE submission for one artifact — not two rows and two copies of one
+      // blob. Two rows here is the fan-out returning.
       const subs = await db
-        .select({
-          id: submissions.id,
-          student_id: submissions.student_id,
-          blob_sha256: submissions.blob_sha256,
-        })
+        .select({ id: submissions.id, student_id: submissions.student_id })
         .from(submissions)
         .where(eq(submissions.semester_id, semester!.id));
-      expect(subs).toHaveLength(2);
-      expect(subs[0]!.blob_sha256).toBe(subs[1]!.blob_sha256);
-      expect(new Set(subs.map((s) => s.student_id))).toEqual(new Set([studentA!.id, studentB!.id]));
+      expect(subs).toHaveLength(1);
+      expect(subs[0]!.id).toBe(rowA.submission_id);
+
+      // The submission is owned by whichever co-submitter created it, and the
+      // duplicate's student is the other one — asserted without assuming which
+      // side of the race won.
+      const matchedRow = [rowA, rowB].find((r) => r.status === 'matched')!;
+      const duplicateRow = [rowA, rowB].find((r) => r.status === 'duplicate')!;
+      expect(subs[0]!.student_id).toBe(matchedRow.matched_student_id);
+      expect(duplicateRow.matched_student_id).not.toBe(subs[0]!.student_id);
+
+      // The load-bearing assertion: BOTH people are contributors on that one
+      // submission. Exactly two rows — one per human. `attachCoSubmitter` going
+      // no-op, or upserting the co-submitter onto the wrong key, shows up here
+      // and nowhere else, because every status column above still looks healthy
+      // when the contributor is lost.
+      const contribRows = await db
+        .select({
+          submission_id: submission_contributors.submission_id,
+          roster_entry_id: submission_contributors.roster_entry_id,
+          kind: submission_contributors.kind,
+          is_submitter: submission_contributors.is_submitter,
+        })
+        .from(submission_contributors)
+        .where(eq(submission_contributors.semester_id, semester!.id));
+      expect(contribRows).toHaveLength(2);
+      expect(contribRows.every((c) => c.submission_id === subs[0]!.id)).toBe(true);
+      expect(new Set(contribRows.map((c) => c.roster_entry_id))).toEqual(
+        new Set([studentA!.id, studentB!.id]),
+      );
+      for (const contrib of contribRows) {
+        expect(contrib.kind).toBe('roster');
+        expect(contrib.is_submitter).toBe(true);
+      }
     });
   });
 

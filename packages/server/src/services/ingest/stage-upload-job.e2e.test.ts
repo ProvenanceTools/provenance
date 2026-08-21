@@ -40,6 +40,7 @@ import { createResumableUpload, putResumablePart, resolveChunkBytes } from './re
 import { enqueueIngestJob } from './job-control.js';
 import { stageUploadIntoJob } from './stage-upload-job.js';
 import { ingestLocalPath, toSkippedWire } from './local-path.js';
+import { expectSoloPlusPairEndState } from '../../../test/helpers/gradescope-group-shape.js';
 import type { IngestScopeConfig } from './gradescope/repo-scopes.js';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -282,12 +283,12 @@ describe('stage-upload-job (pre-create job → stageUploadIntoJob → worker →
       }
       expect(finalStatus).toBe('succeeded');
 
-      const fileRows = await db
-        .select({ status: ingest_files.status })
-        .from(ingest_files)
-        .where(eq(ingest_files.ingest_job_id, jobId));
-      expect(fileRows).toHaveLength(3);
-      expect(fileRows.every((f) => f.status === 'matched')).toBe(true);
+      // The staged path must land on the SAME end state as the direct and
+      // local-path ones, so it asserts it through the same function rather than
+      // a hand-copied subset: matched/matched/duplicate over the three
+      // submitters, TWO submissions rather than the pre-D9 three, and both
+      // co-submitters carried onto the shared submission as contributors.
+      await expectSoloPlusPairEndState(db, semester!.id, jobId);
 
       // A genuinely clean batch reports an EMPTY list that means empty — not a
       // null standing in for "we never looked". The distinction only exists

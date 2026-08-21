@@ -6,7 +6,9 @@
  * in-memory whole-archive buffer), drives the worker through pg-boss, and
  * asserts the SAME end state the HTTP :gradescope route produces:
  *   - roster populated from the metadata (no pre-existing roster needed),
- *   - solo + group submitters matched, co-submitters share one blob,
+ *   - the solo submitter matched, and the two co-submitters of one group folder
+ *     collapsed onto ONE submission carrying both as contributors (D9) — the
+ *     second resolves as `duplicate` rather than fanning out a second row,
  *   - a no-manifest folder reported as skipped.
  *
  * Mirrors ingest-gradescope.e2e.test.ts: real pg-boss + Postgres + MinIO via
@@ -47,6 +49,7 @@ import { createStorageClient, storageConfigFromEnv } from '../storage/client.js'
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { ingestLocalPath } from './local-path.js';
 import { enqueueIngestJob } from './job-control.js';
+import { expectSoloPlusPairEndState } from '../../../test/helpers/gradescope-group-shape.js';
 import type { DrizzleDb } from '../../db/client.js';
 
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
@@ -177,7 +180,7 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('upserts roster, matches solo + group submitters, reports skipped folders', async () => {
+  it('upserts roster, gives the co-submitter pair ONE submission with both contributors, reports skipped folders', async () => {
     await withTestMinio(async ({ client, bucketName }) => {
       const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
@@ -298,37 +301,11 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
       expect(['succeeded', 'partial']).toContain(jobRow!.status);
       expect((jobRow!.summary as { total: number }).total).toBe(3);
 
-      // All three files matched.
-      const fileRows = await db
-        .select({ status: ingest_files.status })
-        .from(ingest_files)
-        .where(eq(ingest_files.ingest_job_id, jobId));
-      expect(fileRows).toHaveLength(3);
-      expect(fileRows.every((f) => f.status === 'matched')).toBe(true);
-
-      // Three submissions; the two co-submitters share one blob.
-      const subs = await db
-        .select({ student_id: submissions.student_id, blob_sha256: submissions.blob_sha256 })
-        .from(submissions)
-        .where(eq(submissions.semester_id, semester!.id));
-      expect(subs).toHaveLength(3);
-
-      const rosterBySid = new Map(
-        (
-          await db
-            .select({ id: roster_entries.id, sid: roster_entries.sid })
-            .from(roster_entries)
-            .where(eq(roster_entries.semester_id, semester!.id))
-        ).map((r) => [r.sid, r.id]),
-      );
-      const subByStudent = new Map(subs.map((s) => [s.student_id, s.blob_sha256]));
-      const pairBlobs = [
-        subByStudent.get(rosterBySid.get('222')!),
-        subByStudent.get(rosterBySid.get('333')!),
-      ];
-      expect(pairBlobs[0]).toBeTruthy();
-      expect(pairBlobs[0]).toBe(pairBlobs[1]);
-      expect(subByStudent.get(rosterBySid.get('111')!)).not.toBe(pairBlobs[0]);
+      // The solo + pair end state, shared with every other upload mechanism
+      // (see `expectSoloPlusPairEndState`): three ingest_files rows resolving
+      // matched/matched/duplicate, TWO submissions rather than three, and both
+      // co-submitters present as contributors on the shared one.
+      await expectSoloPlusPairEndState(db, semester!.id, jobId);
     });
   });
 
