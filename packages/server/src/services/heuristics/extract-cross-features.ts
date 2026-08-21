@@ -21,6 +21,7 @@
 import {
   buildKindNgramSet,
   NGRAM_SIZE,
+  observedCommitKeysOf,
   REPRESENTATIVE_EVENT_COUNT,
 } from '@provenance/analysis-core/heuristics/cross/features.js';
 import type {
@@ -62,6 +63,13 @@ export function extractCrossFeaturesFromIndex(
    * editing_pattern_clone needs this: a course that switches a gated event kind
    * off shrinks the kind alphabet the fingerprint is built from, which inflates
    * Jaccard similarity across the whole cohort at once.
+   *
+   * It is also where the same-scope exclusion key comes from (spec S20): the
+   * observed commit DAG is walked over the bundle's `git.event`s, which the
+   * EventIndex alone does not carry the session grouping for. A caller with no
+   * bundle therefore gets no `observedCommitKeys`, which reads as "never
+   * computed" and suppresses nothing — the direction that fails toward
+   * comparing rather than toward silence.
    */
   bundle?: Bundle,
 ): ExtractedCrossFeatures {
@@ -109,7 +117,13 @@ export function extractCrossFeaturesFromIndex(
     representativeSeqKeys,
     ...(bundle === undefined
       ? {}
-      : { disabledCaptureSignals: resolveBundleCapturePolicy(bundle).disabledSignals }),
+      : {
+          disabledCaptureSignals: resolveBundleCapturePolicy(bundle).disabledSignals,
+          // The SAME derivation the browser path uses — imported, never
+          // reimplemented, so the two cannot drift into disagreeing about which
+          // pairs are one repository.
+          observedCommitKeys: observedCommitKeysOf(bundle),
+        }),
   };
 
   return { features, globalIdxBySeqKey };

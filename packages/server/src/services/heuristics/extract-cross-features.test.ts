@@ -22,6 +22,10 @@ import {
   sessionStart2,
 } from '@provenance/analysis-core/test-support/build-manifest-2.js';
 import { establishBundleTrust } from '@provenance/analysis-core/manifest/bundle-manifest.js';
+import {
+  ASSUMED_SINGLE_REPOSITORY,
+  commitNodeKey,
+} from '@provenance/analysis-core/git/observed-dag.js';
 import { extractCrossFeaturesFromIndex } from './extract-cross-features.js';
 
 const SESSION = '11111111-1111-1111-1111-111111111111';
@@ -207,5 +211,76 @@ describe('extractCrossFeaturesFromIndex — capture policy', () => {
       parsed.value,
     );
     expect(features.disabledCaptureSignals).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The same-scope exclusion key (spec S20)
+//
+// The server builds CrossSubmissionFeatures on its own path, so it has to
+// produce the same `observedCommitKeys` the browser does — otherwise a
+// git-native group submission is correctly excluded under `/local` and still
+// accused on the server.
+// ---------------------------------------------------------------------------
+
+describe('extractCrossFeaturesFromIndex — observed commit keys', () => {
+  const SHA = 'ab'.repeat(20);
+
+  it("carries the bundle's observed commits as (repository, sha) node keys", async () => {
+    const { zipBuffer } = await buildTestBundle({
+      sessions: [
+        {
+          sessionId: SESSION,
+          events: [
+            {
+              kind: 'git.event',
+              data: { operation: 'commit', sha: SHA, commit_sha: SHA, parents: [], branch: 'main' },
+            },
+          ],
+        },
+      ],
+    });
+    const parsed = await loadBundle(zipBuffer, 'b.zip');
+    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+
+    const { features } = extractCrossFeaturesFromIndex(
+      buildIndex(parsed.value),
+      'sub-1',
+      'bundle-1',
+      parsed.value,
+    );
+    // Identical to what the browser's extractCrossFeatures produces — the same
+    // `observedCommitKeysOf` is imported, not reimplemented.
+    expect(features.observedCommitKeys).toEqual([commitNodeKey(ASSUMED_SINGLE_REPOSITORY, SHA)]);
+  });
+
+  it('is an empty list, not undefined, when nothing was recorded', async () => {
+    // Empty and absent are different claims: empty is "we looked and there were
+    // none", absent is "nobody computed it". Both suppress nothing, but only the
+    // first is a statement about this bundle.
+    const { zipBuffer } = await buildTestBundle({ sessions: [{ sessionId: SESSION }] });
+    const parsed = await loadBundle(zipBuffer, 'b.zip');
+    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+
+    const { features } = extractCrossFeaturesFromIndex(
+      buildIndex(parsed.value),
+      'sub-1',
+      'bundle-1',
+      parsed.value,
+    );
+    expect(features.observedCommitKeys).toEqual([]);
+  });
+
+  it('is undefined when no bundle is passed — never computed, so nothing is excluded', async () => {
+    const { zipBuffer } = await buildTestBundle({ sessions: [{ sessionId: SESSION }] });
+    const parsed = await loadBundle(zipBuffer, 'b.zip');
+    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+
+    const { features } = extractCrossFeaturesFromIndex(
+      buildIndex(parsed.value),
+      'sub-1',
+      'bundle-1',
+    );
+    expect(features.observedCommitKeys).toBeUndefined();
   });
 });

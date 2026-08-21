@@ -53,24 +53,54 @@ beforeEach(() => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Seed a minimal submission row + return both submissionId and semesterId. */
-async function seedSubmissionWithSemester(
-  db: DrizzleDb,
-): Promise<{ submissionId: string; semesterId: string }> {
+/**
+ * Seed a minimal submission row + return everything a second submission in the
+ * SAME assignment needs to be seeded against it.
+ *
+ * `assignmentId` is returned because the cross-heuristic candidate pool is
+ * scoped per assignment (2026-08). Two submissions on two different assignments
+ * are never compared, so a test that means to compare them has to put them on
+ * one assignment and say so.
+ */
+async function seedSubmissionWithSemester(db: DrizzleDb): Promise<{
+  submissionId: string;
+  semesterId: string;
+  assignmentId: string;
+  ingestJobId: string;
+}> {
   const submissionId = await seedSubmission(db);
   const [row] = await db
-    .select({ semester_id: submissions.semester_id })
+    .select({
+      semester_id: submissions.semester_id,
+      assignment_id: submissions.assignment_id,
+      ingest_job_id: submissions.ingest_job_id,
+    })
     .from(submissions)
     .where(eq(submissions.id, submissionId))
     .limit(1);
-  return { submissionId, semesterId: row!.semester_id };
+  return {
+    submissionId,
+    semesterId: row!.semester_id,
+    assignmentId: row!.assignment_id,
+    ingestJobId: row!.ingest_job_id,
+  };
 }
 
 /**
- * Insert a second submission into an already-seeded semester (new student +
- * assignment, reusing the first submission's ingest_job_id). Mirrors
- * seedSubmission's shape but targets an existing semester so two submissions
- * can be compared cross-submission.
+ * Insert another submission into an already-seeded semester, reusing the first
+ * submission's ingest_job_id.
+ *
+ * `assignmentId` is REQUIRED and is a uuid, not a string id. It used to mint a
+ * fresh `assignments` row from an `assignmentIdStr`, which meant every
+ * "two submissions that should be compared" fixture in this file put the two
+ * submissions on DIFFERENT assignments — hw1 vs hw2, hw1 vs hw3, hw1 vs hw9 —
+ * and the tests passed only because the candidate pool was semester-wide with no
+ * assignment filter at all. They asserted the defect as the requirement. Making
+ * the caller name the assignment is what stops that shape from being spelled
+ * again by accident.
+ *
+ * `seedNewAssignment` is the deliberate opposite: pass it to put the submission
+ * on a SEPARATE assignment, which is a claim a test has to make on purpose.
  */
 async function seedSecondSubmissionInSemester(
   db: DrizzleDb,
@@ -78,8 +108,10 @@ async function seedSecondSubmissionInSemester(
     semesterId: string;
     sidPrefix: string;
     displayName: string;
-    assignmentIdStr: string;
-    label: string;
+    /** Existing assignment uuid to share, or `undefined` with `seedNewAssignment`. */
+    assignmentId?: string;
+    /** Mint a separate assignment instead of sharing one. */
+    seedNewAssignment?: { assignmentIdStr: string; label: string };
     sourceFilename: string;
     ingestJobId: string;
   },
@@ -93,20 +125,27 @@ async function seedSecondSubmissionInSemester(
     })
     .returning();
 
-  const [assignment] = await db
-    .insert(assignments)
-    .values({
-      semester_id: opts.semesterId,
-      assignment_id_str: opts.assignmentIdStr,
-      label: opts.label,
-    })
-    .returning();
+  let assignmentId = opts.assignmentId;
+  if (assignmentId === undefined) {
+    if (opts.seedNewAssignment === undefined) {
+      throw new Error('seedSecondSubmissionInSemester: pass assignmentId or seedNewAssignment');
+    }
+    const [assignment] = await db
+      .insert(assignments)
+      .values({
+        semester_id: opts.semesterId,
+        assignment_id_str: opts.seedNewAssignment.assignmentIdStr,
+        label: opts.seedNewAssignment.label,
+      })
+      .returning();
+    assignmentId = assignment!.id;
+  }
 
   const subId = crypto.randomUUID();
   await db.insert(submissions).values({
     id: subId,
     semester_id: opts.semesterId,
-    assignment_id: assignment!.id,
+    assignment_id: assignmentId,
     student_id: student!.id,
     blob_object_key: `semesters/${opts.semesterId}/submissions/${subId}/bundle.zip`,
     blob_sha256: `sha256-${subId}`,
@@ -175,22 +214,22 @@ async function seedSharedPastePair(
   storage: StorageClient,
   sha256: string,
 ): Promise<{ semesterId: string; sub1: string; sub2: string }> {
-  const { submissionId: sub1, semesterId } = await seedSubmissionWithSemester(db);
+  const {
+    submissionId: sub1,
+    semesterId,
+    assignmentId,
+    ingestJobId,
+  } = await seedSubmissionWithSemester(db);
 
-  const [sub1Row] = await db
-    .select({ ingest_job_id: submissions.ingest_job_id })
-    .from(submissions)
-    .where(eq(submissions.id, sub1))
-    .limit(1);
-
+  // Same assignment as sub1 — comparing two students is only meaningful inside
+  // one assignment, and the candidate pool is scoped that way.
   const sub2 = await seedSecondSubmissionInSemester(db, {
     semesterId,
     sidPrefix: 'cfg',
     displayName: 'Dana',
-    assignmentIdStr: 'hw9',
-    label: 'HW9',
-    sourceFilename: 'hw9-dana.zip',
-    ingestJobId: sub1Row!.ingest_job_id,
+    assignmentId,
+    sourceFilename: 'hw1-dana.zip',
+    ingestJobId,
   });
 
   await putPasteBundle(db, storage, sub1, { sha256, content: SHARED_PASTE_CONTENT });
@@ -254,23 +293,21 @@ describe('runAndStoreCrossHeuristics', () => {
   it('produces one cross_flags row + 2 participants for two bundles with shared paste', async () => {
     await withTestMinio(async ({ client }) => {
       await withTestDb(async (db) => {
-        // Seed two submissions in the same semester.
-        const { submissionId: sub1, semesterId } = await seedSubmissionWithSemester(db);
-
-        const [sub1Row] = await db
-          .select({ ingest_job_id: submissions.ingest_job_id })
-          .from(submissions)
-          .where(eq(submissions.id, sub1))
-          .limit(1);
+        // Seed two submissions on the SAME assignment in the same semester.
+        const {
+          submissionId: sub1,
+          semesterId,
+          assignmentId,
+          ingestJobId,
+        } = await seedSubmissionWithSemester(db);
 
         const sub2Id = await seedSecondSubmissionInSemester(db, {
           semesterId,
           sidPrefix: 's2',
           displayName: 'Bob',
-          assignmentIdStr: 'hw2',
-          label: 'HW2',
-          sourceFilename: 'hw2-student2.zip',
-          ingestJobId: sub1Row!.ingest_job_id,
+          assignmentId,
+          sourceFilename: 'hw1-student2.zip',
+          ingestJobId,
         });
 
         // Store bundle blobs for both submissions with a shared paste sha256.
@@ -340,22 +377,20 @@ describe('runAndStoreCrossHeuristics', () => {
   it('is idempotent: running twice produces the same final DB state', async () => {
     await withTestMinio(async ({ client }) => {
       await withTestDb(async (db) => {
-        const { submissionId: sub1, semesterId } = await seedSubmissionWithSemester(db);
-
-        const [sub1Row] = await db
-          .select({ ingest_job_id: submissions.ingest_job_id })
-          .from(submissions)
-          .where(eq(submissions.id, sub1))
-          .limit(1);
+        const {
+          submissionId: sub1,
+          semesterId,
+          assignmentId,
+          ingestJobId,
+        } = await seedSubmissionWithSemester(db);
 
         const sub2Id = await seedSecondSubmissionInSemester(db, {
           semesterId,
           sidPrefix: 's3',
           displayName: 'Charlie',
-          assignmentIdStr: 'hw3',
-          label: 'HW3',
-          sourceFilename: 'hw3-charlie.zip',
-          ingestJobId: sub1Row!.ingest_job_id,
+          assignmentId,
+          sourceFilename: 'hw1-charlie.zip',
+          ingestJobId,
         });
 
         await putPasteBundle(db, client, sub1, {
@@ -423,6 +458,124 @@ describe('runAndStoreCrossHeuristics', () => {
           .from(cross_flags)
           .where(eq(cross_flags.semester_id, semesterId));
         expect(afterRows[0]?.cnt ?? 0).toBe(0);
+      });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The candidate pool is scoped per ASSIGNMENT (2026-08)
+//
+// The pool was `semester_id` + `isNull(superseded_by)` and NOTHING else, so a
+// student's own hw1 and hw2 were compared against each other, as was every pair
+// of unrelated assignments in the semester. "Did two students share this?" only
+// has meaning inside one assignment.
+//
+// NOTE: these tests are the reason the fixtures above had to change. Every
+// positive fixture in this file used to seed its second submission on a
+// different assignment (hw1 vs hw2 / hw3 / hw9) and passed only because no
+// assignment filter existed — the tests asserted the defect as the requirement.
+// ---------------------------------------------------------------------------
+
+describe('runAndStoreCrossHeuristics — assignment scoping', () => {
+  it("does not compare one student's own two assignments", async () => {
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const { submissionId: hw1, semesterId, ingestJobId } = await seedSubmissionWithSemester(db);
+
+        // The SAME student, submitting their next assignment, carrying the same
+        // helper function forward. Deliberately a separate assignment.
+        const hw2 = await seedSecondSubmissionInSemester(db, {
+          semesterId,
+          sidPrefix: 'self',
+          displayName: 'Same Student, Next Assignment',
+          seedNewAssignment: { assignmentIdStr: 'hw2', label: 'HW2' },
+          sourceFilename: 'hw2-samestudent.zip',
+          ingestJobId,
+        });
+
+        await putPasteBundle(db, client, hw1, {
+          sha256: 'carried-forward-sha',
+          content: SHARED_PASTE_CONTENT,
+        });
+        await putPasteBundle(db, client, hw2, {
+          sha256: 'carried-forward-sha',
+          content: SHARED_PASTE_CONTENT,
+        });
+
+        const result = await runAndStoreCrossHeuristics(db, client, semesterId);
+
+        expect(
+          result.flag_count,
+          'two different assignments are not a comparison anyone asked for',
+        ).toBe(0);
+        expect(result.participant_count).toBe(0);
+
+        const rows = await db
+          .select()
+          .from(cross_flags)
+          .where(eq(cross_flags.semester_id, semesterId));
+        expect(rows).toHaveLength(0);
+      });
+    });
+  });
+
+  it('still compares two students WITHIN one assignment when another assignment exists', async () => {
+    // The negative control for the scoping change: adding an unrelated
+    // assignment to the semester must not suppress the real finding inside the
+    // assignment that has two submissions.
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const {
+          submissionId: sub1,
+          semesterId,
+          assignmentId,
+          ingestJobId,
+        } = await seedSubmissionWithSemester(db);
+
+        const sub2 = await seedSecondSubmissionInSemester(db, {
+          semesterId,
+          sidPrefix: 'peer',
+          displayName: 'Peer',
+          assignmentId,
+          sourceFilename: 'hw1-peer.zip',
+          ingestJobId,
+        });
+
+        // A third submission on a DIFFERENT assignment, carrying the identical
+        // paste. It must not join the finding, and must not suppress it.
+        const other = await seedSecondSubmissionInSemester(db, {
+          semesterId,
+          sidPrefix: 'other',
+          displayName: 'Other Assignment',
+          seedNewAssignment: { assignmentIdStr: 'hw7', label: 'HW7' },
+          sourceFilename: 'hw7-other.zip',
+          ingestJobId,
+        });
+
+        for (const id of [sub1, sub2, other]) {
+          await putPasteBundle(db, client, id, {
+            sha256: 'within-assignment-sha',
+            content: SHARED_PASTE_CONTENT,
+          });
+        }
+
+        const result = await runAndStoreCrossHeuristics(db, client, semesterId);
+
+        expect(result.flag_count, 'the within-assignment pair is still found').toBe(1);
+        expect(result.participant_count, 'and names exactly two participants').toBe(2);
+
+        const [flagRow] = await db
+          .select()
+          .from(cross_flags)
+          .where(eq(cross_flags.semester_id, semesterId));
+        const participants = await db
+          .select()
+          .from(cross_flag_participants)
+          .where(eq(cross_flag_participants.cross_flag_id, flagRow!.id));
+        const ids = participants.map((p) => p.submission_id).sort();
+        expect(ids).toEqual([sub1, sub2].sort());
+        expect(ids, 'the other assignment is not a participant').not.toContain(other);
       });
     });
   });
