@@ -166,6 +166,32 @@ export type HeuristicConfig = {
      */
     sharedThreshold: number;
   };
+  /** Phase 16: no_intermediate_errors heuristic thresholds. */
+  noIntermediateErrors: {
+    /**
+     * Minimum number of terminal commands that actually REPORTED an exit code,
+     * across the WHOLE submission, before "none of them failed" is evidence of
+     * anything at all.
+     *
+     * Without a floor the flag fires on one `ls` and one keystroke. It also
+     * used to count commands with NO recorded exit code as successes, so a
+     * session where nothing reported an exit code raised the flag on zero
+     * evidence — absence of capture read as evidence of success. Only reported
+     * exit codes count toward this floor.
+     *
+     * Why a floor makes the flag discriminating at all: "the student never saw
+     * an error" is consistent with "they pasted working code" AND with "they
+     * are a strong programmer", and on one or two runs those are
+     * indistinguishable — a clean short session is an ordinary morning. What
+     * is unusual is a LONG run of commands with not one non-zero exit: real
+     * terminal use produces failures from typos alone. Below the floor the
+     * flag is not weak evidence, it is no evidence, and emitting it costs a
+     * false accusation.
+     *
+     * Default: 5.
+     */
+    minCommandsWithExitCode: number;
+  };
   /** Phase 16: time_to_first_save_anomaly heuristic thresholds. */
   timeToFirstSaveAnomaly: {
     /**
@@ -306,6 +332,9 @@ export const DEFAULT_HEURISTIC_CONFIG: HeuristicConfig = {
   massExternalReplacement: {
     sharedThreshold: 0.2,
   },
+  noIntermediateErrors: {
+    minCommandsWithExitCode: 5,
+  },
   timeToFirstSaveAnomaly: {
     anomalySeconds: 30,
     minChars: 500,
@@ -364,6 +393,10 @@ export function mergeConfig(override?: Partial<HeuristicConfig>): HeuristicConfi
     massExternalReplacement: {
       ...DEFAULT_HEURISTIC_CONFIG.massExternalReplacement,
       ...override.massExternalReplacement,
+    },
+    noIntermediateErrors: {
+      ...DEFAULT_HEURISTIC_CONFIG.noIntermediateErrors,
+      ...override.noIntermediateErrors,
     },
     timeToFirstSaveAnomaly: {
       ...DEFAULT_HEURISTIC_CONFIG.timeToFirstSaveAnomaly,

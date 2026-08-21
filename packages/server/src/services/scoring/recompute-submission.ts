@@ -114,6 +114,7 @@ const HEURISTIC_ID_TO_V2_KEY: Readonly<Record<string, keyof HeuristicConfig>> = 
   low_typing_high_output: 'lowTypingHighOutput',
   paste_is_solution: 'pasteIsSolution',
   mass_external_replacement: 'massExternalReplacement',
+  no_intermediate_errors: 'noIntermediateErrors',
   time_to_first_save_anomaly: 'timeToFirstSaveAnomaly',
   idle_then_complete: 'idleThenComplete',
   paste_matches_known_source: 'pasteMatchesKnownSource',
