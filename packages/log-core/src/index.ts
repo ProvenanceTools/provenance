@@ -30,6 +30,14 @@ export {
 } from './rolling-manifest.js';
 export type { RollingSessionManifest, RollingManifestError } from './rolling-manifest.js';
 
+// The `.gitattributes` all three recorders write into `.provenance/`, so the
+// bytes git must not rewrite have exactly one definition. See git-attributes.ts.
+export {
+  PROVENANCE_GITATTRIBUTES_FILENAME,
+  PROVENANCE_GITATTRIBUTES_CONTENT,
+  looksLikeItDisablesEolTranslation,
+} from './git-attributes.js';
+
 // Prefix digests — reading a rolling seal's log commitment as the PREFIX
 // commitment it actually is. See prefix-digest.ts.
 export { findSha256PrefixLength } from './prefix-digest.js';
