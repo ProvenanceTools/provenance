@@ -2,7 +2,7 @@
 
 Node.js API server for the Provenance Analyzer v3.
 
-Current schema version: **0012** (cross_flags + cross_flag_participants, Phases 0–14).
+Current schema version: **0029** (`submission_contributors` — a submission belongs to a set of people; see `db/migrations/0029_submission_contributors.sql`).
 
 ## Dev quickstart
 
@@ -185,18 +185,22 @@ running** (`npm run dev` in `--mode=all`, or a separate `--mode=worker` process)
 process the queued submissions. It prints a summary (job id, roster added/updated,
 bundles processed, submissions queued, skipped folders by reason).
 
-## Cron jobs (Phase 25)
+## Cron jobs
 
-Three scheduled jobs are registered in pg-boss on worker startup:
+Five scheduled jobs are registered in pg-boss on worker startup (`boss.schedule()` is
+idempotent, so registration is repeated on every start):
 
-| Job                      | Cron (UTC)  | Description                                          |
-| ------------------------ | ----------- | ---------------------------------------------------- |
-| `retention_sweep`        | `0 2 * * *` | Purge blobs past semester retention window (PRD §16) |
-| `purge_expired_sessions` | `0 * * * *` | DELETE expired session rows                          |
-| `purge_expired_exports`  | `0 3 * * *` | Stub — export artifacts (v3.1)                       |
+| Job                      | Cron (UTC)  | Description                                                        |
+| ------------------------ | ----------- | ------------------------------------------------------------------ |
+| `retention_sweep`        | `0 2 * * *` | Purge blobs past semester retention window (PRD §16)               |
+| `purge_expired_sessions` | `0 * * * *` | DELETE expired session rows                                        |
+| `purge_expired_exports`  | `0 3 * * *` | Stub — export artifacts (v3.1)                                     |
+| `reap_stale_uploads`     | `0 4 * * *` | Reclaim abandoned multipart staging dirs (fs backend; no-op on s3) |
+| `storage_quota_check`    | `0 * * * *` | Measure disk use against `STORAGE_QUOTA_BYTES` and set the gauges  |
 
 Handler sources: `src/jobs/retention-sweep.ts`, `src/jobs/purge-expired-sessions.ts`,
-`src/jobs/purge-expired-exports.ts`. Registered via `boss.schedule()` in `src/jobs/worker.ts`.
+`src/jobs/purge-expired-exports.ts`, `src/jobs/reap-stale-uploads.ts`,
+`src/jobs/storage-quota-check.ts`. Registered via `boss.schedule()` in `src/jobs/worker.ts`.
 
 ## Database migrations
 

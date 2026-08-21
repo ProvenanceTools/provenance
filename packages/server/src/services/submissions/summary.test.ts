@@ -40,6 +40,7 @@ import {
 } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import type { StorageClient } from '../storage/client.js';
+import { CoverageFactsSchema } from '@provenance/shared/api-schemas';
 import { getSubmissionSummary } from './summary.js';
 import { _resetBundleIndexCacheForTest } from '../bundle/load-index.js';
 
@@ -571,6 +572,146 @@ describe('getSubmissionSummary — a submission with no single owning student', 
           sid: 'stu-1',
           display_name: 'Alice',
         });
+      });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Coverage facts on the wire (§6 Rule 3, server parity)
+// ---------------------------------------------------------------------------
+
+/**
+ * The summary route now serves the coverage stage's output, so the server-backed
+ * panel shows the same facts `/local` does instead of "not available".
+ *
+ * Two things are worth testing here and nowhere else, because both are invisible
+ * to the type system:
+ *
+ *  1. **The `ReadonlyMap` hazard.** `BundleContributors.bySession` is a
+ *     `ReadonlyMap`, and `JSON.stringify` renders a Map as `{}`. A wire shape
+ *     carrying one would report "no contributors" for every submission in the
+ *     deployment, silently, with every type green. The wire shape must be the
+ *     `CoverageFacts` AGGREGATE, and the only way to prove it is to serialize.
+ *
+ *  2. **Present-and-real, never zeroed.** The panel's three states are three
+ *     different claims: absent means "the server did not send them", and a
+ *     zeroed-but-present object would collapse that into "we checked and there
+ *     is nothing" — stronger, and false. So these assert the values are the
+ *     bundle's actual facts, not a placeholder that happens to parse.
+ */
+describe('getSubmissionSummary — coverage facts', () => {
+  it('serializes real facts that survive JSON and the shared schema', async () => {
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const user = await seedUser(db);
+        const { semester } = await seedCourseAndSemester(db);
+        const student = await seedStudent(db, semester.id, {
+          sid: 'cov-1',
+          displayName: 'Cov One',
+        });
+        const assignment = await seedAssignment(db, semester.id);
+        const job = await seedIngestJob(db, semester.id, user.id);
+        const sub = await seedSubmission(db, {
+          semesterId: semester.id,
+          assignmentId: assignment.id,
+          studentId: student.id,
+          ingestJobId: job.id,
+        });
+        await seedBundleForSubmission(db, client, sub.id);
+
+        const summary = await getSubmissionSummary(db, client, sub.id, false);
+        expect(summary).not.toBeNull();
+        const coverage = summary!.coverage;
+        expect(coverage).toBeDefined();
+
+        // Real, not a placeholder: contributor resolution RAN on this bundle
+        // (that is what `resolved` means), and the one seeded session carries no
+        // identity block, which is `unattributed` — the ordinary, blameless
+        // state, and deterministically 1 here whatever the deployment's root key
+        // is set to.
+        expect(coverage.identity.resolved).toBe(true);
+        expect(coverage.identity.unattributed).toBe(1);
+        expect(coverage.identity.unverifiable).toBe(0);
+
+        // The `ReadonlyMap` hazard, caught the only way it can be: serialize.
+        const overTheWire: unknown = JSON.parse(JSON.stringify(coverage));
+        const parsed = CoverageFactsSchema.parse(overTheWire);
+        expect(parsed).toEqual(coverage);
+
+        // Belt and braces — nothing anywhere in the payload is a Map or a Set,
+        // both of which JSON.stringify quietly renders as `{}`.
+        const walk = (v: unknown, path: string): void => {
+          expect(v instanceof Map, `${path} is a Map`).toBe(false);
+          expect(v instanceof Set, `${path} is a Set`).toBe(false);
+          if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`));
+          else if (v !== null && typeof v === 'object') {
+            for (const [k, x] of Object.entries(v)) walk(x, `${path}.${k}`);
+          }
+        };
+        walk(coverage, 'coverage');
+      });
+    });
+  });
+
+  /**
+   * A submission with no commits must NOT report the single-repository caveat,
+   * and one whose commits name no repository MUST — the D12 predicate reaching a
+   * grader through the wire rather than only through `/local`.
+   */
+  it('reports the single-repository caveat off the stored bundle, not a default', async () => {
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const user = await seedUser(db);
+        const { semester } = await seedCourseAndSemester(db);
+        const student = await seedStudent(db, semester.id, {
+          sid: 'cov-2',
+          displayName: 'Cov Two',
+        });
+        const assignment = await seedAssignment(db, semester.id);
+        const job = await seedIngestJob(db, semester.id, user.id);
+
+        // A bundle with no commit observation at all: no graph, so no caveat.
+        const quiet = await seedSubmission(db, {
+          semesterId: semester.id,
+          assignmentId: assignment.id,
+          studentId: student.id,
+          ingestJobId: job.id,
+        });
+        await seedBundleForSubmission(db, client, quiet.id);
+        const quietSummary = await getSubmissionSummary(db, client, quiet.id, false);
+        expect(quietSummary!.coverage.dagCoverage.commits).toBe(0);
+        expect(quietSummary!.coverage.repositoryAssumedSingle).toBe(false);
+
+        // A bundle whose commit names no repository — every recorder before
+        // 2026-08-20, and every shallow clone. Folded into the sentinel, so the
+        // caveat is stated.
+        const withCommit = await seedSubmission(db, {
+          semesterId: semester.id,
+          assignmentId: assignment.id,
+          studentId: student.id,
+          ingestJobId: job.id,
+        });
+        const { zipBuffer } = await buildTestBundle({
+          sessions: [
+            {
+              sessionId: crypto.randomUUID(),
+              events: [
+                {
+                  kind: 'git.event',
+                  data: { operation: 'commit', sha: 'a'.repeat(40), parents: [] },
+                },
+              ],
+            },
+          ],
+        });
+        await putSubmissionBundle(db, client, withCommit.id, new Uint8Array(zipBuffer));
+        const commitSummary = await getSubmissionSummary(db, client, withCommit.id, false);
+        expect(commitSummary!.coverage.dagCoverage.commits).toBe(1);
+        expect(commitSummary!.coverage.repositoryAssumedSingle).toBe(true);
+        // And it stays a fact about the RECORDING: no defect, nothing dropped.
+        expect(commitSummary!.coverage.dagDefects).toEqual([]);
+        expect(commitSummary!.coverage.droppedArtifacts).toEqual([]);
       });
     });
   });

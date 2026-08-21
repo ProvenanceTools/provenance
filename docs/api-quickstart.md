@@ -204,7 +204,20 @@ for sev in ["high", "medium", "low", "info"]:
 flagged = sorted(items, key=lambda s: s["score_total"], reverse=True)[:10]
 print(f"\nTop 10 by risk score:")
 for rank, sub in enumerate(flagged, 1):
-    student = sub["student"]["sid"]
+    # `student` is NULLABLE — a group submission has no single student (migration
+    # 0029 / D9). `contributors` is always populated and is correct for both
+    # shapes, so read it and keep `student` only as the solo fast path.
+    # A contributor's own `student` is null too when they are not on the roster
+    # (D13: a real contributor we cannot name), so fall back to `student_ref`.
+    solo = sub.get("student")
+    if solo is not None:
+        student = solo["sid"]
+    else:
+        names = [
+            c["student"]["sid"] if c["student"] else (c["student_ref"] or "unidentified")
+            for c in sub["contributors"]
+        ]
+        student = " + ".join(names) if names else "unattributed"
     assignment = sub["assignment"]["label"]
     score = sub["score_total"]
     severity = sub["score_max_severity"]
@@ -267,8 +280,12 @@ curl -s -X POST \
 
 Upload the ZIP from Gradescope's "Download Submissions" directly. The roster is
 populated from the export's `submission_metadata.yml` (no separate roster upload
-needed) and every student bundle is processed in one job. Group submissions
-produce one submission per co-submitter.
+needed) and every student bundle is processed in one job. A group submission
+produces **one** submission with **N contributors** — not one submission per
+co-submitter. (The old fan-out, which ingested the same bundle once per
+co-submitter into N independent rows, was removed in migration 0029; it could not
+carry which partner a finding belonged to. Rows created by the old fan-out are
+deliberately left as they are and are not merged retroactively.)
 
 ```bash
 curl -s -X POST \

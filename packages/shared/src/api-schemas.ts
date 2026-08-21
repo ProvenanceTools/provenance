@@ -997,6 +997,149 @@ export const AssignmentManifestSchema = z.object({
 });
 export type AssignmentManifest = z.infer<typeof AssignmentManifestSchema>;
 
+// ---------------------------------------------------------------------------
+// Coverage facts (§5.4 step 5 / §6 Rule 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * The coverage stage's output, on the wire.
+ *
+ * This mirrors `analysis-core`'s `CoverageFacts` aggregate — plain arrays,
+ * numbers, strings and booleans. It is deliberately NOT `BundleContributors`,
+ * whose `bySession` is a `ReadonlyMap` and would serialize to `{}`: a Map that
+ * silently becomes an empty object is a wire shape that reports "no
+ * contributors" for every submission, which is precisely the kind of quiet,
+ * stronger-and-false claim §6 Rule 3 exists to prevent.
+ *
+ * **Nothing here is a finding.** Every field states what the RECORDING contains
+ * or cannot show. A consumer that renders any of it as an accusation — or that
+ * sums `unverifiable` and `unattributed` into one "problem" number, or reads
+ * `rootKeyConfigured: false` as "these identities failed" — has turned a
+ * deployment fact into a class-wide integrity finding. See
+ * `analysis-core/src/coverage/coverage-facts.ts` for the full contract.
+ *
+ * The field is OPTIONAL on the summary, and its absence has exactly one
+ * meaning: **the server did not send it** (an older deployment). Absence is
+ * never rendered as zeroes — a zeroed panel asserts "no commits observed, no
+ * contributors, no root key", which is a stronger and false claim than "not
+ * available".
+ */
+const ObservationRefSchema = z.object({
+  sessionId: z.string(),
+  seq: z.number().int(),
+});
+
+const ParentsClaimSchema = z.object({
+  parents: z.array(z.string()),
+  observations: z.array(ObservationRefSchema),
+});
+
+export const ObservedDagDefectSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('conflicting_parents'),
+    repository: z.string(),
+    sha: z.string(),
+    claims: z.array(ParentsClaimSchema),
+  }),
+  z.object({
+    kind: z.literal('cycle'),
+    repository: z.string(),
+    shas: z.array(z.string()),
+  }),
+  z.object({
+    kind: z.literal('unreadable_parents'),
+    repository: z.string(),
+    sha: z.string(),
+    sessionId: z.string(),
+    seq: z.number().int(),
+    reason: z.enum(['not_an_array', 'non_string_entry']),
+  }),
+]);
+
+export const CoverageFactsSchema = z.object({
+  identity: z.object({
+    /** `false` when the bundle carries no contributor stamp at all. */
+    resolved: z.boolean(),
+    /**
+     * `false` means NO IDENTITY CHECK WAS POSSIBLE — one unset environment
+     * variable, not a page of failed students.
+     */
+    rootKeyConfigured: z.boolean(),
+    attributed: z.number().int(),
+    /** A claim was present and could not be stood behind. Never summed with… */
+    unverifiable: z.number().int(),
+    /** …this: no identity block at all. Ordinary, blameless, never a finding. */
+    unattributed: z.number().int(),
+  }),
+  /**
+   * Two PROVABLY DIFFERENT verified contributors recording at the same time.
+   * Exculpatory context — the expected shape of collaboration.
+   */
+  concurrentRecording: z.array(
+    z.object({
+      sessionA: z.string(),
+      sessionB: z.string(),
+      contributorA: z.string(),
+      contributorB: z.string(),
+      overlapMs: z.number(),
+      crashBounded: z.boolean(),
+    }),
+  ),
+  /**
+   * Archive entries the loader could not read as provenance records.
+   *
+   * Only the three fields the panel states. `logFileId` / `logicalSessionId` are
+   * loader-internal id-space handles that no staff surface renders, and
+   * `filename` already carries the greppable name verbatim — publishing an id a
+   * grader cannot find in the archive is the id-space defect this program has
+   * already paid for four times.
+   */
+  droppedArtifacts: z.array(
+    z.object({
+      kind: z.enum([
+        'orphaned_meta',
+        'orphaned_slog',
+        'empty_slog',
+        'quarantined_log',
+        'staging_leftover',
+        'orphaned_rolling_seal',
+      ]),
+      filename: z.string(),
+      detail: z.string(),
+    }),
+  ),
+  /** A rolling seal committing only to a PREFIX. Ordinary; never tampering. */
+  unattestedTails: z.array(
+    z.object({
+      sessionId: z.string(),
+      file: z.enum(['slog', 'meta']),
+      sealed: z.number(),
+      total: z.number(),
+      unit: z.enum(['bytes', 'checkpoints']),
+    }),
+  ),
+  dagDefects: z.array(ObservedDagDefectSchema),
+  dagCoverage: z.object({
+    sessionsObserving: z.number().int(),
+    observations: z.number().int(),
+    commits: z.number().int(),
+    observedCommits: z.number().int(),
+    witnessedOnlyCommits: z.number().int(),
+    commitsWithUnrecordedParents: z.number().int(),
+    commitsWithConflictingParents: z.number().int(),
+    recordedRoots: z.number().int(),
+    gitEventsWithoutSha: z.number().int(),
+    gitEventsWithUnreadableRepository: z.number().int(),
+  }),
+  /**
+   * Some observation named no usable repository, so its commits were folded into
+   * one assumed repository (D12). True for a wholly unlabelled scope AND for a
+   * mixed one where only some observations are labelled.
+   */
+  repositoryAssumedSingle: z.boolean(),
+});
+export type CoverageFacts = z.infer<typeof CoverageFactsSchema>;
+
 export const SubmissionSummarySchema = z.object({
   id: z.string().uuid(),
   /**
@@ -1053,6 +1196,16 @@ export const SubmissionSummarySchema = z.object({
    * 1.x manifest.
    */
   assignment_manifest: AssignmentManifestSchema.optional(),
+  /**
+   * The coverage stage's facts (§6 Rule 3), derived from the same
+   * `loadSubmissionIndex` call that produces `sessions[]` — so it costs no extra
+   * query and no extra blob parse.
+   *
+   * Optional so a client talking to a server that predates it keeps parsing.
+   * Absence means ONE thing — the server did not send them — and the analyzer
+   * renders that as "not available", never as zeroes.
+   */
+  coverage: CoverageFactsSchema.optional(),
 });
 export type SubmissionSummary = z.infer<typeof SubmissionSummarySchema>;
 
