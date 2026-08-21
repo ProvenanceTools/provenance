@@ -1,5 +1,5 @@
-<svg width="1859pt" height="492pt"
- viewBox="0.00 0.00 1859.00 492.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<svg width="1928pt" height="492pt"
+ viewBox="0.00 0.00 1928.00 492.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
 <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(21.6 470.21)">
 <title>state</title>
 
@@ -49,137 +49,141 @@
 
 <g id="node4" class="node">
 <title>recording</title>
-<path stroke-width="2" d="M1008.79,-249.71C1008.79,-249.71 914.62,-249.71 914.62,-249.71 908.62,-249.71 902.62,-243.71 902.62,-237.71 902.62,-237.71 902.62,-215 902.62,-215 902.62,-209 908.62,-203 914.62,-203 914.62,-203 1008.79,-203 1008.79,-203 1014.79,-203 1020.79,-209 1020.79,-215 1020.79,-215 1020.79,-237.71 1020.79,-237.71 1020.79,-243.71 1014.79,-249.71 1008.79,-249.71" class="f-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="961.71" y="-233.26" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">RECORDING</text>
-<text xml:space="preserve" text-anchor="middle" x="961.71" y="-222.01" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">session keypair live</text>
-<text xml:space="preserve" text-anchor="middle" x="961.71" y="-210.76" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">events appending</text>
+<path stroke-width="2" d="M1077.79,-249.71C1077.79,-249.71 983.62,-249.71 983.62,-249.71 977.62,-249.71 971.62,-243.71 971.62,-237.71 971.62,-237.71 971.62,-215 971.62,-215 971.62,-209 977.62,-203 983.62,-203 983.62,-203 1077.79,-203 1077.79,-203 1083.79,-203 1089.79,-209 1089.79,-215 1089.79,-215 1089.79,-237.71 1089.79,-237.71 1089.79,-243.71 1083.79,-249.71 1077.79,-249.71" class="f-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-233.26" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">RECORDING</text>
+<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-222.01" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">session keypair live</text>
+<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-210.76" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">events appending</text>
 </g>
 
 <g id="edge4" class="edge">
 
-<path fill="none" stroke-width="1.2" d="M662.22,-177.83C735.77,-189.78 830.99,-205.26 893.87,-215.49" class="s-rec"/>
-<polygon stroke-width="1.2" points="893.18,-217.68 899.97,-216.48 893.91,-213.19 893.18,-217.68" class="a-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="811" y="-211.33" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">yes — session.start</text>
+<path fill="none" stroke-width="1.2" d="M667.92,-176.08C759.78,-188.85 886.21,-206.41 962.71,-217.04" class="s-rec"/>
+<polygon stroke-width="1.2" points="962.32,-219.29 969.07,-217.93 962.95,-214.78 962.32,-219.29" class="a-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="845.5" y="-249.02" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">yes — session.start.</text>
+<text xml:space="preserve" text-anchor="middle" x="845.5" y="-240.02" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">The §5.6 capability reports resolve FIRST:</text>
+<text xml:space="preserve" text-anchor="middle" x="845.5" y="-231.02" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">the git probe and the .provenance/ watcher&#39;s</text>
+<text xml:space="preserve" text-anchor="middle" x="845.5" y="-222.02" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">creation both happen before seq 0 is chained,</text>
+<text xml:space="preserve" text-anchor="middle" x="845.5" y="-213.02" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">while the wiring that consumes them starts after</text>
 </g>
 
 <g id="node5" class="node">
 <title>degraded</title>
-<path stroke-width="1.4" d="M1430.96,-46.71C1430.96,-46.71 1301.54,-46.71 1301.54,-46.71 1295.54,-46.71 1289.54,-40.71 1289.54,-34.71 1289.54,-34.71 1289.54,-12 1289.54,-12 1289.54,-6 1295.54,0 1301.54,0 1301.54,0 1430.96,0 1430.96,0 1436.96,0 1442.96,-6 1442.96,-12 1442.96,-12 1442.96,-34.71 1442.96,-34.71 1442.96,-40.71 1436.96,-46.71 1430.96,-46.71" class="f-bad s-bad"/>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-30.26" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">DEGRADED</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-19.01" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">disk full — student notified,</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-7.76" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">appends suspended</text>
+<path stroke-width="1.4" d="M1499.96,-46.71C1499.96,-46.71 1370.54,-46.71 1370.54,-46.71 1364.54,-46.71 1358.54,-40.71 1358.54,-34.71 1358.54,-34.71 1358.54,-12 1358.54,-12 1358.54,-6 1364.54,0 1370.54,0 1370.54,0 1499.96,0 1499.96,0 1505.96,0 1511.96,-6 1511.96,-12 1511.96,-12 1511.96,-34.71 1511.96,-34.71 1511.96,-40.71 1505.96,-46.71 1499.96,-46.71" class="f-bad s-bad"/>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-30.26" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">DEGRADED</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-19.01" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">disk full — student notified,</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-7.76" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">appends suspended</text>
 </g>
 
 <g id="edge7" class="edge">
 
-<path fill="none" stroke-width="1.2" d="M974.8,-202.18C990.31,-173.67 1019.93,-126.95 1058.79,-101.36 1125.63,-57.34 1215.71,-38.16 1280.9,-29.81" class="s-bad"/>
-<polygon stroke-width="1.2" points="1281.15,-32.07 1287.32,-29.01 1280.59,-27.55 1281.15,-32.07" class="a-bad s-bad"/>
-<text xml:space="preserve" text-anchor="middle" x="1132.29" y="-111.28" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">write fails:</text>
-<text xml:space="preserve" text-anchor="middle" x="1132.29" y="-102.28" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">ENOSPC</text>
+<path fill="none" stroke-width="1.2" d="M1043.8,-202.18C1059.31,-173.67 1088.93,-126.95 1127.79,-101.36 1194.63,-57.34 1284.71,-38.16 1349.9,-29.81" class="s-bad"/>
+<polygon stroke-width="1.2" points="1350.15,-32.07 1356.32,-29.01 1349.59,-27.55 1350.15,-32.07" class="a-bad s-bad"/>
+<text xml:space="preserve" text-anchor="middle" x="1201.29" y="-111.28" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">write fails:</text>
+<text xml:space="preserve" text-anchor="middle" x="1201.29" y="-102.28" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">ENOSPC</text>
 </g>
 
 <g id="node6" class="node">
 <title>suspended</title>
-<path stroke-width="1.4" stroke-dasharray="5,2" d="M1441.84,-393.71C1441.84,-393.71 1290.67,-393.71 1290.67,-393.71 1284.67,-393.71 1278.67,-387.71 1278.67,-381.71 1278.67,-381.71 1278.67,-359 1278.67,-359 1278.67,-353 1284.67,-347 1290.67,-347 1290.67,-347 1441.84,-347 1441.84,-347 1447.84,-347 1453.84,-353 1453.84,-359 1453.84,-359 1453.84,-381.71 1453.84,-381.71 1453.84,-387.71 1447.84,-393.71 1441.84,-393.71" class="f-hum s-hum"/>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-377.25" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink2">SUSPENDED</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-366" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink2">OS sleep — the host process is</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-354.75" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink2">parked, not deactivated</text>
+<path stroke-width="1.4" stroke-dasharray="5,2" d="M1510.84,-393.71C1510.84,-393.71 1359.67,-393.71 1359.67,-393.71 1353.67,-393.71 1347.67,-387.71 1347.67,-381.71 1347.67,-381.71 1347.67,-359 1347.67,-359 1347.67,-353 1353.67,-347 1359.67,-347 1359.67,-347 1510.84,-347 1510.84,-347 1516.84,-347 1522.84,-353 1522.84,-359 1522.84,-359 1522.84,-381.71 1522.84,-381.71 1522.84,-387.71 1516.84,-393.71 1510.84,-393.71" class="f-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-377.25" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink2">SUSPENDED</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-366" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink2">OS sleep — the host process is</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-354.75" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink2">parked, not deactivated</text>
 </g>
 
 <g id="edge5" class="edge">
 
-<path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M971.73,-250.6C985.17,-282.77 1013.79,-338.3 1058.79,-362.36 1123.16,-396.76 1206.51,-396.6 1270.03,-389.04" class="s-hum"/>
-<polygon stroke-width="1.2" points="1270.1,-391.32 1276.27,-388.25 1269.53,-386.81 1270.1,-391.32" class="a-hum s-hum"/>
-<text xml:space="preserve" text-anchor="middle" x="1132.29" y="-394.06" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">machine sleeps</text>
+<path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M1040.73,-250.6C1054.17,-282.77 1082.79,-338.3 1127.79,-362.36 1192.16,-396.76 1275.51,-396.6 1339.03,-389.04" class="s-hum"/>
+<polygon stroke-width="1.2" points="1339.1,-391.32 1345.27,-388.25 1338.53,-386.81 1339.1,-391.32" class="a-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="1201.29" y="-394.06" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">machine sleeps</text>
 </g>
 
 <g id="node7" class="node">
 <title>crashed</title>
-<path stroke-width="1.4" stroke-dasharray="5,2" d="M1420.46,-147.71C1420.46,-147.71 1312.04,-147.71 1312.04,-147.71 1306.04,-147.71 1300.04,-141.71 1300.04,-135.71 1300.04,-135.71 1300.04,-113 1300.04,-113 1300.04,-107 1306.04,-101 1312.04,-101 1312.04,-101 1420.46,-101 1420.46,-101 1426.46,-101 1432.46,-107 1432.46,-113 1432.46,-113 1432.46,-135.71 1432.46,-135.71 1432.46,-141.71 1426.46,-147.71 1420.46,-147.71" class="f-bad s-bad"/>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-131.26" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">TERMINATED</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-120.01" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">crash, kill, or quit —</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-108.76" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">no session.end written</text>
+<path stroke-width="1.4" stroke-dasharray="5,2" d="M1489.46,-147.71C1489.46,-147.71 1381.04,-147.71 1381.04,-147.71 1375.04,-147.71 1369.04,-141.71 1369.04,-135.71 1369.04,-135.71 1369.04,-113 1369.04,-113 1369.04,-107 1375.04,-101 1381.04,-101 1381.04,-101 1489.46,-101 1489.46,-101 1495.46,-101 1501.46,-107 1501.46,-113 1501.46,-113 1501.46,-135.71 1501.46,-135.71 1501.46,-141.71 1495.46,-147.71 1489.46,-147.71" class="f-bad s-bad"/>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-131.26" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">TERMINATED</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-120.01" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">crash, kill, or quit —</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-108.76" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">no session.end written</text>
 </g>
 
 <g id="edge9" class="edge">
 
-<path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M990.08,-202.17C1008.27,-187.53 1033.41,-169.89 1058.79,-160.36 1134.66,-131.85 1227.88,-124.46 1291.45,-123.19" class="s-bad"/>
-<polygon stroke-width="1.2" points="1291.16,-125.47 1297.62,-123.09 1291.09,-120.92 1291.16,-125.47" class="a-bad s-bad"/>
-<text xml:space="preserve" text-anchor="middle" x="1132.29" y="-161.28" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">process dies</text>
+<path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M1059.08,-202.17C1077.27,-187.53 1102.41,-169.89 1127.79,-160.36 1203.66,-131.85 1296.88,-124.46 1360.45,-123.19" class="s-bad"/>
+<polygon stroke-width="1.2" points="1360.16,-125.47 1366.62,-123.09 1360.09,-120.92 1360.16,-125.47" class="a-bad s-bad"/>
+<text xml:space="preserve" text-anchor="middle" x="1201.29" y="-161.28" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">process dies</text>
 </g>
 
 <g id="node9" class="node">
 <title>sealed</title>
-<path stroke-width="2" d="M1476.71,-304.46C1476.71,-304.46 1255.79,-304.46 1255.79,-304.46 1249.79,-304.46 1243.79,-298.46 1243.79,-292.46 1243.79,-292.46 1243.79,-202.25 1243.79,-202.25 1243.79,-196.25 1249.79,-190.25 1255.79,-190.25 1255.79,-190.25 1476.71,-190.25 1476.71,-190.25 1482.71,-190.25 1488.71,-196.25 1488.71,-202.25 1488.71,-202.25 1488.71,-292.46 1488.71,-292.46 1488.71,-298.46 1482.71,-304.46 1476.71,-304.46" class="f-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-288" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">BUNDLE SEALED</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-276.75" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">the archived copy is immutable —</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-265.5" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">but this is NOT a terminal state:</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-254.26" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">the live session keeps appending.</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-243.01" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">ZIP SUBMISSION ONLY. A git&#45;submitted</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-231.76" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">assignment never enters this state at all:</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-220.51" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">there is no submit moment, so the seal moves</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-209.26" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">onto the recording as a per&#45;session</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-198.01" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">ROLLING seal, rewritten at every checkpoint.</text>
+<path stroke-width="2" d="M1545.71,-304.46C1545.71,-304.46 1324.79,-304.46 1324.79,-304.46 1318.79,-304.46 1312.79,-298.46 1312.79,-292.46 1312.79,-292.46 1312.79,-202.25 1312.79,-202.25 1312.79,-196.25 1318.79,-190.25 1324.79,-190.25 1324.79,-190.25 1545.71,-190.25 1545.71,-190.25 1551.71,-190.25 1557.71,-196.25 1557.71,-202.25 1557.71,-202.25 1557.71,-292.46 1557.71,-292.46 1557.71,-298.46 1551.71,-304.46 1545.71,-304.46" class="f-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-288" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">BUNDLE SEALED</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-276.75" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">the archived copy is immutable —</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-265.5" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">but this is NOT a terminal state:</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-254.26" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">the live session keeps appending.</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-243.01" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">ZIP SUBMISSION ONLY. A git&#45;submitted</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-231.76" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">assignment never enters this state at all:</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-220.51" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">there is no submit moment, so the seal moves</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-209.26" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">onto the recording as a per&#45;session</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-198.01" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">ROLLING seal, rewritten at every checkpoint.</text>
 </g>
 
 <g id="edge12" class="edge">
 
-<path fill="none" stroke-width="1.2" d="M1013.75,-202.06C1028.01,-196.42 1043.73,-191.23 1058.79,-188.36 1122.97,-176.13 1141.48,-176.84 1205.79,-188.36 1215.42,-190.08 1225.23,-192.35 1235.01,-194.99" class="s-tra"/>
-<polygon stroke-width="1.2" points="1234.22,-197.13 1241.1,-196.69 1235.45,-192.75 1234.22,-197.13" class="a-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="1132.29" y="-198.28" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">student runs</text>
-<text xml:space="preserve" text-anchor="middle" x="1132.29" y="-189.28" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">Prepare Submission Bundle</text>
+<path fill="none" stroke-width="1.2" d="M1082.75,-202.06C1097.01,-196.42 1112.73,-191.23 1127.79,-188.36 1191.97,-176.13 1210.48,-176.84 1274.79,-188.36 1284.42,-190.08 1294.23,-192.35 1304.01,-194.99" class="s-tra"/>
+<polygon stroke-width="1.2" points="1303.22,-197.13 1310.1,-196.69 1304.45,-192.75 1303.22,-197.13" class="a-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="1201.29" y="-198.28" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">student runs</text>
+<text xml:space="preserve" text-anchor="middle" x="1201.29" y="-189.28" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">Prepare Submission Bundle</text>
 </g>
 
 <g id="edge8" class="edge">
 
-<path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M1289.03,-25.36C1227,-27.16 1137.21,-30.18 1058.79,-34.36 712.47,-52.8 625.09,-51 280.41,-89.36 270.88,-90.42 260.82,-91.74 251,-93.14" class="s-bad"/>
-<polygon stroke-width="1.2" points="250.72,-90.88 244.61,-94.07 251.37,-95.39 250.72,-90.88" class="a-bad s-bad"/>
-<text xml:space="preserve" text-anchor="middle" x="811" y="-68.2" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">an editor restart is the ONLY</text>
-<text xml:space="preserve" text-anchor="middle" x="811" y="-59.2" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">way out — degraded mode is</text>
-<text xml:space="preserve" text-anchor="middle" x="811" y="-50.2" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">never cleared in&#45;process</text>
+<path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M1358.03,-25.48C1296.01,-27.35 1206.22,-30.4 1127.79,-34.36 750.86,-53.35 655.62,-48.69 280.41,-89.36 270.88,-90.39 260.82,-91.7 250.99,-93.09" class="s-bad"/>
+<polygon stroke-width="1.2" points="250.71,-90.84 244.61,-94.02 251.37,-95.34 250.71,-90.84" class="a-bad s-bad"/>
+<text xml:space="preserve" text-anchor="middle" x="845.5" y="-69.91" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">an editor restart is the ONLY</text>
+<text xml:space="preserve" text-anchor="middle" x="845.5" y="-60.91" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">way out — degraded mode is</text>
+<text xml:space="preserve" text-anchor="middle" x="845.5" y="-51.91" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">never cleared in&#45;process</text>
 </g>
 
 <g id="edge6" class="edge">
 
-<path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M1294.35,-346.36C1205.64,-316.33 1064.54,-268.52 1058.79,-266.36 1048.46,-262.45 1037.57,-258.13 1027,-253.82" class="s-hum"/>
-<polygon stroke-width="1.2" points="1027.92,-251.74 1021.04,-251.37 1026.19,-255.95 1027.92,-251.74" class="a-hum s-hum"/>
-<text xml:space="preserve" text-anchor="middle" x="1132.29" y="-341.33" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">wake — the heartbeat emits</text>
-<text xml:space="preserve" text-anchor="middle" x="1132.29" y="-332.33" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">session.resumed when the gap is</text>
-<text xml:space="preserve" text-anchor="middle" x="1132.29" y="-323.33" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">≥ 2× the interval. The gap has no</text>
-<text xml:space="preserve" text-anchor="middle" x="1132.29" y="-314.33" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">intervening events, so it is NOT flagged</text>
+<path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M1363.35,-346.36C1274.64,-316.33 1133.54,-268.52 1127.79,-266.36 1117.46,-262.45 1106.57,-258.13 1096,-253.82" class="s-hum"/>
+<polygon stroke-width="1.2" points="1096.92,-251.74 1090.04,-251.37 1095.19,-255.95 1096.92,-251.74" class="a-hum s-hum"/>
+<text xml:space="preserve" text-anchor="middle" x="1201.29" y="-341.33" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">wake — the heartbeat emits</text>
+<text xml:space="preserve" text-anchor="middle" x="1201.29" y="-332.33" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">session.resumed when the gap is</text>
+<text xml:space="preserve" text-anchor="middle" x="1201.29" y="-323.33" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">≥ 2× the interval. The gap has no</text>
+<text xml:space="preserve" text-anchor="middle" x="1201.29" y="-314.33" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">intervening events, so it is NOT flagged</text>
 </g>
 
 <g id="node8" class="node">
 <title>recover</title>
-<path stroke-width="1.4" d="M1803.63,-331.34C1803.63,-331.34 1628.46,-331.34 1628.46,-331.34 1622.46,-331.34 1616.46,-325.34 1616.46,-319.34 1616.46,-319.34 1616.46,-285.38 1616.46,-285.38 1616.46,-279.38 1622.46,-273.38 1628.46,-273.38 1628.46,-273.38 1803.63,-273.38 1803.63,-273.38 1809.63,-273.38 1815.63,-279.38 1815.63,-285.38 1815.63,-285.38 1815.63,-319.34 1815.63,-319.34 1815.63,-325.34 1809.63,-331.34 1803.63,-331.34" class="f-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1716.05" y="-314.88" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">RECOVERING</text>
-<text xml:space="preserve" text-anchor="middle" x="1716.05" y="-303.63" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">read the log tail, find the last valid</text>
-<text xml:space="preserve" text-anchor="middle" x="1716.05" y="-292.38" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">chain link, quarantine the remainder,</text>
-<text xml:space="preserve" text-anchor="middle" x="1716.05" y="-281.13" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">and start a NEW log linked to it</text>
+<path stroke-width="1.4" d="M1872.63,-331.34C1872.63,-331.34 1697.46,-331.34 1697.46,-331.34 1691.46,-331.34 1685.46,-325.34 1685.46,-319.34 1685.46,-319.34 1685.46,-285.38 1685.46,-285.38 1685.46,-279.38 1691.46,-273.38 1697.46,-273.38 1697.46,-273.38 1872.63,-273.38 1872.63,-273.38 1878.63,-273.38 1884.63,-279.38 1884.63,-285.38 1884.63,-285.38 1884.63,-319.34 1884.63,-319.34 1884.63,-325.34 1878.63,-331.34 1872.63,-331.34" class="f-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1785.05" y="-314.88" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">RECOVERING</text>
+<text xml:space="preserve" text-anchor="middle" x="1785.05" y="-303.63" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">read the log tail, find the last valid</text>
+<text xml:space="preserve" text-anchor="middle" x="1785.05" y="-292.38" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">chain link, quarantine the remainder,</text>
+<text xml:space="preserve" text-anchor="middle" x="1785.05" y="-281.13" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">and start a NEW log linked to it</text>
 </g>
 
 <g id="edge10" class="edge">
 
-<path fill="none" stroke-width="1.2" d="M1433.1,-145.67C1451.39,-152.28 1471.07,-160.03 1488.71,-168.36 1551.36,-197.93 1619.25,-239.51 1664.16,-268.48" class="s-fmt"/>
-<polygon stroke-width="1.2" points="1662.67,-270.23 1669.37,-271.86 1665.15,-266.41 1662.67,-270.23" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1552.59" y="-216.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">editor restarts</text>
+<path fill="none" stroke-width="1.2" d="M1502.1,-145.67C1520.39,-152.28 1540.07,-160.03 1557.71,-168.36 1620.36,-197.93 1688.25,-239.51 1733.16,-268.48" class="s-fmt"/>
+<polygon stroke-width="1.2" points="1731.67,-270.23 1738.37,-271.86 1734.15,-266.41 1731.67,-270.23" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1621.59" y="-216.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">editor restarts</text>
 </g>
 
 <g id="edge11" class="edge">
 
-<path fill="none" stroke-width="1.2" d="M1671.46,-331.83C1627.53,-359.62 1556.68,-399.33 1488.71,-415.36 1452.86,-423.81 1078.39,-424.51 1058.79,-412.36 1003.95,-378.34 978.96,-302.04 968.8,-258.46" class="s-fmt"/>
-<polygon stroke-width="1.2" points="971.04,-258.09 967.41,-252.24 966.6,-259.08 971.04,-258.09" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-440.53" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">a FRESH session.start carrying</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-431.53" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">prev_session_id — not session.resumed,</text>
-<text xml:space="preserve" text-anchor="middle" x="1366.25" y="-422.53" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">and always into a NEW log file</text>
+<path fill="none" stroke-width="1.2" d="M1740.46,-331.83C1696.53,-359.62 1625.68,-399.33 1557.71,-415.36 1521.86,-423.81 1147.39,-424.51 1127.79,-412.36 1072.95,-378.34 1047.96,-302.04 1037.8,-258.46" class="s-fmt"/>
+<polygon stroke-width="1.2" points="1040.04,-258.09 1036.41,-252.24 1035.6,-259.08 1040.04,-258.09" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-440.53" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">a FRESH session.start carrying</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-431.53" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">prev_session_id — not session.resumed,</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-422.53" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">and always into a NEW log file</text>
 </g>
 
 <g id="edge13" class="edge">
 
-<path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M1242.92,-240.97C1172.85,-237.32 1087.6,-232.87 1029.66,-229.85" class="s-tra"/>
-<polygon stroke-width="1.2" points="1030.1,-227.59 1023.49,-229.53 1029.86,-232.14 1030.1,-227.59" class="a-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="1132.29" y="-248.66" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">sealing again just produces</text>
-<text xml:space="preserve" text-anchor="middle" x="1132.29" y="-239.66" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">another bundle</text>
+<path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M1311.92,-240.97C1241.85,-237.32 1156.6,-232.87 1098.66,-229.85" class="s-tra"/>
+<polygon stroke-width="1.2" points="1099.1,-227.59 1092.49,-229.53 1098.86,-232.14 1099.1,-227.59" class="a-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="1201.29" y="-248.66" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">sealing again just produces</text>
+<text xml:space="preserve" text-anchor="middle" x="1201.29" y="-239.66" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">another bundle</text>
 </g>
 </g>
 </svg>

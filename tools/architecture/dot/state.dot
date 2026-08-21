@@ -36,7 +36,8 @@ digraph state {
   start     -> dormant  [label="editor starts"]
   dormant   -> verify   [label="workspace opened"]
   verify    -> dormant  [label="no — stay silent,\nrecord nothing" color="#5d677d" style=dashed]
-  verify    -> recording[label="yes — session.start" color="#F97316"]
+  verify    -> recording[label="yes — session.start.\nThe §5.6 capability reports resolve FIRST:\nthe git probe and the .provenance/ watcher's\ncreation both happen before seq 0 is chained,\nwhile the wiring that consumes them starts after"
+                         color="#F97316"]
 
   recording -> suspended[label="machine sleeps" color="#5d677d" style=dashed]
   suspended -> recording[label="wake — the heartbeat emits\nsession.resumed when the gap is\n≥ 2× the interval. The gap has no\nintervening events, so it is NOT flagged"

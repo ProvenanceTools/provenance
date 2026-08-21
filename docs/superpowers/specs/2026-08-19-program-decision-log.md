@@ -1786,3 +1786,75 @@ Left alone deliberately, per the standing instruction that concurrent agents mus
 log-core **689** · analysis-core **1165** (+12) · analyzer **1327** (+4) · tools **188**. Build,
 typecheck, lint clean. Server not run and no server source touched; `summary.ts` returns the
 aggregate wholesale, so the new field crosses the wire with no route change.
+
+---
+
+### Landed 2026-08-21 — the `/architecture` catch-up pass for the six changes after the consolidation
+
+Six changes had landed since the consolidated diagram pass and each left node bodies or diagrams
+owed. All six were re-verified against the CODE before being drawn; five reports were accurate and
+one was stale in a detail worth recording.
+
+**Three new nodes, and the diagram edits carrying them.**
+
+- `recorder:cap` — the §5.6 capability reports, drawn in `cluster_core` in host colour because the
+  values come from the host layer. Two dashed edges arrive, from `h_git` (`probeGitCapture`, which
+  goes through the same `resolveGitApi` `startGitWiring` routes on) and from `h_prov` (whether the
+  ONE watcher could be created), and one edge leaves for `tx` carrying the ordering constraint:
+  the report rides in `session.start` at seq 0, so the WIRING that consumes both signals starts
+  afterwards. `h_prov`'s own label now says the watcher's creation moved ahead of `session.start`
+  and IS `witness_capture`. **`state.dot`'s activation edge says the same thing** — recorder
+  activation ordering is its own `/architecture` trigger, and the state machine is where a reader
+  looks for ordering.
+- `analysis:capab` — `analysis-core/src/capability/`, edged into `witness`, which is what gains
+  `witnessingCapability` at bundle level and a per-session `capability` on a different axis from
+  `state`.
+- `analysis:xscope` — S20's `coverage/cross-scope.ts`, drawn inside `cluster_cross` rather than
+  beside `session-overlap` in `cluster_creaders`: it needs more than one bundle by construction,
+  and `cluster_creaders` was already carrying five nodes. Edged from `dag` (observed commit keys)
+  into both `c1` and `c2`.
+
+**`chain.dot`'s entry-0 note** now lists `git_capture` / `witness_capture` / `file_scope` beside
+manifest / identity / host, marked optional-permanently with "absent ≠ unavailable", and the `e0`
+body says what kind of field they are — capability, not observation — and why omission rather than
+`null` is the writer rule.
+
+**The one stale report.** The briefing said `readpath.dot`'s loader node "says `loadSubmissionIndex`
+throws on an unparseable log", and that this is now false for the torn-tail shape. **It does not say
+that** — the `lsi` body never mentions failure behaviour at all, so nothing there was wrong and
+nothing was changed. The torn-tail rule was authored where the enumeration it belongs to actually
+lives: `chain:zip` (the fifth crash shape, and why truncate-and-keep beats drop — check 8 scans
+`bundle.sessions` for each file's last recorded state, so dropping one returns the crash as "code
+appeared that the log never recorded") and `analysis:unzip` (the byte-level rule, that a MIDDLE
+failure is still fatal and IS what `loadSubmissionIndex` throws on, and that `parseEntries` itself
+stays strict because chain-recovery, seal and the peer watcher all call it).
+
+**A pre-existing inaccuracy noticed and deliberately NOT changed.** `analysis:unzip`'s second
+paragraph still says "the structural failures are hard failures rather than warnings: a `.slog` with
+no `.meta` sidecar, a `.meta` with no `.slog`, zero sessions at all." Bug 11 made the first two
+DROPPED artifacts rather than load failures, and `chain:zip` says so at length four paragraphs
+later, so the page contradicts itself in one sentence. It predates all six of these changes, and
+rewriting it is a separate edit with its own reading of what "zero sessions" still does.
+
+**Also drawn, not on the owed list.** `master:cross` and `analysis:cx` (the comparison is per
+assignment; the DELETE-then-INSERT stays semester-wide, with the reused-starter argument and the
+fixture-encoded-the-bug note); `master:local` (the `/compare` exclusion register, and the explicit
+statement that the server path has no channel for it); `er:submissions` (two partial indexes now
+share the not-superseded predicate, since the cohort index leads with `score_total` and cannot serve
+a chronological page); `analysis:hi`'s confidence list, which enumerated four constants and now has
+to say the overlap answers at two strengths.
+
+**Migration-chain check.** Nothing on the page names the chain by length or by highest number.
+`er.ts` cites individual migrations (0001, 0002, 0004, 0005, 0014, 0021, 0024–0027, 0029) and every
+citation is still correct; `0030` is now cited too, in `readpath:r_cohort` and `er:submissions`.
+
+**Determinism.** `build_diagrams.py` run twice, `git status --porcelain` empty the second time.
+Plate growth is modest and both changed plates were rendered and read: `analysis` 3199×1898 →
+3476×1985, `recorder` 2207×1986 → 2481×1883. One layout experiment was tried and reverted —
+`constraint=false` on `dag -> xscope` shortens that one long edge but reflows the whole plate, putting
+the validation cluster on the far left and the loader on the right, which is a worse page.
+
+**Suites.** analyzer **1334** (unchanged — this pass adds no test, and `nodes.coverage.test.ts` is
+green with three new nodes), tools **188**. Build, typecheck, lint clean. No server test run and no
+production code outside `tools/architecture/**` and
+`packages/analyzer/src/views/architecture/**` touched.

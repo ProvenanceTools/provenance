@@ -21,7 +21,7 @@ digraph recorder {
     h_term [label="terminal\nshell integration, when available"]
     h_git  [label="git\nbuilt-in API · Git4Idea · external — may be absent"]
     h_win  [label="window\nfocus · selection · extension activation"]
-    h_prov [label=".provenance/ directory watcher\nONE watcher on the DIRECTORY, not one per file, and\ndistinct from the files_under_review watchers.\nCallbacks enqueue a basename and return —\nno I/O, no hashing, no parsing on the callback"]
+    h_prov [label=".provenance/ directory watcher\nONE watcher on the DIRECTORY, not one per file, and\ndistinct from the files_under_review watchers.\nCreated BEFORE session.start is chained, and whether\nit could be created IS witness_capture — no second,\nthrowaway probe that could disagree with the wiring.\nCallbacks enqueue a basename and return —\nno I/O, no hashing, no parsing on the callback"]
   }
 
   /* ── detection ── */
@@ -64,6 +64,8 @@ digraph recorder {
 
     polic [label="capture policy\nresolved once from the course-signed manifest\nselection_change · focus_change · terminal ·\nheartbeat_interval_ms — everything else is FLOOR"
            fontsize=9]
+    cap   [label="§5.6 CAPABILITY REPORT — not a knob\ngit_capture · witness_capture · file_scope.\nResolved at activation, BEFORE seq 0 is chained,\nand OMITTED — never null — where it cannot be\nanswered. Never gated by policy, never a finding."
+           fillcolor="#241a0c" color="#F97316" fontsize=9]
     gate  [label="captured under\nthis policy?" shape=diamond fillcolor="#0e0b18" fontsize=9
            height=0.85 width=1.5]
     drop  [label="dropped at the ONE choke point —\nand BEFORE chaining, so it consumes no seq.\nDropping after would leave a gap that\nvalidation check 4 reads as a deletion."
@@ -110,6 +112,10 @@ digraph recorder {
   h_git  -> tx [label="every git.event carrying a sha is labelled with its\nrepository's ROOT-COMMIT sha, derived once per\nrepository at wiring setup. Omitted — never null,\nnever guessed — on a shallow clone or any failure"]
   h_win  -> tx
   h_prov -> drain [label="a basename on a Set,\nnothing more"]
+  h_git  -> cap [label="probeGitCapture — the SAME resolveGitApi\nthe wiring routes on, so the report and the\nbehaviour cannot drift apart" color="#F97316" style=dashed]
+  h_prov -> cap [label="could the ONE watcher\nbe created?" color="#F97316" style=dashed]
+  cap    -> tx  [label="rides in session.start at seq 0 — the WIRING that\nconsumes both signals only starts afterwards"
+                 color="#F97316"]
   drain  -> tx [label="peer.observed — a FILE and a\nCHAIN POSITION. No student ref, no key,\nno git author, no path outside .provenance/"
                 color="#e8559c"]
 
