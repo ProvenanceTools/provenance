@@ -30,7 +30,7 @@ digraph state {
   recover [label="RECOVERING\nread the log tail, find the last valid\nchain link, quarantine the remainder,\nand start a NEW log linked to it"
            fillcolor="#1e1830" color="#9d7bf5"]
 
-  sealed  [label="BUNDLE SEALED\nthe archived copy is immutable —\nbut this is NOT a terminal state:\nthe live session keeps appending"
+  sealed  [label="BUNDLE SEALED\nthe archived copy is immutable —\nbut this is NOT a terminal state:\nthe live session keeps appending.\nZIP SUBMISSION ONLY. A git-submitted\nassignment never enters this state at all:\nthere is no submit moment, so the seal moves\nonto the recording as a per-session\nROLLING seal, rewritten at every checkpoint."
            fillcolor="#0e2422" color="#17bfae" penwidth=2.0]
 
   start     -> dormant  [label="editor starts"]
