@@ -228,6 +228,12 @@ describe('partitionSessionOverlaps is a partition', () => {
       expect(p.contributorB.kind).toBe('attributed');
       expect(p.contributorA.contributorKey).not.toBe(p.contributorB.contributorKey);
     }
+    // Same guarantee on the two-machine arm: a suppression may never rest on
+    // an unproven relationship, so both sides must be attributed there too.
+    for (const p of multiMachine) {
+      expect(p.contributorA.kind).toBe('attributed');
+      expect(p.contributorB.kind).toBe('attributed');
+    }
   });
 
   it('the two-machine arm is one person on proven-distinct machines — never two people', async () => {

@@ -621,6 +621,10 @@ const COVERAGE_WITH_FACTS: NonNullable<SubmissionSummary['coverage']> = {
       crashBounded: false,
     },
   ],
+  // One student on two enrolled machines (D5) — a separate fact from the
+  // partner collaboration above, and empty here so this fixture keeps
+  // describing exactly what it always did.
+  multiMachineRecording: [],
   droppedArtifacts: [],
   unattestedTails: [],
   dagDefects: [],
@@ -693,6 +697,7 @@ describe('Overview coverage panel', () => {
         unattributed: 0,
       },
       concurrentRecording: [],
+      multiMachineRecording: [],
     };
     renderOverview(makeProvider(makeQueryResult({ ...DUMMY_SUMMARY, coverage: nothingToNote })));
 

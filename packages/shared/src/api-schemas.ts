@@ -1086,6 +1086,24 @@ export const CoverageFactsSchema = z.object({
     }),
   ),
   /**
+   * ONE verified student recording on TWO independently enrolled machines at
+   * the same time (D5). Exculpatory context — a supported setup.
+   *
+   * A SEPARATE field from `concurrentRecording`, deliberately: two machines is
+   * not two people, and merging them would tell a grader that two students
+   * collaborated when one person moved between their own machines.
+   */
+  multiMachineRecording: z.array(
+    z.object({
+      sessionA: z.string(),
+      sessionB: z.string(),
+      /** The one verified `student_ref` — never two. */
+      studentRef: z.string(),
+      overlapMs: z.number(),
+      crashBounded: z.boolean(),
+    }),
+  ),
+  /**
    * Archive entries the loader could not read as provenance records.
    *
    * Only the three fields the panel states. `logFileId` / `logicalSessionId` are

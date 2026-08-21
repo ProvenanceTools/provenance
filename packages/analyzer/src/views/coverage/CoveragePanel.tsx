@@ -140,6 +140,7 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
   const {
     identity,
     concurrentRecording,
+    multiMachineRecording,
     droppedArtifacts,
     unattestedTails,
     dagDefects,
@@ -178,6 +179,31 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
               </span>{' '}
               Both identities are verified and are different people, so this is two partners working
               at the same time — the expected shape of collaboration, and not a finding.
+              {f.crashBounded &&
+                ' One of the two sessions has no session.end, so its extent is bounded at its last recorded event and the real overlap may be longer.'}
+            </p>
+          ))}
+        </Section>
+      )}
+
+      {/* -----------------------------------------------------------------
+          One student, two machines (D5) — a SEPARATE section, deliberately.
+          Rendering this inside "Concurrent recording" would tell a grader
+          two people collaborated when one person moved between their own
+          machines. Two machines is not two people.
+          ----------------------------------------------------------------- */}
+      {multiMachineRecording.length > 0 && (
+        <Section title="One contributor, two machines" testId="coverage-multi-machine-recording">
+          {multiMachineRecording.map((f) => (
+            <p key={`${f.sessionA}:${f.sessionB}`} data-testid="coverage-multi-machine-row">
+              <span className="font-medium">
+                {f.studentRef} recorded on two enrolled machines at the same time, for{' '}
+                {formatDuration(f.overlapMs)}.
+              </span>{' '}
+              Both sessions verify to the same student, and each was signed by a different enrolled
+              machine key — so this is one person&rsquo;s two machines, which is a supported setup,
+              and not a finding. Enrolling a second machine is how it is meant to be done: each
+              machine generates its own key and nothing is copied between them.
               {f.crashBounded &&
                 ' One of the two sessions has no session.end, so its extent is bounded at its last recorded event and the real overlap may be longer.'}
             </p>
