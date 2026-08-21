@@ -60,8 +60,25 @@ const SHA_B = 'b'.repeat(40);
 const ROOT_ONE = '1'.repeat(40);
 const ROOT_TWO = '2'.repeat(40);
 
+/**
+ * A SECOND enrolled machine for the same deployment (D5): same root, same
+ * institution, a different student keypair. That is the whole difference a
+ * second independent enrolment produces.
+ */
+let cachedSecondMachine: IdentityTestKeys | null = null;
+async function secondMachine(): Promise<IdentityTestKeys> {
+  cachedSecondMachine ??= await buildIdentityKeys({ studentSeedByte: 0x56 });
+  return cachedSecondMachine;
+}
+
 async function buildScope(
-  specs: Array<{ who: Who; startMin: number; endMin: number; commits?: CommitSpec[] }>,
+  specs: Array<{
+    who: Who;
+    startMin: number;
+    endMin: number;
+    commits?: CommitSpec[];
+    machine?: IdentityTestKeys;
+  }>,
   opts: { rootKey?: string } = {},
 ): Promise<{ bundle: Bundle; index: EventIndex }> {
   const k = await keys();
@@ -96,7 +113,7 @@ async function buildScope(
           ? {}
           : {
               identity: await buildInstitutionIdentity({
-                keys: k,
+                keys: spec.machine ?? k,
                 sessionPubkeyHex: sk.pubkeyHex,
                 ...(spec.who === 'forged'
                   ? { certSignedBy: k.student.privkey }
@@ -177,6 +194,63 @@ describe('a suppressed concurrent overlap appears as a fact', () => {
     expect(screen.getByTestId('coverage-concurrent-row')).not.toBeNull();
     // No collapsed-by-default control survives.
     expect(screen.queryByRole('button', { expanded: false })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One student, two machines (D5)
+// ---------------------------------------------------------------------------
+
+describe('a suppressed two-machine overlap appears as a fact', () => {
+  async function twoMachines() {
+    return buildScope([
+      { who: { studentRef: 'alice' }, startMin: 0, endMin: 192 },
+      { who: { studentRef: 'alice' }, machine: await secondMachine(), startMin: 0, endMin: 192 },
+    ]);
+  }
+
+  it('names the one student, the two machines, and the duration', async () => {
+    const { bundle, index } = await twoMachines();
+    renderOpen(bundle, index);
+
+    const row = screen.getByTestId('coverage-multi-machine-row');
+    expect(row.textContent).toMatch(/alice/);
+    expect(row.textContent).toMatch(/3h 12m/);
+    expect(row.textContent).toMatch(/two enrolled machines/i);
+    expect(row.textContent).toMatch(/not a finding/i);
+  });
+
+  it('is its OWN section — two machines is not two people', async () => {
+    const { bundle, index } = await twoMachines();
+    renderOpen(bundle, index);
+
+    expect(screen.getByTestId('coverage-multi-machine-recording')).not.toBeNull();
+    // The partner-collaboration section must NOT appear: no two people here.
+    expect(screen.queryByTestId('coverage-concurrent-recording')).toBeNull();
+    // And the copy must not describe this as collaboration.
+    const row = screen.getByTestId('coverage-multi-machine-row');
+    expect(row.textContent).not.toMatch(/collaboration/i);
+    expect(row.textContent).not.toMatch(/partner/i);
+  });
+
+  it('is a status region, never an alert', async () => {
+    const { bundle, index } = await twoMachines();
+    render(<CoveragePanel facts={coverageFacts(bundle, index)} />);
+    expect(screen.getByTestId('submission-coverage-panel').getAttribute('role')).toBe('status');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('survives the wire — the server-backed panel says the same thing', async () => {
+    const { bundle, index } = await twoMachines();
+    const facts = coverageFacts(bundle, index);
+    expect(facts.multiMachineRecording.length).toBeGreaterThan(0);
+
+    const overTheWire: unknown = JSON.parse(JSON.stringify(facts));
+    const parsed = CoverageFactsSchema.parse(overTheWire);
+    expect(parsed.multiMachineRecording).toEqual(facts.multiMachineRecording);
+
+    render(<CoveragePanel facts={parsed as unknown as typeof facts} />);
+    expect(screen.getByTestId('coverage-multi-machine-row').textContent).toMatch(/alice/);
   });
 });
 
@@ -430,6 +504,7 @@ describe('when the facts were not sent', () => {
       'coverage-no-root-key',
       'coverage-dag-counts',
       'coverage-concurrent-recording',
+      'coverage-multi-machine-recording',
       'coverage-unattested-tails',
       'coverage-dropped-artifacts',
       'coverage-nothing-to-note',

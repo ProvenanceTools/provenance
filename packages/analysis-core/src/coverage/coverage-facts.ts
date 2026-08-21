@@ -24,16 +24,21 @@
  *  - `concurrent` ≠ `unknown`. A {@link CollaborationOverlap} is only ever a pair
  *    of two verified, provably different people; an unproven pair is not
  *    representable in it.
+ *  - **two machines ≠ two people.** {@link MultiMachineRecordingFact} is ONE
+ *    verified student on two independently enrolled machines (D5). It is kept in
+ *    its own field for the same reason the three identity states are kept apart:
+ *    merging it into {@link ConcurrentRecordingFact} would tell a grader two
+ *    people collaborated when one person moved between their own machines.
  *
- * ## Where the concurrency fact comes from
+ * ## Where the concurrency facts come from
  *
  * `coverage/session-overlap.ts` owns the single enumeration of overlapping
- * session pairs and the single suppression decision.
- * `heuristics/multiple-sessions-overlap.ts` consumes the `judged` half; this
- * module consumes the `collaboration` half. They cannot disagree about which
- * pairs were suppressed because neither computes it — see that module's header
- * for why this is a type-level guarantee rather than a tested-after-the-fact
- * one.
+ * session pairs and the single place the suppressions are decided.
+ * `heuristics/multiple-sessions-overlap.ts` consumes the `judged` part; this
+ * module consumes the `collaboration` and `multiMachine` parts. They cannot
+ * disagree about which pairs were suppressed because neither computes it — see
+ * that module's header for why this is a type-level guarantee rather than a
+ * tested-after-the-fact one.
  */
 
 import { ASSUMED_SINGLE_REPOSITORY, buildObservedDag } from '../git/observed-dag.js';
@@ -41,7 +46,11 @@ import type { ObservedDagCoverage, ObservedDagDefect } from '../git/observed-dag
 import type { BundleContributors } from '../identity/types.js';
 import type { EventIndex } from '../index/event-index.js';
 import type { Bundle, DroppedArtifact } from '../loader/types.js';
-import { partitionSessionOverlaps, type CollaborationOverlap } from './session-overlap.js';
+import {
+  partitionSessionOverlaps,
+  type CollaborationOverlap,
+  type MultiMachineOverlap,
+} from './session-overlap.js';
 
 // ---------------------------------------------------------------------------
 // Concurrent recording
@@ -85,14 +94,65 @@ function toFact(o: CollaborationOverlap): ConcurrentRecordingFact {
 
 /**
  * Every overlapping session pair whose contributors are PROVABLY different —
- * exactly the pairs `multiple_sessions_overlap` suppresses, read from the
- * partition rather than recomputed.
+ * one of the two kinds of pair `multiple_sessions_overlap` suppresses, read
+ * from the partition rather than recomputed.
  */
 export function concurrentRecordingFacts(
   bundle: Bundle,
   index: EventIndex,
 ): ConcurrentRecordingFact[] {
   return partitionSessionOverlaps(bundle, index).collaboration.map(toFact);
+}
+
+// ---------------------------------------------------------------------------
+// One student, two machines
+// ---------------------------------------------------------------------------
+
+/**
+ * ONE verified student recorded on TWO independently enrolled machines at the
+ * same wall-clock time (D5).
+ *
+ * Exculpatory context, never a finding — and a DIFFERENT fact from
+ * {@link ConcurrentRecordingFact}. Rendering this as "two contributors recorded
+ * concurrently" would tell a grader that two people worked together when one
+ * person moved between their own machines, which is a fabricated relationship
+ * in the opposite direction from the one this module usually guards against.
+ *
+ * Produced only from the `multiMachine` arm of the overlap partition, which
+ * requires both sides attributed, sharing one `student_ref`, and carrying two
+ * proven-distinct `student_pubkey`s — so it can never rest on an unproven
+ * relationship.
+ */
+export type MultiMachineRecordingFact = {
+  sessionA: string;
+  sessionB: string;
+  /** The one verified `student_ref`. Only ever a verified name. */
+  studentRef: string;
+  overlapMs: number;
+  /** Either range was bounded by its last recorded event; see above. */
+  crashBounded: boolean;
+};
+
+function toMachineFact(o: MultiMachineOverlap): MultiMachineRecordingFact {
+  return {
+    sessionA: o.a.sessionId,
+    sessionB: o.b.sessionId,
+    studentRef: o.studentRef,
+    overlapMs: o.overlapMs,
+    crashBounded: o.a.openEnded || o.b.openEnded,
+  };
+}
+
+/**
+ * Every overlapping session pair recorded by one verified student on two
+ * enrolled machines — the other kind of pair `multiple_sessions_overlap`
+ * suppresses, read from the partition rather than recomputed.
+ */
+export function multiMachineRecordingFacts(
+  bundle: Bundle,
+  index: EventIndex,
+): MultiMachineRecordingFact[] {
+  return partitionSessionOverlaps(bundle, index).multiMachine.map(toMachineFact);
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +299,12 @@ export function tornTails(bundle: Bundle): TornTailFact[] {
 export type CoverageFacts = {
   identity: IdentityCoverage;
   concurrentRecording: readonly ConcurrentRecordingFact[];
+  /**
+   * One student on two enrolled machines. Kept SEPARATE from
+   * `concurrentRecording`: two machines is not two people, and a consumer that
+   * merges them names a collaboration that did not happen.
+   */
+  multiMachineRecording: readonly MultiMachineRecordingFact[];
   droppedArtifacts: readonly DroppedArtifact[];
   tornTails: readonly TornTailFact[];
   unattestedTails: readonly UnattestedTail[];
@@ -281,6 +347,7 @@ export function coverageFacts(bundle: Bundle, index: EventIndex): CoverageFacts 
   return {
     identity: identityCoverage(bundle.contributors ?? null),
     concurrentRecording: concurrentRecordingFacts(bundle, index),
+    multiMachineRecording: multiMachineRecordingFacts(bundle, index),
     droppedArtifacts: bundle.droppedArtifacts,
     tornTails: tornTails(bundle),
     unattestedTails: unattestedTails(bundle),
@@ -302,6 +369,7 @@ export function coverageFacts(bundle: Bundle, index: EventIndex): CoverageFacts 
 export function hasCoverageFacts(f: CoverageFacts): boolean {
   return (
     f.concurrentRecording.length > 0 ||
+    f.multiMachineRecording.length > 0 ||
     f.droppedArtifacts.length > 0 ||
     f.tornTails.length > 0 ||
     f.unattestedTails.length > 0 ||
