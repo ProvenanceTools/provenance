@@ -2957,12 +2957,21 @@ async function main(): Promise<void> {
 
   // --- 7. golden full bundle (built from analysis-core's test-support builder) ---
   // A complete, self-consistent sealed bundle straight from analysis-core, so the
-  // JetBrains core/ can assert its manifest conforms to the shared shape. Not compared
-  // byte-for-byte (there is no committed original); it is a fresh, deterministic build.
+  // JetBrains core/ can assert its manifest conforms to the shared shape.
+  //
+  // sessionPrivkeyHex + zipFileDate pin buildTestBundle's two nondeterministic
+  // inputs (a fresh ed25519 keypair per call, and JSZip's per-file `new Date()`
+  // mtime) so this is a byte-for-byte reproducible build, not a fresh one each
+  // run — golden-bundle.json/.zip are committed fixtures in the JetBrains and
+  // Neovim recorder repos, and every re-run used to mint a new keypair, making
+  // the "regenerate the vectors" workflow produce spurious diffs in exactly
+  // these two files that had to be noticed and reverted by hand.
   const golden = await buildTestBundle({
     assignmentId: 'golden-hw',
     semester: 'fa26',
     sessions: [{ eventCount: 8, appendDocSave: true }],
+    sessionPrivkeyHex: toHex(seed(8)),
+    zipFileDate: new Date('2026-01-01T00:00:00.000Z'),
   });
   fs.writeFileSync(path.join(outDir, 'golden-bundle.zip'), Buffer.from(golden.zipBuffer));
   writeJson(outDir, 'golden-bundle.json', {

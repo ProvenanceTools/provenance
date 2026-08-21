@@ -8,7 +8,7 @@
 
 import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha2.js';
-import { bytesToHex } from '@noble/hashes/utils.js';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import JSZip from 'jszip';
 import {
   chainEntry,
@@ -203,6 +203,25 @@ export type BuildBundleOpts = {
    * `manifest.json`. See {@link RollingSealSpec}.
    */
   rollingSeal?: RollingSealSpec;
+  /**
+   * Pin the ed25519 keypair used to sign the manifest, as a hex-encoded 32-byte
+   * seed. Opt-in only — omit this and you get the existing behavior (a fresh
+   * random keypair per call, via `ed.utils.randomSecretKey()`), which is what
+   * most callers want (e.g. tests that build two bundles and expect them to
+   * carry distinct pubkeys). Pass this when a caller needs the SAME bundle
+   * bytes across repeated builds — e.g. `tools/export-conformance-vectors.ts`'s
+   * golden bundle, which is committed as a fixture in sibling repos and must
+   * not churn every time someone re-runs the exporter.
+   */
+  sessionPrivkeyHex?: string;
+  /**
+   * Pin the mtime JSZip embeds for every file in the built ZIP. Opt-in only —
+   * JSZip defaults to `new Date()` per `zip.file()` call when no `date` option
+   * is given, which is nondeterministic across runs and would defeat
+   * `sessionPrivkeyHex`'s byte-for-byte reproducibility goal for the ZIP output
+   * (the JSON manifest sidecar has no such field and doesn't need this).
+   */
+  zipFileDate?: Date;
   /**
    * Submission files to include (makes this a 1.1 bundle).
    * If undefined, the manifest is 1.0 and no submission_files are present.
@@ -611,8 +630,12 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
 
   const rollingSpec = opts?.rollingSeal;
 
-  // Generate one keypair shared across sessions (manifest sig is all that matters here).
-  const privkey = ed.utils.randomSecretKey();
+  // Generate one keypair shared across sessions (manifest sig is all that matters here),
+  // unless the caller pinned one via sessionPrivkeyHex (see BuildBundleOpts).
+  const privkey =
+    opts?.sessionPrivkeyHex !== undefined
+      ? hexToBytes(opts.sessionPrivkeyHex)
+      : ed.utils.randomSecretKey();
   const pubkey = await ed.getPublicKeyAsync(privkey);
   const pubkeyHex = bytesToHex(pubkey);
   const sessionPrivkeyHex = bytesToHex(privkey);
@@ -1069,19 +1092,23 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
   // 5. Build ZIP, applying tamper mutations.
   // ---------------------------------------------------------------------------
   const zip = new JSZip();
+  // See BuildBundleOpts.zipFileDate: an empty options object here reproduces
+  // the prior behavior exactly (JSZip falls back to `new Date()` per file).
+  const zipOpts: { date?: Date } =
+    opts?.zipFileDate !== undefined ? { date: opts.zipFileDate } : {};
 
   // A rolling-sealed bundle has no classic manifest at all unless the test asks
   // for the both-shapes case.
   const emitClassic = rollingSpec === undefined || rollingSpec.alsoClassic === true;
 
   if (emitClassic && !tamper.omitManifest) {
-    zip.file('manifest.json', canonicalManifest);
+    zip.file('manifest.json', canonicalManifest, zipOpts);
   }
   if (emitClassic && !tamper.omitSig) {
-    zip.file('manifest.sig', sigHex);
+    zip.file('manifest.sig', sigHex, zipOpts);
   }
   for (const [name, text] of rollingFiles) {
-    zip.file(name, text);
+    zip.file(name, text, zipOpts);
   }
 
   if (!tamper.omitAllSlogs) {
@@ -1101,23 +1128,23 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
       const skipSlog = tamper.omitOneSlog === true && isLastSession;
 
       if (!skipSlog) {
-        zip.file(slogName, s.archiveAsCrlf ? toCrlf(s.slogText) : s.slogText);
+        zip.file(slogName, s.archiveAsCrlf ? toCrlf(s.slogText) : s.slogText, zipOpts);
       }
       if (!skipMeta) {
-        zip.file(metaName, s.metaJson);
+        zip.file(metaName, s.metaJson, zipOpts);
       }
     }
   }
 
   if (tamper.addStrayFile !== undefined) {
-    zip.file(tamper.addStrayFile.name, tamper.addStrayFile.content);
+    zip.file(tamper.addStrayFile.name, tamper.addStrayFile.content, zipOpts);
   }
 
   // Add submission file bytes at the zip root (1.1 bundles only).
   if (submissionFileSpecs !== undefined) {
     for (const spec of submissionFileSpecs) {
       if (spec.status === 'present' && spec.content !== undefined) {
-        zip.file(spec.path, spec.content);
+        zip.file(spec.path, spec.content, zipOpts);
       }
     }
   }
