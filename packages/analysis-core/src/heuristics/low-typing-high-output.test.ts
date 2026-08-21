@@ -8,6 +8,15 @@ import { buildIndex } from '../index/build-index.js';
 import { loadBundle } from '../loader/parse-bundle.js';
 import { buildTestBundle } from '../test-support/build-test-bundle.js';
 import { DEFAULT_HEURISTIC_CONFIG } from './config.js';
+import {
+  buildCollabScope,
+  collabDocSave,
+  collabPartnerSession,
+  collabPullerSession,
+  COLLAB_ALICE,
+  COLLAB_BOB,
+  COLLAB_FILE,
+} from '../test-support/build-collab-scope.js';
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -665,5 +674,119 @@ describe('low_typing_high_output — net-delta semantics', () => {
     expect(flags[0]!.detail!['startLength']).toBe(0);
     expect(flags[0]!.detail!['deltaLength']).toBe(100);
     expect(flags[0]!.detail!['ratio']).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tier 3.1 — content a git merge delivered is not this student's output
+// ---------------------------------------------------------------------------
+//
+// The false accusation this section exists to prevent: Alice pulls Bob's work
+// onto a descendant commit, so the file re-anchors and Tier 2.2 answers
+// `determinate`. She never had the file open, so `startLength = 0` and
+// `charsTyped = 0`, and the ratio is infinite — HIGH severity, confidence 1.0,
+// on a student who ran `git pull`. There is no way for her to avoid the shape.
+//
+// The fix subtracts the merged-in characters rather than skipping the file, so
+// each case below has a partner: honest pull produces nothing, the same pull
+// followed by real unexplained output still fires.
+
+describe('low_typing_high_output — Tier 3.1 (git merge is not output)', () => {
+  const IMPLEMENTATION =
+    Array.from(
+      { length: 24 },
+      (_, i) => `def helper_${i}(value):\n    return value * ${i} + 1`,
+    ).join('\n') + '\n';
+
+  /** Content of the same size that NO contributor recorded. */
+  const ELSEWHERE =
+    Array.from({ length: 24 }, (_, i) => `def other_${i}(value):\n    return value - ${i}`).join(
+      '\n',
+    ) + '\n';
+
+  function honestPull(opts: Parameters<typeof collabPullerSession>[1] = {}) {
+    return [
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession(IMPLEMENTATION) },
+      {
+        who: { studentRef: COLLAB_ALICE },
+        events: collabPullerSession(IMPLEMENTATION, { merge: true, ...opts }),
+      },
+    ] satisfies Parameters<typeof buildCollabScope>[0];
+  }
+
+  it('does not fire on an honest `git pull` of a partner’s recorded work', async () => {
+    const { bundle, index } = await buildCollabScope(honestPull());
+    const flags = lowTypingHighOutputHeuristic.run(index, bundle, cfg);
+    expect(
+      flags,
+      'low_typing_high_output fired on an honest pull. Two enrolled partners sharing one ' +
+        'repository must not collect a high-severity finding for collaborating — this is the ' +
+        '"no false accusations" row. Do not relax this assertion; find what stopped ' +
+        'discounting the merged-in content.',
+    ).toHaveLength(0);
+  });
+
+  it('the same events WITHOUT a contributor verdict still fire — the zero above is the gate', async () => {
+    // An unstamped bundle is the ordinary 1.x / unenrolled / no-root-key state:
+    // `compareContributors` answers `'unknown'`, nothing is `git_merge_in`, and
+    // the heuristic behaves exactly as it did before Tier 3.1. Without this the
+    // zero above would be satisfied by a heuristic that had simply stopped
+    // working.
+    const { bundle, index } = await buildCollabScope(honestPull(), { stamp: false });
+    const flags = lowTypingHighOutputHeuristic.run(index, bundle, cfg);
+    expect(flags.length).toBeGreaterThan(0);
+    expect(flags[0]!.severity).toBe('high');
+  });
+
+  it('still fires when the student pastes unexplained content after the pull', async () => {
+    const pasted = 'z'.repeat(900);
+    const { bundle, index } = await buildCollabScope(
+      honestPull({
+        after: [
+          {
+            kind: 'paste',
+            data: {
+              path: COLLAB_FILE,
+              content: pasted,
+              length: pasted.length,
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+            },
+          },
+          collabDocSave(pasted + IMPLEMENTATION),
+        ],
+      }),
+    );
+    const flags = lowTypingHighOutputHeuristic.run(index, bundle, cfg);
+    expect(
+      flags,
+      'the discount must be limited to the characters git delivered. A pull followed by an ' +
+        'unexplained 900-char paste is still unexplained output.',
+    ).toHaveLength(1);
+    expect(flags[0]!.severity).toBe('high');
+    expect(flags[0]!.detail!['deltaLength']).toBe(pasted.length);
+    expect(flags[0]!.detail!['mergedInChars']).toBe(IMPLEMENTATION.length);
+  });
+
+  it('D16: a recorder `explanation: git` tag does not discount content nobody recorded', async () => {
+    // Same pull shape, same two-second timing tag — but the bytes match nothing
+    // any contributor recorded, so the content test answers `git_unrecorded_in`
+    // and the flag stands. This is the hole D16 closed for `external_edits`:
+    // if a timing tag could silence the finding, a student could time an
+    // out-of-editor paste right after any git command.
+    const { bundle, index } = await buildCollabScope([
+      { who: { studentRef: COLLAB_BOB }, events: collabPartnerSession(IMPLEMENTATION) },
+      {
+        who: { studentRef: COLLAB_ALICE },
+        events: collabPullerSession(ELSEWHERE, { merge: true, explanation: 'git' }),
+      },
+    ]);
+    const flags = lowTypingHighOutputHeuristic.run(index, bundle, cfg);
+    expect(
+      flags,
+      'content that no verified contributor recorded must still be unexplained output, ' +
+        'however it was tagged. Discounting on the tag is exactly the shape D16 rejected.',
+    ).toHaveLength(1);
+    expect(flags[0]!.severity).toBe('high');
+    expect(flags[0]!.detail!['mergedInChars']).toBe(0);
   });
 });
