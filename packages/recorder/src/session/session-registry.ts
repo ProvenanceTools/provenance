@@ -91,6 +91,13 @@ export type ActiveSession = {
   sessionHost: ReturnType<typeof createSessionHost>;
   sessionKeypair: { privateKey: Uint8Array; publicKeyHex: string };
   /**
+   * This session's expected-content registry. `seal` reads
+   * `expectedContentRegistry.capHit()` to populate `SealDeps.scopeCapped` — the
+   * registry, not the seal command, is what knows whether its cap ever refused
+   * an in-scope path this session.
+   */
+  expectedContentRegistry: ExpectedContentRegistry;
+  /**
    * Whether this session could claim an identity, and if not, why.
    *
    * `undefined` means identity was never attempted (no `secrets` supplied) — NOT
@@ -986,6 +993,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     metaWriter,
     sessionHost,
     sessionKeypair: { privateKey: keypair.privateKey, publicKeyHex: keypair.publicKeyHex },
+    expectedContentRegistry,
     identityOutcome,
     ownDisposables,
     getPendingCheckpoint: () => pendingCheckpoint,

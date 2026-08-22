@@ -253,3 +253,36 @@ describe('validateBundleManifestShape — 1.1', () => {
     expect(validateBundleManifestShape(m).ok).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// submission_files role and scope_capped
+// ---------------------------------------------------------------------------
+
+describe('submission_files role and scope_capped', () => {
+  it('accepts a manifest with no role, meaning every file is reviewed', () => {
+    const m = valid11Manifest();
+    expect(validateBundleManifestShape(m).ok).toBe(true);
+  });
+
+  it('accepts both role values', () => {
+    for (const role of ['reviewed', 'attachment'] as const) {
+      const m = valid11Manifest();
+      (m.submission_files[0] as { role?: string }).role = role;
+      expect(validateBundleManifestShape(m).ok).toBe(true);
+    }
+  });
+
+  it('rejects a role outside the pair', () => {
+    const m = valid11Manifest();
+    (m.submission_files[0] as { role?: string }).role = 'whatever';
+    const r = validateBundleManifestShape(m);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatchObject({ kind: 'invalid_field' });
+  });
+
+  it('rejects a non-boolean scope_capped but accepts its absence', () => {
+    const m = valid11Manifest();
+    expect(validateBundleManifestShape({ ...m, scope_capped: true }).ok).toBe(true);
+    expect(validateBundleManifestShape({ ...m, scope_capped: 'yes' }).ok).toBe(false);
+  });
+});

@@ -579,11 +579,19 @@ export async function loadBundle(
   // ---------------------------------------------------------------------------
   const submissionFiles = new Map<
     string,
-    { status: 'present' | 'missing'; sha256: string | null; bytes?: Uint8Array; hashOk: boolean }
+    {
+      status: 'present' | 'missing';
+      sha256: string | null;
+      bytes?: Uint8Array;
+      hashOk: boolean;
+      role: 'reviewed' | 'attachment';
+    }
   >();
   for (const f of manifest.submission_files ?? []) {
+    // Absent role reads as 'reviewed' — every bundle sealed before path scope.
+    const role = f.role ?? 'reviewed';
     if (f.status === 'missing') {
-      submissionFiles.set(f.path, { status: 'missing', sha256: null, hashOk: true });
+      submissionFiles.set(f.path, { status: 'missing', sha256: null, hashOk: true, role });
       continue;
     }
     const bytes = bundleSubmissionFiles.get(f.path);
@@ -593,6 +601,7 @@ export async function loadBundle(
       sha256: f.sha256,
       ...(bytes !== undefined ? { bytes } : {}),
       hashOk,
+      role,
     });
   }
 

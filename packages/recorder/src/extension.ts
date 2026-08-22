@@ -21,7 +21,7 @@
 
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import { SystemClock } from '@provenance/log-core';
+import { SystemClock, scopeFromManifest } from '@provenance/log-core';
 import { loadAndVerifyManifest } from './activation/manifest-loader.js';
 import type { ActivationError } from './activation/manifest-loader.js';
 import { discoverManifests } from './activation/manifest-discovery.js';
@@ -247,7 +247,8 @@ export async function activateImpl(deps: ActivateDeps): Promise<ActiveSession | 
         provenanceDir: session.provenanceDir,
         assignmentId: session.manifest.assignment_id,
         semester: session.manifest.semester,
-        filesUnderReview: session.manifest.files_under_review,
+        scope: scopeFromManifest(session.manifest),
+        scopeCapped: session.expectedContentRegistry.capHit(),
         sessionPrivkey: session.sessionKeypair.privateKey,
         sessionPubkeyHex: session.sessionKeypair.publicKeyHex,
         computeExtensionHash: () => computeExtensionHash(extensionDistPath),
@@ -264,11 +265,17 @@ export async function activateImpl(deps: ActivateDeps): Promise<ActiveSession | 
           );
         }
         // A dropped artifact must never read as "nothing was wrong". Separate
-        // message from the one above: this is not evidence of tampering, it is
-        // an incomplete recording left out so the bundle stays readable.
+        // message from the one above: this is not evidence of tampering —
+        // it's either an incomplete session recording (left out so the
+        // bundle stays readable) or a workspace source file the seal could
+        // not read, or dropped as a duplicate of one already sealed under
+        // another path. The copy below covers both: this branch is the ONLY
+        // disclosure a dropped source file ever gets (fix round 3,
+        // Moderate 3 — the previous copy named only the session-artifact
+        // case, which was wrong on every clause for a dropped source file).
         if (sealDroppedArtifacts(result.warnings)) {
           void vscode.window.showWarningMessage(
-            'Provenance bundle produced. Some incomplete session files were left out of it so it can be opened; nothing was removed from .provenance/. Mention this to course staff.',
+            'Provenance bundle produced. Some files could not be included — either session recording artifacts left out so the bundle can be opened, or workspace files that could not be read, resolved outside this workspace folder, or were duplicates of another sealed file at seal time. Nothing was removed from disk. Mention this to course staff.',
           );
         }
       } else if (result.kind === 'no_sessions') {
@@ -542,7 +549,8 @@ function registerSealCommand(context: vscode.ExtensionContext, extensionDistPath
         provenanceDir: chosen.provenanceDir,
         assignmentId: chosen.manifest.assignment_id,
         semester: chosen.manifest.semester,
-        filesUnderReview: chosen.manifest.files_under_review,
+        scope: scopeFromManifest(chosen.manifest),
+        scopeCapped: chosen.expectedContentRegistry.capHit(),
         sessionPrivkey: chosen.sessionKeypair.privateKey,
         sessionPubkeyHex: chosen.sessionKeypair.publicKeyHex,
         computeExtensionHash: () => computeExtensionHash(extensionDistPath),
@@ -559,11 +567,17 @@ function registerSealCommand(context: vscode.ExtensionContext, extensionDistPath
           );
         }
         // A dropped artifact must never read as "nothing was wrong". Separate
-        // message from the one above: this is not evidence of tampering, it is
-        // an incomplete recording left out so the bundle stays readable.
+        // message from the one above: this is not evidence of tampering —
+        // it's either an incomplete session recording (left out so the
+        // bundle stays readable) or a workspace source file the seal could
+        // not read, or dropped as a duplicate of one already sealed under
+        // another path. The copy below covers both: this branch is the ONLY
+        // disclosure a dropped source file ever gets (fix round 3,
+        // Moderate 3 — the previous copy named only the session-artifact
+        // case, which was wrong on every clause for a dropped source file).
         if (sealDroppedArtifacts(result.warnings)) {
           void vscode.window.showWarningMessage(
-            'Provenance bundle produced. Some incomplete session files were left out of it so it can be opened; nothing was removed from .provenance/. Mention this to course staff.',
+            'Provenance bundle produced. Some files could not be included — either session recording artifacts left out so the bundle can be opened, or workspace files that could not be read, resolved outside this workspace folder, or were duplicates of another sealed file at seal time. Nothing was removed from disk. Mention this to course staff.',
           );
         }
       } else if (result.kind === 'no_sessions') {

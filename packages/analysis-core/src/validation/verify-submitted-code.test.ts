@@ -107,13 +107,20 @@ function makeBundle(opts: {
 
   const submissionFilesMap = new Map<
     string,
-    { status: 'present' | 'missing'; sha256: string | null; bytes?: Uint8Array; hashOk: boolean }
+    {
+      status: 'present' | 'missing';
+      sha256: string | null;
+      bytes?: Uint8Array;
+      hashOk: boolean;
+      role: 'reviewed' | 'attachment';
+    }
   >();
   for (const f of opts.submissionFiles) {
     submissionFilesMap.set(f.path, {
       status: f.status,
       sha256: f.sha256,
       hashOk: f.hashOk,
+      role: 'reviewed',
       ...(f.bytes !== undefined ? { bytes: f.bytes } : {}),
     });
   }
@@ -411,7 +418,15 @@ describe('Check 8 — two contributors with concurrent recorded states', () => {
       sourceFilename: 'b.zip',
       loadedAt: '2026-01-01T00:00:00.000Z',
       submissionFiles: new Map([
-        ['a.py', { status: 'present' as const, sha256: opts.submittedSha, hashOk: true }],
+        [
+          'a.py',
+          {
+            status: 'present' as const,
+            sha256: opts.submittedSha,
+            hashOk: true,
+            role: 'reviewed' as const,
+          },
+        ],
       ]),
       contributors: {
         bySession,
@@ -585,7 +600,15 @@ describe('Check 8 — the concurrency gate is per path', () => {
       sourceFilename: 'b.zip',
       loadedAt: '2026-01-01T00:00:00.000Z',
       submissionFiles: new Map([
-        ['a.py', { status: 'present' as const, sha256: 'SOMETHING_ELSE', hashOk: true }],
+        [
+          'a.py',
+          {
+            status: 'present' as const,
+            sha256: 'SOMETHING_ELSE',
+            hashOk: true,
+            role: 'reviewed' as const,
+          },
+        ],
       ]),
       contributors: {
         bySession: new Map<string, SessionContributor>([
