@@ -23,6 +23,7 @@ import {
   generateSessionKeypair,
   encryptSessionPrivkey,
   signCheckpoint,
+  scopeFromManifest,
 } from '@provenance/log-core';
 import type {
   HashedEnvelope,
@@ -690,7 +691,8 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   };
 
   // Step 11: Start doc-event wiring (PRD §4.2 + §4.3 paste detection).
-  const expectedContentRegistry = new ExpectedContentRegistry(manifest.files_under_review);
+  const scope = scopeFromManifest(manifest);
+  const expectedContentRegistry = new ExpectedContentRegistry(scope);
 
   // ExplanationTagger for formatter/git explanation of external changes.
   const explanationTagger = new ExplanationTagger({ getNow: () => clock.now() });
@@ -735,7 +737,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   // while VS Code unfocused" path). Must come after docWiring so getLastDocChangeAt works.
   const fsWatcher = startFsWatcher({
     assignmentRoot,
-    filesUnderReview: manifest.files_under_review,
+    scope,
     registry: expectedContentRegistry,
     emit: (data) => sessionHost.emit('fs.external_change', data),
     getLastDocChangeAt: (p) => docWiring.getLastDocChangeAt(p),

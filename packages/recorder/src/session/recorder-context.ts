@@ -9,7 +9,7 @@
 import * as os from 'node:os';
 import * as crypto from 'node:crypto';
 import * as vscode from 'vscode';
-import { buildFileScope } from '@provenance/log-core';
+import { buildFileScope, isExactEntry } from '@provenance/log-core';
 import type {
   GitCaptureCapability,
   Manifest,
@@ -78,12 +78,29 @@ export const FILE_SCOPE_MAX_ENTRIES = 4096;
  * `buildFileScope` rejects an absolute path, a colon (every remote-URL spelling)
  * and any `..` segment; a course that put one in its manifest gets the field
  * OMITTED rather than an absolute path in a signed log — S14(b).
+ *
+ * ## Rules make the list partial, not wrong
+ *
+ * A manifest may now name a folder or a suffix (design spec §3). Those entries
+ * cannot be enumerated at session start — that is the whole point of naming one
+ * — so `watched` carries the exact-path entries only and `complete` goes false.
+ * The analyzer then has two better answers available before it falls back to
+ * `unknown`: it can evaluate the rules itself against the signed manifest in
+ * `session.start` (§5.1 tier 1), and any file with recorded activity was
+ * self-evidently watched.
  */
 export function resolveFileScope(
   filesUnderReview: readonly string[],
 ): SessionFileScope | undefined {
-  const complete = filesUnderReview.length <= FILE_SCOPE_MAX_ENTRIES;
-  const watched = complete ? filesUnderReview : filesUnderReview.slice(0, FILE_SCOPE_MAX_ENTRIES);
+  // A rule entry cannot be enumerated, so it cannot go in `watched` — and its
+  // presence means absence from `watched` no longer proves "not watched".
+  // `complete: false` is precisely the downgrade-to-unknown this field already
+  // defines for the truncation case; rules reuse it unchanged.
+  const exact = filesUnderReview.filter(isExactEntry);
+  const hasRules = exact.length !== filesUnderReview.length;
+  const complete = !hasRules && exact.length <= FILE_SCOPE_MAX_ENTRIES;
+  const watched =
+    exact.length <= FILE_SCOPE_MAX_ENTRIES ? exact : exact.slice(0, FILE_SCOPE_MAX_ENTRIES);
   return buildFileScope(watched, complete);
 }
 

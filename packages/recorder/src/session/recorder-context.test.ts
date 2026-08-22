@@ -469,6 +469,24 @@ describe('buildRecorderContext — the §5.6 capability reports', () => {
     expect(resolveFileScope(exact)?.complete).toBe(true);
   });
 
+  describe('resolveFileScope with rule entries', () => {
+    it('stays complete for an all-exact list', () => {
+      const scope = resolveFileScope(['Main.java', 'src/Board.java']);
+      expect(scope).toEqual({ watched: ['Main.java', 'src/Board.java'], complete: true });
+    });
+
+    it('reports incomplete and lists only the exact entries when a rule is present', () => {
+      // A rule cannot be enumerated, so absence from `watched` must no longer be
+      // readable as "not watched". `complete: false` is exactly that downgrade.
+      const scope = resolveFileScope(['src/', 'Main.java', '*.java']);
+      expect(scope).toEqual({ watched: ['Main.java'], complete: false });
+    });
+
+    it('reports incomplete with an empty list when every entry is a rule', () => {
+      expect(resolveFileScope(['src/'])).toEqual({ watched: [], complete: false });
+    });
+  });
+
   it('OMITS file_scope rather than publishing a path the format forbids', () => {
     // S14(b). A course manifest carrying an absolute path, a remote URL or a
     // parent escape gets the field omitted — never an absolute path inside a
