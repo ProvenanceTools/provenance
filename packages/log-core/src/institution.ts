@@ -126,6 +126,12 @@ import {
   requireOrderedBounds,
   checkWindow,
 } from './identity-shapes.js';
+// TYPE-ONLY, and it must stay that way. `enrollment.ts` imports the 2.1 walk
+// below at RUNTIME, so a runtime import back would be a real module cycle; a
+// type import is erased entirely, leaving the runtime graph one-way. The two
+// result types live in `enrollment.ts` because they are the union across BOTH
+// identity versions and `verifyIdentityChain` — the router — lives there.
+import type { IdentityChainOk, IdentityChainError } from './enrollment.js';
 
 // ---------------------------------------------------------------------------
 // Constants — the cross-language contract
@@ -540,4 +546,166 @@ export function checkCredentialWindow(credential: StudentCredential, at: string)
  */
 export function checkInstitutionCertWindow(cert: InstitutionCert, at: string): CertWindowStatus {
   return checkWindow(cert.valid_from, cert.valid_until, at);
+}
+
+// ---------------------------------------------------------------------------
+// The 2.1 identity walk
+//
+// `verifyIdentityChain` in `enrollment.ts` is the ROUTER and stays there — it is
+// the one public entry point, and it gates on the signed `format_version` before
+// dispatching here. The walk itself lives with the 2.1 types, parsers, windows
+// and binding payload it is made of, which is this file.
+//
+// The 2.0 walk is a SEPARATE, deliberately copy-pasted body in `enrollment.ts`.
+// The two are not factored into a shared "signed artifact walker" and must not
+// be: 2.0 is an archived format supported forever, and a shared walker means a
+// 2.0 bugfix can silently change the bytes 2.1 accepts. Duplication is the
+// cheaper of the two failure modes here.
+// ---------------------------------------------------------------------------
+
+/**
+ * The three `session.start` identity wire slots, as the 2.1 walk sees them.
+ *
+ * Deliberately NOT `SessionIdentity`: that type is the union across both
+ * identity versions and lives in `enrollment.ts`, which imports this module at
+ * runtime. Taking the slots structurally keeps that dependency one-way.
+ *
+ * The two artifacts arrive as `unknown` because step 0b below is where their
+ * shape is established — narrowing them at the call site would split the walk
+ * across two files, which is exactly what moving it here undoes.
+ */
+export type IdentityWireSlots = {
+  /** The credential. Shape-checked here by {@link parseStudentCredential}. */
+  enrollment: unknown;
+  /** The authorization for whoever signed it. Shape-checked by {@link parseInstitutionCert}. */
+  enrollment_cert: unknown;
+  /** The student key's signature over this session's ephemeral `session_pubkey`. */
+  session_pubkey_sig: string;
+};
+
+/**
+ * Narrow a shape error into the chain's cert/credential shape-error members.
+ *
+ * A private twin of the identical helper in `enrollment.ts`, copied for the same
+ * reason the walk bodies are: the 2.0 path must not be able to change what the
+ * 2.1 path reports, or vice versa.
+ */
+function shapeErr<K extends 'invalid_cert_shape' | 'invalid_token_shape'>(
+  kind: K,
+  inner: { kind: 'invalid_shape'; field?: string; reason?: string } | { kind: 'invalid_signature' },
+): IdentityChainError {
+  return {
+    kind,
+    ...(inner.kind === 'invalid_shape' && inner.field !== undefined ? { field: inner.field } : {}),
+    ...(inner.kind === 'invalid_shape' && inner.reason !== undefined
+      ? { reason: inner.reason }
+      : {}),
+  } as IdentityChainError;
+}
+
+/**
+ * The CURRENT 2.1 institution-scoped walk.
+ *
+ * Reached only through `verifyIdentityChain`, which has already established that
+ * BOTH artifacts declare `'2.1'`. Not re-exported from `index.ts` on purpose:
+ * callers must enter through the router, so the version gate cannot be bypassed.
+ *
+ *  0.  (the router) `format_version === '2.1'` on both artifacts.
+ *  0b. Both satisfy the 2.1 shape — before any signature work, because
+ *      `canonicalize` omits `undefined`-valued keys, so an artifact missing a
+ *      required field would sign and verify cleanly while carrying nothing there.
+ *  1.  The credential minus `institution_sig` verifies against the ANCHOR's
+ *      `institution_pubkey` — never the travelling cert's copy, so a swapped
+ *      cert can never introduce a key of the attacker's choosing even if step 2
+ *      were somehow bypassed.
+ *  2.  The institution anchor check. See "The invariant that replaces the
+ *      cross-course forgery check" above: root certifies many institutions, so a
+ *      genuine signature by a genuinely certified key proves only WHO signed,
+ *      never WHOM they were entitled to speak for.
+ *  3.  `session_pubkey_sig` verifies against `credential.student_pubkey` over the
+ *      v2 binding payload (a distinct `purpose` tag, so 2.0 and 2.1
+ *      countersignatures can never be swapped).
+ *  4.  Both validity windows — NON-FATAL, returned on the success value.
+ *
+ * The anchor MUST already be root-verified by the caller — see
+ * {@link verifyInstitutionCert}.
+ */
+export async function walkInstitutionChain(
+  identity: IdentityWireSlots,
+  session_pubkey: string,
+  anchor: InstitutionCert | undefined,
+  session_started_at: string,
+): Promise<Result<IdentityChainOk, IdentityChainError>> {
+  if (anchor === undefined) {
+    return err({ kind: 'missing_trust_anchor', required: 'institution_cert' });
+  }
+
+  // Step 0b — shape before signatures, for both artifacts.
+  const parsedCert = parseInstitutionCert(identity.enrollment_cert);
+  if (!parsedCert.ok) return err(shapeErr('invalid_cert_shape', parsedCert.error));
+  const parsedCredential = parseStudentCredential(identity.enrollment);
+  if (!parsedCredential.ok) return err(shapeErr('invalid_token_shape', parsedCredential.error));
+
+  const cert = parsedCert.value;
+  const credential = parsedCredential.value;
+
+  // Step 1 — the credential verifies against the key the ROOT vouched for.
+  //
+  // Deliberately the ANCHOR's `institution_pubkey`, never the travelling cert's.
+  // Step 2 forces the two to be equal anyway, but reading the key from the
+  // already-root-verified value means a swapped travelling cert can never
+  // introduce a key of the attacker's choosing, whatever happens downstream.
+  const credentialOk = await verifyStudentCredential(credential, anchor.institution_pubkey);
+  if (!credentialOk.ok) return err({ kind: 'invalid_institution_signature' });
+
+  // Step 2 — THE INSTITUTION ANCHOR CHECK. The replacement for 2.0's
+  // course_id triple-comparison, and mandatory for exactly the same reason:
+  // root certifies many institutions, so a genuine signature by a genuinely
+  // certified key proves only WHO signed, never WHOM they were entitled to
+  // speak for. Comparing the id at every link is what makes replaying one
+  // signer's credential under another's authority impossible rather than
+  // merely unlikely.
+  const pubkeyMismatch = cert.institution_pubkey !== anchor.institution_pubkey;
+  if (
+    credential.institution_id !== cert.institution_id ||
+    cert.institution_id !== anchor.institution_id ||
+    pubkeyMismatch
+  ) {
+    return err({
+      kind: 'institution_mismatch',
+      credential_institution_id: credential.institution_id,
+      cert_institution_id: cert.institution_id,
+      anchor_institution_id: anchor.institution_id,
+      pubkey_mismatch: pubkeyMismatch,
+    });
+  }
+
+  // Step 3 — the student key adopted THIS session key.
+  if (!HEX_64_RE.test(session_pubkey)) {
+    return err({ kind: 'invalid_session_pubkey' });
+  }
+  const bindingOk = await verifyStudentSessionBinding(
+    {
+      institution_id: credential.institution_id,
+      student_ref: credential.student_ref,
+      session_pubkey,
+    },
+    identity.session_pubkey_sig,
+    credential.student_pubkey,
+  );
+  if (!bindingOk.ok) return err({ kind: 'invalid_session_pubkey_signature' });
+
+  // Step 4 — non-fatal windows, each against its own relevant issue time.
+  return ok({
+    identity_version: '2.1',
+    scope: 'institution',
+    institution_id: credential.institution_id,
+    student_ref: credential.student_ref,
+    student_pubkey: credential.student_pubkey,
+    institution_pubkey: anchor.institution_pubkey,
+    cert,
+    credential,
+    cert_window: checkInstitutionCertWindow(cert, credential.issued_at),
+    token_window: checkCredentialWindow(credential, session_started_at),
+  });
 }

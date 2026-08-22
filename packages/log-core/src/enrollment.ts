@@ -23,15 +23,14 @@
  * system. Treat the code below as a format contract that happens to be
  * executable.
  *
- * ## The problem this layer exists to solve
+ * ## The 2.0 chain, which this file is the format contract for
  *
  * An enrollment token binds a student's per-course public key to a roster
  * identity, and must be signed by the course. But the course's manifest-signing
  * key is deliberately OFFLINE — that is most of what `course_cert` buys. Minting
  * a token per student per semester is a server-side, on-demand operation, so
  * putting the course key on a server to do it would defeat the whole design.
- *
- * The fix is one more delegation, exactly the shape of root → course:
+ * Hence one more delegation, exactly the shape of root → course:
  *
  * ```
  *   root keypair                (offline; signs course certs only)
@@ -72,47 +71,16 @@
  * course already knows how to do. Taking the course key would be far worse, which
  * is precisely why it does not go on a server.
  *
- * ## `student_ref` is opaque, and is a VALUE
+ * ## Rules this chain shares with 2.1 — stated once, in `institution.ts`
  *
- * `student_ref` is an opaque UUID, never a raw SID, name, or email. In a shared
- * CS 61B repo one partner can read the other's `session.start`; the server maps
- * `student_ref` → `roster_entries.id`, so a partner sees only a UUID.
- *
- * It is also never an object KEY in a signed payload — see the permanent
- * constraint documented in `course-cert.ts`. provnvim's hand-rolled Lua JCS sorts
- * object keys bytewise while JS and Kotlin sort by UTF-16 code unit, so any
- * user-derived key risks silently different signed bytes across recorders. Every
- * key in every payload below is a fixed ASCII identifier chosen by us.
- *
- * For the same cross-port reason the signed payloads contain **no JSON arrays**:
- * the Lua port must tag arrays explicitly at each call site (`json.array()`),
- * which is one more thing to get wrong. Objects only.
- *
- * ## Expiry is reported, never enforced
- *
- * Exactly as for `course_cert`: an out-of-window credential is NOT an error. It
- * is returned on the success value for the caller to act on. A course letting an
- * enrollment cert lapse mid-semester must not silently stop recording for the
- * whole class — for an integrity tool that is a worse failure than recording
- * under a stale credential (program spec §4).
- *
- * And every window is evaluated against **the relevant issue time**, never
- * wall-clock now, so an archived bundle still verifies years later during an
- * adjudication:
- *
- *  - the enrollment cert's window is checked against the TOKEN's `issued_at`
- *    ("was the enrollment key authorized when it minted this token");
- *  - the token's window is checked against the SESSION's start time
- *    ("was this student enrolled when they did this work").
- *
- * ## Revocation
- *
- * Not modelled here, for the same reason as `course_cert`: an offline recorder
- * cannot learn about it without a network call, which recorder PRD NG2 forbids.
- * A server-side list must key on `enrollment_pubkey` and on `student_ref`, not on
- * a certificate or token identity — both travel outside any payload that binds
- * to them, so the holder chooses which copy ships. The offline mitigation is
- * short windows.
+ * `student_ref` is an opaque UUID and only ever a VALUE at a fixed ASCII key,
+ * never an object key in a signed payload; there are no JSON arrays in a signed
+ * payload either. Expiry is REPORTED on the success value, never enforced, and
+ * every window is judged against the relevant issue time rather than wall-clock
+ * now — here that means the cert's window against the TOKEN's `issued_at`, and
+ * the token's window against the SESSION's start. Revocation is not modelled.
+ * `institution.ts` gives the reasoning for all of it; it is identical at 2.0, and
+ * repeating it in both files is how two statements of one rule drift apart.
  */
 
 import * as ed from '@noble/ed25519';
@@ -129,15 +97,7 @@ import {
   requireOrderedBounds,
   checkWindow,
 } from './identity-shapes.js';
-import {
-  INSTITUTION_IDENTITY_FORMAT_VERSION,
-  parseInstitutionCert,
-  parseStudentCredential,
-  verifyStudentCredential,
-  verifyStudentSessionBinding,
-  checkInstitutionCertWindow,
-  checkCredentialWindow,
-} from './institution.js';
+import { INSTITUTION_IDENTITY_FORMAT_VERSION, walkInstitutionChain } from './institution.js';
 import type { InstitutionCert, StudentCredential } from './institution.js';
 
 // ---------------------------------------------------------------------------
@@ -721,6 +681,22 @@ export function checkEnrollmentCertWindow(cert: EnrollmentCert, at: string): Cer
 // The full identity chain
 // ---------------------------------------------------------------------------
 
+/**
+ * Read a declared `format_version` off an identity artifact.
+ *
+ * No cast: both members of each union declare `format_version: string`, so the
+ * property read is direct. The runtime normalisation is still required, and is
+ * the whole point of this helper — callers reach `verifyIdentityChain` with an
+ * `identity as SessionIdentity` over a student-editable `session.start`, so the
+ * declared type is a claim about the object rather than a guarantee about it.
+ * `format_version: 7` and a wholly absent artifact are both live test vectors,
+ * and both must land on a chain ERROR rather than throwing.
+ */
+function declaredVersionOf(artifact: { format_version: string } | undefined): string {
+  const declared: unknown = artifact?.format_version;
+  return typeof declared === 'string' ? declared : '';
+}
+
 /** Narrow a shape error into the chain's cert/credential shape-error members. */
 function shapeErr<K extends 'invalid_cert_shape' | 'invalid_token_shape'>(
   kind: K,
@@ -776,25 +752,11 @@ function shapeErr<K extends 'invalid_cert_shape' | 'invalid_token_shape'>(
  *
  * ## `'2.1'` — current, INSTITUTION-scoped.
  *
- *  0.  `format_version === '2.1'` on both artifacts.
- *  0b. Both satisfy the 2.1 shape. Same reasoning as above.
- *  1.  The credential minus `institution_sig` verifies against the ANCHOR's
- *      `institution_pubkey` — never the travelling cert's copy, so a swapped
- *      cert can never introduce a key of the attacker's choosing even if step 2
- *      were somehow bypassed.
- *  2.  **The institution anchor check — the replacement for step 3 above, and
- *      mandatory for the same reason.** `credential.institution_id`, the
- *      travelling cert's `institution_id`, and the anchor's must all agree, and
- *      the travelling cert must name the anchor's `institution_pubkey`. Root
- *      legitimately certifies many institutions; without this, a holder of a
- *      genuinely root-certified key for one institution can mint a credential
- *      naming ANOTHER and ship it with their own genuine cert, and every
- *      signature verifies. One signer's credential must never be replayable
- *      under another signer's authority.
- *  3.  `session_pubkey_sig` verifies against `credential.student_pubkey` over the
- *      v2 binding payload (a distinct `purpose` tag, so 2.0 and 2.1
- *      countersignatures can never be swapped).
- *  4.  Both validity windows — NON-FATAL, returned on the success value.
+ * Walked by `walkInstitutionChain` in `institution.ts`, alongside the 2.1 types,
+ * parsers, windows and binding payload it is built from; its steps are documented
+ * there. The two walks are deliberately separate copy-pasted bodies rather than
+ * one parameterised walker, so that a fix to the legacy 2.0 path can never
+ * silently change which bytes 2.1 accepts.
  *
  * ## The trust anchor MUST already be verified
  *
@@ -832,9 +794,7 @@ export async function verifyIdentityChain(input: {
   // The discriminator lives in the CERT slot: it is signed in both versions and
   // sits at the same wire key in both, so it can be read without first knowing
   // which shape is present. Never route on which fields exist.
-  const declaredCertVersion = (identity.enrollment_cert as { format_version?: unknown } | undefined)
-    ?.format_version;
-  const certVersion = typeof declaredCertVersion === 'string' ? declaredCertVersion : '';
+  const certVersion = declaredVersionOf(identity.enrollment_cert);
 
   if (
     certVersion !== ENROLLMENT_FORMAT_VERSION &&
@@ -843,11 +803,7 @@ export async function verifyIdentityChain(input: {
     return err({ kind: 'unsupported_identity_version', format_version: certVersion });
   }
 
-  const declaredCredentialVersion = (
-    identity.enrollment as { format_version?: unknown } | undefined
-  )?.format_version;
-  const credentialVersion =
-    typeof declaredCredentialVersion === 'string' ? declaredCredentialVersion : '';
+  const credentialVersion = declaredVersionOf(identity.enrollment);
 
   // No mixing. A legacy course-signed cert paired with an institution credential
   // would leave each artifact read under rules the other never agreed to.
@@ -934,86 +890,5 @@ async function walkCourseChain(
     token,
     cert_window: checkEnrollmentCertWindow(cert, token.issued_at),
     token_window: checkTokenWindow(token, session_started_at),
-  });
-}
-
-/** The CURRENT 2.1 institution-scoped walk. See `institution.ts`. */
-async function walkInstitutionChain(
-  identity: SessionIdentity,
-  session_pubkey: string,
-  anchor: InstitutionCert | undefined,
-  session_started_at: string,
-): Promise<Result<IdentityChainOk, IdentityChainError>> {
-  if (anchor === undefined) {
-    return err({ kind: 'missing_trust_anchor', required: 'institution_cert' });
-  }
-
-  // Step 0b — shape before signatures, for both artifacts.
-  const parsedCert = parseInstitutionCert(identity.enrollment_cert);
-  if (!parsedCert.ok) return err(shapeErr('invalid_cert_shape', parsedCert.error));
-  const parsedCredential = parseStudentCredential(identity.enrollment);
-  if (!parsedCredential.ok) return err(shapeErr('invalid_token_shape', parsedCredential.error));
-
-  const cert = parsedCert.value;
-  const credential = parsedCredential.value;
-
-  // Step 1 — the credential verifies against the key the ROOT vouched for.
-  //
-  // Deliberately the ANCHOR's `institution_pubkey`, never the travelling cert's.
-  // Step 2 forces the two to be equal anyway, but reading the key from the
-  // already-root-verified value means a swapped travelling cert can never
-  // introduce a key of the attacker's choosing, whatever happens downstream.
-  const credentialOk = await verifyStudentCredential(credential, anchor.institution_pubkey);
-  if (!credentialOk.ok) return err({ kind: 'invalid_institution_signature' });
-
-  // Step 2 — THE INSTITUTION ANCHOR CHECK. The replacement for 2.0's
-  // course_id triple-comparison, and mandatory for exactly the same reason:
-  // root certifies many institutions, so a genuine signature by a genuinely
-  // certified key proves only WHO signed, never WHOM they were entitled to
-  // speak for. Comparing the id at every link is what makes replaying one
-  // signer's credential under another's authority impossible rather than
-  // merely unlikely.
-  const pubkeyMismatch = cert.institution_pubkey !== anchor.institution_pubkey;
-  if (
-    credential.institution_id !== cert.institution_id ||
-    cert.institution_id !== anchor.institution_id ||
-    pubkeyMismatch
-  ) {
-    return err({
-      kind: 'institution_mismatch',
-      credential_institution_id: credential.institution_id,
-      cert_institution_id: cert.institution_id,
-      anchor_institution_id: anchor.institution_id,
-      pubkey_mismatch: pubkeyMismatch,
-    });
-  }
-
-  // Step 3 — the student key adopted THIS session key.
-  if (!HEX_64_RE.test(session_pubkey)) {
-    return err({ kind: 'invalid_session_pubkey' });
-  }
-  const bindingOk = await verifyStudentSessionBinding(
-    {
-      institution_id: credential.institution_id,
-      student_ref: credential.student_ref,
-      session_pubkey,
-    },
-    identity.session_pubkey_sig,
-    credential.student_pubkey,
-  );
-  if (!bindingOk.ok) return err({ kind: 'invalid_session_pubkey_signature' });
-
-  // Step 4 — non-fatal windows, each against its own relevant issue time.
-  return ok({
-    identity_version: '2.1',
-    scope: 'institution',
-    institution_id: credential.institution_id,
-    student_ref: credential.student_ref,
-    student_pubkey: credential.student_pubkey,
-    institution_pubkey: anchor.institution_pubkey,
-    cert,
-    credential,
-    cert_window: checkInstitutionCertWindow(cert, credential.issued_at),
-    token_window: checkCredentialWindow(credential, session_started_at),
   });
 }
