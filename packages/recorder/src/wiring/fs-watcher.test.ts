@@ -82,7 +82,7 @@ import { sha256Hex } from '@provenance/log-core';
 // ---------------------------------------------------------------------------
 
 function makeRegistry(filesUnderReview: string[]) {
-  return new ExpectedContentRegistry(filesUnderReview);
+  return new ExpectedContentRegistry({ track: filesUnderReview, ignore: [], attachments: [] });
 }
 
 // Flush all pending microtasks / Promises
@@ -530,7 +530,7 @@ describe('startFsWatcher', () => {
   it('onDidCreate: file appears with no prior baseline → emits operation:create + seeds registry', async () => {
     capturedWatchers.length = 0;
     const newContent = 'def fresh(): return 1\n';
-    const registry = new ExpectedContentRegistry(['hw.py']);
+    const registry = new ExpectedContentRegistry({ track: ['hw.py'], ignore: [], attachments: [] });
     const emit = vi.fn();
 
     startFsWatcher({
@@ -573,7 +573,7 @@ describe('startFsWatcher', () => {
   it('onDidCreate: file already in registry with same hash → no emit (race with doc.open)', async () => {
     capturedWatchers.length = 0;
     const content = 'already there\n';
-    const registry = new ExpectedContentRegistry(['hw.py']);
+    const registry = new ExpectedContentRegistry({ track: ['hw.py'], ignore: [], attachments: [] });
     registry.getOrCreate('hw.py', content);
     const emit = vi.fn();
 
@@ -601,7 +601,7 @@ describe('startFsWatcher', () => {
     capturedWatchers.length = 0;
     const seeded = 'old skeleton\n';
     const disk = 'completely different content\n';
-    const registry = new ExpectedContentRegistry(['hw.py']);
+    const registry = new ExpectedContentRegistry({ track: ['hw.py'], ignore: [], attachments: [] });
     registry.getOrCreate('hw.py', seeded);
     const emit = vi.fn();
 
@@ -631,7 +631,7 @@ describe('startFsWatcher', () => {
   it('onDidDelete: registered file → emits operation:delete + clears registry', () => {
     capturedWatchers.length = 0;
     const content = 'about to vanish\n';
-    const registry = new ExpectedContentRegistry(['hw.py']);
+    const registry = new ExpectedContentRegistry({ track: ['hw.py'], ignore: [], attachments: [] });
     registry.getOrCreate('hw.py', content);
     const emit = vi.fn();
 
@@ -671,7 +671,7 @@ describe('startFsWatcher', () => {
 
   it('onDidDelete: untracked file → still emits delete with empty old_hash', () => {
     capturedWatchers.length = 0;
-    const registry = new ExpectedContentRegistry(['hw.py']);
+    const registry = new ExpectedContentRegistry({ track: ['hw.py'], ignore: [], attachments: [] });
     // No getOrCreate — file was never opened in VS Code.
     const emit = vi.fn();
 
@@ -706,7 +706,7 @@ describe('startFsWatcher', () => {
     capturedWatchers.length = 0;
     const original = 'original\n';
     const replacement = 'replacement\n';
-    const registry = new ExpectedContentRegistry(['hw.py']);
+    const registry = new ExpectedContentRegistry({ track: ['hw.py'], ignore: [], attachments: [] });
     registry.getOrCreate('hw.py', original);
     const emit = vi.fn();
 
@@ -752,7 +752,7 @@ describe('startFsWatcher', () => {
     capturedWatchers.length = 0;
     const originalContent = 'def hello(): pass\n';
     const newContent = 'def hello(): return 42\n';
-    const registry = new ExpectedContentRegistry(['hw.py']);
+    const registry = new ExpectedContentRegistry({ track: ['hw.py'], ignore: [], attachments: [] });
     registry.getOrCreate('hw.py', originalContent);
     const emit = vi.fn();
 
