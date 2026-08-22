@@ -898,10 +898,11 @@ describe('path scope at seal time', () => {
   });
 
   it('wires the new scope-walk warnings into sealDroppedArtifacts and its student-facing branch', async () => {
-    // Fix round 2, Important 4. `extension.ts`'s two seal-command call sites
-    // both gate the "mention this to course staff" warning on
-    // `sealDroppedArtifacts(result.warnings)`; this test pins that the two new
-    // flags actually participate, not just that they exist on the type.
+    // Fix round 2, Important 4 (+ round 3, Moderate 4's duplicateEntryDropped).
+    // `extension.ts`'s two seal-command call sites both gate the "mention this
+    // to course staff" warning on `sealDroppedArtifacts(result.warnings)`;
+    // this test pins that all three new flags actually participate, not just
+    // that they exist on the type.
     expect(
       sealDroppedArtifacts({
         chainBroken: false,
@@ -911,6 +912,7 @@ describe('path scope at seal time', () => {
         orphanedRollingSeal: false,
         unreadableInScopeFile: true,
         unreadableScopeDirectory: false,
+        duplicateEntryDropped: false,
       }),
     ).toBe(true);
     expect(
@@ -922,6 +924,7 @@ describe('path scope at seal time', () => {
         orphanedRollingSeal: false,
         unreadableInScopeFile: false,
         unreadableScopeDirectory: true,
+        duplicateEntryDropped: false,
       }),
     ).toBe(true);
     expect(
@@ -933,6 +936,19 @@ describe('path scope at seal time', () => {
         orphanedRollingSeal: false,
         unreadableInScopeFile: false,
         unreadableScopeDirectory: false,
+        duplicateEntryDropped: true,
+      }),
+    ).toBe(true);
+    expect(
+      sealDroppedArtifacts({
+        chainBroken: false,
+        unreadableSession: false,
+        orphanedMeta: false,
+        emptySession: false,
+        orphanedRollingSeal: false,
+        unreadableInScopeFile: false,
+        unreadableScopeDirectory: false,
+        duplicateEntryDropped: false,
       }),
     ).toBe(false);
   });
@@ -965,5 +981,110 @@ describe('path scope at seal time', () => {
     const zip = await JSZip.loadAsync(await fsPromises.readFile(result.bundlePath));
     expect(zip.file('src/Main.java')).not.toBeNull();
     expect(zip.file('Alias.java')).toBeNull();
+
+    // Fix round 3, Moderate 4: the dropped alias leaves a trace rather than
+    // vanishing with zero signal.
+    expect(result.warnings.duplicateEntryDropped).toBe(true);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Fix round 3 regressions
+  // ---------------------------------------------------------------------------
+
+  it('(I1a) never mints missing for an on-disk file whose parent directory is unreadable', async () => {
+    // Fix round 3, Important 1, construction (a). `chmod 000` on `src/` blinds
+    // the WALK (it can't even readdir the directory), so `sightedInScope`
+    // cannot protect `src/Main.java` — this is the one construction where the
+    // exact-entry loop's own EACCES handling is the ONLY protection, and round
+    // 1/2 both collapsed every errno (including EACCES) into `missing`.
+    const ws = await makeWorkspace({ 'src/Main.java': 'secret' });
+    const dirPath = path.join(ws.root, 'src');
+    await fsPromises.chmod(dirPath, 0o000);
+    try {
+      const result = await sealBundle(
+        sealDeps(ws, { scope: { track: ['src/Main.java'], ignore: [], attachments: [] } }),
+      );
+      expect(result.kind).toBe('ok');
+      if (result.kind !== 'ok') return;
+      expect(result.warnings.unreadableInScopeFile).toBe(true);
+
+      const manifest = await readSealedManifest();
+      // Not present, not missing — absent entirely. A file that IS on disk
+      // must never be reported as absent.
+      expect((manifest.submission_files ?? []).some((f) => f.path === 'src/Main.java')).toBe(false);
+    } finally {
+      await fsPromises.chmod(dirPath, 0o755);
+    }
+  });
+
+  it('(I1b) an exact entry naming a DIRECTORY (EISDIR, an ordinary staff typo) is dropped, not missing', async () => {
+    // Fix round 3, Important 1, construction (b). `track: ['src']` (no
+    // trailing slash — the exact form, not the directory-rule form) against a
+    // real `src/` directory throws EISDIR when read as a file. Pre-fix, this
+    // collapsed to `missing`, producing a bundle with ZERO files and one
+    // affirmative false absence, with every warning false.
+    const ws = await makeWorkspace({ 'src/Main.java': 'x' });
+    const result = await sealBundle(
+      sealDeps(ws, { scope: { track: ['src'], ignore: [], attachments: [] } }),
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.warnings.unreadableInScopeFile).toBe(true);
+
+    const manifest = await readSealedManifest();
+    expect((manifest.submission_files ?? []).some((f) => f.path === 'src')).toBe(false);
+  });
+
+  it('(I1c) a case/symlink-mismatched exact entry pointing at an unreadable file is dropped, not missing', async () => {
+    // Fix round 3, Important 1, construction (c). `Main.java` is a symlink to
+    // `real/Target.java`, whose bytes are unreadable (chmod 000) — the walk
+    // never sights `Main.java` (Dirent.isFile() is false for a symlink entry),
+    // so this exercises the exact-entry loop's own read, which pre-fix
+    // returned `missing` for ANY errno, with zero trace.
+    const ws = await makeWorkspace({ 'real/Target.java': 'secret' });
+    const targetPath = path.join(ws.root, 'real/Target.java');
+    await fsPromises.chmod(targetPath, 0o000);
+    const linkPath = path.join(ws.root, 'Main.java');
+    await fsPromises.symlink(targetPath, linkPath);
+    try {
+      const result = await sealBundle(
+        sealDeps(ws, { scope: { track: ['Main.java'], ignore: [], attachments: [] } }),
+      );
+      expect(result.kind).toBe('ok');
+      if (result.kind !== 'ok') return;
+      expect(result.warnings.unreadableInScopeFile).toBe(true);
+
+      const manifest = await readSealedManifest();
+      expect((manifest.submission_files ?? []).some((f) => f.path === 'Main.java')).toBe(false);
+    } finally {
+      await fsPromises.chmod(targetPath, 0o644);
+    }
+  });
+
+  it('(I2) never reads through a symlink INSIDE the workspace whose target resolves OUTSIDE it', async () => {
+    // Fix round 3, Important 2. The round-2 containment check compared
+    // LEXICAL paths: `out.txt` is lexically inside the workspace root even
+    // though it is a symlink whose TARGET is outside it, so the lexical check
+    // let `fsPromises.readFile` follow the link straight through to the
+    // outside file's real bytes.
+    const ws = await makeWorkspace({});
+    const secretPath = path.join(tmpDir, 'SECRET.txt');
+    await fsPromises.writeFile(secretPath, 'not the students', 'utf8');
+    await fsPromises.symlink(secretPath, path.join(ws.root, 'out.txt'));
+
+    const result = await sealBundle(
+      sealDeps(ws, { scope: { track: ['out.txt'], ignore: [], attachments: [] } }),
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+
+    const manifest = await readSealedManifest();
+    const entry = (manifest.submission_files ?? []).find((f) => f.path === 'out.txt');
+    // Reported, if at all, as missing — never as present with the outside
+    // file's real bytes.
+    expect(entry?.status ?? 'missing').toBe('missing');
+
+    const zip = await JSZip.loadAsync(await fsPromises.readFile(result.bundlePath));
+    expect(Object.keys(zip.files).some((n) => n.endsWith('out.txt'))).toBe(false);
   });
 });
