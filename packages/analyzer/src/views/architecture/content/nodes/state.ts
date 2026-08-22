@@ -30,7 +30,7 @@ export const nodes: Record<string, ArchNode> = {
   },
   recording: {
     title: 'Recording',
-    body: 'A recording session is scoped to an assignment root, not to a window. Activation scans the open workspace folders for manifests at any depth and starts one independent session per directory whose manifest verifies, each with its own .provenance/ directory, its own log file, and its own freshly generated ed25519 keypair. Every state in this diagram therefore applies per session: one assignment can be degraded or dangling while another beside it keeps recording normally.\n\nThe session private key never sits on disk in the clear. It is encrypted under the course manifest’s signature and written to the .slog.meta sidecar, and every hundredth entry is signed with it as a checkpoint. Checkpoints are what make an unfinished log still provable: if the process dies mid-session, everything up to the last checkpoint carries a signature over its chain hash.',
+    body: 'A recording session is scoped to an assignment root, not to a window. Activation scans the open workspace folders for manifests at any depth and starts one independent session per directory whose manifest verifies, each with its own .provenance/ directory, its own log file, and its own freshly generated ed25519 keypair. Every state in this diagram therefore applies per session: one assignment can be degraded or dangling while another beside it keeps recording normally.\n\nThe session private key never sits on disk in the clear. It is encrypted under the course manifest’s signature and written to the .slog.meta sidecar, and every hundredth entry is signed with it as a checkpoint. Checkpoints are what make an unfinished log still provable: if the process dies mid-session, everything up to the last checkpoint carries a signature over its chain hash.\n\nRecording says nothing about whether anyone can tell whose work it is. Identity is built here, once the session keypair exists, and it is allowed to fail: a student who has never enrolled records a complete, chain-verifiable log with no identity block in it. That state is the default of every fresh install and it used to be invisible — one line in a developer console — so all three recorders now disclose it. The indicator reads “recording (not enrolled)”, its tooltip carries the enrollment URL, and a notification says it at most twice in a student’s life before falling silent and leaving the indicator to do the work.\n\nWhat drives that disclosure is the identity outcome rather than a lookup for a stored credential, and the distinction is load-bearing: a student holding a legacy 2.0 course token has no 2.1 credential on disk but does emit an identity, so a lookup would accuse an attributed student of being unattributed. Only the two outcomes an enrollment would actually repair are treated as un-enrolled. A missing root key in the build, or a keyring the recorder cannot open, leaves the indicator plain — the identity is just as absent, but sending that student to a web page would be the wrong instruction and would bury a fault that needs staff.',
     links: [
       {
         label: 'session-registry.ts',
@@ -39,6 +39,10 @@ export const nodes: Record<string, ArchNode> = {
       {
         label: 'manifest-discovery.ts',
         href: `${GH}/packages/recorder/src/activation/manifest-discovery.ts`,
+      },
+      {
+        label: 'enroll-nudge.ts',
+        href: `${GH}/packages/recorder/src/activation/enroll-nudge.ts`,
       },
     ],
   },
