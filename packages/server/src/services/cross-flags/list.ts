@@ -91,9 +91,15 @@ export type CrossScopeExclusionMemberRow = {
  */
 export type CrossScopeExclusionSummary = {
   id: string;
-  reason: 'same_repository_lineage';
+  reason: 'same_repository_lineage' | 'shared_recording_scope';
   members: CrossScopeExclusionMemberRow[];
   shared_commits: string[];
+  /**
+   * The session keys that proved it (migration 0032). Empty for a lineage
+   * proved by commits alone — including every row written before 0032, which
+   * the column default makes true rather than merely likely.
+   */
+  shared_sessions: string[];
   excluded_pair_count: number;
   created_at: string;
 };
@@ -302,6 +308,7 @@ export async function listCrossScopeExclusions(
       reason: cross_flag_exclusions.reason,
       submission_ids: cross_flag_exclusions.submission_ids,
       shared_commits: cross_flag_exclusions.shared_commits,
+      shared_sessions: cross_flag_exclusions.shared_sessions,
       excluded_pair_count: cross_flag_exclusions.excluded_pair_count,
       created_at: cross_flag_exclusions.created_at,
     })
@@ -317,9 +324,9 @@ export async function listCrossScopeExclusions(
 
   return rows.map((row) => ({
     id: row.id,
-    // The CHECK constraint admits no other value; the cast keeps the API type
-    // honest without a runtime branch that can never be taken.
-    reason: row.reason as 'same_repository_lineage',
+    // The CHECK constraint admits exactly these two values; the cast keeps the
+    // API type honest without a runtime branch that can never be taken.
+    reason: row.reason as 'same_repository_lineage' | 'shared_recording_scope',
     // `submission_ids` is stored sorted, so this preserves that order. A member
     // the join could not resolve is NOT dropped — evidence of a withheld
     // comparison must not disappear because a row went missing.
@@ -334,6 +341,7 @@ export async function listCrossScopeExclusions(
         },
     ),
     shared_commits: row.shared_commits,
+    shared_sessions: row.shared_sessions,
     excluded_pair_count: row.excluded_pair_count,
     created_at: row.created_at.toISOString(),
   }));

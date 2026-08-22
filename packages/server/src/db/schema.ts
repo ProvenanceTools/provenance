@@ -1173,6 +1173,13 @@ export const cross_flag_exclusions = pgTable(
       .array()
       .notNull()
       .default(sql`'{}'`),
+    // Migration 0032. Empty for a lineage proved by commits alone, which is
+    // every row 0031 wrote — so the default makes those rows read correctly
+    // with no backfill.
+    shared_sessions: text('shared_sessions')
+      .array()
+      .notNull()
+      .default(sql`'{}'`),
     excluded_pair_count: integer('excluded_pair_count').notNull(),
     created_at: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -1181,7 +1188,10 @@ export const cross_flag_exclusions = pgTable(
   (t) => [
     // Both created in the SQL migration; mirrored here for query-builder hints.
     index('cross_flag_exclusions_sem_idx').on(t.semester_id),
-    check('cross_flag_exclusions_reason_check', sql`${t.reason} IN ('same_repository_lineage')`),
+    check(
+      'cross_flag_exclusions_reason_check',
+      sql`${t.reason} IN ('same_repository_lineage', 'shared_recording_scope')`,
+    ),
     // A lineage is 2 or more submissions. A one-member "exclusion" excludes
     // nothing and would render as a suppression that never happened.
     check('cross_flag_exclusions_members_check', sql`array_length(${t.submission_ids}, 1) >= 2`),

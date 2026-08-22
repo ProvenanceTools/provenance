@@ -463,6 +463,7 @@ type ExclusionRow = {
   reason: string;
   submission_ids: string[];
   shared_commits: string[];
+  shared_sessions: string[];
   excluded_pair_count: number;
 };
 
@@ -470,7 +471,8 @@ type ExclusionRow = {
  * `SameScopeExclusion[]` → `cross_flag_exclusions` rows.
  *
  * NOT gated on any heuristic config. The partition is derived from signed
- * `git.event` payloads alone; no weight, threshold or enable flag can change
+ * `git.event` payloads and signed `session.start` keys alone; no weight,
+ * threshold or enable flag can change
  * which submissions are one repository, and letting a disabled heuristic
  * suppress the register would hide a suppression that still happened for the
  * other heuristic.
@@ -510,6 +512,9 @@ export function translateExclusionsToRows(
       reason: ex.reason,
       submission_ids: submissionIds,
       shared_commits: [...ex.sharedCommits],
+      // The second proof (migration 0032). Empty for a commit-proved lineage,
+      // which is what every row written before 0032 means.
+      shared_sessions: [...ex.sharedSessions],
       // Recomputed from the members that actually survived translation, not
       // copied — a count that disagrees with the list it accompanies is worse
       // than no count.
