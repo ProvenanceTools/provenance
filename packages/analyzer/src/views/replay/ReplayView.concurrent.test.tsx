@@ -15,7 +15,22 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
+import {
+  buildIndex,
+  buildIndexFromEventRows,
+  sessionsFromIndex,
+  type ServerEventRow,
+} from '@provenance/analysis-core/index/build-index.js';
+import {
+  buildReconstructionScopeFromSessions,
+  reconstructionScopeFor,
+  type ReconstructionScope,
+} from '@provenance/analysis-core/index/reconstruct-segments.js';
+import {
+  fromWireBundleContributors,
+  toWireBundleContributors,
+} from '@provenance/analysis-core/identity/wire.js';
+import type { BundleContributors } from '@provenance/analysis-core/identity/types.js';
 import { loadBundle } from '@provenance/analysis-core/loader/parse-bundle.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import {
@@ -122,7 +137,65 @@ async function buildScope(
   return { bundle: result.value, index: buildIndex(result.value) };
 }
 
+/**
+ * Render the way the `/local` route does: a parsed bundle in hand, so the scope
+ * and the stamp come straight off it.
+ */
 function renderReplay(bundle: Bundle | null, index: EventIndex) {
+  return renderWith(
+    index,
+    bundle === null ? null : reconstructionScopeFor(bundle, index),
+    bundle?.contributors ?? null,
+  );
+}
+
+/**
+ * Render the way the SERVER-BACKED tab does.
+ *
+ * This is the path the defect lived on and the reason it survived: this file
+ * only ever pinned `bundle={null}` under a SOLO fixture, so "no bundle" was
+ * tested and "no bundle, two contributors" — the deployed group-work case — was
+ * not. The tab has no `Bundle`; it pages `EventRow`s and reads the contributor
+ * stamp off the summary. Both are reproduced exactly here: the index is rebuilt
+ * from server-shape rows, and the stamp makes the round trip through the wire
+ * projection, so nothing about the server's data shape is assumed away.
+ */
+function renderServerBackedReplay(bundle: Bundle, index: EventIndex) {
+  const rows: ServerEventRow[] = [];
+  for (const session of bundle.sessions) {
+    for (const e of session.events) {
+      rows.push({
+        seq: e.seq,
+        kind: e.kind,
+        t: e.t,
+        wall: e.wall,
+        session_id: session.sessionId,
+        payload: e.data,
+      });
+    }
+  }
+  rows.sort((a, b) => (a.wall !== b.wall ? (a.wall < b.wall ? -1 : 1) : a.seq - b.seq));
+
+  const serverIndex = buildIndexFromEventRows(rows);
+  const contributors =
+    bundle.contributors === undefined
+      ? null
+      : fromWireBundleContributors(toWireBundleContributors(bundle.contributors));
+  const scope = buildReconstructionScopeFromSessions(
+    sessionsFromIndex(serverIndex),
+    contributors?.bySession ?? new Map(),
+    serverIndex,
+  );
+  // `index` is only used for the entry anchor; the tab replays `serverIndex`.
+  void index;
+  return renderWith(serverIndex, scope, contributors);
+}
+
+function renderWith(
+  index: EventIndex,
+  scope: ReconstructionScope | null,
+  contributors: BundleContributors | null,
+) {
   const firstSession = [...index.bySessionId.keys()][0]!;
   const lastIdx = index.ordered.length - 1;
   return render(
@@ -133,7 +206,8 @@ function renderReplay(bundle: Bundle | null, index: EventIndex) {
         flags={[]}
         sourceFilename="test.zip"
         showHeader={false}
-        bundle={bundle}
+        scope={scope}
+        contributors={contributors}
       />
     </MemoryRouter>,
   );
@@ -200,6 +274,84 @@ describe('two partners on divergent branches', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The same two partners, through the SERVER-BACKED path
+// ---------------------------------------------------------------------------
+
+/**
+ * The deployed analyzer. Everything above proved `/local` behaves; none of it
+ * touched the path a grader on provenance.eecs.berkeley.edu actually uses, and
+ * that path had no scope at all — it took `soloReconstructionScope`, which says
+ * the submission has one contributor, and therefore replayed both partners'
+ * edits as one linear keystroke sequence.
+ */
+describe('two partners, on the server-backed path', () => {
+  it('renders as concurrent with both branches — parity with /local, not a linearization', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE' },
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE' },
+    ]);
+
+    renderServerBackedReplay(bundle, index);
+
+    const pane = await screen.findByTestId('replay-ambiguous');
+    expect(pane.getAttribute('data-ambiguity-kind')).toBe('concurrent');
+
+    const names = screen.getAllByTestId('replay-branch-contributor').map((e) => e.textContent);
+    expect(names.sort()).toEqual(['alice', 'bob']);
+
+    // Neither branch is presented as "the file".
+    expect(screen.queryByTestId('monaco-editor')).toBeNull();
+  });
+
+  it('offers the contributor switcher, which the server-backed tab never had', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE' },
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE' },
+    ]);
+
+    renderServerBackedReplay(bundle, index);
+
+    const select = await screen.findByTestId('replay-contributor-select');
+    const options = [...select.querySelectorAll('option')].map((o) => o.textContent);
+    expect(options).toContain('alice');
+    expect(options).toContain('bob');
+  });
+
+  it('never puts an interleaving of the two branches on screen', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE' },
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE' },
+    ]);
+
+    renderServerBackedReplay(bundle, index);
+    await screen.findByTestId('replay-ambiguous');
+
+    for (const pane of screen.getAllByTestId('replay-branch-content')) {
+      const text = pane.textContent ?? '';
+      expect(text.includes('ALICE_LINE') && text.includes('BOB_LINE')).toBe(false);
+    }
+  });
+
+  /**
+   * The gate, on the path that matters. A solo submission on the deployed
+   * analyzer must render exactly as it did before any of this — the editor, with
+   * content, and no switcher.
+   */
+  it('leaves a solo submission exactly as it was', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE' },
+    ]);
+
+    renderServerBackedReplay(bundle, index);
+
+    const editor = await screen.findByTestId('monaco-editor');
+    expect(editor.getAttribute('data-value')).toContain('ALICE_LINE');
+    expect(screen.queryByTestId('replay-ambiguous')).toBeNull();
+    expect(screen.queryByTestId('replay-contributor-switcher')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The solo control
 // ---------------------------------------------------------------------------
 
@@ -222,7 +374,12 @@ describe('a solo bundle', () => {
     expect(screen.queryByTestId('replay-coverage-panel')).toBeNull();
   });
 
-  it('is unchanged when no bundle is supplied at all — the server-backed tab', async () => {
+  /**
+   * No scope at all is what a client talking to a server that predates the
+   * contributor stamp gets. It must fail toward today's behaviour — the ordinary
+   * editor — rather than toward a refusal to answer.
+   */
+  it('is unchanged when no scope is supplied at all — an older server', async () => {
     const { index } = await buildScope([{ who: { studentRef: 'alice' }, text: 'ALICE_LINE' }]);
 
     renderReplay(null, index);

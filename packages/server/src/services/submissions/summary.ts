@@ -276,9 +276,7 @@ export async function getSubmissionSummary(
   // behaviour. An EMPTY object here would instead assert "no contributors",
   // which is a stronger and false claim.
   const contributor_stamp =
-    bundle.contributors === undefined
-      ? undefined
-      : toWireBundleContributors(bundle.contributors);
+    bundle.contributors === undefined ? undefined : toWireBundleContributors(bundle.contributors);
 
   // Query 4: per_file_stats for files list
   const fileRows = await db

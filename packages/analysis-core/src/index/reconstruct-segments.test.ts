@@ -23,7 +23,7 @@ import type { Bundle, ParsedSession } from '../loader/types.js';
 import {
   buildIndex,
   buildIndexFromEventRows,
-  sessionsFromEventRows,
+  sessionsFromIndex,
   type ServerEventRow,
 } from './build-index.js';
 import { reconstructFile } from './reconstruct-file.js';
@@ -716,7 +716,7 @@ function rowScopeOf(specs: readonly SessionSpec[]) {
   const rows = serverRowsOf(bundle);
   const index = buildIndexFromEventRows(rows);
   return buildReconstructionScopeFromSessions(
-    sessionsFromEventRows(rows),
+    sessionsFromIndex(index),
     new Map(bundle.contributors!.bySession),
     index,
   );
@@ -776,12 +776,8 @@ describe('a scope built from server event rows', () => {
    * toward today's behaviour rather than toward a refusal to answer.
    */
   it('falls back to the solo path when no contributor stamp is supplied', () => {
-    const rows = serverRowsOf(bundleOf(divergentPartners()));
-    const scope = buildReconstructionScopeFromSessions(
-      sessionsFromEventRows(rows),
-      new Map(),
-      buildIndexFromEventRows(rows),
-    );
+    const index = buildIndexFromEventRows(serverRowsOf(bundleOf(divergentPartners())));
+    const scope = buildReconstructionScopeFromSessions(sessionsFromIndex(index), new Map(), index);
 
     expect(scope.ordering).toBeNull();
     expect(reconstructFileSegmented(scope, PATH).kind).toBe('determinate');

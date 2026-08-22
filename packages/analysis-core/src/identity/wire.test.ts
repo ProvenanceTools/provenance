@@ -15,7 +15,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { isIdentityCheckFailure, type BundleContributors, type SessionContributor } from './types.js';
+import {
+  isIdentityCheckFailure,
+  type BundleContributors,
+  type SessionContributor,
+} from './types.js';
 import {
   fromWireBundleContributors,
   fromWireSessionContributor,
@@ -71,7 +75,11 @@ describe('the contributor stamp round-trips through the wire shape', () => {
       claimedStudentRef: 'bob',
       claimedScopeId: 'cs61b-fa26',
       claimedIdentityVersion: '2.0',
-      reason: { kind: 'chain_failed', error: { kind: 'invalid_course_signature' }, detail: 'bad sig' },
+      reason: {
+        kind: 'chain_failed',
+        error: { kind: 'invalid_course_signature' },
+        detail: 'bad sig',
+      },
     };
     const back = roundTrip(c);
     expect(back).toEqual(c);

@@ -573,12 +573,7 @@ export const components = {
           properties: {
             kind: {
               type: 'string',
-              enum: [
-                'no_root_key',
-                'no_trust_anchor',
-                'anchor_not_root_signed',
-                'chain_failed',
-              ],
+              enum: ['no_root_key', 'no_trust_anchor', 'anchor_not_root_signed', 'chain_failed'],
             },
             detail: { type: 'string' },
             required: { type: 'string', enum: ['course_cert', 'institution_cert'] },

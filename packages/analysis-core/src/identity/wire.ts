@@ -56,7 +56,12 @@ import type {
 export type WireUnverifiableReason = {
   kind: IdentityUnverifiableReason['kind'];
   detail: string;
-  required?: 'course_cert' | 'institution_cert';
+  /**
+   * `| undefined` rather than a bare optional so the zod-inferred type in
+   * `@provenance/shared` is assignable under `exactOptionalPropertyTypes` and
+   * the analyzer needs no cast at the boundary.
+   */
+  required?: 'course_cert' | 'institution_cert' | undefined;
   /** log-core's `IdentityChainError`, carried opaquely. See the module header. */
   error?: unknown;
 };

@@ -27,11 +27,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createEngine } from './engine-core.js';
-import {
-  buildReconstructionScope,
-  soloReconstructionScope,
-} from '@provenance/analysis-core/index/reconstruct-segments.js';
-import type { Bundle } from '@provenance/analysis-core/loader/types.js';
+import { soloReconstructionScope } from '@provenance/analysis-core/index/reconstruct-segments.js';
+import type { ReconstructionScope } from '@provenance/analysis-core/index/reconstruct-segments.js';
 import type { AmbiguousReconstruction, EngineHandle, ReplayState } from './engine-core.js';
 import type { FileReplayState } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
 import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
@@ -77,13 +74,19 @@ export type UseReplayEngineOptions = {
    */
   skipIdle?: boolean;
   /**
-   * The bundle behind `index`. Supplying it lets replay tell a file whose
-   * content at the playhead has no single truth from one that simply has none
-   * (Tier 2.2, spec §6 Rule 4). Omitted, the engine takes a solo scope, which
-   * is the behaviour that predates this and is correct for every
-   * single-contributor bundle.
+   * The reconstruction scope for `index`. Supplying it lets replay tell a file
+   * whose content at the playhead has no single truth from one that simply has
+   * none (Tier 2.2, spec §6 Rule 4).
+   *
+   * Takes the SCOPE rather than the `Bundle` it used to take, because only the
+   * `/local` route has a bundle: the server-backed tab pages event rows and
+   * builds the identical scope from them plus the summary's contributor stamp
+   * (`useServerScope`). Omitted, the engine takes a solo scope — the behaviour
+   * that predates this, and correct for every single-contributor submission.
+   *
+   * The caller must memoize it; the engine is rebuilt whenever it changes.
    */
-  bundle?: Bundle | null | undefined;
+  scope?: ReconstructionScope | null | undefined;
 };
 
 /**
@@ -97,7 +100,7 @@ export function useReplayEngine(
   options: UseReplayEngineOptions = {},
 ): UseReplayEngineResult {
   const skipIdle = options.skipIdle ?? false;
-  const bundle = options.bundle ?? null;
+  const scope = options.scope ?? null;
 
   // Engine handle lives in a ref so we don't re-create it on every render.
   const engineRef = useRef<EngineHandle | null>(null);
@@ -161,10 +164,7 @@ export function useReplayEngine(
       return;
     }
 
-    const engine = createEngine(
-      index,
-      bundle === null ? soloReconstructionScope(index) : buildReconstructionScope(bundle, index),
-    );
+    const engine = createEngine(index, scope ?? soloReconstructionScope(index));
     engineRef.current = engine;
     speedRef.current = engine.getState().speed;
     engine.setSkipIdle(skipIdleRef.current);
@@ -183,7 +183,7 @@ export function useReplayEngine(
         rafRef.current = null;
       }
     };
-  }, [index, bundle]);
+  }, [index, scope]);
 
   // ---------------------------------------------------------------------------
   // Helper: sync React state from the engine after a mutation.

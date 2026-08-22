@@ -20,6 +20,7 @@ import { useMemo } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useSubmissionData } from '../../data/SubmissionDataProvider.js';
 import { useFullEventIndex } from '../../data/useFullEventIndex.js';
+import { useServerScope } from '../../data/useServerScope.js';
 import { buildGlobalSeqLookup } from '../../data/global-seq-lookup.js';
 import { ReplayInner } from '../replay/ReplayView.js';
 import { StatusRegion } from '../../components/a11y/StatusRegion.js';
@@ -102,6 +103,13 @@ export function Replay() {
 
   const sourceFilename = summaryQuery.data?.source_filename ?? '';
 
+  // The reconstruction scope, from the paged rows plus the summary's contributor
+  // stamp. Without it this tab took `soloReconstructionScope` — a statement that
+  // the submission has one contributor — and so replayed two partners' unordered
+  // work as one linear keystroke sequence, for a submission `/local` refuses to
+  // linearize. Solo submissions get the `ordering: null` scope and are unchanged.
+  const serverScope = useServerScope(indexQuery.data ?? null, summaryQuery.data);
+
   if (indexQuery.isLoading || summaryQuery.isLoading) {
     return (
       <StatusRegion className="container mx-auto py-12 text-center text-gray-600">
@@ -156,6 +164,8 @@ export function Replay() {
           flags={(flagsQuery.data ?? []).map((row) => toFlag(row, bySeq))}
           sourceFilename={sourceFilename}
           showHeader={false}
+          scope={serverScope?.scope ?? null}
+          contributors={serverScope?.contributors ?? null}
         />
       </div>
     </div>
