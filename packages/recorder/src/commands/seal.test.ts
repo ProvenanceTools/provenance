@@ -32,7 +32,7 @@ import {
   generateSessionKeypair,
 } from '@provenance/log-core';
 import type { Envelope, ResolvedScope, BundleManifest } from '@provenance/log-core';
-import { sealBundle, verifyManifestSig } from './seal.js';
+import { sealBundle, verifyManifestSig, sealDroppedArtifacts } from './seal.js';
 import type { SealDeps } from './seal.js';
 
 /** A scope that tracks nothing — the pre-path-scope default for most tests here. */
@@ -808,5 +808,162 @@ describe('path scope at seal time', () => {
     expect(paths).toContain('real/Nested.java');
     // Nothing was walked through the `loop/` symlink at all.
     expect(paths.some((p) => p.startsWith('loop/'))).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Fix round 2 regressions
+  // ---------------------------------------------------------------------------
+
+  it('drops (never reports missing) an EXACT entry the walk sighted but could not read', async () => {
+    // Fix round 2, Important 1. Round 1's fix built the exact-entry loop's
+    // skip-set from SUCCESSFUL reads, so a file the walk sighted but could not
+    // re-open (chmod 0 here) was absent from that set and fell through to the
+    // exact-entry loop, which read-failed again and minted a false `missing`.
+    // Every 1.x manifest's files_under_review is nothing BUT exact entries, so
+    // this was the whole protection, void. Uses the EXACT-entry form
+    // (`track: ['src/Main.java']`), not a rule, because the rule form does not
+    // exercise the exact-entry loop's skip-set at all.
+    const ws = await makeWorkspace({ 'src/Main.java': 'secret' });
+    const lockedPath = path.join(ws.root, 'src/Main.java');
+    await fsPromises.chmod(lockedPath, 0o000);
+    try {
+      const result = await sealBundle(
+        sealDeps(ws, { scope: { track: ['src/Main.java'], ignore: [], attachments: [] } }),
+      );
+      expect(result.kind).toBe('ok');
+      if (result.kind !== 'ok') return;
+      expect(result.warnings.unreadableInScopeFile).toBe(true);
+
+      const manifest = await readSealedManifest();
+      // Not present, not missing — absent from the bundle entirely, exactly
+      // like the rule-entry case round 1 already covered.
+      expect((manifest.submission_files ?? []).some((f) => f.path === 'src/Main.java')).toBe(false);
+    } finally {
+      await fsPromises.chmod(lockedPath, 0o644);
+    }
+  });
+
+  it('never seals an EXACT entry naming a path inside a nested .git/ or .provenance/', async () => {
+    // Fix round 2, Important 2. Round 1's I3 fix pruned the WALK from ever
+    // entering a nested .git/.provenance, but an exact track entry reads
+    // directly by string and never passes through the walk's pruning — so
+    // naming the leak exactly still sealed it.
+    const ws = await makeWorkspace({
+      'hw3/.provenance/manifest.json': '{"leaked":true}',
+    });
+    const result = await sealBundle(
+      sealDeps(ws, {
+        scope: { track: ['hw3/.provenance/manifest.json'], ignore: [], attachments: [] },
+      }),
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+
+    const manifest = await readSealedManifest();
+    expect(
+      (manifest.submission_files ?? []).some((f) => f.path === 'hw3/.provenance/manifest.json'),
+    ).toBe(false);
+
+    // Confirm the bytes never made it into the zip either.
+    const zip = await JSZip.loadAsync(await fsPromises.readFile(result.bundlePath));
+    expect(zip.file('hw3/.provenance/manifest.json')).toBeNull();
+  });
+
+  it('never reads or seals an EXACT entry that resolves outside the workspace root', async () => {
+    // Fix round 2, Important 3. `validateScopeEntry` deliberately never runs
+    // against a 1.x manifest's files_under_review (1.x parsing must never
+    // reject), so a `..`-shaped entry reaches the seal unfiltered. Gated only
+    // by the course signature (staff-error/key-compromise, not
+    // student-reachable), but the seal must not read outside its own root
+    // regardless.
+    const ws = await makeWorkspace({ 'src/Main.java': 'x' });
+    // A real file OUTSIDE the workspace root, i.e. directly in `tmpDir`.
+    await fsPromises.writeFile(path.join(tmpDir, 'ESCAPE.txt'), 'not the students', 'utf8');
+
+    const result = await sealBundle(
+      sealDeps(ws, { scope: { track: ['../ESCAPE.txt'], ignore: [], attachments: [] } }),
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+
+    const manifest = await readSealedManifest();
+    const entry = (manifest.submission_files ?? []).find((f) => f.path === '../ESCAPE.txt');
+    // Reported, if at all, as missing — never as present with the outside
+    // file's real bytes/hash.
+    expect(entry?.status ?? 'missing').toBe('missing');
+
+    // And definitely not sealed into the zip under any spelling.
+    const zip = await JSZip.loadAsync(await fsPromises.readFile(result.bundlePath));
+    expect(Object.keys(zip.files).some((n) => n.endsWith('ESCAPE.txt'))).toBe(false);
+  });
+
+  it('wires the new scope-walk warnings into sealDroppedArtifacts and its student-facing branch', async () => {
+    // Fix round 2, Important 4. `extension.ts`'s two seal-command call sites
+    // both gate the "mention this to course staff" warning on
+    // `sealDroppedArtifacts(result.warnings)`; this test pins that the two new
+    // flags actually participate, not just that they exist on the type.
+    expect(
+      sealDroppedArtifacts({
+        chainBroken: false,
+        unreadableSession: false,
+        orphanedMeta: false,
+        emptySession: false,
+        orphanedRollingSeal: false,
+        unreadableInScopeFile: true,
+        unreadableScopeDirectory: false,
+      }),
+    ).toBe(true);
+    expect(
+      sealDroppedArtifacts({
+        chainBroken: false,
+        unreadableSession: false,
+        orphanedMeta: false,
+        emptySession: false,
+        orphanedRollingSeal: false,
+        unreadableInScopeFile: false,
+        unreadableScopeDirectory: true,
+      }),
+    ).toBe(true);
+    expect(
+      sealDroppedArtifacts({
+        chainBroken: false,
+        unreadableSession: false,
+        orphanedMeta: false,
+        emptySession: false,
+        orphanedRollingSeal: false,
+        unreadableInScopeFile: false,
+        unreadableScopeDirectory: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('dedupes an exact entry against a walk-captured file that resolves to the same real path', async () => {
+    // Fix round 2, Moderate 5. A symlink lets us exercise the "two spellings,
+    // one underlying file" shape portably (case-insensitive-filesystem
+    // collisions are the same bug but OS/filesystem-dependent, so not asserted
+    // directly — see the round-1 symlink test's comment for the same reasoning).
+    const ws = await makeWorkspace({ 'src/Main.java': 'class Main {}' });
+    const aliasPath = path.join(ws.root, 'Alias.java');
+    await fsPromises.symlink(path.join(ws.root, 'src/Main.java'), aliasPath);
+
+    const result = await sealBundle(
+      sealDeps(ws, {
+        // `src/` (rule) captures src/Main.java via the walk; `Alias.java`
+        // (exact) is a symlink to the SAME underlying bytes.
+        scope: { track: ['src/', 'Alias.java'], ignore: [], attachments: [] },
+      }),
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+
+    const manifest = await readSealedManifest();
+    const present = (manifest.submission_files ?? []).filter((f) => f.status === 'present');
+    // Exactly one present record for this file's bytes, not two.
+    expect(present).toHaveLength(1);
+    expect(present[0]!.path).toBe('src/Main.java');
+
+    const zip = await JSZip.loadAsync(await fsPromises.readFile(result.bundlePath));
+    expect(zip.file('src/Main.java')).not.toBeNull();
+    expect(zip.file('Alias.java')).toBeNull();
   });
 });
