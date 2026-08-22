@@ -67,8 +67,15 @@ import type { ValidationCheck } from './check-types.js';
 export type SubmittedFileVerdict = {
   path: string;
   status: 'present' | 'missing';
-  /** 'match' | 'mismatch' | 'unknown' (skip) */
-  verdict: 'match' | 'mismatch' | 'unknown';
+  /**
+   * 'match' | 'mismatch' | 'unknown' (skip) | 'attachment' (not comparable).
+   *
+   * `'attachment'` is NOT a weaker 'unknown'. Unknown means we could not tell;
+   * attachment means the question does not apply, because the file was sealed
+   * and hashed but deliberately never captured. Collapsing the two would put
+   * attachments into whatever surface renders unresolved files.
+   */
+  verdict: 'match' | 'mismatch' | 'unknown' | 'attachment';
   submittedSha: string | null;
   recordedSha: string | null;
   detail: string;
@@ -231,6 +238,42 @@ export function submittedFileVerdicts(
   const verdicts: SubmittedFileVerdict[] = [];
 
   for (const [path, f] of bundle.submissionFiles) {
+    if (f.role === 'attachment') {
+      // Real, detectable tampering — present bytes that disagree with their own
+      // signed manifest sha256 — needs no event provenance to catch, and an
+      // attachment is not exempt from it. Reporting 'attachment' here would be
+      // an unearned exculpatory claim ("covered by the signed manifest") about
+      // bytes the manifest hash has already contradicted. This is the SAME
+      // tamper sub-check as the non-attachment path below; it must run before
+      // the branch returns, because no attachment may reach the reconstruction
+      // comparison the rest of this function performs.
+      if (f.bytes !== undefined && !f.hashOk) {
+        verdicts.push({
+          path,
+          status: 'present',
+          verdict: 'mismatch',
+          submittedSha: f.sha256,
+          recordedSha: null,
+          detail: 'Submitted bytes do not match their own manifest sha256 (tampered bundle).',
+          supportingSeqs: [],
+        });
+        continue;
+      }
+      // Attested by hash in the signed manifest, never captured, so there is
+      // nothing to reconstruct and nothing to compare. Spec §9.1.
+      verdicts.push({
+        path,
+        status: f.status,
+        verdict: 'attachment',
+        submittedSha: f.sha256,
+        recordedSha: null,
+        detail:
+          'Carried in the bundle and covered by the signed manifest, but never captured — ' +
+          'the assignment lists it as an attachment, so no event history exists to compare against.',
+        supportingSeqs: [],
+      });
+      continue;
+    }
     if (f.status === 'missing') {
       verdicts.push({
         path,

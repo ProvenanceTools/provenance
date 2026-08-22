@@ -388,4 +388,52 @@ describe('Source tab', () => {
       expect(screen.getByTestId('verdict-optional.py')).toHaveTextContent('missing');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Attachment verdict — spec §9.1 (R2). Not a weaker `unknown`; must never
+  // read as, or be styled like, `mismatch`. The Source tab is the one surface
+  // where an attachment could appear beside a real tampering finding.
+  // -------------------------------------------------------------------------
+
+  it('labels an attachment distinctly, never in the mismatch bucket', async () => {
+    const filesResult: SubmittedFileListResult = {
+      available: true,
+      files: [
+        { path: 'logs/run.log', status: 'present', verdict: 'attachment', sha256: 'abc123' },
+        { path: 'Main.java', status: 'present', verdict: 'mismatch', sha256: 'def456' },
+      ],
+    };
+    const provider = makeProvider(filesResult);
+    renderSource(provider);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('verdict-logs/run.log')).toHaveTextContent('attachment');
+    });
+
+    const attachmentBadge = screen.getByTestId('verdict-logs/run.log');
+    const mismatchBadge = screen.getByTestId('verdict-Main.java');
+    // Not the mismatch styling…
+    expect(attachmentBadge.className).not.toBe(mismatchBadge.className);
+    expect(attachmentBadge.className).not.toMatch(/text-red-700/);
+    // …and a genuinely distinct one, not a silent fallback to the `unknown` grey.
+    expect(attachmentBadge.className).not.toMatch(/text-gray-600/);
+  });
+
+  it('the content notice for an attachment says the question does not apply, not that it is unresolved', async () => {
+    const el = await renderSelected({
+      path: 'logs/run.log',
+      content: '',
+      status: 'present',
+      verdict: 'attachment',
+      content_source: 'event_replay',
+    });
+
+    expect(el).toHaveTextContent('Attachment');
+    expect(el).toHaveTextContent('never captured');
+    expect(el).toHaveTextContent('no event history to reconstruct');
+    // Must not fall through to the generic "verdict did not reach a
+    // conclusion" wording `unknown` gets — that would collapse the two states
+    // the whole feature exists to keep apart.
+    expect(el).not.toHaveTextContent('did not reach a verdict');
+  });
 });

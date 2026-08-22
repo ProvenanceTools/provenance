@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { verifySubmittedCode } from './verify-submitted-code.js';
+import { verifySubmittedCode, submittedFileVerdicts } from './verify-submitted-code.js';
 import type { Bundle, ParsedSession } from '../loader/types.js';
 import type { SessionContributor } from '../identity/types.js';
 import type { HashedEnvelope, SlogMeta, BundleManifest } from '@provenance/log-core';
@@ -68,6 +68,8 @@ type SubmissionFileInput = {
    * without tampering. Supply bytes to model an actually-tampered bundle.
    */
   bytes?: Uint8Array;
+  /** Defaults to 'reviewed' — every bundle sealed before path scope. */
+  role?: 'reviewed' | 'attachment';
 };
 
 function makeBundle(opts: {
@@ -120,7 +122,7 @@ function makeBundle(opts: {
       status: f.status,
       sha256: f.sha256,
       hashOk: f.hashOk,
-      role: 'reviewed',
+      role: f.role ?? 'reviewed',
       ...(f.bytes !== undefined ? { bytes: f.bytes } : {}),
     });
   }
@@ -144,6 +146,7 @@ function makeBundle(opts: {
             path: f.path,
             status: f.status,
             sha256: f.sha256,
+            ...(f.role !== undefined ? { role: f.role } : {}),
           })),
         }
       : {
@@ -303,6 +306,125 @@ describe('verifySubmittedCode (Check 8)', () => {
     });
     const check = verifySubmittedCode(bundle, { chainIntact: true });
     expect(check.id).toBe('submitted_code_match');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Attachments (spec §9.1) — an attachment has no event provenance BY
+// DEFINITION, so check 8 must never compare it against reconstruction.
+// ---------------------------------------------------------------------------
+
+describe('attachments are never compared against reconstruction (R2)', () => {
+  it('reports an attachment as attested rather than mismatched', () => {
+    // An attachment has no event provenance BY DEFINITION — that is what makes
+    // it an attachment. Comparing it against reconstruction reports every
+    // attachment in every bundle as tampered, on a check used in
+    // academic-integrity proceedings. Spec §9.1.
+    const bundle = makeBundle({
+      submissionFiles: [
+        {
+          path: 'logs/run.log',
+          status: 'present',
+          sha256: 'ab'.repeat(32),
+          hashOk: true,
+          role: 'attachment',
+        },
+      ],
+      events: [],
+    });
+    const verdicts = submittedFileVerdicts(bundle, { chainIntact: true });
+    const v = verdicts.find((x) => x.path === 'logs/run.log');
+    expect(v?.verdict).toBe('attachment');
+    expect(v?.detail).toMatch(/never captured/i);
+  });
+
+  it('still compares a reviewed file in the same bundle', () => {
+    const bundle = makeBundle({
+      submissionFiles: [
+        {
+          path: 'logs/run.log',
+          status: 'present',
+          sha256: 'ab'.repeat(32),
+          hashOk: true,
+          role: 'attachment',
+        },
+        {
+          path: 'Main.java',
+          status: 'present',
+          sha256: 'cd'.repeat(32),
+          hashOk: true,
+          role: 'reviewed',
+        },
+      ],
+      events: [],
+    });
+    const verdicts = submittedFileVerdicts(bundle, { chainIntact: true });
+    expect(verdicts.find((x) => x.path === 'Main.java')?.verdict).not.toBe('attachment');
+  });
+
+  it('an attachment does not count toward the check-8 mismatch or match tallies', () => {
+    const bundle = makeBundle({
+      submissionFiles: [
+        {
+          path: 'logs/run.log',
+          status: 'present',
+          sha256: 'ab'.repeat(32),
+          hashOk: true,
+          role: 'attachment',
+        },
+        { path: 'Main.java', status: 'present', sha256: 'H', hashOk: true, role: 'reviewed' },
+      ],
+      events: [docSave('Main.java', 'H')],
+    });
+    const check = verifySubmittedCode(bundle, { chainIntact: true });
+    expect(check.status).toBe('pass');
+    expect(check.detail).not.toMatch(/logs\/run\.log/);
+  });
+
+  it('still reports real tampering on an attachment whose bytes disagree with the manifest sha', () => {
+    // Real, detectable bundle tampering — present bytes that do not hash to
+    // their own signed manifest sha256 — needs no event provenance to catch,
+    // and 'attachment' must not become an unearned exculpatory claim about
+    // bytes the manifest hash has already contradicted. Under-reporting is the
+    // safe direction for an ACCUSATION; this is a false ASSURANCE instead, and
+    // that direction is not safe.
+    const bundle = makeBundle({
+      submissionFiles: [
+        {
+          path: 'logs/run.log',
+          status: 'present',
+          sha256: 'ab'.repeat(32),
+          hashOk: false,
+          bytes: TAMPERED_BYTES,
+          role: 'attachment',
+        },
+      ],
+      events: [],
+    });
+    const verdicts = submittedFileVerdicts(bundle, { chainIntact: true });
+    const v = verdicts.find((x) => x.path === 'logs/run.log');
+    expect(v?.verdict).toBe('mismatch');
+    expect(v?.detail).toMatch(/tampered/i);
+  });
+
+  it('a stored attachment whose bytes were stripped still reports attachment, not tampered', () => {
+    // A stored (provenance-only) bundle has no bytes for ANY file, attachment
+    // or not — `hashOk` is trivially false there. That must not be read as
+    // tampering, same as the non-attachment path below in this file.
+    const bundle = makeBundle({
+      submissionFiles: [
+        {
+          path: 'logs/run.log',
+          status: 'present',
+          sha256: 'ab'.repeat(32),
+          hashOk: false,
+          role: 'attachment',
+        },
+      ],
+      events: [],
+    });
+    const verdicts = submittedFileVerdicts(bundle, { chainIntact: true });
+    expect(verdicts.find((x) => x.path === 'logs/run.log')?.verdict).toBe('attachment');
   });
 });
 

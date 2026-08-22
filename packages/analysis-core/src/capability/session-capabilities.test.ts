@@ -26,7 +26,52 @@ import {
   readBundleCapabilities,
   wasFileWatched,
   gitObservationGap,
+  ignoredByAssignment,
 } from './session-capabilities.js';
+import type { BundleCapabilityFacts } from './session-capabilities.js';
+
+/**
+ * A minimal `BundleCapabilityFacts` carrying exactly one session's file scope,
+ * for testing `wasFileWatched` directly without round-tripping a bundle.
+ *
+ * `git`/`witness` are irrelevant to `wasFileWatched` and left `'absent'`.
+ */
+function factsWithFileScope(
+  fileScope: { watched: readonly string[]; complete: boolean },
+  opts?: { scopeCapped?: boolean },
+): BundleCapabilityFacts {
+  return {
+    sessions: [
+      {
+        sessionId: 's1',
+        git: { kind: 'absent' },
+        witness: { kind: 'absent' },
+        fileScope: { kind: 'recorded', watched: fileScope.watched, complete: fileScope.complete },
+      },
+    ],
+    counts: {
+      sessions: 1,
+      gitAvailable: 0,
+      gitUnavailable: 0,
+      gitNotOwned: 0,
+      gitUnreported: 1,
+      gitMalformed: 0,
+      witnessAvailable: 0,
+      witnessUnavailable: 0,
+      witnessUnreported: 1,
+      witnessMalformed: 0,
+      fileScopeReported: 1,
+      fileScopeIncomplete: fileScope.complete ? 0 : 1,
+      fileScopeUnreported: 0,
+      fileScopeMalformed: 0,
+    },
+    gitObservation: 'unknown',
+    gitImpossibleReason: null,
+    witnessing: 'unknown',
+    watchedFiles: [...fileScope.watched].sort(),
+    scopeCapped: opts?.scopeCapped ?? false,
+  };
+}
 
 /** A bundle whose sessions carry exactly the given `session.start` extras. */
 async function scope(...sessionStarts: Array<Record<string, unknown>>): Promise<Bundle> {
@@ -374,5 +419,160 @@ describe('the three reports are independent', () => {
     const bundle = await scope({ git_capture: 'available' }, {}, { witness_capture: 'available' });
     const facts = readBundleCapabilities(bundle);
     expect(facts.sessions.map((s) => s.sessionId)).toEqual(bundle.sessions.map((s) => s.sessionId));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// wasFileWatched with a resolved scope — spec §5.1 tier 1
+// ---------------------------------------------------------------------------
+
+describe('wasFileWatched with a resolved scope (tier 1)', () => {
+  const scopeRules = { track: ['src/'], ignore: ['*.class'], attachments: [] };
+
+  it('answers definitively from the rules even when the list is incomplete', () => {
+    // The rules come from the SIGNED manifest in session.start, so this is not
+    // a guess — it is the same evaluation the recorder made. Spec §5.1 tier 1.
+    const facts = factsWithFileScope({ watched: [], complete: false });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('watched');
+    expect(wasFileWatched(facts, 'README.md', scopeRules)).toBe('not_watched');
+    expect(wasFileWatched(facts, 'src/A.class', scopeRules)).toBe('not_watched');
+  });
+
+  it('falls back to the list when no scope is supplied', () => {
+    const facts = factsWithFileScope({ watched: ['Main.java'], complete: true });
+    expect(wasFileWatched(facts, 'Main.java')).toBe('watched');
+    expect(wasFileWatched(facts, 'Other.java')).toBe('not_watched');
+  });
+
+  it('returns unknown from the rules when the recorder reported a capped session', () => {
+    // scope_capped means the recorder stopped admitting in-scope paths. The
+    // rules then describe what SHOULD have been watched, not what was — so
+    // "in scope, no activity" must not be concluded. R2.
+    const facts = factsWithFileScope({ watched: [], complete: false }, { scopeCapped: true });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('unknown');
+  });
+
+  it('does not assert from rules a session never evaluated', () => {
+    // A recorder that predates path scope may still emit `file_scope` under
+    // its OLD exact-match semantics, or may not report it at all. Either way,
+    // asserting 'watched' — the strongest of the three answers — from rules
+    // the recorder gives no evidence of having applied would be an accusatory
+    // error: the file may genuinely have gone unwatched despite being "in
+    // scope" on paper.
+    const absent: BundleCapabilityFacts = {
+      sessions: [
+        {
+          sessionId: 's1',
+          git: { kind: 'absent' },
+          witness: { kind: 'absent' },
+          fileScope: { kind: 'absent' },
+        },
+      ],
+      counts: {
+        sessions: 1,
+        gitAvailable: 0,
+        gitUnavailable: 0,
+        gitNotOwned: 0,
+        gitUnreported: 1,
+        gitMalformed: 0,
+        witnessAvailable: 0,
+        witnessUnavailable: 0,
+        witnessUnreported: 1,
+        witnessMalformed: 0,
+        fileScopeReported: 0,
+        fileScopeIncomplete: 0,
+        fileScopeUnreported: 1,
+        fileScopeMalformed: 0,
+      },
+      gitObservation: 'unknown',
+      gitImpossibleReason: null,
+      witnessing: 'unknown',
+      watchedFiles: [],
+      scopeCapped: false,
+    };
+    expect(wasFileWatched(absent, 'src/Solver.java', scopeRules)).toBe('unknown');
+
+    const malformed: BundleCapabilityFacts = {
+      ...absent,
+      sessions: [
+        {
+          ...absent.sessions[0]!,
+          fileScope: { kind: 'malformed', problem: 'path_absolute' },
+        },
+      ],
+    };
+    expect(wasFileWatched(malformed, 'src/Solver.java', scopeRules)).toBe('unknown');
+  });
+
+  it('still asserts from the rules once every session actually reported a file scope', () => {
+    // The gate is per-bundle-reporting, not a blanket suppression: a bundle
+    // whose every session DID evaluate file_scope (however incomplete) still
+    // gets the definitive rules-based answer.
+    const facts = factsWithFileScope({ watched: [], complete: false });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('watched');
+  });
+
+  it("does not assert WATCHED from a stale recorder's complete:true on a rule-bearing scope", () => {
+    // The exact stale-recorder shape: `track: ['src/']` is a RULE entry (not
+    // exact), and a pre-path-scope recorder treats it as a literal filename —
+    // matching nothing real — while believing it fully enumerated a one-entry
+    // list, so it reports `{ watched: ['src/'], complete: true }`. That report
+    // is `kind: 'recorded'`, so the bare "did every session report?" gate does
+    // not catch it. The honest tier-2 answer for this exact bundle is
+    // `not_watched` (the list is complete and never names the path) — tier 1
+    // must not INVERT that into `'watched'`, the most accusatory answer, about
+    // a file the recorder demonstrably never watched.
+    const facts = factsWithFileScope({ watched: ['src/'], complete: true });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('unknown');
+  });
+
+  it('still fires tier 1 on a rule-bearing scope once every session reports complete:false', () => {
+    // Not a blanket suppression for rule-bearing scopes: a path-scope-aware
+    // recorder is GUARANTEED to report complete:false when the scope carries a
+    // rule entry (recorder-context.ts), so that shape still gets the
+    // definitive rules-based answer.
+    const facts = factsWithFileScope({ watched: [], complete: false });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('watched');
+    expect(wasFileWatched(facts, 'README.md', scopeRules)).toBe('not_watched');
+  });
+
+  it('an EXACT-only scope is unaffected by the complete:false requirement', () => {
+    // No rule entries in `track`, so the stale-recorder hazard does not apply:
+    // a session reporting complete:true is exactly the ordinary case tier 1
+    // was built for, and must still answer definitively.
+    const exactScope = { track: ['Main.java'], ignore: [], attachments: [] };
+    const facts = factsWithFileScope({ watched: ['Main.java'], complete: true });
+    expect(wasFileWatched(facts, 'Main.java', exactScope)).toBe('watched');
+    expect(wasFileWatched(facts, 'Other.java', exactScope)).toBe('not_watched');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ignoredByAssignment — spec §9.3, R1
+// ---------------------------------------------------------------------------
+
+describe('ignoredByAssignment', () => {
+  const scopeRules = { track: ['src/'], ignore: ['*.class', 'vendor/'], attachments: ['logs/'] };
+
+  it('is true only for a path the course ignore list matches', () => {
+    expect(ignoredByAssignment('src/A.class', scopeRules)).toBe(true);
+    expect(ignoredByAssignment('vendor/dep.java', scopeRules)).toBe(true);
+    expect(ignoredByAssignment('src/Main.java', scopeRules)).toBe(false);
+    expect(ignoredByAssignment('logs/run.log', scopeRules)).toBe(false);
+  });
+
+  it("does not claim a hard-excluded path was the course's choice", () => {
+    // `.provenance/` is excluded by the protocol, not by the assignment. Saying
+    // "your course excluded this" about it would be false.
+    expect(ignoredByAssignment('.provenance/manifest.json', scopeRules)).toBe(false);
+  });
+
+  it('pairs with wasFileWatched to distinguish the two silences', () => {
+    const facts = factsWithFileScope({ watched: [], complete: false });
+    // Both are not_watched, but only one of them is the course's doing.
+    expect(wasFileWatched(facts, 'src/A.class', scopeRules)).toBe('not_watched');
+    expect(wasFileWatched(facts, 'README.md', scopeRules)).toBe('not_watched');
+    expect(ignoredByAssignment('src/A.class', scopeRules)).toBe(true);
+    expect(ignoredByAssignment('README.md', scopeRules)).toBe(false);
   });
 });

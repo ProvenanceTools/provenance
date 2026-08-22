@@ -1583,8 +1583,11 @@ export const components = {
         },
         verdict: {
           type: 'string',
-          enum: ['match', 'mismatch', 'unknown'],
-          description: 'Check 8 verdict for this file.',
+          enum: ['match', 'mismatch', 'unknown', 'attachment'],
+          description:
+            "Check 8 verdict for this file. 'attachment' is not a weaker 'unknown': " +
+            'it means the file was sealed and hashed but deliberately never captured ' +
+            '(path scope), so there is nothing to compare against reconstruction.',
         },
         sha256: {
           oneOf: [{ type: 'string' }, { type: 'null' }],
@@ -1620,7 +1623,7 @@ export const components = {
             'the submitted bytes are stripped at ingest.',
         },
         status: { type: 'string', enum: ['present', 'missing'] },
-        verdict: { type: 'string', enum: ['match', 'mismatch', 'unknown'] },
+        verdict: { type: 'string', enum: ['match', 'mismatch', 'unknown', 'attachment'] },
         content_source: {
           type: 'string',
           enum: ['submitted_bytes', 'event_replay'],

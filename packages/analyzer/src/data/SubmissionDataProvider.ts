@@ -108,11 +108,21 @@ export type FileProvenanceResult = {
   at_seq: number;
 };
 
+/**
+ * Check 8 verdict for a submitted file.
+ *
+ * `'attachment'` is NOT a weaker `'unknown'`. Unknown means the check could
+ * not tell; attachment means the question does not apply, because the file
+ * was sealed and hashed but deliberately never captured (path scope). Never
+ * render it in the same bucket as `mismatch`, and never count it toward
+ * "files that failed check 8".
+ */
+export type SubmittedFileVerdict = 'match' | 'mismatch' | 'unknown' | 'attachment';
+
 export type SubmittedFileEntry = {
   path: string;
   status: 'present' | 'missing';
-  /** 'match' | 'mismatch' | 'unknown' — Check 8 verdict for this file. */
-  verdict: 'match' | 'mismatch' | 'unknown';
+  verdict: SubmittedFileVerdict;
   sha256: string | null;
 };
 
@@ -130,7 +140,7 @@ export type SubmittedFileContentResult = {
    */
   content: string;
   status: 'present' | 'missing';
-  verdict: 'match' | 'mismatch' | 'unknown';
+  verdict: SubmittedFileVerdict;
   /**
    * `'submitted_bytes'` — the literal bytes sealed into the bundle (only the
    * in-browser `/local` provider can produce this).

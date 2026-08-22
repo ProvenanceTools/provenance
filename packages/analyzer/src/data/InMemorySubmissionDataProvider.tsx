@@ -453,7 +453,7 @@ function createInMemoryProvider(
             path,
             content,
             status: (entry?.status ?? 'missing') as 'present' | 'missing',
-            verdict: (v?.verdict ?? 'unknown') as 'match' | 'mismatch' | 'unknown',
+            verdict: v?.verdict ?? 'unknown',
             // `/local` reads the dropped .zip directly, so these ARE the bytes
             // that were sealed into the bundle — not a replay of the recording.
             // That is a stronger claim than the server can make and the pane is

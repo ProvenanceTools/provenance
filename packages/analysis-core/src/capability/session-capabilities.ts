@@ -41,8 +41,19 @@
  * Fail toward not knowing.
  */
 
-import { readFileScope, readGitCapture, readWitnessCapture } from '@provenance/log-core';
-import type { FileScopeRead, GitCaptureRead, WitnessCaptureRead } from '@provenance/log-core';
+import {
+  isExactEntry,
+  readFileScope,
+  readGitCapture,
+  readWitnessCapture,
+  resolvePathRole,
+} from '@provenance/log-core';
+import type {
+  FileScopeRead,
+  GitCaptureRead,
+  WitnessCaptureRead,
+  ResolvedScope,
+} from '@provenance/log-core';
 import type { Bundle } from '../loader/types.js';
 
 // ---------------------------------------------------------------------------
@@ -127,6 +138,13 @@ export type BundleCapabilityFacts = {
    * has to reason about completeness as well as membership.
    */
   watchedFiles: readonly string[];
+  /**
+   * Any session's recorder reported that its expected-content cap refused an
+   * in-scope path (design spec §4.3). When true, the scope RULES describe what
+   * should have been watched rather than what was, so rule evaluation must
+   * degrade to `unknown` rather than assert `not_watched`.
+   */
+  scopeCapped: boolean;
 };
 
 /**
@@ -246,6 +264,7 @@ export function readBundleCapabilities(bundle: Bundle): BundleCapabilityFacts {
     gitImpossibleReason: gitImpossibleReason(counts),
     witnessing: summarizeWitness(counts),
     watchedFiles: [...watched].sort(),
+    scopeCapped: bundle.manifest.scope_capped === true,
   };
 }
 
@@ -292,7 +311,58 @@ function summarizeWitness(c: CapabilityCounts): BundleCapabilitySummary {
  * would quietly make two different recorders' spellings compare equal on this
  * one axis and unequal everywhere else.
  */
-export function wasFileWatched(facts: BundleCapabilityFacts, path: string): WatchedFileAnswer {
+export function wasFileWatched(
+  facts: BundleCapabilityFacts,
+  path: string,
+  scope?: ResolvedScope,
+): WatchedFileAnswer {
+  // Tier 1 — evaluate the course's own rules. Available whenever the caller
+  // holds a 2.0 manifest, which travels inside session.start, so this needs
+  // nothing from the server and nothing the student could edit.
+  //
+  // Skipped when a recorder reported a capped session: the rules then say what
+  // should have been watched, and asserting `not_watched` OR `watched` from
+  // them would be a claim the record cannot support.
+  //
+  // Also skipped when any session's `file_scope` is absent or malformed, OR —
+  // when the scope carries a RULE entry (a directory or suffix, not an exact
+  // path) — when any session reports `complete: true`. A recorder that
+  // predates path scope may still emit `file_scope` under its OLD exact-match
+  // semantics: it treats a rule entry like `'src/'` as a literal filename,
+  // matches nothing real, and — because it believes it fully enumerated a
+  // one-entry list — reports `{ watched: ['src/'], complete: true }`. That
+  // report is `kind: 'recorded'`, so a bare "did any session report at all?"
+  // check does not catch it. The discriminator that DOES catch it is already
+  // in the wire format: the current recorder sets
+  // `complete = !hasRules && exact.length <= FILE_SCOPE_MAX_ENTRIES`
+  // (`recorder-context.ts`), so a path-scope-aware recorder evaluating a
+  // rule-bearing scope is GUARANTEED to report `complete: false`. A stale
+  // recorder's `complete: true` on a rule-bearing scope is therefore itself
+  // the tell that it never applied the rules — and asserting `'watched'` (the
+  // strongest of the three answers — "absence of events means the events did
+  // not happen") from those rules anyway would be an accusatory error about a
+  // file the recorder demonstrably never watched.
+  const hasRuleEntries = scope !== undefined && scope.track.some((entry) => !isExactEntry(entry));
+  const everySessionEvaluatedScope =
+    facts.sessions.length > 0 &&
+    facts.sessions.every(
+      (s) => s.fileScope.kind === 'recorded' && (!hasRuleEntries || !s.fileScope.complete),
+    );
+  if (scope !== undefined && !facts.scopeCapped && everySessionEvaluatedScope) {
+    return resolvePathRole(path, scope) === 'reviewed' ? 'watched' : 'not_watched';
+  }
+
+  // Tier 2 — the recorder's own enumerated list. A TRUNCATED or rule-bearing
+  // list can prove 'watched' (the path is in it) but never 'not_watched'.
+  //
+  // A session's `complete: true` on a rule-bearing scope is the SAME stale
+  // signature tier 1 just refused to trust, and tier 2 must not trust it
+  // either: it is the identical field, from the identical session, and a
+  // recorder that could not evaluate the rule for tier 1's purposes did not
+  // somehow evaluate it correctly for tier 2's. Treat that claim as NOT
+  // complete rather than as a genuine enumeration — the honest answer is
+  // 'unknown', not the inverted 'not_watched' a stale recorder's own
+  // self-report would otherwise produce.
   let everySessionComplete = facts.counts.sessions > 0;
   for (const session of facts.sessions) {
     if (session.fileScope.kind !== 'recorded') {
@@ -300,9 +370,32 @@ export function wasFileWatched(facts: BundleCapabilityFacts, path: string): Watc
       continue;
     }
     if (session.fileScope.watched.includes(path)) return 'watched';
-    if (!session.fileScope.complete) everySessionComplete = false;
+    // `hasRuleEntries` alone forces this false: a compliant recorder NEVER
+    // reports `complete: true` for a rule-bearing scope (the guarantee tier 1
+    // relies on above), so a scope with a rule entry never lets tier 2 reach
+    // `not_watched` — only a positive membership match, or `unknown`.
+    if (!session.fileScope.complete || hasRuleEntries) {
+      everySessionComplete = false;
+    }
   }
+  // Tier 3 — unknown.
   return everySessionComplete ? 'not_watched' : 'unknown';
+}
+
+/**
+ * Was this path excluded by the ASSIGNMENT, as opposed to merely unwatched?
+ *
+ * Spec §9.3 / R1. "No evidence exists for this file" and "no evidence exists
+ * for this file because the course excluded it" are different sentences, and
+ * only the second one is fair to put in front of someone adjudicating a case.
+ * `wasFileWatched` answers whether; this answers why.
+ *
+ * Deliberately false for a hard-excluded path: `.provenance/` and `.git/` are
+ * excluded by the protocol, not by anyone's course policy, and attributing that
+ * choice to the course would be false.
+ */
+export function ignoredByAssignment(path: string, scope: ResolvedScope): boolean {
+  return resolvePathRole(path, scope) === 'ignored';
 }
 
 // ---------------------------------------------------------------------------
