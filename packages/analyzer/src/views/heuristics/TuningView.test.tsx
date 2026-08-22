@@ -275,6 +275,42 @@ describe('TuningView', () => {
     expect(screen.queryByTestId('weight-note-large_paste')).not.toBeInTheDocument();
   });
 
+  it('disables both the weight slider and enable toggle for paste_matches_known_source and explains why', async () => {
+    // paste_matches_known_source matches pastes against a course-supplied
+    // corpus (analysis-core/heuristics/config.ts: pasteMatchesKnownSource.corpus,
+    // default []). Nothing in packages/server/src or packages/analyzer/src
+    // populates that corpus — no upload path, no config plumbing, no storage —
+    // so the heuristic emits 0 flags in every deployed semester today. Unlike
+    // the cross-submission case, toggling `enabled` is ALSO inert here (0
+    // flags either way), so both controls must be disabled, not just weight.
+    // The row itself must still render — the flag stays a known, tunable id
+    // in the catalogue (ALL_FLAG_IDS/known-flag-ids.ts) for when a corpus
+    // feature ships; only the ability to set a no-op weight/toggle is removed.
+    await renderAndWaitForLoad();
+
+    const id = 'paste_matches_known_source';
+    expect(ALL_FLAG_IDS).toContain(id);
+
+    const slider = screen.getByTestId(`slider-${id}`);
+    expect(slider).toBeDisabled();
+
+    const toggle = screen.getByTestId(`toggle-${id}`);
+    expect(toggle).toBeDisabled();
+
+    const note = screen.getByTestId(`inert-note-${id}`);
+    expect(note).toBeVisible();
+    expect(note).toHaveTextContent(/no corpus source exists yet/i);
+
+    // Both disabled controls must be programmatically associated with the
+    // explanation, not just visually adjacent to it.
+    expect(slider).toHaveAccessibleDescription(/no corpus source exists yet/i);
+    expect(toggle).toHaveAccessibleDescription(/no corpus source exists yet/i);
+
+    // A regular per-submission heuristic must be unaffected.
+    expect(screen.getByTestId('toggle-large_paste')).not.toBeDisabled();
+    expect(screen.queryByTestId('inert-note-large_paste')).not.toBeInTheDocument();
+  });
+
   it('slider change triggers dry-run after 300ms debounce', async () => {
     let dryRunCalled = false;
 
