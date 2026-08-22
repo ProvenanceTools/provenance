@@ -35,6 +35,7 @@
  */
 
 import * as fsPromises from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import JSZip from 'jszip';
@@ -69,6 +70,24 @@ export type SealWarnings = {
   emptySession: boolean;
   /** True if a rolling seal was dropped because the session it seals is not in the bundle. */
   orphanedRollingSeal: boolean;
+  /**
+   * True if a path the walk discovered as in-scope (reviewed or attachment)
+   * could not be read back — edited out from under the seal, permission denied,
+   * a transient I/O error. The file is DROPPED from the bundle rather than
+   * recorded `missing`: the walk only proves the path existed a moment ago, not
+   * that it was ever absent, and only an EXACT `track` entry may claim absence
+   * (see `isExactEntry` at step 3). Never a finding by itself; a reader must not
+   * treat it as evidence either way about the dropped file's content.
+   */
+  unreadableInScopeFile: boolean;
+  /**
+   * True if a directory under the workspace could not be listed while walking
+   * for in-scope files — most often a permissions problem. Whatever that
+   * subtree held is silently absent from the bundle unless this is surfaced:
+   * exactly the "in scope, no activity" inference `scope_capped` exists to rule
+   * out at the registry level, just one layer lower (the walk, not the cap).
+   */
+  unreadableScopeDirectory: boolean;
 };
 
 /** Did the orphan guard leave anything out of the zip? */
@@ -166,6 +185,9 @@ async function readReviewedFile(workspaceRoot: string, relPath: string): Promise
   }
 }
 
+/** Result of walking one subtree: the files found, and whether any directory in it refused to list. */
+type WalkResult = { paths: string[]; hadUnreadableDir: boolean };
+
 /**
  * Every file under `root`, as workspace-relative forward-slash paths.
  *
@@ -173,25 +195,60 @@ async function readReviewedFile(workspaceRoot: string, relPath: string): Promise
  * filtered afterwards: `.git/` in a real assignment holds thousands of objects,
  * and walking them to throw them away is the difference between a seal that
  * feels instant and one that does not.
+ *
+ * The skip is by SEGMENT NAME (`d.name === '.git' || d.name === '.provenance'`),
+ * not `isHardExcluded`'s root-anchored prefix check. `isHardExcluded` only
+ * matches a path that STARTS WITH `.git/` or `.provenance/`, so it says nothing
+ * about `vendor/lib/.git/` (a submodule) or, worse, a SIBLING assignment's
+ * `.provenance/` under this repo's nested/concurrent multi-assignment
+ * recording (spec `2026-08-18-multicourse-program-architecture.md`) — a rule
+ * entry like `*.json` would otherwise walk into `hw3/.provenance/` and seal
+ * that assignment's signed manifest into THIS bundle, leaking one student's
+ * provenance into another's evidence. `isHardExcluded` is deliberately NOT
+ * changed to do this itself: it is pinned by `tools/path-scope-vectors.json`
+ * and re-implemented by hand in the JetBrains and Neovim recorders, so its root
+ * semantics stay put and this walk-local rule covers the deeper case instead.
+ * The `isHardExcluded` call is kept alongside as a second, redundant check —
+ * cheap insurance if the hard-excluded prefix list ever grows past this pair.
+ *
+ * `Dirent.isDirectory()` / `isFile()` do not follow symlinks (they classify the
+ * directory ENTRY itself, `lstat`-flavoured) — see `should not recurse into a
+ * symlinked directory` in `seal.test.ts`. A symlinked directory is therefore
+ * neither traversed nor walked into, so this cannot cycle on a self-referential
+ * link or walk outside the workspace through one. A symlinked FILE is likewise
+ * not reported as `isFile()` here and so never appears in the walk's output; an
+ * EXACT `track` entry naming one is still resolved correctly at step 3, because
+ * that step reads it directly with `fsPromises.readFile`, which does follow the
+ * link.
+ *
+ * A directory this function cannot `readdir` (most often a permissions
+ * problem) is not silently treated as empty: `hadUnreadableDir` bubbles that up
+ * so the caller can warn rather than let the subtree's files vanish from the
+ * bundle without a trace.
  */
-async function walkWorkspace(root: string, rel = ''): Promise<string[]> {
-  let dirents;
+async function walkWorkspace(root: string, rel = ''): Promise<WalkResult> {
+  let dirents: Dirent[];
   try {
     dirents = await fsPromises.readdir(path.join(root, rel), { withFileTypes: true });
   } catch {
-    return [];
+    return { paths: [], hadUnreadableDir: true };
   }
   const out: string[] = [];
+  let hadUnreadableDir = false;
   for (const d of dirents) {
     const childRel = rel === '' ? d.name : `${rel}/${d.name}`;
     if (d.isDirectory()) {
-      if (isHardExcluded(`${childRel}/`)) continue;
-      out.push(...(await walkWorkspace(root, childRel)));
+      if (d.name === '.git' || d.name === '.provenance' || isHardExcluded(`${childRel}/`)) {
+        continue;
+      }
+      const child = await walkWorkspace(root, childRel);
+      out.push(...child.paths);
+      if (child.hadUnreadableDir) hadUnreadableDir = true;
     } else if (d.isFile()) {
       out.push(childRel);
     }
   }
-  return out;
+  return { paths: out, hadUnreadableDir };
 }
 
 /**
@@ -240,7 +297,9 @@ function filenameTimestamp(date: Date): string {
  *      unparseable chain — accumulates warnings instead. For parse failures the
  *      session entry gets session_id: null. For chain breaks, chainBroken is set true.
  *      Collect: session_id (or null), prev_session_id, slog_sha256, meta_sha256.
- *   3. Read each filesUnderReview entry from disk; mark missing ones.
+ *   3. Walk the workspace, assign each file a role via the resolved scope, and
+ *      read the ones that are reviewed or attachment. Only an EXACT track entry
+ *      the walk did not already capture may be recorded `missing`.
  *   4. Build BundleManifest (format_version 1.1) including submission_files.
  *   5. Canonicalize + sign → atomic-write manifest.json and manifest.sig.
  *   6. ZIP all files in provenanceDir (including new manifest + sig), plus
@@ -276,6 +335,8 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
     orphanedMeta: false,
     emptySession: false,
     orphanedRollingSeal: false,
+    unreadableInScopeFile: false,
+    unreadableScopeDirectory: false,
   };
 
   // ---------------------------------------------------------------------------
@@ -458,25 +519,54 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
   // cannot be enumerated from the manifest, so the file set is discovered here
   // rather than read off the list.
   const workspaceRoot = assignmentRoot;
-  const onDisk = await walkWorkspace(workspaceRoot);
-  const presentOnDisk = new Set(onDisk);
+  const walkResult = await walkWorkspace(workspaceRoot);
+  if (walkResult.hadUnreadableDir) {
+    warnings.unreadableScopeDirectory = true;
+  }
 
   const reviewedFiles: Array<ReviewedFile & { role: 'reviewed' | 'attachment' }> = [];
-  for (const rel of onDisk) {
+  for (const rel of walkResult.paths) {
     const role = resolvePathRole(rel, scope);
     if (role !== 'reviewed' && role !== 'attachment') continue;
-    reviewedFiles.push({ ...(await readReviewedFile(workspaceRoot, rel)), role });
+    const result = await readReviewedFile(workspaceRoot, rel);
+    if (result.status === 'missing') {
+      // The walk just listed this path, so its absence now means it vanished
+      // (or became unreadable) between listing and reading — edited out from
+      // under the seal, a permissions change, a transient I/O error. That is
+      // not the same fact as "the student never had this file", so it is
+      // DROPPED rather than recorded `missing`: only an EXACT track entry (the
+      // loop below) may make that claim, and this path was discovered by the
+      // walk, not asserted by the manifest.
+      warnings.unreadableInScopeFile = true;
+      continue;
+    }
+    reviewedFiles.push({ ...result, role });
   }
+
+  // Paths the walk already captured successfully — read by exact spelling
+  // below only if NOT already here, so a case-difference or symlink that the
+  // walk's Dirent classification missed (see walkWorkspace's docstring) still
+  // gets a real read instead of being declared absent by Set non-membership.
+  const capturedByWalk = new Set(reviewedFiles.map((f) => f.path));
 
   // An EXACT track entry is a claim that a specific file should exist, so an
   // absent one is reportable. A rule entry claims nothing about any particular
   // file, so an absent rule-match is not a fact about the student at all —
   // reporting one would produce a finding per file they never wrote (R2).
+  //
+  // Existence here is decided by ATTEMPTING THE READ, never by walk-set
+  // membership: the walk enumerates directory entries by the OS's exact
+  // on-disk spelling and Dirent's lstat-flavoured type, so it can miss a path
+  // that differs only in case on a case-insensitive filesystem, or a symlink
+  // (`isFile()` is false for a symlink entry) — both of which `readReviewedFile`
+  // resolves correctly because it opens the path directly, the same way the
+  // pre-path-scope seal always did.
   for (const entry of scope.track) {
     if (!isExactEntry(entry)) continue;
-    if (presentOnDisk.has(entry)) continue;
     if (resolvePathRole(entry, scope) !== 'reviewed') continue;
-    reviewedFiles.push({ path: entry, status: 'missing', sha256: null, role: 'reviewed' });
+    if (capturedByWalk.has(entry)) continue;
+    const result = await readReviewedFile(workspaceRoot, entry);
+    reviewedFiles.push({ ...result, role: 'reviewed' });
   }
 
   const submissionFiles = reviewedFiles.map((f) =>

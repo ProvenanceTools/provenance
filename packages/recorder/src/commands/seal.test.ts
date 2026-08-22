@@ -625,6 +625,7 @@ describe('path scope at seal time', () => {
       }),
     );
     expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
 
     const manifest = await readSealedManifest();
     const byPath = new Map((manifest.submission_files ?? []).map((f) => [f.path, f]));
@@ -634,6 +635,13 @@ describe('path scope at seal time', () => {
     // ignored and unscoped files are not in the bundle at all
     expect(byPath.has('src/A.class')).toBe(false);
     expect(byPath.has('README.md')).toBe(false);
+
+    // The property that DEFINES an attachment: its bytes are actually sealed
+    // into the ZIP, at the workspace-relative path, not just named in the
+    // manifest as a role label.
+    const zip = await JSZip.loadAsync(await fsPromises.readFile(result.bundlePath));
+    expect(zip.file('logs/run.log')).not.toBeNull();
+    expect(await zip.file('logs/run.log')!.async('string')).toBe('output');
   });
 
   it('never seals a hard-excluded path, however greedy the manifest', async () => {
@@ -685,5 +693,120 @@ describe('path scope at seal time', () => {
       }),
     );
     expect('scope_capped' in (await readSealedManifest())).toBe(false);
+  });
+
+  it('drops (never reports missing) a walk-discovered file it cannot read, and warns', async () => {
+    // A rule entry (`src/`) asserts nothing about any particular file, so a
+    // file the walk SAW but could not re-open a moment later (edited away,
+    // permission denied, a transient I/O error) must not become a `missing`
+    // finding — that would falsely say the student's file is absent AND imply
+    // a rule entry can make an existence claim, neither of which is true.
+    const ws = await makeWorkspace({ 'src/Locked.java': 'secret' });
+    const lockedPath = path.join(ws.root, 'src/Locked.java');
+    await fsPromises.chmod(lockedPath, 0o000);
+    try {
+      const result = await sealBundle(
+        sealDeps(ws, { scope: { track: ['src/'], ignore: [], attachments: [] } }),
+      );
+      expect(result.kind).toBe('ok');
+      if (result.kind !== 'ok') return;
+      expect(result.warnings.unreadableInScopeFile).toBe(true);
+
+      const manifest = await readSealedManifest();
+      // Not present, not missing — simply absent from the bundle entirely.
+      expect((manifest.submission_files ?? []).some((f) => f.path === 'src/Locked.java')).toBe(
+        false,
+      );
+    } finally {
+      await fsPromises.chmod(lockedPath, 0o644);
+    }
+  });
+
+  it('reads an EXACT entry the walk itself cannot classify as a file, instead of declaring it missing', async () => {
+    // Existence for an exact entry must be decided by ATTEMPTING the read, not
+    // by Set membership in the walk's output. `Dirent.isFile()` is false for a
+    // symlink entry (lstat-flavoured, does not follow the link), so the walk
+    // never lists `Main.java` here even though `readReviewedFile` opens it
+    // successfully — exactly the same shape of bug as a case-folding mismatch
+    // on a case-insensitive filesystem (not asserted directly here since that
+    // behaviour is OS/filesystem-dependent and would not be portable across
+    // CI platforms; the fix is the same attempt-the-read code path either way).
+    const ws = await makeWorkspace({ 'real/Target.java': 'class Target {}' });
+    const linkPath = path.join(ws.root, 'Main.java');
+    await fsPromises.symlink(path.join(ws.root, 'real/Target.java'), linkPath);
+
+    const result = await sealBundle(
+      sealDeps(ws, { scope: { track: ['Main.java'], ignore: [], attachments: [] } }),
+    );
+    expect(result.kind).toBe('ok');
+
+    const manifest = await readSealedManifest();
+    const entry = (manifest.submission_files ?? []).find((f) => f.path === 'Main.java');
+    expect(entry?.status).toBe('present');
+    expect(entry?.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('never walks into a NESTED .git/ or .provenance/, wherever it appears', async () => {
+    // `isHardExcluded` is root-anchored (pinned by tools/path-scope-vectors.json
+    // and hand-reimplemented in two other recorders), so it does not answer this
+    // question. Under nested/concurrent multi-assignment recording, a sibling
+    // assignment's `.provenance/manifest.json` sitting inside THIS workspace
+    // must never be walked into and sealed as this student's evidence, however
+    // greedy the manifest's rule is.
+    const ws = await makeWorkspace({
+      'hw3/.provenance/manifest.json': '{"leaked":true}',
+      'vendor/lib/.git/config': 'leaked',
+      'src/Main.java': 'x',
+    });
+    const result = await sealBundle(
+      sealDeps(ws, { scope: { track: ['*'], ignore: [], attachments: [] } }),
+    );
+    expect(result.kind).toBe('ok');
+
+    const manifest = await readSealedManifest();
+    const paths = (manifest.submission_files ?? []).map((f) => f.path);
+    expect(paths.some((p) => p.includes('/.provenance/'))).toBe(false);
+    expect(paths.some((p) => p.includes('/.git/'))).toBe(false);
+    // The exclusion is narrow: an ordinary file elsewhere is still sealed.
+    expect(paths).toContain('src/Main.java');
+  });
+
+  it('warns when an in-scope directory cannot be listed, rather than silently sealing nothing from it', async () => {
+    const ws = await makeWorkspace({ 'src/Main.java': 'x' });
+    const dirPath = path.join(ws.root, 'src');
+    await fsPromises.chmod(dirPath, 0o000);
+    try {
+      const result = await sealBundle(
+        sealDeps(ws, { scope: { track: ['src/'], ignore: [], attachments: [] } }),
+      );
+      expect(result.kind).toBe('ok');
+      if (result.kind !== 'ok') return;
+      // Never aborts — the bundle is still produced — but the gap is disclosed.
+      expect(result.warnings.unreadableScopeDirectory).toBe(true);
+    } finally {
+      await fsPromises.chmod(dirPath, 0o755);
+    }
+  });
+
+  it('does not recurse into a symlinked directory (lstat-flavoured Dirent classification)', async () => {
+    // Dirent.isDirectory() does not follow symlinks, so a symlink to a
+    // directory (including one pointing back at an ancestor, which would
+    // otherwise cycle forever) is classified as neither a directory nor a file
+    // by this walk and is simply skipped.
+    const ws = await makeWorkspace({ 'real/Nested.java': 'class Nested {}' });
+    const cyclePath = path.join(ws.root, 'loop');
+    await fsPromises.symlink(ws.root, cyclePath);
+
+    const result = await sealBundle(
+      sealDeps(ws, { scope: { track: ['*'], ignore: [], attachments: [] } }),
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+
+    const manifest = await readSealedManifest();
+    const paths = (manifest.submission_files ?? []).map((f) => f.path);
+    expect(paths).toContain('real/Nested.java');
+    // Nothing was walked through the `loop/` symlink at all.
+    expect(paths.some((p) => p.startsWith('loop/'))).toBe(false);
   });
 });
