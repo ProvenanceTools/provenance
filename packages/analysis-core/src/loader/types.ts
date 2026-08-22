@@ -601,9 +601,17 @@ export type Bundle = {
    * Submitted files from the bundle (1.1+). Keyed by manifest path. `bytes` is
    * present only for status 'present' files whose zip entry verified against the
    * manifest sha256. `hashOk` records whether the bundle self-check passed.
+   * `role` is always populated, defaulting to `'reviewed'` when the manifest
+   * entry omits it (every bundle sealed before path scope).
    */
   submissionFiles: Map<
     string,
-    { status: 'present' | 'missing'; sha256: string | null; bytes?: Uint8Array; hashOk: boolean }
+    {
+      status: 'present' | 'missing';
+      sha256: string | null;
+      bytes?: Uint8Array;
+      hashOk: boolean;
+      role: 'reviewed' | 'attachment';
+    }
   >;
 };

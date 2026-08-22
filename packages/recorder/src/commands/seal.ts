@@ -47,8 +47,11 @@ import {
   signBundleManifest,
   parseRollingManifestFilename,
   PROVENANCE_GITATTRIBUTES_FILENAME,
+  resolvePathRole,
+  isExactEntry,
+  isHardExcluded,
 } from '@provenance/log-core';
-import type { BundleManifest, SignedBundleManifest } from '@provenance/log-core';
+import type { BundleManifest, SignedBundleManifest, ResolvedScope } from '@provenance/log-core';
 import { atomicWriteFile } from '../io/atomic-write.js';
 
 // ---------------------------------------------------------------------------
@@ -86,8 +89,10 @@ export type SealDeps = {
   /** Assignment id + semester from the loaded manifest. */
   assignmentId: string;
   semester: string;
-  /** Workspace-relative paths of the files under review (`.provenance-manifest`/`provenance-manifest` files_under_review). */
-  filesUnderReview: readonly string[];
+  /** The resolved scope from the course manifest. Replaces the old exact-path list. */
+  scope: ResolvedScope;
+  /** Whether the recorder's expected-content cap refused an in-scope path this session. */
+  scopeCapped: boolean;
   /** Active session private key for signing the bundle manifest. 32 bytes. */
   sessionPrivkey: Uint8Array;
   /** Active session public key, hex. */
@@ -162,6 +167,34 @@ async function readReviewedFile(workspaceRoot: string, relPath: string): Promise
 }
 
 /**
+ * Every file under `root`, as workspace-relative forward-slash paths.
+ *
+ * Hard-excluded directories are skipped at the DIRECTORY level rather than
+ * filtered afterwards: `.git/` in a real assignment holds thousands of objects,
+ * and walking them to throw them away is the difference between a seal that
+ * feels instant and one that does not.
+ */
+async function walkWorkspace(root: string, rel = ''): Promise<string[]> {
+  let dirents;
+  try {
+    dirents = await fsPromises.readdir(path.join(root, rel), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const d of dirents) {
+    const childRel = rel === '' ? d.name : `${rel}/${d.name}`;
+    if (d.isDirectory()) {
+      if (isHardExcluded(`${childRel}/`)) continue;
+      out.push(...(await walkWorkspace(root, childRel)));
+    } else if (d.isFile()) {
+      out.push(childRel);
+    }
+  }
+  return out;
+}
+
+/**
  * Extract session_id and prev_session_id from the first entry of a parsed slog.
  * Returns null if the first entry isn't a session.start or data is malformed.
  */
@@ -220,7 +253,8 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
     provenanceDir,
     assignmentId,
     semester,
-    filesUnderReview,
+    scope,
+    scopeCapped,
     sessionPrivkey,
     computeExtensionHash: getExtensionHash,
     outputDir,
@@ -420,17 +454,35 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
     });
   }
 
-  // Step 3: Read reviewed files (workspace-relative; resolved against the workspace root).
+  // Step 3: Walk the workspace and assign each file its role. A rule entry
+  // cannot be enumerated from the manifest, so the file set is discovered here
+  // rather than read off the list.
   const workspaceRoot = assignmentRoot;
-  const reviewedFiles: ReviewedFile[] = [];
-  for (const rel of filesUnderReview) {
-    reviewedFiles.push(await readReviewedFile(workspaceRoot, rel));
+  const onDisk = await walkWorkspace(workspaceRoot);
+  const presentOnDisk = new Set(onDisk);
+
+  const reviewedFiles: Array<ReviewedFile & { role: 'reviewed' | 'attachment' }> = [];
+  for (const rel of onDisk) {
+    const role = resolvePathRole(rel, scope);
+    if (role !== 'reviewed' && role !== 'attachment') continue;
+    reviewedFiles.push({ ...(await readReviewedFile(workspaceRoot, rel)), role });
+  }
+
+  // An EXACT track entry is a claim that a specific file should exist, so an
+  // absent one is reportable. A rule entry claims nothing about any particular
+  // file, so an absent rule-match is not a fact about the student at all —
+  // reporting one would produce a finding per file they never wrote (R2).
+  for (const entry of scope.track) {
+    if (!isExactEntry(entry)) continue;
+    if (presentOnDisk.has(entry)) continue;
+    if (resolvePathRole(entry, scope) !== 'reviewed') continue;
+    reviewedFiles.push({ path: entry, status: 'missing', sha256: null, role: 'reviewed' });
   }
 
   const submissionFiles = reviewedFiles.map((f) =>
     f.status === 'present'
-      ? { path: f.path, status: 'present' as const, sha256: f.sha256 }
-      : { path: f.path, status: 'missing' as const, sha256: null },
+      ? { path: f.path, status: 'present' as const, sha256: f.sha256, role: f.role }
+      : { path: f.path, status: 'missing' as const, sha256: null, role: f.role },
   );
 
   // Step 4: Build BundleManifest (format_version 1.1).
@@ -451,6 +503,7 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
     extension_hash: extensionHash,
     sessions: sessionEntries,
     submission_files: submissionFiles,
+    ...(scopeCapped ? { scope_capped: true } : {}),
   };
 
   // Step 5: Canonicalize + sign + atomic-write manifest.json and manifest.sig.

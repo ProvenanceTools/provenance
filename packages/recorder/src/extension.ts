@@ -21,7 +21,7 @@
 
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import { SystemClock } from '@provenance/log-core';
+import { SystemClock, scopeFromManifest } from '@provenance/log-core';
 import { loadAndVerifyManifest } from './activation/manifest-loader.js';
 import type { ActivationError } from './activation/manifest-loader.js';
 import { discoverManifests } from './activation/manifest-discovery.js';
@@ -247,7 +247,8 @@ export async function activateImpl(deps: ActivateDeps): Promise<ActiveSession | 
         provenanceDir: session.provenanceDir,
         assignmentId: session.manifest.assignment_id,
         semester: session.manifest.semester,
-        filesUnderReview: session.manifest.files_under_review,
+        scope: scopeFromManifest(session.manifest),
+        scopeCapped: session.expectedContentRegistry.capHit(),
         sessionPrivkey: session.sessionKeypair.privateKey,
         sessionPubkeyHex: session.sessionKeypair.publicKeyHex,
         computeExtensionHash: () => computeExtensionHash(extensionDistPath),
@@ -542,7 +543,8 @@ function registerSealCommand(context: vscode.ExtensionContext, extensionDistPath
         provenanceDir: chosen.provenanceDir,
         assignmentId: chosen.manifest.assignment_id,
         semester: chosen.manifest.semester,
-        filesUnderReview: chosen.manifest.files_under_review,
+        scope: scopeFromManifest(chosen.manifest),
+        scopeCapped: chosen.expectedContentRegistry.capHit(),
         sessionPrivkey: chosen.sessionKeypair.privateKey,
         sessionPubkeyHex: chosen.sessionKeypair.publicKeyHex,
         computeExtensionHash: () => computeExtensionHash(extensionDistPath),

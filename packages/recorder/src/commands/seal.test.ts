@@ -31,9 +31,17 @@ import {
   canonicalize,
   generateSessionKeypair,
 } from '@provenance/log-core';
-import type { Envelope } from '@provenance/log-core';
+import type { Envelope, ResolvedScope, BundleManifest } from '@provenance/log-core';
 import { sealBundle, verifyManifestSig } from './seal.js';
 import type { SealDeps } from './seal.js';
+
+/** A scope that tracks nothing — the pre-path-scope default for most tests here. */
+const EMPTY_SCOPE: ResolvedScope = { track: [], ignore: [], attachments: [] };
+
+/** Convenience: a scope that tracks exactly the given exact paths (old filesUnderReview shape). */
+function exactScope(paths: readonly string[]): ResolvedScope {
+  return { track: paths, ignore: [], attachments: [] };
+}
 
 // ---------------------------------------------------------------------------
 // Helpers: build fake .slog content
@@ -118,14 +126,16 @@ async function buildDeps(
   provenanceDir: string,
   outputDir: string,
   keypair: Awaited<ReturnType<typeof generateSessionKeypair>>,
-  filesUnderReview: readonly string[] = [],
+  scope: ResolvedScope = EMPTY_SCOPE,
+  scopeCapped = false,
 ): Promise<SealDeps> {
   return {
     assignmentRoot: outputDir,
     provenanceDir,
     assignmentId: TEST_ASSIGNMENT_ID,
     semester: TEST_SEMESTER,
-    filesUnderReview,
+    scope,
+    scopeCapped,
     sessionPrivkey: keypair.privateKey,
     sessionPubkeyHex: keypair.publicKeyHex,
     computeExtensionHash: async () => 'a'.repeat(64),
@@ -160,7 +170,8 @@ async function makeWorkspaceWithValidSession(): Promise<{
     provenanceDir,
     assignmentId: TEST_ASSIGNMENT_ID,
     semester: TEST_SEMESTER,
-    filesUnderReview: [],
+    scope: EMPTY_SCOPE,
+    scopeCapped: false,
     sessionPrivkey: keypair.privateKey,
     sessionPubkeyHex: keypair.publicKeyHex,
     computeExtensionHash: async () => 'a'.repeat(64),
@@ -485,7 +496,7 @@ describe('sealBundle', () => {
 
     const result = await sealBundle({
       ...ws.deps,
-      filesUnderReview: ['hw03.py', 'missing.py'],
+      scope: exactScope(['hw03.py', 'missing.py']),
     });
 
     expect(result.kind).toBe('ok');
@@ -499,7 +510,12 @@ describe('sealBundle', () => {
     const manifestRaw = await zip.file('manifest.json')!.async('string');
     const manifest = JSON.parse(manifestRaw) as {
       format_version: string;
-      submission_files: Array<{ path: string; status: string; sha256: string | null }>;
+      submission_files: Array<{
+        path: string;
+        status: string;
+        sha256: string | null;
+        role?: string;
+      }>;
     };
 
     // Manifest must be 1.1 with submission_files.
@@ -507,7 +523,13 @@ describe('sealBundle', () => {
     const byPath = Object.fromEntries(manifest.submission_files.map((f) => [f.path, f]));
     expect(byPath['hw03.py']!.status).toBe('present');
     expect(byPath['hw03.py']!.sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(byPath['missing.py']).toEqual({ path: 'missing.py', status: 'missing', sha256: null });
+    expect(byPath['hw03.py']!.role).toBe('reviewed');
+    expect(byPath['missing.py']).toEqual({
+      path: 'missing.py',
+      status: 'missing',
+      sha256: null,
+      role: 'reviewed',
+    });
 
     // Bytes at the zip root.
     expect(zip.file('hw03.py')).not.toBeNull();
@@ -527,7 +549,7 @@ describe('sealBundle', () => {
     lines[1] = JSON.stringify(obj);
     await fsPromises.writeFile(ws.slogPath, lines.join('\n') + '\n', 'utf8');
 
-    const result = await sealBundle({ ...ws.deps, filesUnderReview: ['hw03.py'] });
+    const result = await sealBundle({ ...ws.deps, scope: exactScope(['hw03.py']) });
 
     expect(result.kind).toBe('ok');
     if (result.kind !== 'ok') return;
@@ -536,5 +558,132 @@ describe('sealBundle', () => {
     // Bundle still contains the (tampered) slog bytes.
     const zip = await JSZip.loadAsync(await fsPromises.readFile(result.bundlePath));
     expect(Object.keys(zip.files).some((n) => n.endsWith('.slog'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Path scope at seal time
+// ---------------------------------------------------------------------------
+
+/**
+ * Write a fresh valid single session into `provenanceDir` (the shared
+ * per-test tmp dir from the outer `beforeEach`) and the given files under
+ * `outputDir` (this suite's stand-in for the workspace/assignment root).
+ * Returns the assignment root and a keypair to build SealDeps against.
+ */
+async function makeWorkspace(
+  files: Record<string, string>,
+): Promise<{ root: string; keypair: Awaited<ReturnType<typeof generateSessionKeypair>> }> {
+  const keypair = await generateSessionKeypair();
+  const slogContent = buildCompleteSlog();
+  await fsPromises.writeFile(path.join(provenanceDir, 'session-scope.slog'), slogContent, 'utf8');
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = path.join(outputDir, rel);
+    await fsPromises.mkdir(path.dirname(abs), { recursive: true });
+    await fsPromises.writeFile(abs, content, 'utf8');
+  }
+  return { root: outputDir, keypair };
+}
+
+/** SealDeps for the path-scope suite: `root` is the assignment root (= workspace). */
+function sealDeps(
+  ws: { root: string; keypair: Awaited<ReturnType<typeof generateSessionKeypair>> },
+  opts: { scope: ResolvedScope; scopeCapped?: boolean },
+): SealDeps {
+  return {
+    assignmentRoot: ws.root,
+    provenanceDir,
+    assignmentId: TEST_ASSIGNMENT_ID,
+    semester: TEST_SEMESTER,
+    scope: opts.scope,
+    scopeCapped: opts.scopeCapped ?? false,
+    sessionPrivkey: ws.keypair.privateKey,
+    sessionPubkeyHex: ws.keypair.publicKeyHex,
+    computeExtensionHash: async () => 'a'.repeat(64),
+    outputDir: ws.root,
+    now: () => new Date('2026-05-19T14:30:00.000Z'),
+  };
+}
+
+/** The sealed manifest.json, read straight off disk (written atomically by sealBundle). */
+async function readSealedManifest(): Promise<BundleManifest> {
+  const raw = await fsPromises.readFile(path.join(provenanceDir, 'manifest.json'), 'utf8');
+  return JSON.parse(raw) as BundleManifest;
+}
+
+describe('path scope at seal time', () => {
+  it('walks the workspace and seals every rule-matched file with its role', async () => {
+    const ws = await makeWorkspace({
+      'src/Main.java': 'class Main {}',
+      'src/A.class': 'BINARY',
+      'logs/run.log': 'output',
+      'README.md': 'notes',
+    });
+    const result = await sealBundle(
+      sealDeps(ws, {
+        scope: { track: ['src/'], ignore: ['*.class'], attachments: ['logs/'] },
+      }),
+    );
+    expect(result.kind).toBe('ok');
+
+    const manifest = await readSealedManifest();
+    const byPath = new Map((manifest.submission_files ?? []).map((f) => [f.path, f]));
+
+    expect(byPath.get('src/Main.java')?.role).toBe('reviewed');
+    expect(byPath.get('logs/run.log')?.role).toBe('attachment');
+    // ignored and unscoped files are not in the bundle at all
+    expect(byPath.has('src/A.class')).toBe(false);
+    expect(byPath.has('README.md')).toBe(false);
+  });
+
+  it('never seals a hard-excluded path, however greedy the manifest', async () => {
+    const ws = await makeWorkspace({
+      'src/Main.java': 'x',
+      '.provenance/should-not-appear.txt': 'x',
+      '.git/objects/pack-abc.pack': 'x',
+    });
+    await sealBundle(sealDeps(ws, { scope: { track: ['*'], ignore: [], attachments: [] } }));
+    const manifest = await readSealedManifest();
+    for (const f of manifest.submission_files ?? []) {
+      expect(f.path.startsWith('.provenance/')).toBe(false);
+      expect(f.path.startsWith('.git/')).toBe(false);
+    }
+  });
+
+  it('marks an absent EXACT entry missing, and says nothing about rule entries', async () => {
+    // R2. A course writing "*.java" asserts nothing about any particular file
+    // existing, so a .java file the student did not write is not a fact about
+    // the student. Only an exact entry is a claim that can go unmet.
+    const ws = await makeWorkspace({ 'Present.java': 'x' });
+    await sealBundle(
+      sealDeps(ws, {
+        scope: { track: ['*.java', 'Required.java'], ignore: [], attachments: [] },
+      }),
+    );
+    const manifest = await readSealedManifest();
+    const missing = (manifest.submission_files ?? []).filter((f) => f.status === 'missing');
+    expect(missing.map((f) => f.path)).toEqual(['Required.java']);
+  });
+
+  it('records scope_capped when the recorder says its registry filled', async () => {
+    const ws = await makeWorkspace({ 'a.java': 'x' });
+    await sealBundle(
+      sealDeps(ws, {
+        scope: { track: ['*.java'], ignore: [], attachments: [] },
+        scopeCapped: true,
+      }),
+    );
+    expect((await readSealedManifest()).scope_capped).toBe(true);
+  });
+
+  it('omits scope_capped entirely when the cap did not bite', async () => {
+    const ws = await makeWorkspace({ 'a.java': 'x' });
+    await sealBundle(
+      sealDeps(ws, {
+        scope: { track: ['*.java'], ignore: [], attachments: [] },
+        scopeCapped: false,
+      }),
+    );
+    expect('scope_capped' in (await readSealedManifest())).toBe(false);
   });
 });

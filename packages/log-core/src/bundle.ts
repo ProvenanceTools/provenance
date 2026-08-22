@@ -29,6 +29,18 @@ export type SubmissionFileEntry = {
   status: 'present' | 'missing';
   /** Hex sha256 of the raw on-disk bytes. null iff status === 'missing'. */
   sha256: string | null;
+  /**
+   * What this file was in the recording, not just in the ZIP.
+   *
+   * ABSENT READS AS `'reviewed'`, which is what every 1.1/1.2 bundle sealed
+   * before path scope existed means. Additive and optional for the same reason
+   * `final` is: no version bump, and absence is never a finding.
+   *
+   * An `'attachment'` was sealed and hashed but never captured — it has no
+   * event provenance by definition, so check 8 must not compare it against
+   * reconstruction. See `verify-submitted-code.ts`.
+   */
+  role?: 'reviewed' | 'attachment';
 };
 
 export type BundleManifest = {
@@ -90,6 +102,19 @@ export type BundleManifest = {
    * therefore already carry whole-file semantics. Readers ignore it there.
    */
   final?: boolean;
+  /**
+   * Whether the recorder's expected-content cap refused a path that the scope
+   * put under review (design spec §4.3).
+   *
+   * Additive and optional. Absent means "this recorder does not report", which
+   * is what every bundle sealed before path scope says, and is not a finding.
+   *
+   * True is not an accusation either — it is the recorder disclosing that its
+   * record of this session is incomplete, so a reader must NOT conclude
+   * "in scope, no activity" about any file. Without it that inference would be
+   * wrong and would land on a student who did nothing.
+   */
+  scope_capped?: boolean;
 };
 
 /**
@@ -311,6 +336,15 @@ export function validateBundleManifestShape(
           });
         }
       }
+
+      const role = fObj['role'];
+      if (role !== undefined && role !== 'reviewed' && role !== 'attachment') {
+        return err({
+          kind: 'invalid_field',
+          field: `submission_files[${i}].role`,
+          reason: "must be 'reviewed' or 'attachment' when present",
+        });
+      }
     }
   }
 
@@ -324,6 +358,17 @@ export function validateBundleManifestShape(
   // nothing. Readers ignore it outside 1.2.
   if (obj['final'] !== undefined && typeof obj['final'] !== 'boolean') {
     return err({ kind: 'invalid_field', field: 'final', reason: 'must be a boolean when present' });
+  }
+
+  // `scope_capped`. Optional everywhere; absence means "this recorder does not
+  // report" (every bundle sealed before path scope), which is not a finding.
+  // When present it must be a real boolean for the same reason `final` is.
+  if (obj['scope_capped'] !== undefined && typeof obj['scope_capped'] !== 'boolean') {
+    return err({
+      kind: 'invalid_field',
+      field: 'scope_capped',
+      reason: 'must be a boolean when present',
+    });
   }
 
   return ok(value as BundleManifest);
