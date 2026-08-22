@@ -1357,12 +1357,29 @@ export const components = {
     },
     SubmittedFileContent: {
       type: 'object',
-      required: ['path', 'content', 'status', 'verdict'],
+      required: ['path', 'content', 'status', 'verdict', 'content_source'],
       properties: {
         path: { type: 'string' },
-        content: { type: 'string', description: 'UTF-8 decoded file bytes.' },
+        content: {
+          type: 'string',
+          description:
+            'The file content, UTF-8 decoded. Read `content_source` before treating ' +
+            'this as the submitted file: on this server it is always reconstructed ' +
+            'from the event stream, because stored bundles are provenance-only and ' +
+            'the submitted bytes are stripped at ingest.',
+        },
         status: { type: 'string', enum: ['present', 'missing'] },
         verdict: { type: 'string', enum: ['match', 'mismatch', 'unknown'] },
+        content_source: {
+          type: 'string',
+          enum: ['submitted_bytes', 'event_replay'],
+          description:
+            "Provenance of `content`. 'submitted_bytes' = the literal bytes sealed " +
+            "into the bundle. 'event_replay' = reconstructed by replaying the " +
+            'recorded edits to the end of the recording, which is the only thing ' +
+            'this server can serve. On a `mismatch` verdict an event_replay content ' +
+            'is known to differ from what was submitted.',
+        },
       },
     },
 

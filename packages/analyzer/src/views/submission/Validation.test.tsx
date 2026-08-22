@@ -215,6 +215,34 @@ describe('Validation tab', () => {
     });
   });
 
+  // The server computes validation once, at ingest. A verdict printed with no
+  // date on it reads as current, and the client schema used to drop
+  // `validated_at` entirely, so staleness could not be shown even in principle.
+  it('states when the results were computed', async () => {
+    const provider = makeProvider({
+      overall: 'pass',
+      checks: EIGHT_CHECKS,
+      validated_at: '2026-03-04T05:06:07.000Z',
+    });
+    renderValidation(provider);
+
+    await waitFor(() => {
+      const el = screen.getByTestId('validation-computed-at');
+      expect(el).toHaveTextContent('Computed once at ingest');
+      expect(el).toHaveTextContent('not recomputed for this page');
+    });
+  });
+
+  it('omits the computed-at line when the provider recomputes live (no validated_at)', async () => {
+    const provider = makeProvider({ overall: 'pass', checks: EIGHT_CHECKS });
+    renderValidation(provider);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('validation-panel')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('validation-computed-at')).toBeNull();
+  });
+
   it('shows loading state when data is pending, announced via role=status', () => {
     const provider = makeProvider({ overall: 'pass', checks: [] }, /* loading= */ true);
     renderValidation(provider);

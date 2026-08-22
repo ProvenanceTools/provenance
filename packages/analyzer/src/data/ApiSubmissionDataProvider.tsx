@@ -85,6 +85,15 @@ const ValidationCheckSchema = z.object({
 const ValidationResultsSchema = z.object({
   overall: z.enum(['pass', 'warn', 'fail']),
   checks: z.array(ValidationCheckSchema),
+  /**
+   * When the server computed these results — i.e. ingest time, because
+   * validation runs once and every read serves the stored row. The server has
+   * always sent it (validation.ts) and OpenAPI has always marked it required;
+   * this schema simply dropped it, so the UI had no way to tell a grader how old
+   * the verdict was. Optional here only so a pre-`validated_at` row cannot fail
+   * the whole parse.
+   */
+  validated_at: z.string().optional(),
 });
 
 const FileListResponseSchema = z.object({

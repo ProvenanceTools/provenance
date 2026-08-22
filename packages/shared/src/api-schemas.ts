@@ -1855,11 +1855,32 @@ export const SubmittedFileListSchema = z.object({
 });
 export type SubmittedFileList = z.infer<typeof SubmittedFileListSchema>;
 
+/**
+ * Where `content` came from. The Source pane must say this out loud, because the
+ * two possibilities are not the same evidence:
+ *
+ *   'submitted_bytes' — the literal bytes sealed into the bundle's
+ *                       submission_files. Only the in-browser `/local` path can
+ *                       ever produce this: stored server-side bundles are
+ *                       provenance-only and the source bytes are gone.
+ *   'event_replay'    — reconstructed by replaying the recorded edits to the end
+ *                       of the recording. This is the recorder's HISTORY of the
+ *                       file, not the file that was handed in. On a `mismatch`
+ *                       verdict the two are known to differ.
+ *
+ * Absent (an older server that predates this field) is read as 'event_replay' —
+ * the more caveated of the two, so a stale deployment degrades toward saying
+ * less rather than toward claiming more.
+ */
+export const SubmittedContentSourceSchema = z.enum(['submitted_bytes', 'event_replay']);
+export type SubmittedContentSource = z.infer<typeof SubmittedContentSourceSchema>;
+
 export const SubmittedFileContentSchema = z.object({
   path: z.string(),
   content: z.string(),
   status: z.enum(['present', 'missing']),
   verdict: z.enum(['match', 'mismatch', 'unknown']),
+  content_source: SubmittedContentSourceSchema.default('event_replay'),
 });
 export type SubmittedFileContent = z.infer<typeof SubmittedFileContentSchema>;
 

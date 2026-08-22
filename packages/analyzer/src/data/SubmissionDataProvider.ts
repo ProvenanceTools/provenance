@@ -22,7 +22,14 @@
 
 import { useContext, createContext } from 'react';
 import type { UseQueryResult } from '@tanstack/react-query';
-import type { SubmissionSummary, FlagRow, EventRow } from '@provenance/shared/api-schemas';
+import type {
+  SubmissionSummary,
+  FlagRow,
+  EventRow,
+  SubmittedContentSource,
+} from '@provenance/shared/api-schemas';
+
+export type { SubmittedContentSource };
 
 // ---------------------------------------------------------------------------
 // Sub-shapes returned by the provider hooks
@@ -56,6 +63,14 @@ export type ValidationCheckResult = {
 export type ValidationResults = {
   overall: 'pass' | 'warn' | 'fail';
   checks: ValidationCheckResult[];
+  /**
+   * When these results were computed — the server runs validation ONCE, at
+   * ingest, and every read serves that stored row. Without this on the wire the
+   * UI could not tell a grader how old the verdict in front of them is. Absent
+   * on the in-browser `/local` provider, which recomputes on load and so has no
+   * staleness to declare.
+   */
+  validated_at?: string | undefined;
 };
 
 export type FileListResult = {
@@ -109,10 +124,25 @@ export type SubmittedFileListResult = {
 
 export type SubmittedFileContentResult = {
   path: string;
-  /** UTF-8 decoded content. */
+  /**
+   * UTF-8 decoded content. What this IS depends on `content_source` — read that
+   * before rendering it as the student's submission.
+   */
   content: string;
   status: 'present' | 'missing';
   verdict: 'match' | 'mismatch' | 'unknown';
+  /**
+   * `'submitted_bytes'` — the literal bytes sealed into the bundle (only the
+   * in-browser `/local` provider can produce this).
+   * `'event_replay'` — reconstructed by replaying the recording; the server can
+   * serve nothing else, because stored bundles are provenance-only. On a
+   * `mismatch` verdict this is provably NOT what was submitted.
+   *
+   * Absent (a server predating the field) is read as `'event_replay'`: the more
+   * caveated of the two, so an unknown provenance never gets upgraded into the
+   * claim that the pane is the submission.
+   */
+  content_source?: SubmittedContentSource | undefined;
 };
 
 export type EventQueryFilters = {
