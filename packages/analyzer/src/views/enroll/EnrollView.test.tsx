@@ -234,27 +234,15 @@ describe('EnrollView — minting', () => {
     // The regression this guards: the page used to say moving to another
     // machine "means exporting your identity secret", which is both untrue now
     // and an instruction to hand-carry the one value that can sign as them.
+    // The explanatory section that carried the corrected wording has since been
+    // removed, so what is asserted now is the invariant itself — nowhere on the
+    // page may suggest exporting or carrying the secret to add a machine.
     mswServer.use(meNoSemestersHandler(), mintHandler().handler);
     renderEnroll();
     await waitFor(() => expect(screen.getByTestId('enroll-form')).toBeInTheDocument());
 
-    const note = screen.getByTestId('enroll-second-machine-note');
-    expect(note).toHaveTextContent(/install the recorder there and come back to this page/i);
-    expect(note).toHaveTextContent(/never have to move your identity secret/i);
-    expect(note.textContent ?? '').not.toMatch(/means exporting your identity secret/i);
-  });
-
-  it('positions the recorder secret command as a backup, not a transfer', async () => {
-    mswServer.use(meNoSemestersHandler(), mintHandler().handler);
-    renderEnroll();
-    await waitFor(() => expect(screen.getByTestId('enroll-form')).toBeInTheDocument());
-
-    // The renamed command, and the reason it still exists.
-    expect(screen.getAllByText(/Back Up Student Identity Secret/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/You do not need it to add a machine/i)).toBeInTheDocument();
-    // The old name must be gone, or the on-screen text names a command that
-    // does not appear in the student's command palette.
-    expect(screen.queryByText(/Export Student Identity Secret/i)).not.toBeInTheDocument();
+    expect(document.body.textContent ?? '').not.toMatch(/export.{0,40}identity secret/i);
+    expect(document.body.textContent ?? '').not.toMatch(/move your identity secret/i);
   });
 });
 
@@ -332,13 +320,28 @@ describe('EnrollView — key validation', () => {
     expect(screen.getByTestId('enroll-pubkey-error')).toBeInTheDocument();
   });
 
-  it('warns that an identity secret must never be pasted here', async () => {
+  /**
+   * The on-screen "paste the KEY, not your secret" notice was removed at the
+   * owner's request, so the only defence left in this step is the parser. This
+   * asserts it is actually wired to the input — `normalizeStudentPubkey`'s own
+   * branch table is covered in `enrollment-token.test.ts`.
+   */
+  it('refuses an identity secret pasted into the key field', async () => {
     mswServer.use(meNoSemestersHandler());
     renderEnroll();
     await waitFor(() => expect(screen.getByTestId('enroll-form')).toBeInTheDocument());
 
-    expect(screen.getByText(/not your identity secret/i)).toBeInTheDocument();
-    expect(screen.getByText(/never be typed into a website/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('enroll-pubkey-input'), {
+      target: {
+        value:
+          `Provenance student identity secret\n\n${'9'.repeat(64)}\n\n` +
+          'KEEP THIS PRIVATE. Anyone holding it can sign work as you, in every course.\n',
+      },
+    });
+    fireEvent.click(screen.getByTestId('enroll-submit'));
+
+    expect(screen.getByTestId('enroll-pubkey-error')).toHaveTextContent(/identity SECRET/);
+    expect(screen.queryByTestId('enroll-token-panel')).not.toBeInTheDocument();
   });
 });
 

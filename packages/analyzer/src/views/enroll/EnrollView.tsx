@@ -26,10 +26,10 @@
  * machine for another credential", so the copy is driven by `machine_count` and
  * `key_first_issued` instead — see {@link describeIssuance}.
  *
- * The corollary for the copy at the bottom of the page: "Back Up / Restore
- * Student Identity Secret" is a BACKUP, not the second-machine path. Telling a
- * student to hand-carry the one value that can sign as them, for a flow that
- * does not need it, is a real harm dressed up as a tip.
+ * The corollary the page must never violate: "Back Up / Restore Student
+ * Identity Secret" is a BACKUP, not the second-machine path. Telling a student
+ * to hand-carry the one value that can sign as them, for a flow that does not
+ * need it, is a real harm dressed up as a tip.
  *
  * So the semester input is not merely unused, it would be misleading — there is
  * nothing to scope, and a `?semester=` query param is now silently irrelevant
@@ -49,10 +49,12 @@
  *
  * The uncomfortable corollary: a student master secret is ALSO 64 lowercase hex
  * characters, so the VALUE cannot be told from a public key by inspection, here
- * or on the server. Two defences, both partial and both necessary:
- * `normalizeStudentPubkey` refuses a paste carrying the recorder's
- * secret-export marker or its prose, and the warning beside the input covers
- * the student who strips the marker by hand.
+ * or on the server. The one defence left in the page is
+ * `normalizeStudentPubkey`, which refuses a paste carrying the recorder's
+ * secret-export marker or its prose; a student who strips the marker by hand is
+ * no longer warned on screen (the amber notice beside the input was removed at
+ * the owner's request), so the recorder's own export warning is the only thing
+ * standing in front of that mistake.
  *
  * ## Both hops are checked before the student leaves
  *
@@ -78,6 +80,50 @@ import {
   normalizeStudentPubkey,
 } from './enrollment-token.js';
 import type { StudentCredentialResponse } from '@provenance/shared/api-schemas';
+
+// ---------------------------------------------------------------------------
+// Per-recorder instructions
+//
+// Both steps are the same shape: one command, reached three different ways
+// depending on which recorder the student installed. Rendering them as a run of
+// prose bullets buries the command in the sentence, so each editor gets a named
+// block with its own line — the student scans for their editor, then reads one
+// instruction, rather than parsing all three.
+// ---------------------------------------------------------------------------
+
+/** A literal the student types or looks for: a command, a chord, a menu name. */
+function Mono({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px] break-words text-gray-800">
+      {children}
+    </span>
+  );
+}
+
+/**
+ * One editor's route to a recorder command. `hint` carries the family examples
+ * (IntelliJ, PyCharm, …) so they sit beside the name instead of interrupting
+ * the instruction.
+ */
+function EditorStep({
+  editor,
+  hint,
+  children,
+}: {
+  readonly editor: string;
+  readonly hint?: string;
+  readonly children: React.ReactNode;
+}) {
+  return (
+    <li>
+      <p className="text-xs font-semibold text-gray-900">
+        {editor}
+        {hint !== undefined && <span className="ml-1.5 font-normal text-gray-500">{hint}</span>}
+      </p>
+      <p className="mt-1 text-xs leading-relaxed text-gray-600">{children}</p>
+    </li>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Success presentation
@@ -119,7 +165,7 @@ export function describeIssuance(response: StudentCredentialResponse): string {
     );
   }
   return (
-    'Copy it into VS Code with "Provenance: Import Enrollment Token". This credential works ' +
+    'Copy it into your editor with "Provenance: Import Enrollment Token". This credential works ' +
     'for every course. Setting up another machine later? Just come back here and do this ' +
     'again — that is the normal way to add one.'
   );
@@ -277,15 +323,30 @@ function TokenPanel({
 
       <div className="mt-4 rounded-lg border border-gray-200 bg-white p-4">
         <label htmlFor="enroll-token-text" className="block text-sm font-semibold text-gray-900">
-          Step 2 — paste this into VS Code
+          Step 2 — paste this into your editor
         </label>
         <p className="mt-1 text-xs text-gray-600">
-          Run <span className="font-mono">Provenance: Import Enrollment Token</span> from the
-          command palette and paste the whole line. It is one line on purpose — the recorder prompts
-          with a single-line box.
+          Copy the whole line and hand it to your recorder. It is one line on purpose — every
+          recorder prompts with a single-line box.
         </p>
+        <ul className="mt-4 space-y-3" data-testid="enroll-import-where">
+          <EditorStep editor="VS Code">
+            Open the Command Palette (<Mono>Cmd+Shift+P</Mono> / <Mono>Ctrl+Shift+P</Mono>) and run{' '}
+            <Mono>Provenance: Import Enrollment Token</Mono>.
+          </EditorStep>
+          <EditorStep
+            editor="JetBrains IDEs"
+            hint="IntelliJ IDEA, PyCharm, CLion, GoLand, WebStorm, Rider…"
+          >
+            Run <Mono>Provenance: Import Enrollment Token</Mono> from the <Mono>Tools</Mono> menu,
+            or press <Mono>Shift</Mono> twice for Search Everywhere and type the command name.
+          </EditorStep>
+          <EditorStep editor="Neovim">
+            Run <Mono>:ProvenanceEnrollmentImport</Mono> and paste at the prompt.
+          </EditorStep>
+        </ul>
 
-        <div className="mt-3 flex items-stretch gap-2">
+        <div className="mt-5 flex items-stretch gap-2">
           <textarea
             id="enroll-token-text"
             readOnly
@@ -312,7 +373,7 @@ function TokenPanel({
         <div className="mt-4 rounded border border-gray-200 bg-gray-50 p-3">
           <p className="text-xs font-semibold text-gray-700">How you will know it worked</p>
           <p className="mt-1 text-xs text-gray-600">
-            VS Code shows{' '}
+            Your editor shows{' '}
             <span className="font-mono" data-testid="enroll-expected-message">
               Provenance: enrolled at {response.institution_id}
             </span>
@@ -320,10 +381,10 @@ function TokenPanel({
             here.
           </p>
           <p className="mt-2 text-xs text-gray-600" data-testid="enroll-version-note">
-            If VS Code instead says the paste is{' '}
-            <span className="font-mono">unsupported_format_version</span>, your Provenance extension
+            If your editor instead says the paste is{' '}
+            <span className="font-mono">unsupported_format_version</span>, your Provenance recorder
             is too old to read this credential. Nothing was saved and nothing is broken — update the
-            extension and paste it again.
+            extension or plugin and paste it again.
           </p>
         </div>
 
@@ -477,25 +538,27 @@ export function EnrollView() {
                 Step 1 — paste your enrollment key
               </label>
               <p className="mt-1 text-xs text-gray-600">
-                In VS Code, open the command palette and run{' '}
-                <span className="font-mono">Provenance: Show My Enrollment Key</span>. It copies the
-                key to your clipboard.
+                Ask your recorder for the key, then paste it below.
               </p>
-
-              <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3">
-                <p className="text-xs font-semibold text-amber-900">
-                  Paste the enrollment KEY, not your identity secret.
-                </p>
-                <p className="mt-1 text-xs text-amber-900">
-                  Your identity secret — the one from{' '}
-                  <span className="font-mono">Back Up Student Identity Secret</span>, which warns
-                  you to keep it private — is also 64 characters. This page refuses it if you paste
-                  it with the label the recorder puts on it, but the bare value is indistinguishable
-                  from your key and nothing here can catch that. Anyone holding that secret can sign
-                  work as you, in every course. It should never be typed into a website, including
-                  this one.
-                </p>
-              </div>
+              <ul className="mt-4 space-y-3" data-testid="enroll-key-where">
+                <EditorStep editor="VS Code">
+                  Open the Command Palette (<Mono>Cmd+Shift+P</Mono> / <Mono>Ctrl+Shift+P</Mono>)
+                  and run <Mono>Provenance: Show My Enrollment Key</Mono>. It copies the key to your
+                  clipboard.
+                </EditorStep>
+                <EditorStep
+                  editor="JetBrains IDEs"
+                  hint="IntelliJ IDEA, PyCharm, CLion, GoLand, WebStorm, Rider…"
+                >
+                  Run <Mono>Provenance: Show My Enrollment Key</Mono> from the <Mono>Tools</Mono>{' '}
+                  menu, or press <Mono>Shift</Mono> twice for Search Everywhere and type the command
+                  name.
+                </EditorStep>
+                <EditorStep editor="Neovim">
+                  Run <Mono>:ProvenanceEnrollmentRequest</Mono>. It prints the key; copy it from the
+                  message.
+                </EditorStep>
+              </ul>
 
               <input
                 id="enroll-pubkey"
@@ -511,7 +574,7 @@ export function EnrollView() {
                 data-testid="enroll-pubkey-input"
                 aria-invalid={showKeyError && !pubkey.ok}
                 aria-describedby={showKeyError && !pubkey.ok ? 'enroll-pubkey-error' : undefined}
-                className="mt-3 w-full rounded border border-gray-300 px-3 py-1.5 font-mono text-sm break-all focus:outline-none focus:ring-2 focus:ring-orange-500"
+                className="mt-5 w-full rounded border border-gray-300 px-3 py-1.5 font-mono text-sm break-all focus:outline-none focus:ring-2 focus:ring-orange-500"
               />
               {pubkey.ok && (
                 <StatusRegion className="mt-1.5 text-xs text-green-700">
@@ -562,34 +625,6 @@ export function EnrollView() {
             )}
           </form>
         )}
-
-        <section className="mt-12 border-t border-gray-200 pt-6">
-          <h2 className="text-sm font-semibold text-gray-900">Why it works this way</h2>
-          <p className="mt-2 text-xs text-gray-600">
-            Your recorder generates a key pair on your machine. The private half never leaves it —
-            not to this page, not to the server, and there is no copy anywhere for anyone to lose or
-            hand over. What you paste above is the public half; all the server does is sign a
-            statement that this public key belongs to you. That signed statement is the credential.
-          </p>
-          <p className="mt-2 text-xs text-gray-600">
-            The credential says who you are, not which classes you are in. It names no course and no
-            semester, so you never have to come back here when you start a new one — and you do not
-            have to be on a roster yet to get it, which matters because rosters usually arrive after
-            your first submission.
-          </p>
-          <p className="mt-2 text-xs text-gray-600" data-testid="enroll-second-machine-note">
-            To work on a second machine, install the recorder there and come back to this page with
-            that machine&rsquo;s key. It gets its own credential, and both machines are recognised
-            as you — you can swap between them freely, and you never have to move your identity
-            secret between them to do it.
-          </p>
-          <p className="mt-2 text-xs text-gray-600">
-            The recorder&rsquo;s <span className="font-mono">Back Up Student Identity Secret</span>{' '}
-            command is for exactly that — a backup, kept in your password manager. There is no copy
-            on any server, so it is the only way to recover a machine&rsquo;s identity if you lose
-            it. You do not need it to add a machine.
-          </p>
-        </section>
       </div>
     </main>
   );
