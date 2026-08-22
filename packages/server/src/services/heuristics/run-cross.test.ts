@@ -1206,6 +1206,7 @@ describe('translateExclusionsToRows', () => {
     bundleIds: ['bundle-b', 'bundle-a'],
     sourceFilenames: ['b.zip', 'a.zip'],
     sharedCommits: ['repository:assumed-single ' + 'a1'.repeat(20)],
+    sharedSessions: [],
     excludedPairCount: 1,
   };
 
