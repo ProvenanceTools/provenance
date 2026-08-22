@@ -22,6 +22,8 @@ export const window = {
   createStatusBarItem: (_alignment?: StatusBarAlignment, _priority?: number) => ({
     text: '',
     tooltip: '',
+    // Set by setEnrollmentState so clicking "(not enrolled)" opens the key.
+    command: undefined as string | undefined,
     show: () => undefined,
     hide: () => undefined,
     dispose: () => undefined,

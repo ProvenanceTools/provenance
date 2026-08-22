@@ -25,7 +25,20 @@ import { SystemClock } from '@provenance/log-core';
 import { loadAndVerifyManifest } from './activation/manifest-loader.js';
 import type { ActivationError } from './activation/manifest-loader.js';
 import { discoverManifests } from './activation/manifest-discovery.js';
-import { createRecordingStatusBar } from './activation/status-bar.js';
+import { createRecordingStatusBar, setEnrollmentState } from './activation/status-bar.js';
+import {
+  ENROLL_URL,
+  NUDGE_ENROLL_LABEL,
+  NUDGE_LATER_LABEL,
+  NUDGE_MESSAGE,
+  NUDGE_SHOW_KEY_LABEL,
+  NUDGE_STATE_KEY,
+  isUnenrolled,
+  nextNudgeState,
+  parseNudgeState,
+  shouldShowNudge,
+} from './activation/enroll-nudge.js';
+import type { NudgeAction } from './activation/enroll-nudge.js';
 import { sealBundle, sealDroppedArtifacts } from './commands/seal.js';
 import { chooseSessionForSeal } from './commands/seal-selector.js';
 import { computeExtensionHash } from './commands/extension-hash.js';
@@ -38,6 +51,7 @@ import {
 import type { EnrollmentCommandDeps } from './commands/enrollment.js';
 import { startSession, SessionRegistry } from './session/session-registry.js';
 import type { ActiveSession, HeartbeatVscodeDeps } from './session/session-registry.js';
+import type { IdentityOutcome } from './identity/session-identity.js';
 import { isRepoOwnedByRoot, resolveOwnerRoot } from './session/session-router.js';
 import type { Manifest } from '@provenance/log-core';
 
@@ -276,6 +290,69 @@ export async function activateImpl(deps: ActivateDeps): Promise<ActiveSession | 
 
 const registry = new SessionRegistry();
 
+/**
+ * The single status bar item, held so enrollment state can be re-rendered after
+ * the sessions have started and again on every rescan. Null before activation
+ * mounts it, and in workspaces where no verified manifest was found.
+ */
+let statusBar: vscode.StatusBarItem | null = null;
+
+/**
+ * Render the enrollment state, and — at most twice in a student's life — say it
+ * out loud.
+ *
+ * Runs after every session has started, because only then is the answer known:
+ * `identityOutcome` is per-session, and a student is un-enrolled only when NO
+ * session managed to claim an identity (see `isUnenrolled`). Called again from
+ * `rescan()` so adding a workspace folder cannot leave a stale claim on screen.
+ *
+ * Never throws into activation. A failed nudge is a missing notification; a
+ * throw here would take the recording with it.
+ */
+async function reflectEnrollment(context: vscode.ExtensionContext): Promise<void> {
+  try {
+    const outcomes = registry
+      .all()
+      .map((s) => s.identityOutcome)
+      .filter((o): o is IdentityOutcome => o !== undefined);
+
+    if (statusBar !== null) setEnrollmentState(statusBar, isUnenrolled(outcomes));
+
+    const state = parseNudgeState(context.globalState.get(NUDGE_STATE_KEY));
+    if (!shouldShowNudge({ outcomes, state })) return;
+
+    // Modal-free and non-blocking by construction: `showWarningMessage` resolves
+    // `undefined` when the student ignores or dismisses it, which is the same
+    // answer as "Later" — a student who closes the toast has said no just as
+    // clearly as one who clicks the button.
+    const picked = await vscode.window.showWarningMessage(
+      NUDGE_MESSAGE,
+      NUDGE_ENROLL_LABEL,
+      NUDGE_SHOW_KEY_LABEL,
+      NUDGE_LATER_LABEL,
+    );
+
+    const action: NudgeAction =
+      picked === NUDGE_ENROLL_LABEL
+        ? 'enroll'
+        : picked === NUDGE_SHOW_KEY_LABEL
+          ? 'show_key'
+          : 'dismiss';
+
+    await context.globalState.update(NUDGE_STATE_KEY, nextNudgeState(state, action));
+
+    // The student's click, in the student's browser. The recorder itself opens no
+    // socket — recorder PRD NG2 holds, and enrollment stays a paste both ways.
+    if (action === 'enroll') {
+      await vscode.env.openExternal(vscode.Uri.parse(ENROLL_URL));
+    } else if (action === 'show_key') {
+      await vscode.commands.executeCommand('provenance.showEnrollmentKey');
+    }
+  } catch (e) {
+    console.warn('[provenance] could not surface enrollment state:', e);
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   // Registered FIRST, before the workspace guard and before any manifest is
   // discovered: a student must be able to import their identity secret on a new
@@ -330,7 +407,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     if (found.length > 0) {
-      createRecordingStatusBar(context.subscriptions);
+      statusBar = createRecordingStatusBar(context.subscriptions);
     }
 
     for (const { root, manifest } of found) {
@@ -364,6 +441,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     registerSealCommand(context, extensionDistPath);
+
+    // After every session, never before: whether the student is enrolled is an
+    // answer only `startSession` has.
+    await reflectEnrollment(context);
 
     context.subscriptions.push(
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -416,6 +497,10 @@ async function rescan(
       session.ownDisposables.length = 0;
       registry.add(session);
     }
+
+    // A folder joining or leaving changes which sessions exist, and so can change
+    // the answer. Re-render rather than leave a stale claim on screen.
+    await reflectEnrollment(context);
   } catch (e) {
     console.error('[provenance] unexpected error during workspace-folder rescan:', e);
   }

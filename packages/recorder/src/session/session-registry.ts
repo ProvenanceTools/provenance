@@ -34,6 +34,7 @@ import type {
 } from '@provenance/log-core';
 import { buildRecorderContext } from './recorder-context.js';
 import { buildSessionIdentity } from '../identity/session-identity.js';
+import type { IdentityOutcome } from '../identity/session-identity.js';
 import { ROOT_PUBLIC_KEY_HEX } from '../activation/course-keys.js';
 import type { SecretStore } from '../identity/secret-store.js';
 import { createSessionHost } from './session-host.js';
@@ -88,6 +89,14 @@ export type ActiveSession = {
   metaWriter: MetaWriter;
   sessionHost: ReturnType<typeof createSessionHost>;
   sessionKeypair: { privateKey: Uint8Array; publicKeyHex: string };
+  /**
+   * Whether this session could claim an identity, and if not, why.
+   *
+   * `undefined` means identity was never attempted (no `secrets` supplied) — NOT
+   * that the student is un-enrolled. `activation/enroll-nudge.ts` consumes this
+   * to decide the status bar wording and whether to offer the enrollment page.
+   */
+  identityOutcome: IdentityOutcome | undefined;
   /** All VS Code subscriptions this session owns (doc-wiring, fs-watcher, heartbeat, etc). Disposed by dispose(). */
   ownDisposables: vscode.Disposable[];
   /** Most recent checkpoint write chain. dispose() awaits this so the final checkpoint isn't lost. */
@@ -261,7 +270,15 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   //
   // `secrets` is optional so the many existing test callers (and any caller
   // without an ExtensionContext) keep working; absent means "never enrolled".
+  //
+  // The outcome is KEPT, not just logged. It is the only place that knows whether
+  // this student is enrolled, and `activation/enroll-nudge.ts` reads it to decide
+  // the status bar wording and whether to point them at the enrollment page. It
+  // stays `undefined` when no `secrets` were supplied, which is "we never asked",
+  // distinct from "we asked and they are not enrolled" — a caller that did not
+  // wire identity must not make the student think they failed to enrol.
   let identity: SessionIdentity | undefined;
+  let identityOutcome: IdentityOutcome | undefined;
   if (deps.secrets !== undefined) {
     const outcome = await buildSessionIdentity({
       manifest,
@@ -275,6 +292,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
       // is the manifest's already-verified `course_cert`.
       rootPubkeyHex: ROOT_PUBLIC_KEY_HEX,
     });
+    identityOutcome = outcome;
     if (outcome.kind === 'emitted') {
       identity = outcome.identity;
       // Out-of-window is reported, never enforced (program spec §4) — surface it
@@ -966,6 +984,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     metaWriter,
     sessionHost,
     sessionKeypair: { privateKey: keypair.privateKey, publicKeyHex: keypair.publicKeyHex },
+    identityOutcome,
     ownDisposables,
     getPendingCheckpoint: () => pendingCheckpoint,
     dispose,

@@ -50,6 +50,7 @@ import {
   MASTER_SECRET_EXPORT_PREFIX,
 } from '../identity/secret-store.js';
 import type { IdentityImportError, SecretStore } from '../identity/secret-store.js';
+import { ENROLL_URL } from '../activation/enroll-nudge.js';
 
 // ---------------------------------------------------------------------------
 // Seams
@@ -112,8 +113,8 @@ export async function showEnrollmentKey(deps: EnrollmentCommandDeps): Promise<vo
   await deps.showDocument(
     `Provenance enrollment key\n\n${keypair.publicKeyHex}\n\n` +
       'This is a PUBLIC key, and it is the same in every course. Paste it into your\n' +
-      "institution's enrollment page to get a credential, then run\n" +
-      '"Provenance: Import Enrollment Token" and paste the credential back in.\n\n' +
+      `institution's enrollment page to get a credential:\n\n    ${ENROLL_URL}\n\n` +
+      'Then run "Provenance: Import Enrollment Token" and paste the credential back in.\n\n' +
       'It is NOT your identity secret. The secret shown by "Provenance: Back Up Student\n' +
       'Identity Secret" is also 64 characters and must never be typed into a website.\n',
   );
