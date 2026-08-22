@@ -24,7 +24,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { ASSUMED_SINGLE_REPOSITORY, commitNodeKey } from '../git/observed-dag.js';
-import { partitionCrossScopes, sameRepositoryLineage } from './cross-scope.js';
+import { partitionCrossScopes, sameRepositoryLineage, sessionNodeKey } from './cross-scope.js';
 import type { CrossSubmissionFeatures } from '../heuristics/cross/types.js';
 
 const A = 'a'.repeat(40);
@@ -36,6 +36,7 @@ const ROOT_TWO = '2'.repeat(40);
 function features(
   bundleId: string,
   observedCommitKeys?: readonly string[],
+  recordedSessionKeys?: readonly string[],
 ): CrossSubmissionFeatures {
   return {
     bundleId,
@@ -45,7 +46,16 @@ function features(
     eventCount: 0,
     representativeSeqKeys: [],
     ...(observedCommitKeys === undefined ? {} : { observedCommitKeys }),
+    ...(recordedSessionKeys === undefined ? {} : { recordedSessionKeys }),
   };
+}
+
+/** A session key for a session signed by `pubkey`. */
+const sk = (pubkey: string, sessionId: string) => sessionNodeKey(pubkey, sessionId);
+
+/** One submission carrying the given sessions and no git observation at all. */
+function sessionOnly(bundleId: string, ...sessionKeys: string[]): CrossSubmissionFeatures {
+  return features(bundleId, undefined, sessionKeys);
 }
 
 /** Unlabelled: what every recorder emitting no `root_commit_sha` produces. */
@@ -283,6 +293,182 @@ describe('partitionCrossScopes', () => {
 
     expect(p.exclusions).toHaveLength(1);
     expect(p.exclusions[0]!.sharedCommits).toEqual(unlabelled(C));
+  });
+});
+
+describe('partitionCrossScopes — the SESSION key, for a scope with no observed git', () => {
+  // The commit key is a proxy for "each archive holds the other's logs", and
+  // git observation is an optional capability, so the proxy is simply absent
+  // for an honest pair on a host with no git integration, on a shared folder,
+  // or committing from a terminal. Before this key those pairs fired
+  // paste_shared_across_students at high / 0.95.
+  const ALICE_KEY = 'aa'.repeat(32);
+  const BOB_KEY = 'bb'.repeat(32);
+  const S1 = '11111111-1111-4111-8111-111111111111';
+  const S2 = '22222222-2222-4222-8222-222222222222';
+
+  it('puts two partners who both carry one signed session in ONE lineage', () => {
+    // Both archives hold BOTH logs — the add-only `.provenance/` shape, reached
+    // here without a single git.event.
+    const p = partitionCrossScopes([
+      sessionOnly('alice', sk(ALICE_KEY, S1), sk(BOB_KEY, S2)),
+      sessionOnly('bob', sk(ALICE_KEY, S1), sk(BOB_KEY, S2)),
+    ]);
+    expect(sameRepositoryLineage(p, 'alice', 'bob')).toBe(true);
+  });
+
+  it('reports it as shared_recording_scope, not as a repository lineage', () => {
+    // The narrower claim, because no repository was demonstrated. Saying
+    // "same repository" about two people who never ran git would be a claim the
+    // record does not support, in the one place a grader reads the evidence.
+    const p = partitionCrossScopes([
+      sessionOnly('alice', sk(ALICE_KEY, S1)),
+      sessionOnly('bob', sk(ALICE_KEY, S1)),
+    ]);
+    expect(p.exclusions).toHaveLength(1);
+    const ex = p.exclusions[0]!;
+    expect(ex.reason).toBe('shared_recording_scope');
+    expect(ex.sharedCommits).toEqual([]);
+    expect(ex.sharedSessions).toEqual([sk(ALICE_KEY, S1)]);
+  });
+
+  it('keeps two unrelated students in DIFFERENT lineages — the negative control', () => {
+    const p = partitionCrossScopes([
+      sessionOnly('carol', sk(ALICE_KEY, S1)),
+      sessionOnly('dave', sk(BOB_KEY, S2)),
+    ]);
+    expect(sameRepositoryLineage(p, 'carol', 'dave')).toBe(false);
+    expect(p.exclusions).toEqual([]);
+  });
+
+  it('does NOT union two sessions that share an ID but not a KEY', () => {
+    // The reason the key is not a bare uuid. A recorder build that minted a
+    // constant session id — or a fixture that does, which is the shape every
+    // test bundle in this repo has — would otherwise union everything it
+    // touched. Only the private half of the pair could have produced both.
+    const p = partitionCrossScopes([
+      sessionOnly('carol', sk(ALICE_KEY, S1)),
+      sessionOnly('dave', sk(BOB_KEY, S1)),
+    ]);
+    expect(sameRepositoryLineage(p, 'carol', 'dave')).toBe(false);
+  });
+
+  it('does NOT union scopes whose session lists were never computed', () => {
+    // Absent is "never computed", not "no sessions" — it must fail toward
+    // comparing, exactly as the commit field does.
+    const p = partitionCrossScopes([features('alice'), features('bob')]);
+    expect(sameRepositoryLineage(p, 'alice', 'bob')).toBe(false);
+  });
+
+  it('does not treat ONE submission carrying a session twice as two holders', () => {
+    const p = partitionCrossScopes([
+      sessionOnly('alice', sk(ALICE_KEY, S1), sk(ALICE_KEY, S1)),
+      sessionOnly('bob', sk(BOB_KEY, S2)),
+    ]);
+    expect(p.exclusions).toEqual([]);
+  });
+
+  it('prefers the repository reason when BOTH proofs exist', () => {
+    // A lineage holding any shared commit is a repository lineage and says so;
+    // the session proof is still listed, so the register never asserts a commit
+    // it does not have and never hides one it does.
+    const p = partitionCrossScopes([
+      features('alice', unlabelled(A), [sk(ALICE_KEY, S1)]),
+      features('bob', unlabelled(A), [sk(ALICE_KEY, S1)]),
+    ]);
+    expect(p.exclusions).toHaveLength(1);
+    const ex = p.exclusions[0]!;
+    expect(ex.reason).toBe('same_repository_lineage');
+    expect(ex.sharedCommits).toEqual(unlabelled(A));
+    expect(ex.sharedSessions).toEqual([sk(ALICE_KEY, S1)]);
+  });
+});
+
+describe('partitionCrossScopes — the cohort-fraction ceiling', () => {
+  const STAFF_KEY = 'ff'.repeat(32);
+  const PAIR_KEY = 'ee'.repeat(32);
+  const STARTER = '00000000-0000-4000-8000-00000000aaaa';
+  const PAIRED = '00000000-0000-4000-8000-00000000bbbb';
+
+  /** `n` submissions, every one of them carrying the staff starter session. */
+  const cohortWithStarter = (n: number) =>
+    Array.from({ length: n }, (_, i) => sessionOnly(`s${i}`, sk(STAFF_KEY, STARTER)));
+
+  it('does NOT let a starter session shared by the whole cohort union anything', () => {
+    // The failure this guard exists for, and it is worse than the bug: staff
+    // prepare the skeleton with the recorder running, commit `.provenance/`,
+    // and one union pass switches cross-submission detection off course-wide.
+    const p = partitionCrossScopes(cohortWithStarter(6));
+    expect(p.exclusions).toEqual([]);
+    expect(sameRepositoryLineage(p, 's0', 's1')).toBe(false);
+  });
+
+  it('admits a strict-minority pair inside that same cohort', () => {
+    // The guard must reject the starter WITHOUT rejecting the partnership that
+    // shares the pool with it.
+    const pool = cohortWithStarter(6);
+    pool[0] = sessionOnly('s0', sk(STAFF_KEY, STARTER), sk(PAIR_KEY, PAIRED));
+    pool[1] = sessionOnly('s1', sk(STAFF_KEY, STARTER), sk(PAIR_KEY, PAIRED));
+
+    const p = partitionCrossScopes(pool);
+    expect(sameRepositoryLineage(p, 's0', 's1')).toBe(true);
+    expect(sameRepositoryLineage(p, 's2', 's3')).toBe(false);
+    expect(p.exclusions).toHaveLength(1);
+    expect(p.exclusions[0]!.bundleIds).toEqual(['s0', 's1']);
+  });
+
+  it('REJECTS an exact even split — the ambiguous boundary fails toward comparing', () => {
+    // 3 of 6. Half the pool is not a group, and this is the single most
+    // ambiguous shape the evidence can take.
+    const pool = Array.from({ length: 6 }, (_, i) => sessionOnly(`s${i}`));
+    for (let i = 0; i < 3; i++) pool[i] = sessionOnly(`s${i}`, sk(PAIR_KEY, PAIRED));
+    const p = partitionCrossScopes(pool);
+    expect(p.exclusions).toEqual([]);
+  });
+
+  it('admits one below that boundary in a pool one larger', () => {
+    // 3 of 7 is a strict minority and unions; the same k in a pool of 6 did
+    // not. The rule is the fraction, not the count.
+    const pool = Array.from({ length: 7 }, (_, i) => sessionOnly(`s${i}`));
+    for (let i = 0; i < 3; i++) pool[i] = sessionOnly(`s${i}`, sk(PAIR_KEY, PAIRED));
+    const p = partitionCrossScopes(pool);
+    expect(p.exclusions).toHaveLength(1);
+    expect(p.exclusions[0]!.bundleIds).toEqual(['s0', 's1', 's2']);
+  });
+
+  it('is INERT on a pool too small for the rule to admit any partnership', () => {
+    // `/local/compare`: a grader drops two partners' zips on the page. The
+    // ceiling can only say yes to k=2 from n=5 up, so applying it here would
+    // not narrow the key — it would disable it, and show the grader exactly the
+    // false accusation this module removes. There is no cohort at n=2 to lose.
+    const p = partitionCrossScopes([
+      sessionOnly('alice', sk(PAIR_KEY, PAIRED)),
+      sessionOnly('bob', sk(PAIR_KEY, PAIRED)),
+    ]);
+    expect(sameRepositoryLineage(p, 'alice', 'bob')).toBe(true);
+  });
+
+  it('never lets ONE session key move a majority of the pool', () => {
+    // The invariant the ceiling buys, stated as a property rather than as a
+    // case: whatever k is, the largest lineage a single key can produce is a
+    // strict minority, so the majority of any pool is always still compared.
+    for (let n = 5; n <= 24; n++) {
+      for (let k = 2; k <= n; k++) {
+        const pool = Array.from({ length: n }, (_, i) => sessionOnly(`s${i}`));
+        for (let i = 0; i < k; i++) pool[i] = sessionOnly(`s${i}`, sk(PAIR_KEY, PAIRED));
+        const p = partitionCrossScopes(pool);
+        const largest = Math.max(
+          ...[...p.lineageOf.values()].reduce((counts: number[], id) => {
+            counts[id] = (counts[id] ?? 0) + 1;
+            return counts;
+          }, []),
+        );
+        // Strict minority: 2 * largest < n. Holds both when the key was
+        // admitted (largest === k, and k*2 < n is exactly what admitted it) and
+        // when it was rejected (largest === 1).
+        expect(largest * 2, `n=${n} k=${k}`).toBeLessThan(n);
+      }
+    }
   });
 });
 

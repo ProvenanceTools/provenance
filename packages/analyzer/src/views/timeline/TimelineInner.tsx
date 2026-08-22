@@ -24,6 +24,11 @@ import { DEFAULT_FILTERS, useFilteredEvents, type TimelineFilters } from './useF
 import { FilterBar } from './FilterBar.js';
 import { EventList } from './EventList.js';
 import { EventDetail } from './EventDetail.js';
+import {
+  computeOrderBreaks,
+  orderTimelineEvents,
+  type TimelineOrderScope,
+} from './presentation-order.js';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -37,13 +42,24 @@ type TimelineInnerProps = {
    * supplied by the wrapper. Omitted → no per-row replay button.
    */
   onJumpToReplay?: ((event: IndexedEvent) => void) | undefined;
+  /**
+   * The happens-before relation over this bundle, plus who produced each
+   * session. Supplied by the wrapper because only a route holding the parsed
+   * Bundle can build it — the server-backed tab pages event rows and has
+   * neither the contributor stamp nor the observed commit DAG.
+   *
+   * Omitted, or `ordering: null` (which is what a scope with fewer than two
+   * PROVABLY DIFFERENT contributors carries), means the list renders exactly as
+   * it always has. See `presentation-order.ts`.
+   */
+  scope?: TimelineOrderScope | null | undefined;
 };
 
 // ---------------------------------------------------------------------------
 // TimelineInner
 // ---------------------------------------------------------------------------
 
-export function TimelineInner({ index, onJumpToReplay }: TimelineInnerProps) {
+export function TimelineInner({ index, onJumpToReplay, scope = null }: TimelineInnerProps) {
   const [searchParams] = useSearchParams();
 
   const [filters, setFilters] = useState<TimelineFilters>(DEFAULT_FILTERS);
@@ -53,7 +69,18 @@ export function TimelineInner({ index, onJumpToReplay }: TimelineInnerProps) {
 
   // Memoized so the `null` case doesn't hand a fresh [] to every useMemo below
   // on each render.
-  const allEvents = useMemo<IndexedEvent[]>(() => index?.ordered ?? [], [index]);
+  //
+  // `orderTimelineEvents` returns THIS array by reference unless the scope
+  // actually carries a relation, so for a solo bundle and for the server-backed
+  // tab `allEvents` is `index.ordered` itself, exactly as before. Where it does
+  // re-order, it re-orders the DISPLAY array only: `globalIdx` is a field on the
+  // event, is what `flags.supporting_seqs` persists, and is neither read as a
+  // position nor rewritten here.
+  const indexOrdered = useMemo<IndexedEvent[]>(() => index?.ordered ?? [], [index]);
+  const allEvents = useMemo<IndexedEvent[]>(
+    () => orderTimelineEvents(indexOrdered, scope),
+    [indexOrdered, scope],
+  );
 
   // Derived: available kinds / files / sessions from the full ordered list.
   const availableKinds = useMemo<EventKind[]>(() => {
@@ -78,6 +105,11 @@ export function TimelineInner({ index, onJumpToReplay }: TimelineInnerProps) {
 
   // Filtered events (memoized).
   const filteredEvents = useFilteredEvents(allEvents, filters);
+
+  // Computed on the FILTERED list, because that is the list a grader reads.
+  // Filtering cannot manufacture a break: `≺` is transitive, so dropping an
+  // intermediate event leaves a proven chain proven.
+  const breaks = useMemo(() => computeOrderBreaks(filteredEvents, scope), [filteredEvents, scope]);
 
   // Deep-link. Two accepted forms:
   //   ?seq=sessionId:42  — session-scoped, what /local emits (seq is
@@ -157,6 +189,29 @@ export function TimelineInner({ index, onJumpToReplay }: TimelineInnerProps) {
           : `${filteredEvents.length} of ${allEvents.length} events`}
       </p>
 
+      {/* Only rendered where the relation actually refuses to order something,
+          so a solo bundle never sees it. Context, not a finding: two partners
+          working at the same time is what collaboration looks like. */}
+      {breaks.size > 0 && (
+        <div
+          className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900"
+          data-testid="timeline-order-notice"
+        >
+          <p className="font-semibold">
+            This list is not a single sequence — {breaks.size}{' '}
+            {breaks.size === 1 ? 'point is' : 'points are'} marked below where the order shown is
+            not evidence.
+          </p>
+          <p className="mt-0.5 text-amber-900/80">
+            More than one contributor recorded this work. Events from one contributor are in the
+            order their own signed log recorded them. Between contributors, the recording orders
+            events only where a shared commit connects them; everywhere else it says nothing, and
+            neither does this list. Clock times are shown as each machine reported them and are not
+            comparable between machines.
+          </p>
+        </div>
+      )}
+
       {/* Main grid: list (3/5) + detail (2/5) */}
       <div
         className="grid grid-cols-5 gap-4"
@@ -166,6 +221,7 @@ export function TimelineInner({ index, onJumpToReplay }: TimelineInnerProps) {
         <div className="col-span-3 min-h-0">
           <EventList
             events={filteredEvents}
+            breaks={breaks}
             onSelect={handleSelect}
             selectedKey={selectedKey}
             scrollToKey={scrollToKey}

@@ -22,6 +22,7 @@ import type { EventIndex } from '../../index/event-index.js';
 import type { CrossSubmissionFeatures, CrossPasteFeature } from './types.js';
 import { resolveBundleCapturePolicy } from '../../manifest/bundle-manifest.js';
 import { buildObservedDag, commitNodeKey, observedCommits } from '../../git/observed-dag.js';
+import { sessionNodeKey } from '../../coverage/cross-scope.js';
 import type { ObservedDagSource } from '../../git/observed-dag.js';
 
 /** 3-gram size for the editing-pattern kind-stream fingerprint. */
@@ -73,6 +74,32 @@ export function observedCommitKeysOf(source: ObservedDagSource): string[] {
 }
 
 /**
+ * The second same-scope exclusion key: every session this archive CARRIES,
+ * keyed by `(session_pubkey, session_id)`.
+ *
+ * Exported for the same reason {@link observedCommitKeysOf} is — the server
+ * builds `CrossSubmissionFeatures` on its own path and must produce the
+ * identical value from one derivation, not a second one that agrees today.
+ *
+ * A session whose `session.start` carries no usable `session_pubkey`
+ * contributes NOTHING rather than a degraded key. Absence is never a match:
+ * unioning on "neither of us could be identified" is the shape that suppresses
+ * detection between strangers. See `coverage/cross-scope.ts`.
+ *
+ * Sorted, so the value is deterministic and diffable; the consumer treats it as
+ * a set.
+ */
+export function recordedSessionKeysOf(bundle: Bundle): string[] {
+  const keys: string[] = [];
+  for (const session of bundle.sessions) {
+    const pubkey = session.firstEvent.data.session_pubkey;
+    if (typeof pubkey !== 'string' || pubkey === '') continue;
+    keys.push(sessionNodeKey(pubkey, session.sessionId));
+  }
+  return keys.sort();
+}
+
+/**
  * Extract the compact cross-submission features from an in-memory Bundle + EventIndex.
  *
  * Used by the browser (BundleContext), where bundles are already loaded. The server
@@ -107,5 +134,6 @@ export function extractCrossFeatures(bundle: Bundle, index: EventIndex): CrossSu
       .map((e) => `${e.sessionId}:${e.seq}`),
     disabledCaptureSignals: resolveBundleCapturePolicy(bundle).disabledSignals,
     observedCommitKeys: observedCommitKeysOf(bundle),
+    recordedSessionKeys: recordedSessionKeysOf(bundle),
   };
 }

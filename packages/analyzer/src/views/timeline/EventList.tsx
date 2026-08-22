@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils';
 import { formatWall, summarizeTerminalCommand } from '@/lib/format.js';
 import type { IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import type { EventKind } from '@provenance/log-core';
+import type { OrderBreak } from './presentation-order.js';
 
 // ---------------------------------------------------------------------------
 // Payload summary
@@ -191,15 +192,93 @@ function KindChip({ event }: { event: IndexedEvent }) {
 // Row
 // ---------------------------------------------------------------------------
 
+/**
+ * The banner that sits between two runs the recording does not order.
+ *
+ * Written for a grader who has never heard the words "happens-before". It says
+ * what is true (the recording holds both, and says nothing about which came
+ * first), who each side belongs to, and — crucially — that the list order here
+ * is a display choice rather than evidence. It is deliberately not styled as a
+ * finding: two partners working at once is the expected shape of collaboration,
+ * not a suspicion about either of them.
+ */
+function OrderBreakBanner({ info }: { info: OrderBreak }) {
+  const headline =
+    info.reason === 'concurrent'
+      ? 'Order not established — these events overlap'
+      : 'Order not established — no record covers this point';
+  const body =
+    info.reason === 'concurrent'
+      ? 'The recording holds both sides and does not say which came first. Their position in this list is display order, not evidence.'
+      : 'The events above and below are not covered by the same recorded history, so nothing here orders them. This is missing record, not a race.';
+  return (
+    <div
+      className="flex h-16 flex-col justify-center gap-0.5 border-y border-dashed border-amber-400 bg-amber-50 px-3 py-1.5"
+      data-testid={`order-break-${info.belowGlobalIdx}`}
+      data-order-break-reason={info.reason}
+    >
+      <p className="text-[11px] font-semibold text-amber-900">⚠ {headline}</p>
+      <p className="truncate text-[10px] text-amber-900/80">
+        Above: {info.above} · Below: {info.below}
+      </p>
+      <p className="truncate text-[10px] text-amber-900/70">{body}</p>
+    </div>
+  );
+}
+
 interface EventRowProps {
   event: IndexedEvent;
   isSelected: boolean;
   onClick: () => void;
   style: React.CSSProperties;
   onJumpToReplay?: ((event: IndexedEvent) => void) | undefined;
+  /** Rendered directly above this row when the order into it is not established. */
+  breakAbove?: OrderBreak | undefined;
 }
 
-function EventRow({ event, isSelected, onClick, style, onJumpToReplay }: EventRowProps) {
+function EventRow({
+  event,
+  isSelected,
+  onClick,
+  style,
+  onJumpToReplay,
+  breakAbove,
+}: EventRowProps) {
+  // A row with no break renders EXACTLY the markup it always has, positioned by
+  // the same style object. The wrapper exists only where a break does, so the
+  // solo path's DOM is unchanged rather than merely equivalent.
+  if (breakAbove !== undefined) {
+    return (
+      <div style={style} className="absolute left-0 right-0">
+        <OrderBreakBanner info={breakAbove} />
+        <EventRowBody
+          event={event}
+          isSelected={isSelected}
+          onClick={onClick}
+          style={{ height: ROW_HEIGHT, position: 'static' }}
+          onJumpToReplay={onJumpToReplay}
+        />
+      </div>
+    );
+  }
+  return (
+    <EventRowBody
+      event={event}
+      isSelected={isSelected}
+      onClick={onClick}
+      style={style}
+      onJumpToReplay={onJumpToReplay}
+    />
+  );
+}
+
+function EventRowBody({
+  event,
+  isSelected,
+  onClick,
+  style,
+  onJumpToReplay,
+}: Omit<EventRowProps, 'breakAbove'>) {
   const summary = payloadSummary(event);
   const filePart = event.file
     ? event.file.length > 35
@@ -288,9 +367,18 @@ function EventRow({ event, isSelected, onClick, style, onJumpToReplay }: EventRo
 // ---------------------------------------------------------------------------
 
 const ROW_HEIGHT = 36; // px
+/** Height of an {@link OrderBreakBanner}. Must match its `h-16`. */
+const BREAK_HEIGHT = 64; // px
 
 interface EventListProps {
   events: IndexedEvent[];
+  /**
+   * Adjacencies in `events` that the happens-before relation does not
+   * establish, keyed by the `globalIdx` of the event BELOW each one. Empty for
+   * every solo scope and for the server-backed tab, which is what makes those
+   * paths render exactly as they always have. See `presentation-order.ts`.
+   */
+  breaks?: ReadonlyMap<number, OrderBreak> | undefined;
   onSelect: (event: IndexedEvent) => void;
   /** Key of the currently selected event: `${sessionId}:${seq}` */
   selectedKey: string | null;
@@ -309,8 +397,11 @@ interface EventListProps {
   onJumpToReplay?: ((event: IndexedEvent) => void) | undefined;
 }
 
+const NO_BREAKS: ReadonlyMap<number, OrderBreak> = new Map();
+
 export function EventList({
   events,
+  breaks = NO_BREAKS,
   onSelect,
   selectedKey,
   scrollToKey,
@@ -318,12 +409,36 @@ export function EventList({
 }: EventListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
+  const estimateSize = useCallback(
+    (index: number) => {
+      const event = events[index];
+      if (event === undefined) return ROW_HEIGHT;
+      return breaks.has(event.globalIdx) ? ROW_HEIGHT + BREAK_HEIGHT : ROW_HEIGHT;
+    },
+    [events, breaks],
+  );
+
   const virtualizer = useVirtualizer({
     count: events.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize,
     overscan: 10,
   });
+
+  // The virtualizer caches item sizes and does NOT treat `estimateSize` as a
+  // dependency, so a change in which rows carry a break has to invalidate the
+  // cache explicitly or the banners overlap the rows below them. Skipped on the
+  // first run: at mount the cache is empty and there is nothing to invalidate,
+  // and a solo scope's `breaks` never changes identity after that, so this costs
+  // the unchanged path nothing.
+  const measured = useRef(false);
+  useEffect(() => {
+    if (!measured.current) {
+      measured.current = true;
+      return;
+    }
+    virtualizer.measure();
+  }, [breaks, virtualizer]);
 
   // Handle scrollToKey: find the row and scroll to it.
   useEffect(() => {
@@ -382,6 +497,7 @@ export function EventList({
                   isSelected={selectedKey === key}
                   onClick={() => handleSelect(event)}
                   onJumpToReplay={onJumpToReplay}
+                  breakAbove={breaks.get(event.globalIdx)}
                   style={{
                     height: virtualItem.size,
                     transform: `translateY(${virtualItem.start}px)`,

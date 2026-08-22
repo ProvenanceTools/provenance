@@ -95,6 +95,85 @@
  * exact-key matches stand alone. Failing toward comparing is the safe direction;
  * failing toward excluding is not.
  *
+ * ## The SECOND key: one signed session present in both archives
+ *
+ * The commit key is a PROXY. What it is actually standing in for is the thing
+ * the register's own text says — "each archive contains the other's recorded
+ * sessions" — and the proxy fails whenever that is true but no commit was
+ * observed. Git observation is an explicitly optional capability
+ * (`log-core/session-capabilities.ts`: `GIT_CAPTURE_VALUES` is `available` /
+ * `unavailable` / `not_owned`, and provnvim reports only the first two), so a
+ * genuinely shared `.provenance/` produces ZERO observed commits whenever the
+ * host exposes no git integration, the partners commit from a terminal outside
+ * a recording session, or there is no git at all — two people on one laptop, a
+ * lab machine, a synced folder. In every one of those cases both archives carry
+ * both partners' signed `.slog` files and the flagship collusion detector fires
+ * at high / 0.95 on the pair, exactly as S20 describes.
+ *
+ * So a shared SESSION unions too. The key is
+ * {@link sessionNodeKey}`(session_pubkey, session_id)`, and both halves matter:
+ *
+ *  - `session_id` alone would be a bare uuid, and a recorder build that minted a
+ *    constant one would union everything it touched.
+ *  - the digest of the `.slog` would be WRONG, and wrong in the direction that
+ *    silently removes the fix: `.provenance/` is add-only, so a partner who
+ *    pulled yesterday holds a PREFIX of today's log and a different sha256. The
+ *    pubkey is written once, in `session.start`, which is the first event of
+ *    every prefix — so it is stable exactly where the digest is not.
+ *
+ * A session contributing no usable pubkey contributes no key at all. Absence is
+ * never a match here either.
+ *
+ * ## The starter guard: a cohort-fraction ceiling
+ *
+ * Narrowing 1 has a direct analogue here, and ignoring it would rebuild the
+ * course-wide outage it exists to prevent. If staff ever prepare an assignment
+ * skeleton with the recorder running and commit the resulting `.provenance/`,
+ * then EVERY student's archive carries that one staff session, every pair shares
+ * it, and one union pass switches cross-submission detection off for the entire
+ * cohort.
+ *
+ * The discriminator is distribution. A partnership is a property of a PAIR, so
+ * its session shows up in about two archives. A starter is a property of the
+ * ASSIGNMENT, so its session shows up in all of them. Hence the rule, applied
+ * per key BEFORE any union:
+ *
+ *   a session key may union only when the number of archives carrying it is a
+ *   STRICT MINORITY of the assignment's submission pool — `k < n / 2`.
+ *
+ * That buys a stated invariant rather than a probability: no single session key
+ * can ever move more than `ceil(n/2) - 1` submissions, so the majority of any
+ * pool is always still compared, and a cohort-wide switch-off is structurally
+ * unreachable rather than merely unlikely.
+ *
+ * At the boundary — an exact even split, `k === n / 2` — the key is REJECTED. An
+ * even split is the single most ambiguous shape the evidence can take, and the
+ * guard fails toward comparing, which is the same direction the sentinel bridge
+ * fails in.
+ *
+ * ## Why the ceiling is inert on small pools, which is not a loophole
+ *
+ * The ceiling can admit the SMALLEST possible partnership, `k = 2`, only once
+ * `2 < n / 2` — that is, from `n = 5` up. Below that it admits nothing at all,
+ * so applying it there would not be a guard; it would be a blanket refusal that
+ * protects nothing and costs the fix. `/local/compare` is the case that makes
+ * this concrete: a grader drops two partners' zips on the page, `n` is 2, and a
+ * ceiling applied there would show them the false accusation this module exists
+ * to remove.
+ *
+ * The asymmetry is what settles it. The catastrophe the guard prevents needs a
+ * COHORT; a pool of four has none, and the most a starter can suppress there is
+ * four submissions and six pairs, all of them in front of a person who is
+ * reading the register. So the ceiling engages from {@link MIN_POOL_FOR_CEILING}
+ * up, and that bound is derived from the rule rather than chosen: it is the
+ * smallest `n` at which `k < n / 2` has any satisfying `k >= 2`.
+ *
+ * Transitivity still chains across DIFFERENT keys — A~B on one session, B~C on
+ * another — exactly as it does for commits, and deliberately so: those are three
+ * archives that really do hold one another's logs. What the ceiling forbids is a
+ * single key doing it in one hop, which is the only shape a distributed starter
+ * can take.
+ *
  * ## Why the decision lives here and not inside the heuristics
  *
  * Exactly the shape `coverage/session-overlap.ts` established, for exactly the
@@ -138,11 +217,20 @@ export type RepositoryLineageId = number;
  */
 export type SameScopeExclusion = {
   /**
-   * Why the comparison is not applicable. A single-valued union today, spelled
-   * as a union so a second exclusion reason cannot be added by widening a
-   * boolean.
+   * Why the comparison is not applicable.
+   *
+   *  - `same_repository_lineage` — at least one commit was proved shared. The
+   *    stronger claim, because a repository is a thing that demonstrably exists.
+   *  - `shared_recording_scope` — no commit was proved shared, but a signed
+   *    session was: these archives physically contain one another's logs. The
+   *    honest wording for a pair whose recorder never observed git.
+   *
+   * Derived from the proofs, never passed in: a lineage that holds ANY shared
+   * commit reports the repository reason, so the register never downgrades a
+   * claim the evidence supports. Both proof lists are carried either way, so it
+   * also never asserts a commit it does not have.
    */
-  reason: 'same_repository_lineage';
+  reason: 'same_repository_lineage' | 'shared_recording_scope';
   /** The submissions in this lineage, sorted. Always length >= 2. */
   bundleIds: readonly string[];
   /** Display names, in the same order as {@link bundleIds}. */
@@ -160,6 +248,16 @@ export type SameScopeExclusion = {
    */
   sharedCommits: readonly string[];
   /**
+   * The `sessionNodeKey(pubkey, session_id)` keys that proved the exclusion,
+   * sorted — the sessions at least two of these submissions BOTH carry.
+   *
+   * Empty when the lineage was proved by commits alone. A session only one side
+   * carries proves nothing and is not listed, and neither is one the
+   * cohort-fraction ceiling rejected: a key that did not union anything must
+   * never appear as the evidence that something was unioned.
+   */
+  sharedSessions: readonly string[];
+  /**
    * How many pairwise comparisons this exclusion suppressed: `n*(n-1)/2`. Stated
    * so a grader reading "no findings" can see how much of the comparison space
    * was withheld rather than searched.
@@ -174,6 +272,55 @@ export type CrossScopePartition = {
   /** Every lineage containing 2 or more submissions, sorted by first bundleId. */
   exclusions: readonly SameScopeExclusion[];
 };
+
+// ---------------------------------------------------------------------------
+// The session key, and the ceiling that guards it
+// ---------------------------------------------------------------------------
+
+/**
+ * The same-scope key for ONE recorded session: its `session.start`
+ * `session_pubkey` and its logical `session_id`, in the shape `commitNodeKey`
+ * uses — a labelled first half, a space, then the id verbatim.
+ *
+ * Both halves are read out of the first event of the log, so a partner holding
+ * only a PREFIX of a still-growing `.slog` derives the identical key. See the
+ * header for why the file digest cannot be used for this and the bare uuid
+ * should not be.
+ */
+export function sessionNodeKey(sessionPubkey: string, sessionId: string): string {
+  return `session:${sessionPubkey} ${sessionId}`;
+}
+
+/**
+ * The smallest partnership the evidence can describe: two people.
+ *
+ * Named rather than inlined because {@link MIN_POOL_FOR_CEILING} is DERIVED from
+ * it, and the derivation is the argument for that bound.
+ */
+const MIN_PARTNERSHIP = 2;
+
+/**
+ * The smallest submission pool on which the cohort-fraction ceiling is applied.
+ *
+ * The ceiling admits a key carried by `k` archives when `k < n / 2`. For the
+ * smallest partnership that needs `MIN_PARTNERSHIP < n / 2`, i.e.
+ * `n > 2 * MIN_PARTNERSHIP` — so `2 * MIN_PARTNERSHIP + 1` is the first pool
+ * size at which the rule can say yes to anything. Applying it below that would
+ * not narrow the key, it would disable it. See the header.
+ */
+const MIN_POOL_FOR_CEILING = 2 * MIN_PARTNERSHIP + 1;
+
+/**
+ * May a session key carried by `observerCount` of `poolSize` archives union?
+ *
+ * Strict minority, with the exact even split rejected — the ambiguous boundary
+ * fails toward comparing. Inert below {@link MIN_POOL_FOR_CEILING}, where the
+ * rule has no satisfying `k` and there is no cohort to protect.
+ */
+function ceilingAdmits(observerCount: number, poolSize: number): boolean {
+  if (poolSize < MIN_POOL_FOR_CEILING) return true;
+  return observerCount * 2 < poolSize;
+}
 
 // ---------------------------------------------------------------------------
 // The pass
@@ -278,11 +425,32 @@ export function partitionCrossScopes(
     }
   }
 
+  // session node key → the submission indexes that carry that session. Same
+  // shape as `observersByCommit`, and deduplicated within a submission for the
+  // same reason: one archive holding a session is one holder of it, however
+  // many ways it is reachable.
+  const holdersBySession = new Map<string, number[]>();
+  for (let i = 0; i < n; i++) {
+    // Absent means "never computed" — read as no exclusion, so a construction
+    // site that predates the field behaves exactly as it did before.
+    const keys = features[i]!.recordedSessionKeys ?? [];
+    const seen = new Set<string>();
+    for (const key of keys) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const list = holdersBySession.get(key);
+      if (list === undefined) holdersBySession.set(key, [i]);
+      else list.push(i);
+    }
+  }
+
   /**
    * Every node key proven shared, mapped to one submission that observed it —
    * enough to recover the lineage root once all unions have settled.
    */
   const provingCommits = new Map<string, number>();
+  /** The same, for session keys — kept apart so the two proofs never mix. */
+  const provingSessions = new Map<string, number>();
 
   /** Only a commit two different submissions BOTH observed is evidence. */
   for (const [key, observers] of observersByCommit) {
@@ -316,6 +484,22 @@ export function partitionCrossScopes(
     for (let k = 1; k < ordered.length; k++) union(ordered[0]!, ordered[k]!);
   }
 
+  // The session pass. Runs AFTER the commit passes so that a lineage the
+  // commits already established is not re-derived, and — the part that matters
+  // — so the cohort-fraction ceiling is evaluated against the ORIGINAL pool
+  // rather than against whatever the earlier unions produced. Measuring
+  // distribution against a partly-collapsed pool would let the first few
+  // legitimate unions shrink the denominator and admit a starter.
+  for (const [key, holders] of holdersBySession) {
+    if (holders.length < 2) continue;
+    // The starter guard. A key the ceiling rejects is discarded as evidence
+    // entirely: it unions nothing, and it is not recorded as having proved
+    // anything either.
+    if (!ceilingAdmits(holders.length, n)) continue;
+    if (!provingSessions.has(key)) provingSessions.set(key, holders[0]!);
+    for (let k = 1; k < holders.length; k++) union(holders[0]!, holders[k]!);
+  }
+
   // Dense, deterministic class ids in first-appearance order.
   const idByRoot = new Map<number, RepositoryLineageId>();
   const lineageOf = new Map<string, RepositoryLineageId>();
@@ -346,6 +530,14 @@ export function partitionCrossScopes(
     else list.push(key);
   }
 
+  const sessionsByRoot = new Map<number, string[]>();
+  for (const [key, representative] of provingSessions) {
+    const root = find(representative);
+    const list = sessionsByRoot.get(root);
+    if (list === undefined) sessionsByRoot.set(root, [key]);
+    else list.push(key);
+  }
+
   const exclusions: SameScopeExclusion[] = [];
   for (const [root, members] of membersByRoot) {
     if (members.length < 2) continue;
@@ -359,11 +551,17 @@ export function partitionCrossScopes(
         }
         return a.bundleId < b.bundleId ? -1 : a.bundleId > b.bundleId ? 1 : 0;
       });
+    const sharedCommits = [...(commitsByRoot.get(root) ?? [])].sort();
+    const sharedSessions = [...(sessionsByRoot.get(root) ?? [])].sort();
     exclusions.push({
-      reason: 'same_repository_lineage',
+      // Derived from the proofs. A lineage holding any shared commit is a
+      // repository lineage and says so; one proved only by shared sessions
+      // makes the narrower claim it can actually support.
+      reason: sharedCommits.length > 0 ? 'same_repository_lineage' : 'shared_recording_scope',
       bundleIds: sorted.map((f) => f.bundleId),
       sourceFilenames: sorted.map((f) => f.sourceFilename),
-      sharedCommits: [...(commitsByRoot.get(root) ?? [])].sort(),
+      sharedCommits,
+      sharedSessions,
       excludedPairCount: (members.length * (members.length - 1)) / 2,
     });
   }

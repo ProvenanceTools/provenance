@@ -126,6 +126,11 @@ Workspace-wide (run from repo root):
 - `npm run lint` — ESLint (only the `src/` trees of the five packages) + Prettier check.
 - `npm run package:recorder` — build the dev-key VSIX for local install.
 - `npm run update-hashes` — refresh the analyzer's known-good extension-hash allowlist (see README for required flags).
+- Staff key/manifest tools, all thin wrappers around `node --experimental-strip-types tools/<tool>.ts` (pass flags after `--`; see README "Course staff: key & manifest workflow"):
+  - `npm run keygen:course` — generate an ed25519 keypair (root, course, **or** institution — same shape; positional path only unless you also want a course cert).
+  - `npm run mint:course-cert` — root-sign a `course_cert`.
+  - `npm run mint:institution-cert` — root-sign the `institution_cert` that `PROVENANCE_INSTITUTION_KEY` requires. Without it `POST /api/v1/identity/credential` is a permanent `503 no_institution_key`.
+  - `npm run sign:manifest` — sign a `.provenance-manifest`.
 - `python3 tools/architecture/build_diagrams.py` — regenerate the `/architecture`
   diagrams after editing `tools/architecture/dot/*.dot`. Requires Graphviz
   (`brew install graphviz`); dev-time only, never needed by `npm run build` or CI.

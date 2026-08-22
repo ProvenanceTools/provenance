@@ -22,6 +22,14 @@ beforeAll(() => {
     Promise.resolve(sha512(message));
 });
 
+/**
+ * The stored `chain_integrity` verdict, which the route reads out of
+ * validation_results and passes in. These functions no longer re-derive it with
+ * their own runValidation pass — see submitted-files.ts.
+ */
+const CHAIN_INTACT = { chainIntact: true } as const;
+const CHAIN_BROKEN = { chainIntact: false } as const;
+
 // ---------------------------------------------------------------------------
 // extractSubmittedFiles
 // ---------------------------------------------------------------------------
@@ -29,7 +37,7 @@ beforeAll(() => {
 describe('extractSubmittedFiles', () => {
   it('returns available:true with empty files for a 1.0 bundle (no submission_files)', async () => {
     const { zipBuffer } = await buildTestBundle({ sessions: [{ eventCount: 3 }] });
-    const result = await extractSubmittedFiles(zipBuffer);
+    const result = await extractSubmittedFiles(zipBuffer, CHAIN_INTACT);
 
     expect(result.available).toBe(true);
     expect(result.files).toHaveLength(0);
@@ -49,7 +57,7 @@ describe('extractSubmittedFiles', () => {
       submissionFiles: [{ path: 'hw03.py', status: 'present', content }],
     });
 
-    const result = await extractSubmittedFiles(zipBuffer);
+    const result = await extractSubmittedFiles(zipBuffer, CHAIN_INTACT);
 
     expect(result.available).toBe(true);
     expect(result.files).toHaveLength(1);
@@ -74,7 +82,7 @@ describe('extractSubmittedFiles', () => {
       submissionFiles: [{ path: 'hw03.py', status: 'present', content: actualContent }],
     });
 
-    const result = await extractSubmittedFiles(zipBuffer);
+    const result = await extractSubmittedFiles(zipBuffer, CHAIN_INTACT);
 
     expect(result.available).toBe(true);
     const f = result.files.find((x) => x.path === 'hw03.py');
@@ -84,7 +92,7 @@ describe('extractSubmittedFiles', () => {
 
   it('returns available:true with empty files for a corrupt/unparseable buffer', async () => {
     const garbage = new Uint8Array([0, 1, 2, 3]).buffer;
-    const result = await extractSubmittedFiles(garbage);
+    const result = await extractSubmittedFiles(garbage, CHAIN_INTACT);
 
     expect(result.available).toBe(true);
     expect(result.files).toHaveLength(0);
@@ -96,11 +104,35 @@ describe('extractSubmittedFiles', () => {
       submissionFiles: [{ path: 'missing.py', status: 'missing' }],
     });
 
-    const result = await extractSubmittedFiles(zipBuffer);
+    const result = await extractSubmittedFiles(zipBuffer, CHAIN_INTACT);
     expect(result.available).toBe(true);
     const f = result.files.find((x) => x.path === 'missing.py');
     expect(f).toBeDefined();
     expect(f!.status).toBe('missing');
+  });
+
+  // The gate comes from the STORED validation row, not from a live re-run. A
+  // stored chain_integrity failure must therefore reach the verdicts — otherwise
+  // the Source badges and the Validation tab could contradict each other on one
+  // page load, which is the bug this argument exists to prevent.
+  it('honours a stored chain_integrity failure: verdicts degrade to unknown', async () => {
+    const content = 'print("hello")\n';
+    const fileHash = sha256Hex(new TextEncoder().encode(content));
+    const { zipBuffer } = await buildTestBundle({
+      sessions: [
+        {
+          events: [{ kind: 'doc.save', data: { path: 'hw03.py', sha256: fileHash } }],
+        },
+      ],
+      submissionFiles: [{ path: 'hw03.py', status: 'present', content }],
+    });
+
+    // Same bundle, same bytes — only the stored gate differs.
+    const intact = await extractSubmittedFiles(zipBuffer, CHAIN_INTACT);
+    expect(intact.files.find((x) => x.path === 'hw03.py')!.verdict).toBe('match');
+
+    const broken = await extractSubmittedFiles(zipBuffer, CHAIN_BROKEN);
+    expect(broken.files.find((x) => x.path === 'hw03.py')!.verdict).toBe('unknown');
   });
 });
 
@@ -120,7 +152,7 @@ describe('extractSubmittedFileContent', () => {
       submissionFiles: [{ path: 'hw03.py', status: 'present', content }],
     });
 
-    const result = await extractSubmittedFileContent(zipBuffer, 'hw03.py');
+    const result = await extractSubmittedFileContent(zipBuffer, 'hw03.py', CHAIN_INTACT);
     expect(result).not.toBeNull();
     expect(result!.path).toBe('hw03.py');
     expect(result!.content).toBe(content);
@@ -133,7 +165,7 @@ describe('extractSubmittedFileContent', () => {
       submissionFiles: [{ path: 'hw03.py', status: 'present', content: 'x' }],
     });
 
-    const result = await extractSubmittedFileContent(zipBuffer, 'nonexistent.py');
+    const result = await extractSubmittedFileContent(zipBuffer, 'nonexistent.py', CHAIN_INTACT);
     expect(result).toBeNull();
   });
 
@@ -143,13 +175,13 @@ describe('extractSubmittedFileContent', () => {
       submissionFiles: [{ path: 'missing.py', status: 'missing' }],
     });
 
-    const result = await extractSubmittedFileContent(zipBuffer, 'missing.py');
+    const result = await extractSubmittedFileContent(zipBuffer, 'missing.py', CHAIN_INTACT);
     expect(result).toBeNull();
   });
 
   it('returns null for a corrupt/unparseable buffer', async () => {
     const garbage = new Uint8Array([0, 1, 2, 3]).buffer;
-    const result = await extractSubmittedFileContent(garbage, 'hw03.py');
+    const result = await extractSubmittedFileContent(garbage, 'hw03.py', CHAIN_INTACT);
     expect(result).toBeNull();
   });
 
@@ -161,9 +193,38 @@ describe('extractSubmittedFileContent', () => {
       submissionFiles: [{ path: nestedPath, status: 'present', content }],
     });
 
-    const result = await extractSubmittedFileContent(zipBuffer, nestedPath);
+    const result = await extractSubmittedFileContent(zipBuffer, nestedPath, CHAIN_INTACT);
     expect(result).not.toBeNull();
     expect(result!.path).toBe(nestedPath);
     expect(result!.content).toBe(content);
+  });
+
+  // The pane must never be presentable as "the submitted code". The server can
+  // only ever replay events (stored bundles are provenance-only), so every
+  // response says so and the analyzer renders the caveat off this field.
+  it("always reports content_source 'event_replay', including on a mismatch", async () => {
+    const recordedContent = 'print("original")\n';
+    const submittedContent = 'print("something else")\n';
+    const recordedHash = sha256Hex(new TextEncoder().encode(recordedContent));
+    const { zipBuffer } = await buildTestBundle({
+      sessions: [
+        {
+          events: [
+            { kind: 'doc.open', data: { path: 'hw03.py', content: recordedContent } },
+            { kind: 'doc.save', data: { path: 'hw03.py', sha256: recordedHash } },
+          ],
+        },
+      ],
+      submissionFiles: [{ path: 'hw03.py', status: 'present', content: submittedContent }],
+    });
+
+    const result = await extractSubmittedFileContent(zipBuffer, 'hw03.py', CHAIN_INTACT);
+    expect(result).not.toBeNull();
+    expect(result!.verdict).toBe('mismatch');
+    expect(result!.content_source).toBe('event_replay');
+    // The pane shows the RECORDING, not the submitted bytes — that is exactly
+    // the confusion the caveat exists to prevent.
+    expect(result!.content).toBe(recordedContent);
+    expect(result!.content).not.toBe(submittedContent);
   });
 });

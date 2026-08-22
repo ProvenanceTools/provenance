@@ -110,6 +110,27 @@ export type CrossSubmissionFeatures = {
    * which fails toward comparing rather than toward silent suppression.
    */
   observedCommitKeys?: readonly string[];
+  /**
+   * Every session this submission's archive CARRIES, as
+   * `sessionNodeKey(session_pubkey, session_id)` values.
+   *
+   * The second same-scope exclusion key, and the one that covers a shared
+   * `.provenance/` whose recorders never observed a commit — git observation is
+   * an optional capability, so the commit key is silently absent for a whole
+   * class of honest partner pairs. Two submissions sharing one of these keys
+   * physically contain one another's signed logs.
+   *
+   * Not a bare session id: the pubkey binds the key to something only that
+   * session's private half could have produced, and unlike the log's sha256 it
+   * is stable when a partner holds only a prefix of a still-growing file. See
+   * `coverage/cross-scope.ts` for the rule, and for the cohort-fraction ceiling
+   * that stops a staff-recorded starter session from unioning a whole cohort.
+   *
+   * Optional for the same reason the two fields above are, and read the same
+   * way: **absent means "never computed", NOT "no sessions"**, which fails
+   * toward comparing.
+   */
+  recordedSessionKeys?: readonly string[];
 };
 
 /**

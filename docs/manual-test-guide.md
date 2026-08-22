@@ -8,7 +8,7 @@ manual version tests the _real thing_ — a real IDE, a real OS, a real Google t
 Gradescope.
 
 **How to use it.** Work top to bottom the first time; the sections build on each other (you cannot
-test enrollment without a course key, or ingest without a recording). After that, use the
+test enrollment without an institution key, or ingest without a recording). After that, use the
 per-section checklists as regression passes.
 
 **Conventions.**
@@ -62,7 +62,7 @@ testcontainers talking to the daemon, **not** the HTTP server returning 500.
 There is no dedicated root-keygen tool; the course-keypair generator produces the same shape.
 
 ```sh
-node --experimental-strip-types tools/generate-course-keypair.ts /Volumes/SECURE/root-keypair.json
+npm run keygen:course -- /Volumes/SECURE/root-keypair.json
 ```
 
 - ✅ 64-hex public key on stdout; a `0600` JSON file with `public_key_hex`, `private_key_hex`,
@@ -74,7 +74,7 @@ Keep this offline. It is the anchor of every trust chain in the system.
 ### 1.2 Course keypair + certificate
 
 ```sh
-node --experimental-strip-types tools/generate-course-keypair.ts /Volumes/SECURE/cs61a-fa26.json \
+npm run keygen:course -- /Volumes/SECURE/cs61a-fa26.json \
   --course-id berkeley-cs61a --valid-from 2026-08-20 --valid-until 2027-01-15 \
   --root-keypair /Volumes/SECURE/root-keypair.json \
   --cert-out /Volumes/SECURE/cs61a-fa26.cert.json
@@ -86,14 +86,58 @@ node --experimental-strip-types tools/generate-course-keypair.ts /Volumes/SECURE
 **Do by hand:** flip one hex character in the cert's `root_sig`, then try to sign a manifest with
 it. ✅ `tools/sign-manifest.ts` must refuse.
 
-### 1.3 Manifest authoring — both paths, and they must agree
+### 1.3 Institution keypair + certificate
+
+Do this while you still have the root key out — it is the other branch of the same chain, and
+skipping it is silent until §2.2, where **every** enrollment fails.
+
+⚠️ **Without this, `/enroll` returns `503 CREDENTIAL_UNAVAILABLE` /
+`reason: "no_institution_key"` forever, and no student on the deployment can obtain a
+credential.** Nothing else in §1 surfaces the omission: the recorder builds, the manifest signs,
+ingest works. §2.2 is where it lands.
+
+One institution key per **deployment**, not per course. Two machines:
+
+```sh
+# on the API server — positional path only; --course-id would mint the wrong artifact
+npm run keygen:course -- /secure/institution-keypair.json
+
+# on the offline root machine, carrying only the 64-hex PUBLIC key across
+npm run mint:institution-cert -- \
+  --institution-id berkeley --institution-pubkey <64-hex from the step above> \
+  --valid-from 2026-08-20 --valid-until 2027-08-19 \
+  --root-keypair /Volumes/SECURE/root-keypair.json \
+  --out /Volumes/SECURE/berkeley-institution.cert.json
+```
+
+- ✅ The certificate is **self-verified against the root public key before being printed or
+  written**, same guarantee as §1.2.
+- ✅ Re-running with the same `--out` **refuses**, rather than replacing a certificate that may
+  still pair with a live key.
+- ✅ Nothing secret reaches stdout — only the certificate, which is public and travels inside
+  bundles.
+- ❌ Omitting `--root-keypair` silently uses the **dev** root at `.notes/dev-root-keypair.json`.
+  A production cert minted that way verifies against nothing a production recorder embeds.
+
+Then, on the server, splice both halves into one variable and restart the API:
+
+```sh
+PROVENANCE_INSTITUTION_KEY='{"private_key_hex":"<64 hex from the keypair file>","cert":<the cert JSON>}'
+```
+
+**Do by hand:** boot the API with the variable **malformed** (drop a character from
+`private_key_hex`). ✅ It must fail loudly at startup, not degrade to "enrollment closed" — the
+distinction is the whole point of `config/institution-keys.ts`. ✅ The error names the offending
+**field** and never echoes a value.
+
+### 1.4 Manifest authoring — both paths, and they must agree
 
 **CLI:**
 
 ```sh
 PROVENANCE_COURSE_KEYPAIR_PATH=/Volumes/SECURE/cs61a-fa26.json \
 PROVENANCE_COURSE_CERT_PATH=/Volumes/SECURE/cs61a-fa26.cert.json \
-  node --experimental-strip-types tools/sign-manifest.ts /path/to/starter/.provenance-manifest
+  npm run sign:manifest -- /path/to/starter/.provenance-manifest
 ```
 
 - ✅ Signs, staples `course_cert` inline, then walks the **full chain** (root → cert → manifest)
@@ -124,7 +168,7 @@ cmp cli-signed.manifest browser-signed.manifest
 ✅ Byte-identical. There is a conformance gate for this, but it uses its own fixtures — this
 exercises your real inputs.
 
-### 1.4 Production recorder build
+### 1.5 Production recorder build
 
 ```sh
 PROVENANCE_ROOT_PUBLIC_KEY_HEX=<real root public key> \
@@ -141,7 +185,7 @@ built bytes and therefore the `extension_hash`**. A two-variant release needs
 `npm run update-hashes` run once per variant, or one variant's submissions all trip
 `extension_hash_mismatch`.
 
-### 1.5 The extension-hash allowlist
+### 1.6 The extension-hash allowlist
 
 ```sh
 npm run update-hashes -- --root-keypair /Volumes/SECURE/root-keypair.json
@@ -167,7 +211,7 @@ later moved or force-pushed silently invalidates the allowlist entry.
 **Failure mode if stale:** every submission from the new build trips `extension_hash_mismatch`.
 That is a heuristic flag, not a validation failure — the bundle still validates.
 
-### 1.6 Semester and assignment setup
+### 1.7 Semester and assignment setup
 
 `filename_convention` and `blob_retention_days` **are settable from the UI** — create a semester at
 `/admin/courses/:courseId/semesters` (superadmin), edit at `/s/:course/:semester/settings`.
@@ -253,6 +297,7 @@ a student with no memberships reaches it.
 - ✅ Mangle the returned credential JSON → the recorder offers to re-check it with the same
   parsers it uses internally.
 - ❌ No institution key configured → **503 `CREDENTIAL_UNAVAILABLE`, `reason: "no_institution_key"`**.
+  If this is what you get for _every_ student, §1.3 was skipped — that is the expected symptom.
 - ❌ Cert lapsed → same 503, `reason: "cert_out_of_window"`.
 - ❌ Personal Gmail → `HOSTED_DOMAIN_MISMATCH`.
 - ❌ An API token instead of a session → 403.

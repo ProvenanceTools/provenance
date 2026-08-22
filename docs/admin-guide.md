@@ -327,12 +327,16 @@ curl -s -X POST https://provenance.example.edu/api/v1/courses/<courseId>/semeste
     "year": 2025,
     "slug": "fa25",
     "display_name": "Fall 2025",
-    "filename_convention": "^(?P<sid>\\d{8})-(?P<assignment_id>hw\\d+)\\.zip$",
+    "filename_convention": "^(?<sid>\\d{8})-(?<assignment_id>hw\\d+)\\.zip$",
     "blob_retention_days": 540
   }'
 ```
 
-Invite staff members to the semester via `POST /semesters/<semesterId>/members/invite`.
+`filename_convention` is compiled with JavaScript's `new RegExp`, so named groups use
+the ECMAScript spelling `(?<sid>…)`. Python's `(?P<sid>…)` throws at compile time and
+the API returns `VALIDATION_REGEX` before the `(?<sid>)`-present check even runs.
+
+Invite staff members to the semester via `POST /semesters/<semesterId>/members`.
 
 ### 5.1 Ingesting submissions
 
@@ -686,10 +690,10 @@ There is no `GOOGLE_OAUTH_REDIRECT_URI`. The callback URL is always
 
 ### 10.6 Trust-chain keys
 
-| Variable                         | Required | Default | Meaning                                                                                                                              |
-| -------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `PROVENANCE_ROOT_PUBLIC_KEY_HEX` | No       | empty   | 64 lowercase hex chars, or empty. Anchors validation check 2 for Manifest 2.0 bundles. See below.                                    |
-| `PROVENANCE_INSTITUTION_KEY`     | No       | `{}`    | JSON object holding the institution private key + its root-signed certificate. **The only private key the server holds.** See below. |
+| Variable                         | Required | Default | Meaning                                                                                                                                                                                                                                    |
+| -------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PROVENANCE_ROOT_PUBLIC_KEY_HEX` | No       | empty   | 64 lowercase hex chars, or empty. Anchors validation check 2 for Manifest 2.0 bundles. See below.                                                                                                                                          |
+| `PROVENANCE_INSTITUTION_KEY`     | No       | `{}`    | JSON object holding the institution private key + its root-signed certificate (minted with `npm run mint:institution-cert`). **The only private key the server holds.** Unset ⇒ student credential issuance is a permanent 503. See below. |
 
 ### 10.7 Read outside the config schema
 
@@ -761,6 +765,51 @@ The `cert` is the `institution_cert` signed offline by the **root** key.
 Generate the institution keypair on the server, carry only its **public** half
 to the offline machine that holds the root key, sign the certificate there, and
 bring the certificate back. The root key never touches this host.
+
+**Until this variable is set, `POST /api/v1/identity/credential` — the backend of
+the student-facing `/enroll` page — answers `503 CREDENTIAL_UNAVAILABLE` with
+`reason: "no_institution_key"`, permanently.** A deployment that has not done the
+two steps below cannot onboard a single student.
+
+**Step 1 — the keypair, on this server.** There is no dedicated institution-keygen
+script; the course-keypair generator emits exactly the shape needed. Pass a
+positional path only — adding `--course-id` would mint a _course_ certificate,
+which is a different artifact:
+
+```sh
+npm run keygen:course -- /secure/institution-keypair.json
+```
+
+It prints the 64-hex **public** key on stdout and writes
+`{ public_key_hex, private_key_hex, generated_at, note }` at mode `0600`. (The
+`note` says "Course offline-signing key" because the generator is shared; nothing
+reads it.) The private half stays on this host, forever.
+
+**Step 2 — the certificate, on the offline root machine.** Carry only the public
+key across, then:
+
+```sh
+npm run mint:institution-cert -- \
+  --institution-id berkeley \
+  --institution-pubkey <64-hex from step 1> \
+  --valid-from 2026-08-20 --valid-until 2027-08-19 \
+  --root-keypair /Volumes/SECURE/root-keypair.json \
+  --out /Volumes/SECURE/berkeley-institution.cert.json
+```
+
+`tools/mint-institution-cert.ts` self-verifies the certificate against the root
+public key before printing or writing it, and refuses to overwrite an existing
+`--out`. `--root-keypair` defaults to the **dev** root at
+`.notes/dev-root-keypair.json`; a production run must point it at the real offline
+key. Keep the window short — there is no offline revocation.
+
+Bring the certificate back, splice it together with the private key from step 1
+into the single JSON object above, and restart the API to pick it up.
+
+Rotation is the same two steps against a fresh keypair: mint a new certificate
+with the offline root key, swap the variable, restart. Credentials already issued
+under the old key keep verifying — the old certificate travels inside the bundles
+that used it.
 
 The `institution_id` is read off the certificate rather than configured
 separately: it is inside the root-signed payload, so it cannot be set to

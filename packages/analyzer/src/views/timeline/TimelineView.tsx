@@ -8,15 +8,25 @@
  * PRD §7.2 ("Raw timeline").
  */
 
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useBundle } from '../../context/BundleContext.js';
 import type { IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
+import { reconstructionScopeFor } from '@provenance/analysis-core/index/reconstruct-segments.js';
 import { TimelineInner } from './TimelineInner.js';
 
 export function TimelineView() {
-  const { index } = useBundle();
+  const { index, bundles, selectedBundleId } = useBundle();
   const navigate = useNavigate();
+
+  // The same memoized scope reconstruction uses, so the timeline and the file
+  // views cannot disagree about who recorded what. Free for a solo bundle: the
+  // scope is `ordering: null` and nothing builds a graph.
+  const scope = useMemo(() => {
+    if (index === null || selectedBundleId === null) return null;
+    const bundle = bundles.find((b) => b.id === selectedBundleId);
+    return bundle === undefined ? null : reconstructionScopeFor(bundle, index);
+  }, [index, bundles, selectedBundleId]);
 
   const handleJumpToReplay = useCallback(
     (event: IndexedEvent) => {
@@ -25,5 +35,5 @@ export function TimelineView() {
     [navigate],
   );
 
-  return <TimelineInner index={index} onJumpToReplay={handleJumpToReplay} />;
+  return <TimelineInner index={index} onJumpToReplay={handleJumpToReplay} scope={scope} />;
 }

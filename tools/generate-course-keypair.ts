@@ -58,8 +58,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ok, err } from '@provenance/log-core';
 import type { Result } from '@provenance/log-core';
-import { mintCourseCert, DEFAULT_ROOT_KEYPAIR_PATH } from './mint-course-cert.js';
-import type { StoredRootKeypair } from './mint-course-cert.js';
+import { mintCourseCert, DEFAULT_ROOT_KEYPAIR_PATH } from './mint-course-cert.ts';
+import type { StoredRootKeypair } from './mint-course-cert.ts';
 
 function bytesToHex(buf: Buffer): string {
   return buf.toString('hex');
