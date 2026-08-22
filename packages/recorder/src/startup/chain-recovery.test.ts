@@ -491,6 +491,39 @@ describe('recoverPreviousSession — shared .provenance/ with two contributors',
     expect(result.prevSessionId).toBe('my-session-1');
   });
 
+  it("does not quarantine a partner's log whose only damage is its wall clock", async () => {
+    // The narrowest reachable form of the evidence-destruction bug, and the one
+    // an attacker can trigger for free. `session.start.wall` is a plain string in
+    // the clear; flip a byte of it and the whole first-line parse used to fail,
+    // which threw away `student_ref` along with the timestamp and demoted Bob's
+    // log to `unattributed`. An UNENROLLED recorder may act on `unattributed`
+    // files, so Alice — who has done nothing but not enrol — selected Bob's log,
+    // failed to validate its now-broken chain, and renamed it to `.corrupt-<ISO>`.
+    // `sealBundle` excludes `.corrupt-` files, so Bob's evidence left the
+    // submission with Alice's commit as the paper trail.
+    const files = {
+      'session-bob.slog': buildDanglingSlog(
+        'bob-session-1',
+        '2026-01-01T09:00:00.000Z',
+        BOB_REF,
+      ).replace(/"wall":"[^"]*"/, '"wall":"2026-13-45T99:99:99.999Z"'),
+    };
+    const renames: Array<{ from: string; to: string }> = [];
+    // No ownStudentRef: Alice has not enrolled, which is the ONLY configuration
+    // in which an `unattributed` file is eligible at all.
+    const deps = makeDeps(files, {
+      rename: async (from, to) => {
+        renames.push({ from, to });
+      },
+    });
+
+    const result = await recoverPreviousSession(deps);
+
+    expect(renames).toEqual([]);
+    expect(files['session-bob.slog']).toBeDefined();
+    expect(result.kind).toBe('clean_start');
+  });
+
   it('still recovers normally when every session in the directory is ours', async () => {
     // The enrolled solo case must be completely unaffected by the ownership gate.
     const files = {

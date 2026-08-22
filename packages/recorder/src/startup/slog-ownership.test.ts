@@ -68,6 +68,21 @@ function startOnlySlog(sessionId: string, wall: string, studentRef?: string): st
   return serializeEntry(chainEntry(GENESIS_PREV_HASH, env, sha256Hex));
 }
 
+/**
+ * A `.slog` whose first line is a perfectly readable `session.start` naming its
+ * author, but whose `wall` is not a parseable timestamp.
+ *
+ * The realistic shape of one flipped byte in a committed log, and also the
+ * cheapest thing an attacker can do to a partner's file: `wall` is a plain
+ * string in the clear, and damaging it costs nothing.
+ */
+function wallDamagedSlog(sessionId: string, studentRef: string): string {
+  return startOnlySlog(sessionId, '2026-01-01T09:00:00.000Z', studentRef).replace(
+    /"wall":"[^"]*"/,
+    '"wall":"2026-13-45T99:99:99.999Z"',
+  );
+}
+
 /** In-memory `readSlogFile`. No filesystem, no rename — this module cannot write. */
 function makeReader(files: Record<string, string>): ReadSlogFile {
   return async (filePath) => {
@@ -188,6 +203,47 @@ describe('selectEligible', () => {
 
     expect(picked.best).toBeNull();
     expect(picked.eligibleFallback).toBeNull();
+  });
+
+  it('still reads ownership off a session.start whose wall is unparseable', async () => {
+    // Ownership is `student_ref` and ONLY `student_ref`. A damaged `wall` costs
+    // a file its place in the ordering; it must never cost it its author.
+    // Before this was true, one flipped byte in a partner's timestamp demoted
+    // their log to `unattributed`, which an UNENROLLED recorder may select and
+    // quarantine — so damaging a stranger's `wall` made someone else's tooling
+    // delete their evidence for you.
+    const files = {
+      'session-bob.slog': wallDamagedSlog('bob-1', BOB_REF),
+    };
+
+    const picked = await selectEligible(
+      Object.keys(files).sort(),
+      '/fake/.provenance',
+      makeReader(files),
+      null,
+    );
+
+    expect(picked.best).toBeNull();
+    expect(picked.eligibleFallback).toBeNull();
+  });
+
+  it('an unparseable wall on OUR own log still leaves it quarantinable', async () => {
+    // The other half of the same rule: reading ownership independently of the
+    // wall also means an enrolled recorder can still act on its OWN damaged log,
+    // which the all-or-nothing parse denied it.
+    const files = {
+      'session-mine.slog': wallDamagedSlog('mine-1', ALICE_REF),
+    };
+
+    const picked = await selectEligible(
+      Object.keys(files).sort(),
+      '/fake/.provenance',
+      makeReader(files),
+      ALICE_REF,
+    );
+
+    expect(picked.best).toBeNull();
+    expect(picked.eligibleFallback).toBe('session-mine.slog');
   });
 
   it('breaks a wall tie on filename, descending', async () => {

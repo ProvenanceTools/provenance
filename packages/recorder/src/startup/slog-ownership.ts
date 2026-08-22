@@ -151,12 +151,26 @@ export function isEligible(ownership: SlogOwnership, ownStudentRef: string | nul
  * become proportional to log size. `student_ref` sits in `session.start`, which is
  * always seq 0, so one line is enough.
  *
- * Returns null when the file doesn't start with a parseable `session.start`. Such
- * a file is not a usable ordering candidate; the corrupt-handling path deals with
- * it if it ends up being chosen, and its ownership is `unattributed` because a
- * file we cannot read cannot tell us whose it is.
+ * THE TWO FACTS ARE READ INDEPENDENTLY, and that is load-bearing rather than
+ * tidy. This used to be all-or-nothing: an unparseable `wall` returned null and
+ * took `student_ref` down with it, so the file classified as `unattributed`.
+ * `unattributed` is eligible to an UNENROLLED recorder, so one flipped byte in a
+ * partner's timestamp — `wall` is a plain string in the clear, and damaging it
+ * costs an attacker nothing — was enough to make a bystander's recorder select
+ * that partner's log, fail to validate its now-broken chain, and rename it to
+ * `.corrupt-<ISO>`. `sealBundle` excludes `.corrupt-` files, so the partner's
+ * evidence left the submission with the bystander's commit as the paper trail:
+ * the exact defect the ownership table exists to prevent, reached through the
+ * ordering key instead of through the identity. A damaged `wall` may cost a file
+ * its PLACE IN THE ORDERING. It may never cost it its author.
+ *
+ * Returns null only when the first line is not a parseable `session.start` object
+ * at all — at that point nothing can say whose it is, and `unattributed` is the
+ * honest answer rather than a lost one.
  */
-function parseSessionStartHead(text: string): { wall: number; studentRef: string | null } | null {
+function parseSessionStartHead(
+  text: string,
+): { wall: number | null; studentRef: string | null } | null {
   const newlineIdx = text.indexOf('\n');
   const firstLine = newlineIdx === -1 ? text : text.slice(0, newlineIdx);
   if (firstLine.trim().length === 0) return null;
@@ -168,12 +182,16 @@ function parseSessionStartHead(text: string): { wall: number; studentRef: string
     return null;
   }
 
-  if (entry.kind !== 'session.start' || typeof entry.wall !== 'string') return null;
+  if (entry.kind !== 'session.start') return null;
 
-  const wall = Date.parse(entry.wall);
-  if (Number.isNaN(wall)) return null;
+  // A missing, non-string, or unparseable `wall` yields null — an unorderable
+  // candidate, NOT an unattributable one.
+  const wallMs = typeof entry.wall === 'string' ? Date.parse(entry.wall) : Number.NaN;
 
-  return { wall, studentRef: extractStudentRef(entry.data) };
+  return {
+    wall: Number.isNaN(wallMs) ? null : wallMs,
+    studentRef: extractStudentRef(entry.data),
+  };
 }
 
 /**
@@ -252,7 +270,10 @@ export async function selectEligible(
     // alphabetically last eligible one.
     eligibleFallback = filename;
 
-    if (!read.ok || head === null) continue;
+    // Eligible but unorderable: no readable text, no `session.start`, or no
+    // parseable `wall`. It stays available as `eligibleFallback` above — it IS
+    // ours to touch — but it cannot compete for `best`, which is ordered on wall.
+    if (!read.ok || head === null || head.wall === null) continue;
 
     // Ties (two sessions starting in the same millisecond) fall back to
     // filename order, so the choice stays deterministic.
