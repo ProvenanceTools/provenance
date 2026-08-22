@@ -212,6 +212,22 @@ chain (Manifest 2.0; full design in
   .provenance-manifest
 ```
 
+The root key also certifies the deployment's **institution key**, which is what signs
+student credentials — a separate branch of the same chain, covered in step 3 below.
+
+Every staff tool has an npm script, so nothing here needs a `node` invocation:
+
+| Script                          | Tool                              | What it does                            |
+| ------------------------------- | --------------------------------- | --------------------------------------- |
+| `npm run keygen:course`         | `tools/generate-course-keypair.ts` | Generate an ed25519 keypair (root, course, or institution) |
+| `npm run mint:course-cert`      | `tools/mint-course-cert.ts`        | Root-sign a `course_cert`               |
+| `npm run mint:institution-cert` | `tools/mint-institution-cert.ts`   | Root-sign an `institution_cert`         |
+| `npm run sign:manifest`         | `tools/sign-manifest.ts`           | Sign a `.provenance-manifest`           |
+
+Pass tool flags after `--` (e.g. `npm run mint:course-cert -- --course-id …`). Each
+script is a thin wrapper around `node --experimental-strip-types tools/<tool>.ts`,
+which still works if you prefer to invoke it directly.
+
 The recorder embeds only the **root** public key — one VSIX build serves every course.
 A course's authority comes entirely from its root-signed `course_cert`, which travels
 **inline** inside every manifest that course signs, not from anything baked into the
@@ -229,18 +245,24 @@ for a real deployment.
 
 ### 1. Root keypair (once, ever, offline)
 
-Generate it the same way `tools/generate-course-keypair.ts` generates a course
-keypair (it's the same ed25519 keypair shape — `{ public_key_hex, private_key_hex }`)
-on an air-gapped or otherwise hardened machine, and back up the private key to
-physical media. There is currently no dedicated root-keypair-generation tool beyond
-that — the maintainer runs the same offline procedure once.
+There is no dedicated root-keypair-generation tool. Use the course-keypair generator:
+it emits a plain ed25519 keypair in exactly the shape a root key needs
+(`{ public_key_hex, private_key_hex }`). Run it once, on an air-gapped or otherwise
+hardened machine, and back up the private key to physical media.
+
+```sh
+npm run keygen:course -- /Volumes/SECURE/root-keypair.json
+```
+
+Positional path only — do **not** pass `--course-id` here; that mints a *course*
+certificate, which is a different artifact.
 
 ### 2. Course keypair + certificate (per course, at onboarding)
 
 **Generate the course keypair** (once per course, on a secured machine):
 
 ```sh
-node --experimental-strip-types tools/generate-course-keypair.ts /Volumes/SECURE/cs61a-fa26.json
+npm run keygen:course -- /Volumes/SECURE/cs61a-fa26.json
 ```
 
 The public key is printed to stdout. The private key is written to the chosen path
@@ -250,7 +272,7 @@ with mode `0600`. Back it up to physical media.
 run by whoever holds the root key, not by course staff):
 
 ```sh
-node --experimental-strip-types tools/mint-course-cert.ts \
+npm run mint:course-cert -- \
   --course-id berkeley-cs61a --course-pubkey <64-hex-from-generate-step> \
   --valid-from 2026-08-20 --valid-until 2027-01-15 \
   --root-keypair /Volumes/SECURE/root-keypair.json \
@@ -262,11 +284,43 @@ key revocation, so a short window is the only mitigation. The certificate is
 self-verified against the root public key before being written; a tool that hands out
 a certificate that fails its own check is worse than no tool.
 
-`tools/generate-course-keypair.ts` can also do both steps in one run — pass
-`--course-id`, `--valid-from`, `--valid-until` (and optionally `--root-keypair` /
-`--cert-out`) alongside the output path — whenever the same machine holds both keys.
+`npm run keygen:course` can also do both steps in one run — pass `--course-id`,
+`--valid-from`, `--valid-until` (and optionally `--root-keypair` / `--cert-out`)
+alongside the output path — whenever the same machine holds both keys.
 
-### 3. Manifest signing (per assignment)
+### 3. Institution keypair + certificate (once per deployment)
+
+Only needed if the deployment issues **student credentials** (identity
+`format_version` 2.1 — the `/enroll` page). Without it,
+`POST /api/v1/identity/credential` answers `503 no_institution_key` forever.
+
+There is one institution key per deployment, not one per course. Generate the keypair
+**on the server**, carry only its public half to the offline root machine, mint there,
+and bring the certificate back:
+
+```sh
+# on the API server
+npm run keygen:course -- /secure/institution-keypair.json     # positional path only
+
+# on the offline root machine, with the public key from above
+npm run mint:institution-cert -- \
+  --institution-id berkeley --institution-pubkey <64-hex-from-generate-step> \
+  --valid-from 2026-08-20 --valid-until 2027-08-19 \
+  --root-keypair /Volumes/SECURE/root-keypair.json \
+  --out /Volumes/SECURE/berkeley-institution.cert.json
+```
+
+Then set both halves in one environment variable on the server:
+
+```sh
+PROVENANCE_INSTITUTION_KEY='{"private_key_hex":"<64 hex>","cert":<the cert JSON>}'
+```
+
+The institution private key never leaves the server; the root private key never
+touches it. Full operator detail — rotation, blast radius, handling rules — is in
+[`docs/admin-guide.md`](docs/admin-guide.md) §10.6, "The institution signing key".
+
+### 4. Manifest signing (per assignment)
 
 **Author the unsigned `.provenance-manifest`** in the assignment starter folder. Drop
 this file at the workspace root the students will open:
@@ -310,7 +364,7 @@ Omit `sig` and `course_cert`; the signer adds both. (If you re-sign an already-s
 ```sh
 PROVENANCE_COURSE_KEYPAIR_PATH=/Volumes/SECURE/cs61a-fa26.json \
 PROVENANCE_COURSE_CERT_PATH=/Volumes/SECURE/cs61a-fa26.cert.json \
-  node --experimental-strip-types tools/sign-manifest.ts /path/to/assignment-starter/.provenance-manifest
+  npm run sign:manifest -- /path/to/assignment-starter/.provenance-manifest
 ```
 
 The tool signs with the course private key, staples the certificate inline, then
