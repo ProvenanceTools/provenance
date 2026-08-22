@@ -57,7 +57,7 @@ import {
 } from '../services/ingest/stage-upload-job.js';
 import { recordIngestJobTerminal } from '../api/middleware/metrics.js';
 import { timePhase, recordPhase, dumpProfile } from './ingest-profile.js';
-import { dedupFile, attachCoSubmitter } from '../services/ingest/dedup.js';
+import { dedupFile, dedupByGroup, attachCoSubmitter } from '../services/ingest/dedup.js';
 import { parseBundlePhase } from '../services/ingest/parse-bundle-phase.js';
 import {
   matchStudent,
@@ -345,9 +345,26 @@ export async function startWorker(): Promise<() => Promise<void>> {
       // -----------------------------------------------------------------------
       recordPhase('setup:db_lookups', performance.now() - handlerStart);
 
-      const dedupResult = await timePhase('dedup', () =>
-        dedupFile(db, semesterId, fileRow.blob_sha256),
-      );
+      // The DECLARED group is checked FIRST (migration 0033). A Gradescope
+      // group submission is one artifact belonging to N people, fanned out into
+      // N ingest_files rows; blob dedup collapses them only because
+      // `local-path.ts` gives every row identical bytes, which is a detail of
+      // that function rather than an invariant. Keying on the declaration means
+      // a byte divergence between two co-submitters can no longer split them
+      // into two submissions for the cross-heuristics to compare (S20).
+      //
+      // When both checks would fire they name the same submission; when only
+      // one does it is this one, because bytes can diverge and the declaration
+      // cannot. Falls through to the blob check for every non-Gradescope file,
+      // which is every file on the filename path.
+      const groupKeyForDedup = fileRow.source_group_key;
+      const dedupResult = await timePhase('dedup', async () => {
+        if (groupKeyForDedup !== null) {
+          const byGroup = await dedupByGroup(db, semesterId, groupKeyForDedup);
+          if (byGroup.isDuplicate) return byGroup;
+        }
+        return dedupFile(db, semesterId, fileRow.blob_sha256);
+      });
 
       if (dedupResult.isDuplicate) {
         // WHO does this duplicate belong to?
@@ -502,6 +519,7 @@ export async function startWorker(): Promise<() => Promise<void>> {
             ingestJobId,
             recorderVersion,
             formatVersion,
+            sourceGroupKey: groupKeyForDedup,
           },
         ),
       );

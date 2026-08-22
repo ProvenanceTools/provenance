@@ -506,6 +506,22 @@ export const submissions = pgTable(
      */
     group_key: text('group_key'),
     /**
+     * The upstream Gradescope `(folderKey, scopePath)` this submission was
+     * ingested from, as `<folderKey>/<scopePath>`. NULL on every other path.
+     *
+     * NOT the version lineage key. That is `group_key` above, which feeds the
+     * GENERATED `version_owner_key`; this one feeds nothing and means only
+     * "which upstream submission produced this artifact". Kept separate on
+     * purpose — see migration 0033.
+     *
+     * UNIQUE per semester where non-null (`submissions_source_group_key`), so
+     * one Gradescope (folder, scope) is one submission whatever the rebuilt
+     * bytes do. That is what stops a byte divergence between two co-submitters
+     * from silently splitting a partner pair into two cross-compared
+     * submissions.
+     */
+    source_group_key: text('source_group_key'),
+    /**
      * The version LINEAGE — "whose repeated submissions supersede each other".
      *
      * GENERATED ALWAYS by Postgres, and NOT NULL:
@@ -619,6 +635,16 @@ export const submissions = pgTable(
     // one lineage. The rest of the version-uniqueness answer is the GENERATED
     // `version_owner_key` above, not a CHECK.
     check('submissions_group_key_check', sql`${t.group_key} IS NULL OR ${t.group_key} <> ''`),
+    check(
+      'submissions_source_group_key_check',
+      sql`${t.source_group_key} IS NULL OR ${t.source_group_key} <> ''`,
+    ),
+    // `submissions_source_group_key` — partial UNIQUE (semester_id,
+    // source_group_key) WHERE source_group_key IS NOT NULL — exists in
+    // migration 0033 and is deliberately NOT mirrored here: this builder cannot
+    // express the WHERE, and an unqualified uniqueIndex() would declare a
+    // different, stronger constraint than the database actually holds. A mirror
+    // that overstates an invariant is worse than one that omits it.
     // submissions_cohort_idx (partial) is SQL-only; defined in migration 0006
     // and replaced in 0014 to cover severity_rank.
   ],
@@ -658,12 +684,26 @@ export const ingest_files = pgTable(
      *
      * When non-null, the worker matches this file to the roster by this `sid`
      * directly — taken from `submission_metadata.yml` — instead of applying the
-     * semester's `filename_convention` regex, and dedups per
+     * semester's `filename_convention` regex. Null for the normal /ingest path
+     * (filename-regex match). See services/ingest/gradescope/.
+     *
+     * The previous wording here described the PRE-0029 fan-out — "dedups per
      * (semester, student, blob) so co-submitters of one group bundle each get
-     * their own submission. Null for the normal /ingest path (filename-regex
-     * match, blob-only dedup). See services/ingest/gradescope/.
+     * their own submission". D9 removed that: dedup is blob-scoped again and a
+     * co-submitter is ATTACHED to the existing submission rather than given a
+     * second row and a second copy of the blob. See `dedupFile`.
      */
     match_sid: text('match_sid'),
+    /**
+     * The Gradescope `(folderKey, scopePath)` this row was fanned out from.
+     *
+     * The DECLARED group: every `ingest_files` row sharing this value names one
+     * artifact and one set of co-submitters. Before migration 0033 the group
+     * existed only as a local variable in `local-path.ts` and was reconstructed
+     * afterwards by byte identity, which is a coincidence rather than an
+     * invariant. NULL on every non-Gradescope path.
+     */
+    source_group_key: text('source_group_key'),
     error: jsonb('error'),
     created_at: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -675,6 +715,10 @@ export const ingest_files = pgTable(
     index('ingest_files_job_idx').on(t.ingest_job_id),
     index('ingest_files_blob_sha256_idx').on(t.blob_sha256),
     // ingest_files_unmatched_idx (partial) is SQL-only; defined in migration 0006.
+    check(
+      'ingest_files_source_group_key_check',
+      sql`${t.source_group_key} IS NULL OR ${t.source_group_key} <> ''`,
+    ),
     check(
       'ingest_files_status_check',
       sql`${t.status} IN ('pending','matched','unmatched','duplicate','failed','superseded','discarded')`,

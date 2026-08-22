@@ -85,6 +85,36 @@ async function stageHintedFile(
 }
 
 /**
+ * Stage a bundle blob + an ingest_files row carrying a match hint AND the
+ * Gradescope `(folderKey, scopePath)` group key, as `local-path.ts` writes it.
+ */
+async function stageGroupedFile(
+  db: DrizzleDb,
+  jobId: string,
+  bundleBytes: Uint8Array,
+  matchSid: string,
+  sourceGroupKey: string,
+): Promise<string> {
+  const storageClient = createStorageClient(storageConfigFromEnv(getConfig()));
+  const fileId = crypto.randomUUID();
+  const { blobSha256, sizeBytes } = await stageBlob(
+    { storageClient },
+    { jobId, ingestFileId: fileId, body: bundleBytes.buffer as ArrayBuffer },
+  );
+  await db.insert(ingest_files).values({
+    id: fileId,
+    ingest_job_id: jobId,
+    original_filename: `${sourceGroupKey}.zip`,
+    size_bytes: sizeBytes,
+    blob_sha256: blobSha256,
+    status: 'pending',
+    match_sid: matchSid,
+    source_group_key: sourceGroupKey,
+  });
+  return fileId;
+}
+
+/**
  * Stage a bundle blob + an ingest_files row with NO `match_sid` — the
  * filename-convention path, where the student is resolved at phase 4.
  */
@@ -461,6 +491,145 @@ describe('worker match-hint path (Gradescope export ingest)', () => {
 
       // And the one that matters more, because every status column above looks
       // healthy while the human is gone: BOTH students are contributors.
+      const contribRows = await db
+        .select({ roster_entry_id: submission_contributors.roster_entry_id })
+        .from(submission_contributors)
+        .where(eq(submission_contributors.semester_id, semester!.id));
+      expect(new Set(contribRows.map((c) => c.roster_entry_id))).toEqual(
+        new Set([studentA!.id, studentB!.id]),
+      );
+    });
+  });
+
+  it('keeps co-submitters on ONE submission when their rebuilt bytes DIVERGE', async () => {
+    // What made the pair collapse before migration 0033 was byte identity, and
+    // the only reason the bytes were identical is that `local-path.ts` awaits
+    // ONE shared `rebuild` promise for all of a folder's submitters. That is a
+    // detail of one function, not an invariant: any change to scope resolution,
+    // entry ordering or the zip writer that moves a byte silently produced two
+    // submissions with one contributor each — and two submissions of one
+    // repository in one assignment are then handed to the cross-submission
+    // heuristics, which fire on the two people the course assigned to work
+    // together (S20).
+    //
+    // So this fixture stages DIFFERENT bundle bytes under the SAME declared
+    // group. Before 0033 that produced two submissions; it must now produce one
+    // with both contributors.
+    await withTestMinio(async ({ client, bucketName }) => {
+      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+      _setConfigForTest(
+        parseEnv({
+          NODE_ENV: 'test',
+          PUBLIC_BASE_URL: 'http://localhost:3000',
+          DATABASE_URL: pgContainer.getConnectionUri(),
+          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_BUCKET: bucketName,
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+          OBJECT_STORAGE_REGION: 'us-east-1',
+          GOOGLE_OAUTH_CLIENT_ID: 'client-id',
+          GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
+          AUTH_ALLOWED_HOSTED_DOMAINS: '["berkeley.edu"]',
+          AUTH_SUPERADMIN_EMAILS: '["admin@berkeley.edu"]',
+          AUTH_COOKIE_SIGNING_SECRET: 'test-signing-secret-for-e2e-tests-123456789',
+          SESSION_TTL_DAYS: '14',
+          INGEST_MAX_BUNDLE_BYTES: '52428800',
+          INGEST_MAX_BATCH_BYTES: '5368709120',
+          INGEST_MAX_BATCH_FILES: '10000',
+        }),
+      );
+
+      const userId = crypto.randomUUID();
+      await db.insert(users).values({
+        id: userId,
+        google_subject: `sub-${userId}`,
+        email: `admin-${userId}@berkeley.edu`,
+        display_name: 'Admin',
+      });
+      const [course] = await db
+        .insert(courses)
+        .values({ name: 'CS 61A', slug: `cs61a-${crypto.randomUUID().slice(0, 8)}` })
+        .returning();
+      const [semester] = await db
+        .insert(semesters)
+        .values({
+          course_id: course!.id,
+          term: 'fa',
+          year: 2024,
+          slug: `fa2024-${crypto.randomUUID().slice(0, 8)}`,
+          display_name: 'Fall 2024',
+          filename_convention: '^(?<assignment_id>[a-z0-9_-]+)[-_](?<sid>\\d{6,12})\\.zip$',
+        })
+        .returning();
+      const [studentA] = await db
+        .insert(roster_entries)
+        .values({ semester_id: semester!.id, sid: '111111', display_name: 'Student A' })
+        .returning();
+      const [studentB] = await db
+        .insert(roster_entries)
+        .values({ semester_id: semester!.id, sid: '222222', display_name: 'Student B' })
+        .returning();
+
+      // Two DIFFERENT archives of the same assignment — a different event count
+      // is enough to move every downstream byte. This is the divergence the old
+      // blob-keyed collapse could not survive.
+      const built1 = await buildTestBundle({
+        assignmentId: 'proj02',
+        semester: 'fa2024',
+        sessions: [{ eventCount: 3 }],
+      });
+      const built2 = await buildTestBundle({
+        assignmentId: 'proj02',
+        semester: 'fa2024',
+        sessions: [{ eventCount: 7 }],
+      });
+      const bytes1 = new Uint8Array(built1.zipBuffer);
+      const bytes2 = new Uint8Array(built2.zipBuffer);
+
+      workerStop = await startWorker();
+      const { jobId } = await enqueueIngestJob(db, semester!.id, userId);
+
+      // ONE Gradescope submission, one scope, two submitters — exactly what
+      // `local-path.ts` writes.
+      const GROUP = '409194023/';
+      const fileA = await stageGroupedFile(db, jobId, bytes1, '111111', GROUP);
+      const fileB = await stageGroupedFile(db, jobId, bytes2, '222222', GROUP);
+
+      const boss = await getBoss();
+      await boss.send(JOB_KINDS.INGEST_FILE, { ingestFileId: fileA, ingestJobId: jobId });
+      await boss.send(JOB_KINDS.INGEST_FILE, { ingestFileId: fileB, ingestJobId: jobId });
+
+      expect(await waitForJobTerminal(db, jobId)).toBe('succeeded');
+
+      const fileRows = await db
+        .select({
+          id: ingest_files.id,
+          status: ingest_files.status,
+          matched_student_id: ingest_files.matched_student_id,
+          submission_id: ingest_files.submission_id,
+        })
+        .from(ingest_files)
+        .where(eq(ingest_files.ingest_job_id, jobId));
+      const rowA = fileRows.find((r) => r.id === fileA)!;
+      const rowB = fileRows.find((r) => r.id === fileB)!;
+
+      // Which one wins is a race; the multiset is not. Two 'matched' here is
+      // the split this migration exists to make unrepresentable.
+      expect([rowA.status, rowB.status].sort()).toEqual(['duplicate', 'matched']);
+      expect(rowA.matched_student_id).toBe(studentA!.id);
+      expect(rowB.matched_student_id).toBe(studentB!.id);
+      expect(rowA.submission_id).not.toBeNull();
+      expect(rowB.submission_id).toBe(rowA.submission_id);
+
+      const subs = await db
+        .select({ id: submissions.id, source_group_key: submissions.source_group_key })
+        .from(submissions)
+        .where(eq(submissions.semester_id, semester!.id));
+      expect(subs).toHaveLength(1);
+      expect(subs[0]!.source_group_key).toBe(GROUP);
+
+      // The whole point: one artifact, both people on it. Two submissions here
+      // would be one partner pair about to be cross-compared against itself.
       const contribRows = await db
         .select({ roster_entry_id: submission_contributors.roster_entry_id })
         .from(submission_contributors)

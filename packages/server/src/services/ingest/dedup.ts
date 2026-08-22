@@ -101,6 +101,52 @@ export async function dedupFile(
 }
 
 /**
+ * Is there already a submission for this DECLARED group?
+ *
+ * The other half of removing the fan-out, and the half that does not depend on
+ * a coincidence. `dedupFile` collapses two co-submitters of one Gradescope
+ * submission only when their rebuilt archives are byte-identical — which they
+ * are today solely because `local-path.ts` awaits ONE shared `rebuild` promise
+ * for all of a folder's submitters. That is an implementation detail of one
+ * function, not a property of the system: any change to scope resolution, entry
+ * ordering or the zip writer that moves a byte splits the pair into two
+ * submissions with one contributor each, silently, and the cross-submission
+ * heuristics then compare two views of one repository against each other and
+ * fire `paste_shared_across_students` at high severity on two people the course
+ * assigned to work together (S20).
+ *
+ * `source_group_key` makes it an invariant instead. It is the upstream
+ * `(folderKey, scopePath)` — the identity of one archive submitted by one set
+ * of people — persisted at staging (migration 0033), so the collapse is keyed
+ * on the DECLARATION rather than on what the rebuild happened to produce.
+ *
+ * Checked BEFORE the blob check by the caller: when both would fire they name
+ * the same submission, and when only one does it is this one, because bytes can
+ * diverge while the declaration cannot.
+ */
+export async function dedupByGroup(
+  db: DrizzleDb,
+  semesterId: string,
+  sourceGroupKey: string,
+): Promise<DedupResult> {
+  const rows = await db
+    .select({ id: submissions.id })
+    .from(submissions)
+    .where(
+      and(
+        eq(submissions.semester_id, semesterId),
+        eq(submissions.source_group_key, sourceGroupKey),
+      ),
+    )
+    .limit(1);
+
+  if (rows.length > 0) {
+    return { isDuplicate: true, existingSubmissionId: rows[0]!.id };
+  }
+  return { isDuplicate: false };
+}
+
+/**
  * Attach a co-submitter to a submission that already exists (D9).
  *
  * This is the other half of removing the fan-out. When the Gradescope path

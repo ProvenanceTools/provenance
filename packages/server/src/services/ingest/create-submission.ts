@@ -57,6 +57,17 @@ export interface CreateSubmissionArgs {
    * when `studentId` is null; ignored otherwise.
    */
   groupKey?: string | null;
+  /**
+   * The upstream Gradescope `(folderKey, scopePath)` this artifact came from,
+   * or null on every other path. NOT the version lineage — see
+   * `submissions.source_group_key` and migration 0033.
+   *
+   * When present it is the PRIMARY identity of the artifact: the re-check below
+   * serialises and dedups on it as well as on the blob, so two co-submitters of
+   * one Gradescope submission collapse onto one row even if their rebuilt
+   * archives differ by a byte.
+   */
+  sourceGroupKey?: string | null;
   blobSha256: string;
   stagingKey: string;
   originalFilename: string;
@@ -123,6 +134,7 @@ export async function createSubmission(
     assignmentIdStr,
     studentId,
     groupKey = null,
+    sourceGroupKey = null,
     blobSha256,
     stagingKey,
     originalFilename,
@@ -169,6 +181,45 @@ export async function createSubmission(
       // staging blob is deliberately left alone here — we have not moved it,
       // and the retention sweep collects it.
       return { kind: 'duplicate' as const, existingSubmissionId: existingForBlob[0]!.id };
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 0b: the same race, on the DECLARED group (migration 0033).
+    //
+    // The blob lock above only serialises writers whose bytes are identical.
+    // Two co-submitters of one Gradescope submission are supposed to be exactly
+    // that — but only because `local-path.ts` shares one `rebuild` promise
+    // between them, which is a detail of that function rather than an
+    // invariant. The moment their archives differ by a byte the blob lock stops
+    // serialising them, both create a submission, and one partner pair becomes
+    // two submissions that the cross-heuristics compare against each other
+    // (S20).
+    //
+    // So a grouped file takes a SECOND advisory lock on the group key and
+    // re-checks that too. The two locks are always taken in the same order —
+    // blob, then group — so two writers can never hold them crosswise and
+    // deadlock. A file with no group key takes exactly the one lock it takes
+    // today and behaves identically.
+    // -----------------------------------------------------------------------
+    if (sourceGroupKey !== null) {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${semesterId}:group:${sourceGroupKey}`}, 0))`,
+      );
+
+      const existingForGroup = await tx
+        .select({ id: submissions.id })
+        .from(submissions)
+        .where(
+          and(
+            eq(submissions.semester_id, semesterId),
+            eq(submissions.source_group_key, sourceGroupKey),
+          ),
+        )
+        .limit(1);
+
+      if (existingForGroup.length > 0) {
+        return { kind: 'duplicate' as const, existingSubmissionId: existingForGroup[0]!.id };
+      }
     }
 
     // -----------------------------------------------------------------------
@@ -326,6 +377,12 @@ export async function createSubmission(
       // (student_id, group_key) and REFUSES an explicit value. We write only
       // the input.
       group_key: studentId === null ? groupKey : null,
+      // The upstream (folder, scope), independent of lineage. Written for every
+      // grouped submission regardless of `student_id`, because it answers a
+      // different question — "which upstream submission is this artifact?" —
+      // and the partial unique index on it is what keeps a partner pair from
+      // splitting when the rebuilt bytes diverge. Migration 0033.
+      source_group_key: sourceGroupKey,
       blob_object_key: finalBlobKey,
       // sha256 of the ORIGINAL (full, pre-strip) bundle. This is the dedup key
       // (dedup.ts matches on semester_id + blob_sha256) and the stable identity

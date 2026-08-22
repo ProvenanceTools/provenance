@@ -307,6 +307,18 @@ export async function ingestLocalPath(
           sub.scopePath === ''
             ? `${folderKey}.zip`
             : `${folderKey}/${sub.scopePath.slice(0, -1)}.zip`;
+        // The DECLARED group, persisted rather than left as a local (migration
+        // 0033). Until now the only thing putting a group back together after
+        // this fan-out was the single shared `rebuild` promise below giving
+        // every co-submitter identical bytes, so blob dedup collapsed them —
+        // a coincidence of this function, not an invariant. Any byte divergence
+        // silently produced two submissions with one contributor each, which
+        // the cross-heuristics then compare against each other (S20).
+        //
+        // Keyed on (folder, SCOPE), never the folder alone: nested manifest
+        // discovery lets one folder yield several scopes, and those are
+        // genuinely different artifacts that must not collapse together.
+        const sourceGroupKey = `${folderKey}/${sub.scopePath}`;
         // Rebuild the bundle ZIP once per bundle (offloaded to the pool), shared
         // across its co-submitters. Kicked off here so it proceeds while we
         // stream the next folders; the runner's backpressure bounds how far the
@@ -339,6 +351,7 @@ export async function ingestLocalPath(
               blob_sha256: blobSha256,
               status: 'pending',
               match_sid: matchSid,
+              source_group_key: sourceGroupKey,
             });
             await boss.send(
               JOB_KINDS.INGEST_FILE,
