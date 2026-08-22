@@ -65,18 +65,48 @@
  *    of what a file did, with a branch checkout and a stash named as the causes.
  *  - **"could not observe" is not "nothing happened".** The git section exists
  *    so a grader can tell those two apart. Both are stated; neither is implied.
+ *  - **"not watched" is not misconduct, and is not even a defect.** The file
+ *    scope section is EXCULPATORY: a file the recorder was never told to watch
+ *    is a fact about the assignment manifest, and its silence is explained
+ *    rather than suspicious. A recorder that reports no scope at all — every
+ *    bundle before §5.6, permanently — reads as "this recorder does not
+ *    report", never as something missing from the submission.
  *
  * ## Which of these sections render, and why they differ
  *
- * Git observation renders unconditionally in state 3; peer witnessing renders
- * only when something reported or a witness was read. See the comments at each
- * one — the asymmetry is deliberate and is about which silence is dangerous.
+ * Git observation and file scope render unconditionally in state 3; peer
+ * witnessing renders only when something reported or a witness was read. See the
+ * comments at each one — the asymmetry is deliberate and is about which silence
+ * is dangerous.
+ *
+ * ## The capability wording is `log-core`'s, not this file's
+ *
+ * `describeGitCapture`, `describeWitnessCapture`,
+ * `describeCapabilityValueProblem` and `describeFileScopeProblem` are the
+ * canonical staff-facing sentences for these states, shared by this analyzer and
+ * the three recorder repos so that four consumers cannot phrase one verdict four
+ * ways. Where they appear below they are QUOTED, never paraphrased.
+ *
+ * They are per-SESSION sentences ("this session", "this machine") and the
+ * summaries here are per-BUNDLE, so each use supplies its own bundle-level frame
+ * — "every session in this submission reported the same thing: …". A helper
+ * dropped straight into a bundle-level claim would say "this session" about a
+ * set of sessions. The `'available'` cases are therefore NOT taken from the
+ * helpers: "at least one session here" is a different assertion from
+ * "this session", and there is no honest frame that makes the per-session
+ * sentence true of a bundle where only some sessions reported it.
  *
  * Presentation is deliberately the `IncompleteRecordingBanner` family — slate,
  * `role="status"`, no icons that read as warnings — and deliberately NOT the
  * amber/red vocabulary the flag surfaces use.
  */
 
+import {
+  describeCapabilityValueProblem,
+  describeFileScopeProblem,
+  describeGitCapture,
+  describeWitnessCapture,
+} from '@provenance/log-core';
 import { hasCoverageFacts } from '@provenance/analysis-core/coverage/coverage-facts.js';
 import type { CoverageFacts } from '@provenance/analysis-core/coverage/coverage-facts.js';
 import { formatDuration } from './duration.js';
@@ -199,6 +229,7 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
     dagCoverage,
     witnessing,
     gitObservation,
+    fileScope,
   } = facts;
 
   // State 2 — facts computed, nothing to note. Rule 3 wants the statement, not
@@ -321,13 +352,21 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
             </p>
           )}
           {witnessing.capability === 'impossible' && (
+            /*
+             * The middle sentence is `log-core`'s own, quoted rather than
+             * paraphrased — see the module header on why the wording is
+             * centralised. It is per-SESSION ("in this session"), which is why
+             * the bundle-level lead has to introduce it as what every session
+             * reported; the helper cannot be used as a bundle-level claim.
+             */
             <p data-testid="coverage-witness-capability-impossible">
               <span className="font-medium">
                 No session here was able to witness any other log.
               </span>{' '}
-              Every session reported that it could not watch the shared <code>.provenance/</code>{' '}
-              directory, so nothing in this submission could have been witnessed by anything else in
-              it. That is a limit on what this record can show, and it is not something anyone did.
+              Every session in this submission reported the same thing.{' '}
+              {describeWitnessCapture('unavailable')} Nothing in this submission could have been
+              witnessed by anything else in it — a limit on what this record can show, and not
+              something anyone did.
             </p>
           )}
           {witnessing.capability === 'unknown' && (
@@ -511,13 +550,39 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
           </p>
         )}
         {gitObservation.availability === 'impossible' && (
+          /*
+           * The `describeGitCapture` sentences are `log-core`'s own, quoted
+           * rather than paraphrased — one wording, four consumers. They are
+           * per-SESSION statements, so each branch supplies its own bundle-level
+           * frame around them; using a helper directly as a bundle-level claim
+           * would say "this session" about a set of sessions.
+           *
+           * The closing sentence of each branch is NOT in the helper and must
+           * not be dropped: "not because nothing was done" is the clause that
+           * stops an incapacity from reading as inactivity.
+           */
           <p data-testid="coverage-git-impossible">
             <span className="font-medium">No git evidence could be collected here.</span>{' '}
-            {gitObservation.impossibleReason === 'not_owned'
-              ? 'Every session reported that git observation worked but that this assignment sat outside any repository it could see. There is no git evidence in this record because there was no repository to observe — not because nothing was done.'
-              : gitObservation.impossibleReason === 'mixed'
-                ? 'Some sessions reported that git observation was unavailable to them, and others reported that the assignment sat outside any repository they could see. Either way nothing could be observed, so the absence of git evidence in this record says nothing about what was done.'
-                : 'Every session reported that git observation was unavailable to it — the editor’s git integration was not present, or could not be reached. There is no git evidence in this record because none could be gathered — not because nothing was done.'}
+            {gitObservation.impossibleReason === 'mixed' ? (
+              <>
+                The sessions here reported two different reasons, and both prevent git evidence.{' '}
+                {describeGitCapture('unavailable')} {describeGitCapture('not_owned')} Either way
+                nothing could be observed, so the absence of git evidence in this record says
+                nothing about what was done.
+              </>
+            ) : gitObservation.impossibleReason === 'not_owned' ? (
+              <>
+                Every session in this submission reported the same thing.{' '}
+                {describeGitCapture('not_owned')} There is no git evidence in this record because
+                there was no repository to observe — not because nothing was done.
+              </>
+            ) : (
+              <>
+                Every session in this submission reported the same thing.{' '}
+                {describeGitCapture('unavailable')} There is no git evidence in this record because
+                none could be gathered — not because nothing was done.
+              </>
+            )}
           </p>
         )}
         {gitObservation.availability === 'unknown' && (
@@ -564,11 +629,116 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
           </p>
         )}
         {gitObservation.malformed > 0 && (
+          /*
+           * The reason comes from `log-core`'s `describeCapabilityValueProblem`
+           * rather than from a literal here. The literal used to say "a value
+           * this format does not define", which is only ever true of
+           * `unknown_value` — a session that reported a NON-STRING is counted in
+           * the same total and was being described as something it was not.
+           */
           <p data-testid="coverage-git-malformed">
             {gitObservation.malformed} session
-            {gitObservation.malformed === 1 ? '' : 's'} reported a git-capture value this format
-            does not define, so that report could not be used. That is a fact about the recorder,
-            never about the student.
+            {gitObservation.malformed === 1 ? '' : 's'} reported a git-capture value that could not
+            be used
+            {gitObservation.malformedProblems.length > 0 &&
+              `: ${gitObservation.malformedProblems.map(describeCapabilityValueProblem).join('; ')}`}
+            . That is a fact about the recorder, never about the student.
+          </p>
+        )}
+      </Section>
+
+      {/* -----------------------------------------------------------------
+          File scope (§5.6 item 1) — which files were actually being watched.
+
+          UNCONDITIONAL in state 3, for the same reason "Git observation" is:
+          the sentence it says on a legacy bundle — "this recorder does not
+          report which files it was watching, so a file's silence is
+          unresolved" — is precisely what stops a grader reading an empty
+          Source tab as "the student never touched these files".
+
+          Nothing in this section is a finding IN EITHER DIRECTION, which is
+          the part that is easy to get wrong. "Not watched" is not misconduct
+          and is not even a defect: the recorder watches what the assignment
+          manifest told it to watch, so a file outside the scope is a course
+          configuration fact. It is EXCULPATORY — it explains a silence that
+          would otherwise be read as inactivity.
+
+          Per-file rows are rendered only for a file that is BOTH provably
+          outside every watched scope AND silent in this record. A file with
+          activity has no ambiguity to resolve, and listing it as "not
+          watched" beside its own events would read as a contradiction rather
+          than as context.
+
+          Like git observation, it does NOT feed `hasCoverageFacts`: a bundle
+          whose only "fact" is that nothing reported still says "nothing to
+          note".
+          ----------------------------------------------------------------- */}
+      <Section title="File scope" testId="coverage-file-scope">
+        {fileScope.reporting === 'unreported' && (
+          <p data-testid="coverage-file-scope-unreported">
+            This submission&rsquo;s recorder does not report which files it was watching. An absence
+            of recorded activity for a particular file is therefore <em>unresolved</em>: it is
+            equally consistent with nothing having happened in that file and with that file never
+            having been watched. Recorders only began reporting this recently, so every submission
+            recorded before then is permanently in this state. It is not a defect and it is not a
+            finding.
+          </p>
+        )}
+        {fileScope.reporting === 'partial' && (
+          <p data-testid="coverage-file-scope-partial">
+            Some sessions here reported which files they were watching and some did not, so what
+            follows is a lower bound rather than the whole scope. A file it does not name may still
+            have been watched by a session that said nothing, and nothing follows from a
+            file&rsquo;s absence from it.
+          </p>
+        )}
+        {fileScope.reporting === 'reported' && (
+          <p data-testid="coverage-file-scope-reported">
+            Every session here reported which files it was watching. {fileScope.watchedFiles.length}{' '}
+            file
+            {fileScope.watchedFiles.length === 1 ? ' was' : 's were'} under observation across this
+            submission.
+          </p>
+        )}
+        {fileScope.incompleteSessions > 0 && (
+          <p data-testid="coverage-file-scope-incomplete">
+            {fileScope.incompleteSessions} session
+            {fileScope.incompleteSessions === 1 ? '' : 's'} reported that the list had been capped
+            at the limit this format allows, so a file the list does not name may still have been
+            watched. A capped list can show that a file <em>was</em> watched; it can never show that
+            one was not.
+          </p>
+        )}
+        {fileScope.malformedSessions > 0 && (
+          /* Reasons come from `log-core`'s `describeFileScopeProblem`, which
+             names the problem and never quotes the offending path — that
+             privacy check is why the reader inspects the value at all. */
+          <p data-testid="coverage-file-scope-malformed">
+            {fileScope.malformedSessions} session
+            {fileScope.malformedSessions === 1 ? '' : 's'} reported a file scope that could not be
+            read
+            {fileScope.malformedProblems.length > 0 &&
+              `: ${fileScope.malformedProblems.map(describeFileScopeProblem).join('; ')}`}
+            . The report was set aside whole rather than partly read, so nothing was narrowed. That
+            is a fact about the recorder that wrote it, never about the student.
+          </p>
+        )}
+
+        {fileScope.files
+          .filter((f) => f.watched === 'not_watched' && !f.recordedActivity)
+          .map((f) => (
+            <p key={f.path} data-testid="coverage-file-not-watched">
+              <span className="font-mono text-[11px] font-medium">{f.path}</span> — under review,
+              and outside every session&rsquo;s watched scope, so nothing was recording it. This
+              record contains no activity for it for that reason alone.
+            </p>
+          ))}
+        {fileScope.files.some((f) => f.watched === 'not_watched' && !f.recordedActivity) && (
+          <p data-testid="coverage-file-not-watched-note">
+            A file outside the watched scope is a fact about the assignment&rsquo;s configuration,
+            not about the student: the recorder watches what the assignment manifest tells it to
+            watch. These are stated so a silence that is already explained is not read as
+            inactivity. Nothing here is a finding.
           </p>
         )}
       </Section>
