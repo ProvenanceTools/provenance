@@ -2093,3 +2093,100 @@ Bringing the branch total to eight. New this pass:
 4. **`packages/shared` still has no test script and zero tests.**
 5. **`reconstruction-gate.ts`'s docstring** still defers a `not_applicable` flag to "Tier 3.5's
    per-contributor scoping work", which will now not happen.
+
+---
+
+## D18 — the same-scope exclusion gets a SECOND key, and the Gradescope group becomes a column
+
+Two false-accusation defects with one shape: the system had the evidence and did not keep it.
+
+### D18a. The commit key is a proxy, and the proxy is absent for a whole class of honest pairs
+
+S20's exclusion is keyed on a shared **observed commit**. What that is standing in for is what the
+register's own text tells a grader — _"each archive contains the other's recorded sessions"_ — and
+git observation is an **optional capability**: `GIT_CAPTURE_VALUES` is `available` / `unavailable` /
+`not_owned`, and provnvim reports only the first two. So a shared, add-only `.provenance/` produces
+**zero** observed commits whenever the host exposes no git integration, the partners commit from a
+terminal outside their sessions, or there is no git at all — two people on one laptop, a lab
+machine, a synced folder. Every fixture written for S20 emitted `git.event`s, which is why this
+survived: `paste_shared_across_students` fired at **high / 0.95** and `editing_pattern_clone` at
+medium / 0.7, on the pair, with an empty exclusion register.
+
+**Decision.** A second key on the same evidence class: `sessionNodeKey(session_pubkey, session_id)`,
+for every session an archive carries. Not a bare uuid — a build minting a constant one would union
+everything it touched. Not the `.slog` digest — `.provenance/` is add-only, so a partner who pulled
+yesterday holds a **prefix** and a different sha256; the pubkey is written in `session.start`, the
+first event of every prefix, so it is stable exactly where the digest is not.
+
+New register reason **`shared_recording_scope`**, derived from the proofs rather than passed in: a
+lineage holding any shared commit still reports `same_repository_lineage`, and both proof arrays are
+carried either way, so the register never asserts a commit it lacks nor hides one it has. Saying
+"same repository" about two people who never ran git would be a claim the record cannot support, in
+the one place a grader reads the evidence.
+
+**The starter guard is a cohort-fraction ceiling.** Narrowing 1 has a direct analogue here: staff
+who prepare a skeleton with the recorder running and commit `.provenance/` would put one staff
+session into every archive, and one union pass would switch detection off course-wide. A session key
+may union only when a **strict minority** of the assignment's pool carries it (`k * 2 < n`), so no
+single key can move more than `ceil(n/2) - 1` submissions and a cohort-wide switch-off is
+_structurally unreachable_ rather than unlikely. An exact even split is **rejected** — the most
+ambiguous shape fails toward comparing.
+
+The ceiling is **inert below n = 5**, and that bound is derived rather than chosen: `k < n/2` admits
+the smallest possible partnership (`k = 2`) only from 5 up, so applying it below would not narrow
+the key, it would disable it — and `/local/compare` runs at n = 2, where a grader has deliberately
+dropped two partners' zips on the page. The catastrophe the guard prevents needs a cohort; a pool of
+four has none, and the most a starter can suppress there is four submissions in front of a person
+reading the register. Stated rather than hidden.
+
+Rejected: **"require the shared session to be `attributed`."** A staff-recorded starter session
+would itself be attributed, so it does not catch the case it exists for — and it would drop honest
+pairs where one partner never enrolled, which D13 says must never present as an integrity signal.
+
+### D18b. The Gradescope group existed only as a local variable
+
+`parse-metadata.ts` reads `submitters[]` — the only first-class group object in the system — and
+`local-path.ts` fans it out into one `ingest_files` row per submitter, each with one scalar
+`match_sid`. After that loop the group is gone. What reassembles it is a **coincidence**: local-path
+awaits ONE shared `rebuild(entries)` promise, so every row gets identical bytes, so blob dedup
+collapses them. One shared promise in one function.
+
+Any byte divergence between two co-submitters — scope resolution, entry ordering, the zip writer, a
+folder partially skipped for `no_seal` — silently produced two submissions with one contributor
+each, and two submissions of one repository in one assignment are precisely what the cross
+heuristics fire on. **Decision:** persist it. `source_group_key` = `<folderKey>/<scopePath>` on
+`ingest_files` and `submissions` (migration 0033), with a partial UNIQUE `(semester_id,
+source_group_key)`. Keyed on (folder, **scope**), never the folder alone — nested manifest discovery
+lets one folder yield several scopes, and those are different artifacts. Kept as a column separate
+from `submissions.group_key`, which is the version LINEAGE key and an input to the GENERATED
+`version_owner_key`; overloading it would plant a value that is inert today and load-bearing the
+first time a `group:` lineage exists.
+
+### D18c. A live co-submitter erasure that had nothing to do with Gradescope
+
+Phase 2 gated `attachCoSubmitter` on `hintedStudentId !== null`, but that hint comes from
+`match_sid`, which only the Gradescope path sets — on the **filename path** the student is resolved
+at phase 4, three phases later. So the second student of a byte-identical pair got
+`status: 'duplicate'`, `matched_student_id: null` and **no contributor row**: the S20 erasure,
+reached with Gradescope nowhere in sight, while the job reported `succeeded`. It was masked by
+timing, not prevented — when the two files raced past phase 2 together the phase-5 late-duplicate
+branch caught the loser instead, by which point phase 4 had run. Whether a student survived depended
+on how the batch interleaved. Phase 2 now resolves the submitter from the filename when there is no
+hint (`resolveSubmitterFromFilename`, which `matchStudent` also calls, so the two cannot disagree).
+
+### Still open after this pass
+
+6. **A byte divergence between two co-submitters is now non-splitting, but still UNREPORTED.**
+   0033's unique index means the pair can no longer become two cross-compared submissions, and one
+   of the two archives is now discarded as a duplicate — but nothing anywhere says the two rebuilds
+   disagreed. If reconstruction starts producing divergent archives, the symptom is silence, and the
+   discarded side may not be the one a grader would have wanted. A coverage fact ("this group's
+   co-submitter archives were not byte-identical") is the honest shape; it is not built.
+7. **The pure no-shared-artifact partner pair remains unreachable.** Two declared partners who work
+   entirely separately with no git and no shared workspace, exchanging code out of band, share no
+   commit and no session. The system holds **no** evidence of their partnership: there is no group
+   roster, `roster_entries` has no team column, and the filename convention has exactly one `sid`
+   capture, so partnership is not expressible on that path at all. `manifest.collaboration` is
+   assignment-level policy with no member list, and keying on it would disable cross-detection for a
+   whole group assignment. Closing this needs a course-supplied group roster — a product decision,
+   not a coding one.
