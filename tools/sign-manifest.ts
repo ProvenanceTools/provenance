@@ -22,9 +22,10 @@
  *
  *   The target manifest file must already contain, unsigned: `assignment_id`,
  *   `semester`, `issued_at`, `files_under_review`, `course_id`, `collaboration`,
- *   `submission`, `scope`, `policy`. `course_id` MUST equal the course_cert's
- *   `course_id` (chain step 3) or signing will succeed but self-verification —
- *   and therefore this tool — will refuse to write the file.
+ *   `submission`, `scope`, `policy`, `ignore`, `attachments`. `course_id` MUST
+ *   equal the course_cert's `course_id` (chain step 3) or signing will succeed
+ *   but self-verification — and therefore this tool — will refuse to write the
+ *   file.
  *
  * USAGE (1.0 — legacy, permanently supported)
  *   node --experimental-strip-types tools/sign-manifest.ts [manifestPath] --format 1.0 \
@@ -228,7 +229,15 @@ export function buildUnsignedManifest(
     return ok(base);
   }
 
-  const required2x = ['course_id', 'collaboration', 'submission', 'scope', 'policy'] as const;
+  const required2x = [
+    'course_id',
+    'collaboration',
+    'submission',
+    'scope',
+    'policy',
+    'ignore',
+    'attachments',
+  ] as const;
   for (const field of required2x) {
     if (obj[field] === undefined) {
       return err({
@@ -245,6 +254,8 @@ export function buildUnsignedManifest(
     submission: obj['submission'],
     scope: obj['scope'],
     policy: obj['policy'],
+    ignore: obj['ignore'],
+    attachments: obj['attachments'],
   } as Omit<Manifest, 'sig'>);
 }
 

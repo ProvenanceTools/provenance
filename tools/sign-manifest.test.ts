@@ -183,6 +183,8 @@ describe('buildUnsignedManifest', () => {
     submission: 'bundle',
     scope: 'directory',
     policy: { capture: { terminal: true } },
+    ignore: ['*.class'],
+    attachments: ['logs/'],
   };
 
   it('builds a 1.0 payload from the four legacy fields, ignoring extras', () => {
@@ -238,6 +240,22 @@ describe('buildUnsignedManifest', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.message).toContain('course_id');
+  });
+
+  it('rejects a 2.0 input missing ignore', () => {
+    const { ignore: _drop, ...withoutIgnore } = v2Extra;
+    const result = buildUnsignedManifest('2.0', { ...v1Fields, ...withoutIgnore });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.message).toContain('ignore');
+  });
+
+  it('rejects a 2.0 input missing attachments', () => {
+    const { attachments: _drop, ...withoutAttachments } = v2Extra;
+    const result = buildUnsignedManifest('2.0', { ...v1Fields, ...withoutAttachments });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.message).toContain('attachments');
   });
 
   it('rejects a non-object input', () => {

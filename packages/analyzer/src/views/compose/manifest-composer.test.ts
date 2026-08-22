@@ -26,11 +26,13 @@ import {
   verifyManifestChain,
 } from '@provenance/log-core';
 import {
+  EMPTY_COMPOSER_FORM,
   MANIFEST_DOWNLOAD_FILENAME,
   POLICY_CAPTURE_TOGGLES,
   buildPolicyBlock,
   buildUnsignedManifest,
   composeSignedManifest,
+  issuedAtFrom,
   parseCourseCertFile,
   splitFilesUnderReview,
   validateComposerForm,
@@ -176,10 +178,12 @@ describe('buildUnsignedManifest', () => {
     const keys = Object.keys(buildUnsignedManifest(makeForm())).sort();
     expect(keys).toEqual([
       'assignment_id',
+      'attachments',
       'collaboration',
       'course_id',
       'files_under_review',
       'format_version',
+      'ignore',
       'issued_at',
       'policy',
       'scope',
@@ -613,6 +617,16 @@ describe('validateComposerForm', () => {
     expect(issues.map((i) => i.field)).toEqual(['issued_at']);
   });
 
+  it('renders a clock as a whole-second UTC issued_at that validates', () => {
+    const at = issuedAtFrom(new Date('2026-09-08T17:04:31.412Z'));
+    expect(at).toBe('2026-09-08T17:04:31Z');
+    expect(validateComposerForm(makeForm({ format: '1.0', issued_at: at }), null)).toEqual([]);
+  });
+
+  it('renders a non-UTC clock in UTC', () => {
+    expect(issuedAtFrom(new Date('2026-09-08T17:04:31+02:00'))).toBe('2026-09-08T15:04:31Z');
+  });
+
   it('requires a certificate at 2.0', () => {
     const issues = validateComposerForm(makeForm(), null);
     expect(issues.map((i) => i.field)).toEqual(['course_cert']);
@@ -668,5 +682,63 @@ describe('validateComposerForm', () => {
       cert.cert,
     );
     expect(issues.map((i) => i.field)).toEqual(['heartbeat_interval_ms']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The scope lists — ignore and attachments
+// ---------------------------------------------------------------------------
+
+describe('the scope lists', () => {
+  it('emits ignore and attachments at 2.0 and neither at 1.x', () => {
+    const form = {
+      ...EMPTY_COMPOSER_FORM,
+      assignment_id: 'a',
+      semester: 'fa26',
+      issued_at: '2026-09-08T00:00:00Z',
+      course_id: 'c',
+      files_under_review: ['src/'],
+      ignore: ['*.class'],
+      attachments: ['logs/'],
+    };
+    const v2 = buildUnsignedManifest(form) as Record<string, unknown>;
+    expect(v2['ignore']).toEqual(['*.class']);
+    expect(v2['attachments']).toEqual(['logs/']);
+
+    const v1 = buildUnsignedManifest({ ...form, format: '1.0' }) as Record<string, unknown>;
+    expect('ignore' in v1).toBe(false);
+    expect('attachments' in v1).toBe(false);
+  });
+
+  it('reports the offending entry and why, per list', () => {
+    const form = {
+      ...EMPTY_COMPOSER_FORM,
+      assignment_id: 'a',
+      semester: 'fa26',
+      issued_at: '2026-09-08T00:00:00Z',
+      course_id: 'c',
+      files_under_review: ['src/*.java'],
+      ignore: ['../escape'],
+      attachments: ['a?.log'],
+    };
+    const issues = validateComposerForm(form, null);
+    const byField = new Map(issues.map((i) => [i.field, i.message]));
+    expect(byField.get('files_under_review')).toContain('src/*.java');
+    expect(byField.get('ignore')).toContain('../escape');
+    expect(byField.get('attachments')).toContain('a?.log');
+  });
+
+  it('accepts empty ignore and attachments lists', () => {
+    const form = {
+      ...EMPTY_COMPOSER_FORM,
+      assignment_id: 'a',
+      semester: 'fa26',
+      issued_at: '2026-09-08T00:00:00Z',
+      course_id: 'c',
+      files_under_review: ['Main.java'],
+    };
+    const issues = validateComposerForm(form, null);
+    expect(issues.some((i) => i.field === 'ignore')).toBe(false);
+    expect(issues.some((i) => i.field === 'attachments')).toBe(false);
   });
 });

@@ -8,8 +8,8 @@
  *  - a mismatched `course_id` is reported beside the field, while staff are
  *    still typing — not at download time, and not as a signature error;
  *  - there is no download link until a manifest has actually verified;
- *  - the policy UI offers three knobs, explains the cost of each, and says in
- *    so many words that the floor signals have no switch anywhere.
+ *  - the policy UI offers three knobs and explains the cost of each;
+ *  - `issued_at` is prefilled from the clock and signs as prefilled.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -51,6 +51,30 @@ function fillAssignment(courseId = 'berkeley-cs61b'): void {
   });
   fireEvent.change(screen.getByTestId('composer-files'), { target: { value: 'src/main.py' } });
   fireEvent.change(screen.getByTestId('composer-course-id'), { target: { value: courseId } });
+}
+
+/** Fill the assignment, certificate, keypair and root key with a valid 2.0 form. */
+async function fillValidV2Form(): Promise<void> {
+  const { root, course, cert } = await fixtures();
+  fillAssignment();
+  fireEvent.change(screen.getByTestId('composer-cert-input'), {
+    target: { files: [jsonFile('cert.json', cert.fileText)] },
+  });
+  await screen.findByTestId('composer-cert-summary');
+  fireEvent.change(screen.getByTestId('composer-key-input'), {
+    target: { files: [jsonFile('key.json', course.fileText)] },
+  });
+  fireEvent.change(screen.getByTestId('composer-root-pubkey'), {
+    target: { value: root.publicKeyHex },
+  });
+}
+
+/** Sign the currently-filled form and return the produced manifest, parsed. */
+async function signAndReadBlob(): Promise<Record<string, unknown>> {
+  fireEvent.click(screen.getByTestId('composer-sign'));
+  await screen.findByTestId('composer-download');
+  const fileText = (screen.getByTestId('composer-file-text') as HTMLTextAreaElement).value;
+  return JSON.parse(fileText) as Record<string, unknown>;
 }
 
 describe('ManifestComposerView', () => {
@@ -237,18 +261,46 @@ describe('ManifestComposerView', () => {
     );
   });
 
-  it('says plainly that the floor signals have no switch', () => {
-    render(<ManifestComposerView />);
-    const note = screen.getByTestId('composer-policy-floor-note').textContent ?? '';
-    expect(note).toContain('doc.open');
-    expect(note).toContain('not just no switch here');
+  // -------------------------------------------------------------------------
+  // issued_at
+  // -------------------------------------------------------------------------
+
+  it('prefills issued_at with the current time, to whole seconds in UTC', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-08T17:04:31.412Z'));
+    try {
+      render(<ManifestComposerView />);
+      expect((screen.getByTestId('composer-issued-at') as HTMLInputElement).value).toBe(
+        '2026-09-08T17:04:31Z',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('states that the private key stays on the machine', () => {
+  it('signs the prefilled issued_at without it being typed', async () => {
+    const course = await makeKeypair(0x22);
+
+    // Only the mount is on a frozen clock — the default is read once, in the
+    // state initialiser. Signing then runs on real timers, so the fake clock
+    // never has to interleave with the ed25519 promises.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-08T17:04:31.412Z'));
     render(<ManifestComposerView />);
-    const promise = screen.getByTestId('composer-key-promise').textContent ?? '';
-    expect(promise).toContain('never uploaded');
-    expect(promise).toContain('browser storage');
+    vi.useRealTimers();
+
+    fireEvent.click(screen.getByTestId('composer-format-1.0'));
+    fireEvent.change(screen.getByTestId('composer-assignment-id'), { target: { value: 'proj2' } });
+    fireEvent.change(screen.getByTestId('composer-semester'), { target: { value: 'fa26' } });
+    fireEvent.change(screen.getByTestId('composer-files'), { target: { value: 'src/main.py' } });
+    fireEvent.change(screen.getByTestId('composer-key-input'), {
+      target: { files: [jsonFile('key.json', course.fileText)] },
+    });
+    fireEvent.click(screen.getByTestId('composer-sign'));
+
+    await screen.findByTestId('composer-download');
+    const fileText = (screen.getByTestId('composer-file-text') as HTMLTextAreaElement).value;
+    expect((JSON.parse(fileText) as { issued_at: string }).issued_at).toBe('2026-09-08T17:04:31Z');
   });
 
   // -------------------------------------------------------------------------
@@ -316,5 +368,33 @@ describe('ManifestComposerView', () => {
         heartbeat_interval_ms: 30000,
       },
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // ignore / attachments
+  // -------------------------------------------------------------------------
+
+  it('signs a manifest carrying the ignore and attachments lists', async () => {
+    render(<ManifestComposerView />);
+    await fillValidV2Form(); // existing helper
+    fireEvent.change(screen.getByTestId('composer-ignore'), { target: { value: '*.class' } });
+    fireEvent.change(screen.getByTestId('composer-attachments'), { target: { value: 'logs/' } });
+    const produced = await signAndReadBlob();
+    expect(produced['ignore']).toEqual(['*.class']);
+    expect(produced['attachments']).toEqual(['logs/']);
+  });
+
+  it('refuses to sign when an entry is malformed, and names it', async () => {
+    render(<ManifestComposerView />);
+    await fillValidV2Form();
+    fireEvent.change(screen.getByTestId('composer-ignore'), { target: { value: '../escape' } });
+    fireEvent.click(screen.getByRole('button', { name: /sign/i }));
+    // Named twice by design: inline under the field (composer-ignore-error)
+    // and in the invalid-form summary list, the same pattern every other
+    // field on this page already follows. findAllByText tolerates that;
+    // findByText would throw "Found multiple elements".
+    const matches = await screen.findAllByText(/\.\.\/escape/);
+    expect(matches.length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('composer-download')).toBeNull();
   });
 });

@@ -92,8 +92,10 @@
 
 import {
   canonicalize,
+  isExactEntry,
   parseCourseCert,
   signManifest,
+  validateScopeEntry,
   verifyManifest,
   verifyManifestChain,
   DEFAULT_CAPTURE_POLICY,
@@ -205,8 +207,12 @@ export type ComposerForm = {
   readonly assignment_id: string;
   readonly semester: string;
   readonly issued_at: string;
-  /** One path per line in the UI; already split and trimmed by {@link splitFilesUnderReview}. */
+  /** One path per line in the UI; already split and trimmed by {@link splitPathList}. */
   readonly files_under_review: readonly string[];
+  /** One entry per line in the UI; split by {@link splitPathList}. 2.0 only. */
+  readonly ignore: readonly string[];
+  /** One entry per line in the UI; split by {@link splitPathList}. 2.0 only. */
+  readonly attachments: readonly string[];
   // --- 2.0 only ---
   readonly course_id: string;
   readonly collaboration: ManifestCollaboration;
@@ -215,12 +221,26 @@ export type ComposerForm = {
   readonly policy: PolicyForm;
 };
 
+/**
+ * `issued_at` for a manifest being signed at `now`: UTC, whole seconds.
+ *
+ * The clock is a parameter rather than a `new Date()` inside, so the form's
+ * default value is a pure function of a timestamp and can be asserted on.
+ * Milliseconds are dropped — `ISO_LIKE_RE` accepts them, but the field is a
+ * date staff read and edit, and a signed `.123Z` says nothing true.
+ */
+export function issuedAtFrom(now: Date): string {
+  return `${now.toISOString().slice(0, 19)}Z`;
+}
+
 export const EMPTY_COMPOSER_FORM: ComposerForm = {
   format: MANIFEST_FORMAT_VERSION_2,
   assignment_id: '',
   semester: '',
   issued_at: '',
   files_under_review: [],
+  ignore: [],
+  attachments: [],
   course_id: '',
   collaboration: 'solo',
   submission: 'bundle',
@@ -229,15 +249,14 @@ export const EMPTY_COMPOSER_FORM: ComposerForm = {
 };
 
 /**
- * Split the files textarea into paths.
+ * Split a path list textarea into entries.
  *
  * Blank lines are dropped and each line is trimmed, because a trailing space on
- * a path is invisible in a textarea and produces a `files_under_review` entry
- * that matches no file — signed, distributed, and diagnosed weeks later.
- * Duplicates are dropped too: they are signed noise, and the recorder resolves
- * a path once regardless.
+ * a path is invisible in a textarea and produces an entry that matches no file
+ * — signed, distributed, and diagnosed weeks later. Duplicates are dropped too:
+ * they are signed noise, and the recorder resolves a path once regardless.
  */
-export function splitFilesUnderReview(text: string): readonly string[] {
+export function splitPathList(text: string): readonly string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const line of text.split('\n')) {
@@ -248,6 +267,9 @@ export function splitFilesUnderReview(text: string): readonly string[] {
   }
   return out;
 }
+
+/** @deprecated Use {@link splitPathList}. Kept so existing imports keep working. */
+export const splitFilesUnderReview = splitPathList;
 
 // ---------------------------------------------------------------------------
 // Field validation — what the form catches before anything is signed
@@ -303,7 +325,35 @@ export function validateComposerForm(
     });
   }
 
-  if (form.format !== MANIFEST_FORMAT_VERSION_2) return issues;
+  const checkList = (field: string, entries: readonly string[]): void => {
+    for (const entry of entries) {
+      const problem = validateScopeEntry(entry);
+      if (problem !== null) {
+        issues.push({ field, message: `"${entry}" — ${problem.detail}` });
+        return; // one message per field; the first bad entry is the one to fix
+      }
+    }
+  };
+  checkList('files_under_review', form.files_under_review);
+
+  if (form.format !== MANIFEST_FORMAT_VERSION_2) {
+    // `src/` and `*.java` are legal entries at 2.0 (a folder rule, a suffix
+    // rule) but at 1.x there is no such grammar — an entry is only ever an
+    // exact path. Letting one through here would sign a manifest that matches
+    // nothing: `src/` becomes a search for a file literally named `src/`.
+    for (const entry of form.files_under_review) {
+      if (isExactEntry(entry)) continue;
+      issues.push({
+        field: 'files_under_review',
+        message:
+          `"${entry}" is a folder or suffix rule, which only exists at format 2.0. In a 1.x ` +
+          'manifest it means a file with that literal name, so it would match nothing. Switch the ' +
+          'format to 2.0, or list exact paths.',
+      });
+      break;
+    }
+    return issues;
+  }
 
   requireText('course_id', form.course_id, 'Course id');
 
@@ -339,6 +389,9 @@ export function validateComposerForm(
         'ignored.',
     });
   }
+
+  checkList('ignore', form.ignore);
+  checkList('attachments', form.attachments);
 
   return issues;
 }
@@ -394,6 +447,8 @@ export function buildUnsignedManifest(form: ComposerForm): Omit<Manifest, 'sig'>
     submission: form.submission,
     scope: form.scope,
     policy: buildPolicyBlock(form.policy),
+    ignore: form.ignore,
+    attachments: form.attachments,
   };
 }
 

@@ -42,9 +42,8 @@
  *    and asserting the key hex reaches no request, no storage, no console call,
  *    no DOM node and no produced blob.
  *
- * The page says all of this to the user in plain words, because "trust us" is
- * not a security property and staff are being asked to open a file they were
- * told never to move.
+ * None of this is stated on the page — the containment is a property of the
+ * code and its tests, not of a paragraph. Keep it that way here.
  *
  * ## Where the certificate comes from
  *
@@ -87,8 +86,9 @@ import {
   POLICY_CAPTURE_TOGGLES,
   buildUnsignedManifest,
   composeSignedManifest,
+  issuedAtFrom,
   parseCourseCertFile,
-  splitFilesUnderReview,
+  splitPathList,
   validateComposerForm,
 } from './manifest-composer.js';
 import type {
@@ -153,8 +153,15 @@ function Section({
 // ---------------------------------------------------------------------------
 
 export function ManifestComposerView() {
-  const [form, setForm] = useState<ComposerForm>(EMPTY_COMPOSER_FORM);
+  // issued_at defaults to now: the common case is signing a manifest today,
+  // and a hand-typed timestamp is a signed field nobody re-reads.
+  const [form, setForm] = useState<ComposerForm>(() => ({
+    ...EMPTY_COMPOSER_FORM,
+    issued_at: issuedAtFrom(new Date()),
+  }));
   const [filesText, setFilesText] = useState('');
+  const [ignoreText, setIgnoreText] = useState('');
+  const [attachmentsText, setAttachmentsText] = useState('');
 
   // The certificate is PUBLIC and is embedded in the output verbatim, so
   // holding its text is not a hazard — unlike the keypair, below.
@@ -306,35 +313,9 @@ export function ManifestComposerView() {
         <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Manifest composer</h1>
         <p className="mt-2 text-sm text-gray-700">
           Build, sign and download the <span className="font-mono">.provenance-manifest</span> for
-          an assignment. This is the same thing{' '}
-          <span className="font-mono">tools/sign-manifest.ts</span> does — byte for byte, pinned by
-          a conformance test — with the JSON authoring and the trust-chain check moved in front of
-          the mistake instead of after it.
+          an assignment.
         </p>
       </header>
-
-      {/* ── The key promise, stated before anything is asked for ──────────── */}
-      <div
-        className="mt-6 rounded-lg border border-amber-300 bg-amber-50 p-4"
-        data-testid="composer-key-promise"
-      >
-        <h2 className="text-sm font-semibold text-amber-900">
-          Your course private key stays on this machine.
-        </h2>
-        <p className="mt-1 text-xs text-amber-900">
-          Signing happens here, in your browser. The keypair file is read once, while you are
-          signing, and is used only to produce the signature. It is never uploaded, never sent in
-          any request, never written to browser storage, never put in a URL, and never included in
-          an error message. The server does not have this key and must not — that is the reason your
-          course has an offline key at all.
-        </p>
-        <p className="mt-2 text-xs text-amber-900">
-          The certificate is the opposite: it is public, root-signed, and gets copied into the
-          manifest you hand to every student. Do not confuse the two files. If you pick the keypair
-          where the certificate belongs, this page refuses it and tells you — but pick carefully
-          anyway.
-        </p>
-      </div>
 
       <form onSubmit={(e) => void handleSign(e)} data-testid="composer-form">
         {/* ── Format ────────────────────────────────────────────────────── */}
@@ -413,8 +394,8 @@ export function ManifestComposerView() {
                 data-testid="composer-issued-at"
               />
               <p className="mt-1 text-xs text-gray-500">
-                The certificate&rsquo;s validity window is checked against this, never against
-                today. That is what lets a Fall 2026 bundle still verify in 2028.
+                Defaults to now, in UTC. The certificate&rsquo;s validity window is checked against
+                this date.
               </p>
               {submitted && (
                 <FieldError id="composer-issued-at-error" message={issueFor('issued_at')} />
@@ -431,7 +412,7 @@ export function ManifestComposerView() {
                 value={filesText}
                 onChange={(e) => {
                   setFilesText(e.target.value);
-                  update({ files_under_review: splitFilesUnderReview(e.target.value) });
+                  update({ files_under_review: splitPathList(e.target.value) });
                 }}
                 placeholder={'src/main.py\nsrc/helpers.py'}
                 data-testid="composer-files"
@@ -440,6 +421,11 @@ export function ManifestComposerView() {
                 Relative to the folder holding the manifest. Blank lines, duplicates and stray
                 trailing spaces are dropped — a path with an invisible trailing space is signed and
                 then matches nothing.
+              </p>
+              <p className="mt-1 text-xs text-gray-500">
+                Three forms: an exact path (<code>Makefile</code>), a folder and everything under it
+                (<code>src/</code>), or a filename suffix at any depth (<code>*.java</code>). There
+                is no <code>**</code> and no mid-path wildcard.
               </p>
               {submitted && (
                 <FieldError id="composer-files-error" message={issueFor('files_under_review')} />
@@ -524,6 +510,9 @@ export function ManifestComposerView() {
                       issueFor('course_id') !== undefined ? 'composer-course-id-error' : undefined
                     }
                   />
+                  <p className="mt-1 text-xs text-gray-500">
+                    The id in your course certificate. It must match exactly.
+                  </p>
                   {cert !== null && (
                     <button
                       type="button"
@@ -559,6 +548,11 @@ export function ManifestComposerView() {
                     <option value="solo">solo</option>
                     <option value="group">group</option>
                   </select>
+                  <p className="mt-1 text-xs text-gray-500">
+                    <span className="font-mono">solo</span> — one student.{' '}
+                    <span className="font-mono">group</span> — a second contributor is expected, so
+                    the analyzer compares them instead of flagging one.
+                  </p>
                 </div>
                 <div>
                   <label
@@ -577,6 +571,11 @@ export function ManifestComposerView() {
                     <option value="bundle">bundle</option>
                     <option value="git">git</option>
                   </select>
+                  <p className="mt-1 text-xs text-gray-500">
+                    How work reaches you. <span className="font-mono">bundle</span> — students seal
+                    and upload a zip. <span className="font-mono">git</span> — they push to a repo,
+                    and the recorder seals each session as it goes.
+                  </p>
                 </div>
                 <div>
                   <label htmlFor="composer-scope" className="text-xs font-medium text-gray-700">
@@ -592,6 +591,66 @@ export function ManifestComposerView() {
                     <option value="directory">directory</option>
                     <option value="repo">repo</option>
                   </select>
+                  <p className="mt-1 text-xs text-gray-500">
+                    What the assignment covers: the folder holding this manifest, or the whole
+                    repository. Recording follows{' '}
+                    <span className="font-mono">files_under_review</span> either way.
+                  </p>
+                </div>
+                <div className="sm:col-span-2">
+                  <label htmlFor="composer-ignore" className="text-xs font-medium text-gray-700">
+                    ignore — one entry per line
+                  </label>
+                  <textarea
+                    id="composer-ignore"
+                    rows={3}
+                    className={`${INPUT_CLASS} font-mono`}
+                    value={ignoreText}
+                    onChange={(e) => {
+                      setIgnoreText(e.target.value);
+                      update({ ignore: splitPathList(e.target.value) });
+                    }}
+                    placeholder={'*.class\ntarget/'}
+                    data-testid="composer-ignore"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Files the recorder will not capture at all. This is a real cost, not just less
+                    noise: no events are produced for these paths, and that includes the evidence
+                    that would <em>exculpate</em> a student — the typing history showing they wrote
+                    the code themselves. Ignore build output and dependencies, not source.
+                  </p>
+                  {submitted && (
+                    <FieldError id="composer-ignore-error" message={issueFor('ignore')} />
+                  )}
+                </div>
+                <div className="sm:col-span-2">
+                  <label
+                    htmlFor="composer-attachments"
+                    className="text-xs font-medium text-gray-700"
+                  >
+                    attachments — one entry per line
+                  </label>
+                  <textarea
+                    id="composer-attachments"
+                    rows={3}
+                    className={`${INPUT_CLASS} font-mono`}
+                    value={attachmentsText}
+                    onChange={(e) => {
+                      setAttachmentsText(e.target.value);
+                      update({ attachments: splitPathList(e.target.value) });
+                    }}
+                    placeholder={'logs/\n*.log'}
+                    data-testid="composer-attachments"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Files that travel with the submission but are never recorded — run logs,
+                    generated output. Their path and hash are covered by the signed bundle manifest,
+                    so they cannot be altered unnoticed, but they have no typing history and are
+                    never compared against one.
+                  </p>
+                  {submitted && (
+                    <FieldError id="composer-attachments-error" message={issueFor('attachments')} />
+                  )}
                 </div>
               </div>
             </Section>
@@ -601,27 +660,7 @@ export function ManifestComposerView() {
               title="Capture policy"
               subtitle="What the recorder records for this assignment. A policy can only narrow capture, and it is inside the signed payload — so you can turn capture down and a student cannot turn it off."
             >
-              <div
-                className="rounded border border-gray-200 bg-gray-50 p-3"
-                data-testid="composer-policy-floor-note"
-              >
-                <p className="text-xs font-semibold text-gray-800">
-                  Most signals are not on this list, and cannot be.
-                </p>
-                <p className="mt-1 text-xs text-gray-600">
-                  Document opens and changes, saves, pastes, external file changes, git activity,
-                  heartbeats and the session and integrity events have no switch anywhere in the
-                  format — not just no switch here. Reconstruction and validation are built on them:{' '}
-                  <span className="font-mono">doc.open</span> carries the file content that replay,
-                  the Source tab and every file diff start from, and paste content is what lets the
-                  analyzer recognise a student moving their own code between files and{' '}
-                  <em>downgrade</em> a large-paste flag. A course able to switch those off could
-                  make the system blind to its own students&rsquo; evidence, or more likely to
-                  falsely accuse them. That is not a configuration.
-                </p>
-              </div>
-
-              <ul className="mt-3 space-y-3">
+              <ul className="space-y-3">
                 {POLICY_CAPTURE_TOGGLES.map((toggle) => {
                   const key: PolicyToggleKey = toggle.key;
                   const on = form.policy[key];

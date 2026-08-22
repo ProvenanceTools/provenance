@@ -86,6 +86,9 @@ const FORM_BASE = {
     terminal: false,
     heartbeat_interval_ms: 45_000,
   },
+  // Not in sorted order either, for the same reason files_under_review isn't.
+  ignore: ['*.class', 'build/', '.Ünicode-cache/'],
+  attachments: ['logs/', '*.log'],
 } as const;
 
 type Fixture = {
@@ -195,6 +198,8 @@ describe('manifest composer ↔ sign-manifest.ts byte identity', () => {
         submission: FORM_BASE.submission,
         scope: FORM_BASE.scope,
         policy: buildPolicyBlock(FORM_BASE.policy),
+        ignore: FORM_BASE.ignore,
+        attachments: FORM_BASE.attachments,
       },
       '2.0',
       'v2.provenance-manifest',
@@ -256,6 +261,8 @@ describe('manifest composer ↔ sign-manifest.ts byte identity', () => {
         submission: FORM_BASE.submission,
         scope: FORM_BASE.scope,
         policy: buildPolicyBlock(FORM_BASE.policy),
+        ignore: FORM_BASE.ignore,
+        attachments: FORM_BASE.attachments,
         sig: 'f'.repeat(128),
         course_cert: { course_id: 'somewhere-else' },
       },
