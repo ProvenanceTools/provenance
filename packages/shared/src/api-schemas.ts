@@ -1590,10 +1590,14 @@ export type CrossScopeExclusionMember = z.infer<typeof CrossScopeExclusionMember
 export const CrossScopeExclusionItemSchema = z.object({
   id: z.string().uuid(),
   /**
-   * Spelled as a literal union rather than a bare string so a second exclusion
+   * Spelled as a literal union rather than a bare string so a further exclusion
    * reason has to be added to the contract on purpose, at both ends.
+   *
+   * `shared_recording_scope` is the narrower claim, for a lineage proved by a
+   * shared signed session with no shared commit — an honest pair whose recorder
+   * never observed git. See migration 0032.
    */
-  reason: z.literal('same_repository_lineage'),
+  reason: z.enum(['same_repository_lineage', 'shared_recording_scope']),
   /** Every submission in the lineage, ordered by submission id. Length >= 2. */
   members: z.array(CrossScopeExclusionMemberSchema),
   /**
@@ -1602,6 +1606,18 @@ export const CrossScopeExclusionItemSchema = z.object({
    * listed — see `analysis-core/coverage/cross-scope.ts`.
    */
   shared_commits: z.array(z.string()),
+  /**
+   * The `session:<session_pubkey> <session_id>` keys that proved it. Empty for
+   * a lineage proved by commits alone.
+   *
+   * `.optional()` rather than `.default([])` for the reason the neighbouring
+   * `exclusions` field documents — tolerating a server that predates the field
+   * during a rolling deploy — and spelled the way `apiFetch` actually surfaces
+   * it: `z.ZodType<T>` collapses a defaulted field to its INPUT side, so a
+   * `.default([])` here would read as `string[] | undefined` at every call site
+   * anyway while claiming otherwise in the type. Consumers write `?? []`.
+   */
+  shared_sessions: z.array(z.string()).optional(),
   /** `n*(n-1)/2` — how much of the comparison space was withheld. */
   excluded_pair_count: z.number().int(),
   created_at: z.string().datetime(),

@@ -1048,10 +1048,23 @@ export const components = {
      */
     CrossScopeExclusion: {
       type: 'object',
-      required: ['id', 'reason', 'members', 'shared_commits', 'excluded_pair_count', 'created_at'],
+      required: [
+        'id',
+        'reason',
+        'members',
+        'shared_commits',
+        'shared_sessions',
+        'excluded_pair_count',
+        'created_at',
+      ],
       properties: {
         id: { $ref: '#/components/schemas/UUID' },
-        reason: { type: 'string', enum: ['same_repository_lineage'] },
+        reason: {
+          type: 'string',
+          description:
+            'same_repository_lineage: a commit was proved shared. shared_recording_scope: no shared commit, but a shared signed session — an honest pair whose recorder never observed git.',
+          enum: ['same_repository_lineage', 'shared_recording_scope'],
+        },
         members: {
           type: 'array',
           description: 'Every submission in the lineage, ordered by id. Length >= 2.',
@@ -1090,6 +1103,12 @@ export const components = {
           type: 'array',
           description:
             'The (repository, sha) node keys that proved the lineage. A mixed-scope proof — one recorder emitting the D12 root-commit discriminator and one not — lists BOTH keys for one sha, because neither was observed by both sides.',
+          items: { type: 'string' },
+        },
+        shared_sessions: {
+          type: 'array',
+          description:
+            'The session:<session_pubkey> <session_id> keys proving at least two of these archives physically carry the same signed .slog. Empty for a lineage proved by commits alone.',
           items: { type: 'string' },
         },
         excluded_pair_count: {
