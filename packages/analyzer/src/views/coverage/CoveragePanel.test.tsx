@@ -211,7 +211,7 @@ describe('a suppressed concurrent overlap appears as a fact', () => {
 
     const row = screen.getByTestId('coverage-concurrent-row');
     expect(row.textContent).toMatch(/not a finding/i);
-    expect(row.textContent).toMatch(/expected shape of collaboration/i);
+    expect(row.textContent).toMatch(/what collaboration looks like/i);
   });
 
   it('is a status region, never an alert', async () => {
@@ -309,8 +309,8 @@ describe('a deployment with no root key', () => {
 
     const note = screen.getByTestId('coverage-no-root-key');
     expect(note.textContent).toMatch(/no identity check was possible/i);
-    expect(note.textContent).toMatch(/limit on what this analyzer can verify/i);
-    expect(note.textContent).toMatch(/nothing follows from it about any student/i);
+    expect(note.textContent).toMatch(/nothing here was checked and found wanting/i);
+    expect(note.textContent).toMatch(/nothing here was checked and found wanting/i);
     // The words that would turn one unset environment variable into a
     // class-wide integrity finding.
     expect(note.textContent).not.toMatch(/failed/i);
@@ -347,9 +347,9 @@ describe('a deployment with no root key', () => {
     const counts = screen.getByTestId('coverage-identity-counts').textContent ?? '';
 
     // Each state is reported with its OWN count and its OWN description.
-    expect(counts).toMatch(/1 session attributed to a verified contributor/i);
-    expect(counts).toMatch(/1 carrying an identity claim that is not being honoured/i);
-    expect(counts).toMatch(/1 with no identity block at all/i);
+    expect(counts).toMatch(/1 verified/);
+    expect(counts).toMatch(/1 claiming an identity that is not being honoured/);
+    expect(counts).toMatch(/1 with no identity block/);
     // And never as a single summed "2".
     expect(counts).not.toMatch(/2 not attributed/i);
     expect(counts).not.toMatch(/\b2\b/);
@@ -362,7 +362,7 @@ describe('a deployment with no root key', () => {
     ]);
     renderOpen(bundle, index);
     expect(screen.queryByTestId('coverage-no-root-key')).toBeNull();
-    expect(screen.getByTestId('coverage-identity-counts').textContent).toMatch(/2 sessions/);
+    expect(screen.getByTestId('coverage-identity-counts').textContent).toMatch(/2 verified/);
   });
 });
 
@@ -379,10 +379,10 @@ describe('absence is never suspicious', () => {
     renderOpen(bundle, index);
 
     const note = screen.getByTestId('coverage-unattributed-note');
-    expect(note.textContent).toMatch(/ordinary state/i);
+    expect(note.textContent).toMatch(/usually means the student had not enrolled/i);
     expect(note.textContent).toMatch(/not a finding/i);
     expect(note.textContent).toMatch(/never grouped/i);
-    expect(note.textContent).toMatch(/never asserted to be different people/i);
+    expect(note.textContent).toMatch(/never treated as different people/i);
   });
 
   /**
@@ -448,8 +448,8 @@ describe('the single-repository caveat', () => {
     // What is actually true of a commit that reaches this paragraph, and WHY,
     // so the reader is not left to guess at a cause.
     expect(note.textContent).toMatch(/name no repository/i);
-    expect(note.textContent).toMatch(/folded into a single assumed repository/i);
-    expect(note.textContent).toMatch(/predates the repository field/i);
+    expect(note.textContent).toMatch(/folded into one assumed repository/i);
+    expect(note.textContent).toMatch(/an older recorder and a shallow clone/i);
     expect(note.textContent).toMatch(/shallow clone/i);
     // Facts, never findings — the house rule for this whole panel.
     expect(note.textContent).toMatch(/not a finding/i);
@@ -479,7 +479,7 @@ describe('the single-repository caveat', () => {
     const note = screen.getByTestId('coverage-repo-assumed-single');
     // The copy has to cover "some, not all" — "every commit here is folded"
     // would be false on this scope.
-    expect(note.textContent).toMatch(/one or more commits/i);
+    expect(note.textContent).toMatch(/some commits here name no repository/i);
     expect(note.textContent).not.toMatch(/every commit here is folded/i);
     // And it must say the labelled half is kept apart, because assuming the
     // unlabelled commits belong to the named repository is exactly the merge
@@ -530,10 +530,9 @@ describe('when the facts were not sent', () => {
     render(<CoveragePanel facts={null} />);
 
     const note = screen.getByTestId('coverage-not-available-note');
-    expect(note.textContent).toMatch(/did not send the coverage facts/i);
+    expect(note.textContent).toMatch(/did not send coverage facts/i);
     expect(note.textContent).toMatch(/running a version older/i);
-    expect(note.textContent).toMatch(/nothing here has been checked and found wanting/i);
-    expect(note.textContent).toMatch(/no conclusion about this submission follows/i);
+    expect(note.textContent).toMatch(/nothing was checked and found wanting/i);
     // The old copy blamed the VIEW ("which this view does not load"), which is
     // no longer true of any surface: both compute or receive real facts.
     expect(note.textContent).not.toMatch(/this view does not load/i);
@@ -602,8 +601,8 @@ describe('git observation says which kind of silence this is', () => {
     renderOpen(bundle, index);
 
     const note = screen.getByTestId('coverage-git-unknown');
-    expect(note.textContent).toMatch(/does not report whether git observation was available/i);
-    expect(note.textContent).toMatch(/unresolved/i);
+    expect(note.textContent).toMatch(/does not report whether it could see git/i);
+    expect(note.textContent).toMatch(/unexplained/i);
     expect(note.textContent).toMatch(/it is not a defect and it is not a finding/i);
     // The state of the entire archive must not read as a fault in the archive.
     expect(note.textContent).not.toMatch(/unavailable/i);
@@ -623,9 +622,9 @@ describe('git observation says which kind of silence this is', () => {
     renderOpen(bundle, index);
 
     const note = screen.getByTestId('coverage-git-impossible');
-    expect(note.textContent).toMatch(/no git evidence could be collected/i);
-    expect(note.textContent).toMatch(/because none could be gathered/i);
-    expect(note.textContent).toMatch(/not because nothing was done/i);
+    expect(note.textContent).toMatch(/could not see git/i);
+    expect(note.textContent).toMatch(/none could be gathered/i);
+    expect(note.textContent).toMatch(/not that nothing was done/i);
     expect(note.textContent).not.toMatch(/failed/i);
   });
 
@@ -643,7 +642,7 @@ describe('git observation says which kind of silence this is', () => {
     const first = renderOpen(notOwned.bundle, notOwned.index);
     const notOwnedText = screen.getByTestId('coverage-git-impossible').textContent ?? '';
     expect(notOwnedText).toMatch(/no repository it could see belonged to this assignment/i);
-    expect(notOwnedText).toMatch(/there was no repository to observe/i);
+    expect(notOwnedText).toMatch(/no repository to watch/i);
     first.unmount();
 
     const unavailable = await buildScope([
@@ -677,8 +676,8 @@ describe('git observation says which kind of silence this is', () => {
 
     const note = screen.getByTestId('coverage-git-silent-capable');
     expect(note.textContent).toMatch(/no git command ran/i);
-    expect(note.textContent).toMatch(/ordinary shape of most honest sessions/i);
-    expect(note.textContent).toMatch(/is not a finding/i);
+    expect(note.textContent).toMatch(/most sessions look like this/i);
+    expect(note.textContent).toMatch(/most sessions look like this/i);
   });
 
   it('never renders in the flag vocabulary', async () => {
@@ -748,9 +747,9 @@ describe('peer witnessing reads as evidence about a log, never about a person', 
 
     const note = screen.getByTestId('coverage-unwitnessed-note');
     expect(note.textContent).toMatch(/ordinary case/i);
-    expect(note.textContent).toMatch(/it is not a finding/i);
+    expect(note.textContent).toMatch(/the ordinary case/i);
     expect(note.textContent).toMatch(/may not have been recording/i);
-    expect(note.textContent).toMatch(/never have overlapped/i);
+    expect(note.textContent).toMatch(/never overlapped/i);
     // The reading this whole module exists to prevent.
     expect(note.textContent).not.toMatch(/unverified|suspicious|deleted|removed/i);
   });
@@ -794,7 +793,7 @@ describe('peer witnessing reads as evidence about a log, never about a person', 
     expect(row.textContent).toMatch(/had not yet pushed/i);
 
     const note = screen.getByTestId('coverage-witness-discrepancy-note');
-    expect(note.textContent).toMatch(/says nothing about who altered anything/i);
+    expect(note.textContent).toMatch(/not so anyone can be accused/i);
     expect(note.textContent).toMatch(/not so anyone can be accused/i);
 
     // No contributor name is reachable from a witness row. `alice` witnessed,
@@ -822,8 +821,8 @@ describe('peer witnessing reads as evidence about a log, never about a person', 
     renderOpen(bundle, index);
 
     const note = screen.getByTestId('coverage-witness-capability-impossible');
-    expect(note.textContent).toMatch(/limit on what this record can show/i);
-    expect(note.textContent).toMatch(/not something anyone did/i);
+    expect(note.textContent).toMatch(/had the chance to be corroborated/i);
+    expect(note.textContent).toMatch(/had the chance to be corroborated/i);
   });
 });
 
@@ -851,8 +850,8 @@ describe('file scope says whether a silent file was ever being watched', () => {
     renderOpen(bundle, index);
 
     const note = screen.getByTestId('coverage-file-scope-unreported');
-    expect(note.textContent).toMatch(/does not report which files it was watching/i);
-    expect(note.textContent).toMatch(/unresolved/i);
+    expect(note.textContent).toMatch(/does not report which files it watched/i);
+    expect(note.textContent).toMatch(/unexplained/i);
     expect(note.textContent).toMatch(/it is not a defect and it is not a finding/i);
     // Nothing is claimed about any individual file, in either direction.
     expect(screen.queryByTestId('coverage-file-not-watched')).toBeNull();
@@ -874,19 +873,19 @@ describe('file scope says whether a silent file was ever being watched', () => {
     renderOpen(bundle, index);
 
     expect(screen.getByTestId('coverage-file-scope-reported').textContent).toMatch(
-      /every session here reported which files it was watching/i,
+      /every session reported its watched files/i,
     );
 
     const rows = screen.getAllByTestId('coverage-file-not-watched');
     expect(rows).toHaveLength(1);
     expect(rows[0]!.textContent).toMatch(/provided\.py/);
-    expect(rows[0]!.textContent).toMatch(/outside every session’s watched scope/i);
+    expect(rows[0]!.textContent).toMatch(/outside every watched scope/i);
     expect(rows[0]!.textContent).toMatch(/nothing was recording it/i);
     // The watched file is not listed: there is no ambiguity to resolve for it.
     expect(rows[0]!.textContent).not.toMatch(/hw1\.py/);
 
     const note = screen.getByTestId('coverage-file-not-watched-note');
-    expect(note.textContent).toMatch(/fact about the assignment’s configuration/i);
+    expect(note.textContent).toMatch(/about the assignment’s configuration/i);
     expect(note.textContent).toMatch(/nothing here is a finding/i);
     expect(note.textContent).not.toMatch(/suspicious|misconduct|failed|warning/i);
   });
@@ -907,7 +906,7 @@ describe('file scope says whether a silent file was ever being watched', () => {
     renderOpen(bundle, index);
 
     const note = screen.getByTestId('coverage-file-scope-partial');
-    expect(note.textContent).toMatch(/lower bound rather than the whole scope/i);
+    expect(note.textContent).toMatch(/lower bound/i);
     expect(note.textContent).toMatch(/may still have been watched by a session that said nothing/i);
     // Fail toward not knowing: no file is asserted to be unwatched.
     expect(screen.queryByTestId('coverage-file-not-watched')).toBeNull();
@@ -950,7 +949,7 @@ describe('file scope says whether a silent file was ever being watched', () => {
     renderOpen(bundle, index);
 
     expect(screen.getByTestId('coverage-file-scope-incomplete').textContent).toMatch(
-      /can never show that one was not/i,
+      /never show one was not/i,
     );
     expect(screen.queryByTestId('coverage-file-not-watched')).toBeNull();
   });
@@ -975,7 +974,7 @@ describe('file scope says whether a silent file was ever being watched', () => {
     const note = screen.getByTestId('coverage-file-scope-malformed');
     expect(note.textContent).toContain(describeFileScopeProblem('path_absolute'));
     expect(note.textContent).not.toMatch(/someone/);
-    expect(note.textContent).toMatch(/never about the student/i);
+    expect(note.textContent).toMatch(/about the recorder, not the student/i);
     // Rejected whole, so nothing about any file is asserted.
     expect(screen.queryByTestId('coverage-file-not-watched')).toBeNull();
   });
@@ -1075,7 +1074,7 @@ describe('capability verdicts are quoted from log-core, not re-worded here', () 
       ]);
       const view = renderOpen(bundle, index);
       expect(screen.getByTestId('coverage-git-impossible').textContent).toMatch(
-        /not because nothing was done/i,
+        /not that nothing was done/i,
       );
       view.unmount();
     }
@@ -1093,7 +1092,7 @@ describe('capability verdicts are quoted from log-core, not re-worded here', () 
     renderOpen(bundle, index);
     const text = screen.getByTestId('coverage-witness-capability-impossible').textContent ?? '';
     expect(text).toContain(describeWitnessCapture('unavailable'));
-    expect(text).toMatch(/not something anyone did/i);
+    expect(text).toMatch(/had the chance to be corroborated/i);
   });
 
   it('quotes describeCapabilityValueProblem, so a non-string is not called an undefined value', async () => {
@@ -1120,7 +1119,7 @@ describe('capability verdicts are quoted from log-core, not re-worded here', () 
     renderOpen(unknownValue.bundle, unknownValue.index);
     const text = screen.getByTestId('coverage-git-malformed').textContent ?? '';
     expect(text).toContain(describeCapabilityValueProblem('unknown_value'));
-    expect(text).toMatch(/never about the student/i);
+    expect(text).toMatch(/about the recorder, not the student/i);
   });
 
   /**
@@ -1139,9 +1138,19 @@ describe('capability verdicts are quoted from log-core, not re-worded here', () 
       },
     ]);
     renderOpen(bundle, index);
-    expect(screen.getByTestId('coverage-git-available').textContent).toMatch(
-      /at least one session/i,
+    // The git section no longer carries an 'available' sentence at all: it was
+    // pure scaffolding — it announced that a per-session breakdown followed and
+    // then explained why the breakdown is per session. The strip says "git
+    // observed" and the rows below say the rest.
+    //
+    // So the requirement is now the STRONGER one it always implied: the
+    // per-SESSION helper sentence must appear nowhere in this section, whether
+    // or not a sentence of our own is there to be compared against it.
+    expect(screen.queryByTestId('coverage-git-available')).toBeNull();
+    expect(screen.getByTestId('coverage-git-observation').textContent ?? '').not.toContain(
+      describeGitCapture('available'),
     );
+    // Witnessing DOES keep an 'available' sentence, and it stays bundle-level.
     expect(screen.getByTestId('coverage-witness-capability-available').textContent).toMatch(
       /at least one session/i,
     );
@@ -1276,5 +1285,97 @@ describe('a torn final line is stated, and stated as an interruption', () => {
     ]);
     renderOpen(bundle, index);
     expect(screen.queryByTestId('coverage-torn-tails')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The strip, and what it means for an ordinary submission
+//
+// The panel used to render four sections of disclaimers for a solo student who
+// had simply not enrolled — every §5.6 field a CURRENT recorder reports takes a
+// bundle out of "nothing to note", so the quiet path had become unreachable for
+// exactly the recordings it was written for. These pin the fix from both ends:
+// the facts must be readable without touching anything, and the arguments about
+// them must not be on screen until asked for.
+// ---------------------------------------------------------------------------
+
+/** What a current recorder reports on an ordinary solo, unenrolled session. */
+const CURRENT_RECORDER = {
+  git_capture: 'available',
+  witness_capture: 'available',
+  ...scopeOf(['src/solution.py', 'src/helpers.py']),
+};
+
+describe('an ordinary current-recorder bundle states its facts and argues none of them', () => {
+  it('puts every count on screen without opening anything', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: 'anonymous',
+        startMin: 0,
+        endMin: 60,
+        capabilities: CURRENT_RECORDER,
+        commits: [{ sha: SHA_A, atMin: 30 }],
+        activity: ['src/solution.py'],
+      },
+    ]);
+    renderOpen(bundle, index);
+
+    // Rendered, not clicked open — same standard Rule 3 sets for the overlap row.
+    const strip = screen.getByTestId('coverage-stat-strip');
+    expect(strip).toBeVisible();
+    expect(screen.getByTestId('coverage-stat-sessions')).toBeVisible();
+    expect(screen.getByTestId('coverage-stat-identity').textContent).toMatch(/1 unattributed/i);
+    expect(screen.getByTestId('coverage-stat-commits').textContent).toMatch(/1 commit observed/i);
+    expect(screen.getByTestId('coverage-stat-git').textContent).toMatch(/git observed/i);
+    expect(screen.getByTestId('coverage-stat-files').textContent).toMatch(/2 files watched/i);
+  });
+
+  it('argues with nobody until asked: no explanatory paragraph is visible', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: 'anonymous',
+        startMin: 0,
+        endMin: 60,
+        capabilities: CURRENT_RECORDER,
+        commits: [{ sha: SHA_A, atMin: 30 }],
+        activity: ['src/solution.py'],
+      },
+    ]);
+    renderOpen(bundle, index);
+
+    // The paragraphs this panel used to open with, on a submission where
+    // nothing happened. Each must STILL BE IN THE DOCUMENT — folded, not
+    // deleted — so the claim survives and only its prominence changed.
+    //
+    // getByTestId, not queryByTestId: a guarded loop would pass just as well
+    // against a panel that stopped rendering these at all, which is the
+    // opposite of the fix. Absence has to fail here.
+    for (const id of [
+      'coverage-unattributed-note',
+      'coverage-unwitnessed-note',
+      'coverage-git-observing',
+      'coverage-file-scope-reported',
+    ]) {
+      expect(screen.getByTestId(id)).not.toBeVisible();
+    }
+
+    // Nothing alarming reached the screen either.
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByTestId('submission-coverage-panel').getAttribute('role')).toBe('status');
+  });
+
+  it('keeps a rare-but-innocent fact visible, disclosure or not', async () => {
+    // The rule the Why disclosure is held to: ordinary reassurance folds, a
+    // fact a grader could misread does not. An overlap is the latter.
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, startMin: 0, endMin: 180, capabilities: CURRENT_RECORDER },
+      { who: { studentRef: 'bob' }, startMin: 60, endMin: 240, capabilities: CURRENT_RECORDER },
+    ]);
+    renderOpen(bundle, index);
+
+    const row = screen.getByTestId('coverage-concurrent-row');
+    expect(row).toBeVisible();
+    // Including the sentence that says why it is not a finding.
+    expect(row.textContent).toMatch(/what collaboration looks like, and not a finding/i);
   });
 });

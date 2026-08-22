@@ -707,7 +707,7 @@ describe('Overview coverage panel', () => {
       expect(screen.getByTestId('coverage-not-available-note')).toBeInTheDocument();
     });
     expect(screen.getByTestId('coverage-not-available-note').textContent).toMatch(
-      /did not send the coverage facts/i,
+      /did not send coverage facts/i,
     );
     // Not "nothing to note" — that would claim we checked and found nothing.
     expect(screen.queryByTestId('coverage-nothing-to-note')).toBeNull();

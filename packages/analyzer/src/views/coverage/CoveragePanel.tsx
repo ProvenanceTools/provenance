@@ -79,6 +79,25 @@
  * comments at each one — the asymmetry is deliberate and is about which silence
  * is dangerous.
  *
+ * ## Counts in the strip, explanations behind `Why`
+ *
+ * State 3 opens with a {@link StatStrip}: every count this panel states, on one
+ * wrapped line, no prose. The paragraphs stay exactly as they were — same
+ * wording, same `data-testid` — but the ones that fire on an ORDINARY recording
+ * now sit inside a {@link Why} disclosure.
+ *
+ * The rule for what may fold, and the reason it is not "whatever is longest",
+ * is on {@link Why}. In short: a paragraph that appears on every submission is
+ * reassurance nobody asked for, and reassurance that is always on screen trains
+ * a grader to skip the panel. A paragraph that appears because something unusual
+ * and innocent happened — an overlap, two machines, a torn tail, a witness
+ * discrepancy — is the one they must not miss, and it stays visible.
+ *
+ * A solo bundle from a current recorder therefore renders the strip and no
+ * paragraphs at all, which is what it always should have said: this record is
+ * ordinary. Before this, the same bundle rendered four sections of disclaimers
+ * about partners it did not have.
+ *
  * ## The capability wording is `log-core`'s, not this file's
  *
  * `describeGitCapture`, `describeWitnessCapture`,
@@ -134,13 +153,13 @@ function Frame({ children }: { children: React.ReactNode }) {
     <section
       role="status"
       data-testid="submission-coverage-panel"
-      className="rounded border border-slate-400 bg-slate-50 text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
+      className="rounded border border-slate-300 bg-slate-50 text-slate-900"
     >
-      <div className="border-b border-slate-300 px-4 py-2 dark:border-slate-700">
+      <div className="border-b border-slate-200 px-4 py-2">
         <h2 className="text-sm font-medium">Recording coverage</h2>
-        <p className="text-xs text-slate-600 dark:text-slate-400">
-          What this record contains, and what it cannot show. These are facts about the recording,
-          not findings about anyone.
+        <p className="text-xs text-slate-600">
+          What this record covers, and what it cannot show. Facts about the recording, not findings
+          about anyone.
         </p>
       </div>
       {children}
@@ -158,13 +177,91 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <div
-      className="border-t border-slate-300 px-4 py-3 first:border-t-0 dark:border-slate-700"
-      data-testid={testId}
-    >
+    <div className="border-t border-slate-200 px-4 py-3 first:border-t-0" data-testid={testId}>
       <h3 className="mb-1.5 text-xs font-medium">{title}</h3>
-      <div className="space-y-1.5 text-xs text-slate-700 dark:text-slate-300">{children}</div>
+      <div className="space-y-1.5 text-xs text-slate-700">{children}</div>
     </div>
+  );
+}
+
+/**
+ * The always-visible strip: one compact line per fact, no prose.
+ *
+ * Rule 3 says the coverage context has to be beside the flags, always visible.
+ * It does not say it has to be four paragraphs. Every COUNT this panel used to
+ * spend a sentence on lives here instead, keeping its original `data-testid` so
+ * the claim it makes is still the claim under test — only the wrapper changed.
+ *
+ * Deliberately not a table and not a stat-card row: this must read as a caption
+ * on the submission, not as another scoreboard competing with the flags.
+ */
+function StatStrip({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="border-t border-slate-200 px-4 py-2.5 first:border-t-0">
+      <ul
+        data-testid="coverage-stat-strip"
+        className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-700"
+      >
+        {children}
+      </ul>
+    </div>
+  );
+}
+
+function Stat({
+  children,
+  testId,
+  muted = false,
+}: {
+  children: React.ReactNode;
+  testId: string;
+  muted?: boolean;
+}) {
+  return (
+    <li data-testid={testId} className={muted ? 'text-slate-500' : undefined}>
+      {children}
+    </li>
+  );
+}
+
+/**
+ * The explanation, folded away by default.
+ *
+ * ## Which prose is allowed behind this, and which is not
+ *
+ * ONLY the paragraphs that fire on an ordinary recording — a student who never
+ * enrolled, a log nobody witnessed, a commit no session was recording at, a
+ * capable session that ran no git command, a recorder that predates a §5.6
+ * field. Those are the ones a grader meets on every submission, and reassurance
+ * that is always on screen stops reading as reassurance: a panel that protests
+ * on a submission where nothing happened teaches the reader to skip it, which is
+ * exactly when they most need to read it.
+ *
+ * The rare-but-innocent facts — a concurrent overlap, two machines, a torn tail,
+ * an unattested tail, a dropped artifact, a witness discrepancy, a DAG defect —
+ * keep their defence ON SCREEN, undisclosed. `CoveragePanel.test.tsx`'s "is
+ * visible without any disclosure" pins the first of those, and the rest share
+ * its reasoning: a fact that could be misread is exactly the fact whose
+ * explanation must not need a click. Passing that test by hiding the sentence
+ * behind a control it happens not to match would be softening the requirement,
+ * not meeting it.
+ *
+ * Native `<details>`, so the prose stays in the DOM and in the page's text for
+ * find-in-page, and so no state has to be managed. It exposes no
+ * `aria-expanded`, which is why it does not read as the collapsed control that
+ * same test forbids — but the rule above, not that detail, is what keeps the
+ * two kinds of paragraph apart.
+ */
+function Why({ children, label = 'why' }: { children: React.ReactNode; label?: string }) {
+  return (
+    <details className="mt-1" data-testid="coverage-why">
+      <summary className="cursor-pointer list-none text-[11px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-slate-400">
+        {label}
+      </summary>
+      <div className="mt-1.5 space-y-1.5 border-l-2 border-slate-200 pl-3 text-xs text-slate-600">
+        {children}
+      </div>
+    </details>
   );
 }
 
@@ -184,19 +281,19 @@ function Section({
  */
 const OBSERVED_STATE_NOTES: Readonly<Record<string, string>> = {
   disappeared:
-    'At some point the recorder saw this file leave the working tree. That is descriptive, not a finding: checking out a branch that never contained a partner’s log removes it, and so does a stash. What the observation still carries is the last state the recorder saw.',
+    'The recorder saw this file leave the working tree — descriptive, not a finding. Checking out a branch that never had a partner’s log removes it, and so does a stash. The observation still carries the last state the recorder saw.',
   shrank:
-    'At some point the recorder saw this file get smaller than it had been. On its own that is not evidence of anything — a branch switch and a fresh checkout both produce it.',
+    'The recorder saw this file get smaller. A branch switch and a fresh checkout both do that.',
   unparseable:
-    'At some point the recorder could not read this file as a provenance log. It did not rename, alter or remove it; recording what it saw is the entire response.',
+    'The recorder could not read this file as a provenance log. It did not rename, alter or remove it.',
 };
 
 /** How far a witnessing session's own identity got, said without insinuation. */
 const WITNESS_AUTHORITY_NOTES: Readonly<Record<string, string>> = {
   unverifiable:
-    'The session that made this observation asserts an identity that could not be verified, so the observation is recorded and is not being relied on.',
+    'The observing session claims an identity that could not be verified, so this observation is recorded but not relied on.',
   unattributed:
-    'The session that made this observation is not attributed to anyone — the usual cause is a student who had not enrolled. Its own chain verifies, so the observation is real; it simply has no name attached to it.',
+    'The observing session has no name on it — usually a student who had not enrolled. Its chain verifies, so the observation is real.',
 };
 
 export function CoveragePanel({ facts }: CoveragePanelProps) {
@@ -208,10 +305,8 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
       <Frame>
         <Section title="Not available" testId="coverage-not-available">
           <p data-testid="coverage-not-available-note">
-            This server did not send the coverage facts for this submission, which happens when it
-            is running a version older than the one that reports them. Nothing here has been checked
-            and found wanting — the facts simply were not fetched, and no conclusion about this
-            submission follows from their absence.
+            This server did not send coverage facts — it is running a version older than the one
+            that reports them. Nothing was checked and found wanting; the facts were not fetched.
           </p>
         </Section>
       </Frame>
@@ -239,18 +334,75 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
       <Frame>
         <Section title="Nothing to note" testId="coverage-nothing-to-note">
           <p data-testid="coverage-nothing-to-note-body">
-            Every session in this submission is attributed to a verified contributor, no artifacts
-            were left out of the analysis, and each log is covered end to end by its signature.
-            There is nothing further to say about what this record can and cannot show.
+            Every session is attributed to a verified contributor, nothing was left out of the
+            analysis, and each log is covered end to end by its signature. There is nothing further
+            to say about what this record can and cannot show.
           </p>
         </Section>
       </Frame>
     );
   }
 
+  const identitySessions = identity.attributed + identity.unverifiable + identity.unattributed;
+
   // State 3 — facts to state.
   return (
     <Frame>
+      {/* -----------------------------------------------------------------
+          The strip: every COUNT this panel states, in one place, no prose.
+
+          These carry their own `coverage-stat-*` ids rather than borrowing the
+          ids of the sentences below. The sentences keep theirs — a claim under
+          test stays on the element that makes it — so this strip adds a
+          summary and takes nothing away.
+          ----------------------------------------------------------------- */}
+      <StatStrip>
+        {/* `IdentityCoverage` carries the three buckets, not a total. Summing
+            them here keeps the total a presentation detail rather than a
+            fourth field the wire shape has to promise to keep consistent. */}
+        <Stat testId="coverage-stat-sessions">
+          {identitySessions} session{identitySessions === 1 ? '' : 's'}
+        </Stat>
+        {!identity.rootKeyConfigured ? (
+          <Stat testId="coverage-stat-identity" muted>
+            identity not checkable
+          </Stat>
+        ) : (
+          identity.unverifiable + identity.unattributed > 0 && (
+            <Stat testId="coverage-stat-identity" muted>
+              {identity.unverifiable > 0 && `${identity.unverifiable} unverifiable`}
+              {identity.unverifiable > 0 && identity.unattributed > 0 && ' · '}
+              {identity.unattributed > 0 && `${identity.unattributed} unattributed`}
+            </Stat>
+          )
+        )}
+        {dagCoverage.commits > 0 && (
+          <Stat testId="coverage-stat-commits">
+            {dagCoverage.observedCommits} commit
+            {dagCoverage.observedCommits === 1 ? '' : 's'} observed
+            {dagCoverage.witnessedOnlyCommits > 0 &&
+              ` · ${dagCoverage.witnessedOnlyCommits} witnessed-only`}
+          </Stat>
+        )}
+        {gitObservation.availability !== 'unknown' && (
+          <Stat testId="coverage-stat-git" muted={gitObservation.availability !== 'available'}>
+            {gitObservation.availability === 'available' ? 'git observed' : 'git not observable'}
+          </Stat>
+        )}
+        {witnessing.sessions > 0 && witnessing.capability !== 'unknown' && (
+          <Stat testId="coverage-stat-witnessing" muted={witnessing.witnessedSessions === 0}>
+            {witnessing.witnessedSessions} of {witnessing.sessions} log
+            {witnessing.sessions === 1 ? '' : 's'} witnessed
+          </Stat>
+        )}
+        {fileScope.reporting === 'reported' && (
+          <Stat testId="coverage-stat-files">
+            {fileScope.watchedFiles.length} file
+            {fileScope.watchedFiles.length === 1 ? '' : 's'} watched
+          </Stat>
+        )}
+      </StatStrip>
+
       {/* -----------------------------------------------------------------
           Concurrent recording — the fact a suppressed overlap used to lose.
           ----------------------------------------------------------------- */}
@@ -262,10 +414,10 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
                 {f.contributorA} and {f.contributorB} recorded concurrently for{' '}
                 {formatDuration(f.overlapMs)}.
               </span>{' '}
-              Both identities are verified and are different people, so this is two partners working
-              at the same time — the expected shape of collaboration, and not a finding.
+              Both are verified, and verified as different people — this is what collaboration looks
+              like, and not a finding.
               {f.crashBounded &&
-                ' One of the two sessions has no session.end, so its extent is bounded at its last recorded event and the real overlap may be longer.'}
+                ' One session has no session.end, so its extent stops at its last recorded event and the real overlap may be longer.'}
             </p>
           ))}
         </Section>
@@ -285,12 +437,11 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
                 {f.studentRef} recorded on two enrolled machines at the same time, for{' '}
                 {formatDuration(f.overlapMs)}.
               </span>{' '}
-              Both sessions verify to the same student, and each was signed by a different enrolled
-              machine key — so this is one person&rsquo;s two machines, which is a supported setup,
-              and not a finding. Enrolling a second machine is how it is meant to be done: each
-              machine generates its own key and nothing is copied between them.
+              Both sessions verify to the same student, each signed by a different enrolled machine
+              key. This is one person&rsquo;s two machines — a supported setup, and not a finding.
+              Each machine generates its own key; nothing is copied between them.
               {f.crashBounded &&
-                ' One of the two sessions has no session.end, so its extent is bounded at its last recorded event and the real overlap may be longer.'}
+                ' One session has no session.end, so its extent stops at its last recorded event and the real overlap may be longer.'}
             </p>
           ))}
         </Section>
@@ -299,34 +450,54 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
       {/* -----------------------------------------------------------------
           Identity coverage.
           ----------------------------------------------------------------- */}
+      {/*
+        Renders only when it has something a strip item cannot carry. The
+        counts are in the strip; what is left is the deployment fact (kept ON
+        SCREEN — "no identity check was possible" is what stops a grader
+        reading unverifiable sessions as failed students) and the unattributed
+        explanation, which is ordinary and folds away.
+      */}
+      {/*
+        Unconditional in state 3, deliberately — an earlier draft rendered it
+        only when a session was unverifiable or unattributed, which read well
+        (a fully attributed bundle has no problem to state) but quietly removed
+        the panel's ability to answer "how ARE these sessions attributed?" on a
+        clean submission. `CoveragePanel.test.tsx`'s "shows counts instead when
+        the root key IS configured" is that guarantee, and it costs one
+        collapsed line to keep.
+      */}
       <Section title="Identity coverage" testId="coverage-identity">
-        {!identity.rootKeyConfigured ? (
-          /*
-           * NOT a failure. This deployment has no root public key, so no
-           * identity chain of any version could be walked. Every identified
-           * session reads "unverifiable" for that reason alone. Saying "these
-           * identities failed verification" here would turn one unset
-           * environment variable into a class-wide integrity finding.
-           */
+        {/*
+         * NOT a failure. This deployment has no root public key, so no
+         * identity chain of any version could be walked. Every identified
+         * session reads "unverifiable" for that reason alone. Saying "these
+         * identities failed verification" here would turn one unset
+         * environment variable into a class-wide integrity finding.
+         *
+         * Stays visible: it is rare, and it is the sentence that stops a
+         * page of "unverifiable" reading as a page of failed students.
+         */}
+        {!identity.rootKeyConfigured && (
           <p data-testid="coverage-no-root-key">
             <span className="font-medium">No identity check was possible.</span> This deployment has
-            no root public key configured, so no session&rsquo;s enrollment chain could be checked
-            at all. This is a limit on what this analyzer can verify — nothing here was checked and
-            found wanting, and nothing follows from it about any student.
-          </p>
-        ) : (
-          <p data-testid="coverage-identity-counts">
-            {identity.attributed} session{identity.attributed === 1 ? '' : 's'} attributed to a
-            verified contributor; {identity.unverifiable} carrying an identity claim that is not
-            being honoured; {identity.unattributed} with no identity block at all.
+            no root public key configured, so no enrollment chain could be checked. Nothing here was
+            checked and found wanting.
           </p>
         )}
-        {identity.unattributed > 0 && (
-          <p data-testid="coverage-unattributed-note">
-            Sessions with no identity block are not attributed to anyone. The usual cause is that
-            the student had not enrolled. This is an ordinary state, it is not a finding, and such
-            sessions are never grouped with each other and never asserted to be different people.
-          </p>
+        {identity.rootKeyConfigured && (
+          <Why label="attribution">
+            <p data-testid="coverage-identity-counts">
+              {identity.attributed} verified, {identity.unverifiable} claiming an identity that is
+              not being honoured, {identity.unattributed} with no identity block.
+            </p>
+            {identity.unattributed > 0 && (
+              <p data-testid="coverage-unattributed-note">
+                A session with no identity block usually means the student had not enrolled — an
+                ordinary state, not a finding. The log is real; it just has no name on it. These are
+                never grouped together and never treated as different people.
+              </p>
+            )}
+          </Why>
         )}
       </Section>
 
@@ -345,12 +516,13 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
         witnessing.excluded > 0 ||
         witnessing.malformed > 0) && (
         <Section title="Peer witnessing" testId="coverage-witnessing">
-          {witnessing.capability === 'available' && (
-            <p data-testid="coverage-witness-capability-available">
-              At least one session here was watching the shared <code>.provenance/</code> directory,
-              so what it did and did not see about the other logs is on the record.
-            </p>
-          )}
+          {/*
+            `impossible` stays visible; `available` and `unknown` fold away.
+            The asymmetry is the same one that decides whether this section
+            renders at all: "nothing here could witness anything" is a real
+            limit on the record, while "something was watching" and "nobody
+            said" are the two ordinary states a grader meets constantly.
+          */}
           {witnessing.capability === 'impossible' && (
             /*
              * The middle sentence is `log-core`'s own, quoted rather than
@@ -360,50 +532,48 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
              * reported; the helper cannot be used as a bundle-level claim.
              */
             <p data-testid="coverage-witness-capability-impossible">
-              <span className="font-medium">
-                No session here was able to witness any other log.
-              </span>{' '}
-              Every session in this submission reported the same thing.{' '}
-              {describeWitnessCapture('unavailable')} Nothing in this submission could have been
-              witnessed by anything else in it — a limit on what this record can show, and not
-              something anyone did.
+              <span className="font-medium">Nothing here could witness anything else.</span> Every
+              session reported the same: {describeWitnessCapture('unavailable')} No log in this
+              submission had the chance to be corroborated.
             </p>
           )}
-          {witnessing.capability === 'unknown' && (
-            <p data-testid="coverage-witness-capability-unknown">
-              Not every session here reported whether it could watch the shared{' '}
-              <code>.provenance/</code> directory, so we cannot say whether a log went unwitnessed
-              because nothing saw it or because nothing was looking. Recorders only began reporting
-              this recently; every submission recorded before then is in this state, and nothing
-              follows from it.
-            </p>
-          )}
-
-          {witnessing.sessions > 0 && (
-            <p data-testid="coverage-witness-counts">
-              {witnessing.witnessedSessions} of {witnessing.sessions} log
-              {witnessing.sessions === 1 ? '' : 's'} in this submission{' '}
-              {witnessing.witnessedSessions === 1 ? 'is' : 'are'} named by another session&rsquo;s
-              signed chain.
-            </p>
-          )}
-          {witnessing.unwitnessedSessions > 0 && (
-            <p data-testid="coverage-unwitnessed-note">
-              The other {witnessing.unwitnessedSessions}{' '}
-              {witnessing.unwitnessedSessions === 1 ? 'is' : 'are'} named by no witness. That is the
-              ordinary case and it is not a finding: the partner may not have been recording, their
-              recorder may predate peer witnessing, or their sessions may simply never have
-              overlapped this one. Nothing about the student, or about the log, follows from it.
-            </p>
-          )}
-          {witnessing.corroborated > 0 && (
-            <p data-testid="coverage-witness-corroborated">
-              {witnessing.corroborated} observation
-              {witnessing.corroborated === 1 ? '' : 's'} match the log that is here at the point
-              {witnessing.corroborated === 1 ? ' it was' : ' they were'} taken, so the witnessed
-              part of that log is intact.
-            </p>
-          )}
+          <Why label="witnessing">
+            {witnessing.capability === 'available' && (
+              <p data-testid="coverage-witness-capability-available">
+                At least one session was watching the shared <code>.provenance/</code> directory.
+              </p>
+            )}
+            {witnessing.capability === 'unknown' && (
+              <p data-testid="coverage-witness-capability-unknown">
+                Not every session reported whether it could watch the shared{' '}
+                <code>.provenance/</code> directory, so an unwitnessed log here is unexplained:
+                nothing saw it, or nothing was looking. Recorders only began reporting this
+                recently.
+              </p>
+            )}
+            {witnessing.sessions > 0 && (
+              <p data-testid="coverage-witness-counts">
+                {witnessing.witnessedSessions} of {witnessing.sessions} log
+                {witnessing.sessions === 1 ? '' : 's'}{' '}
+                {witnessing.witnessedSessions === 1 ? 'is' : 'are'} named by another session&rsquo;s
+                signed chain.
+              </p>
+            )}
+            {witnessing.unwitnessedSessions > 0 && (
+              <p data-testid="coverage-unwitnessed-note">
+                A log no witness names is the ordinary case: the partner may not have been
+                recording, their recorder may predate witnessing, or their sessions never overlapped
+                this one.
+              </p>
+            )}
+            {witnessing.corroborated > 0 && (
+              <p data-testid="coverage-witness-corroborated">
+                {witnessing.corroborated} observation
+                {witnessing.corroborated === 1 ? '' : 's'} match the log that is here, so the
+                witnessed part of it is intact.
+              </p>
+            )}
+          </Why>
 
           {witnessing.discrepancies.map((d) => (
             <p
@@ -438,29 +608,26 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
           ))}
           {witnessing.discrepancies.length > 0 && (
             <p data-testid="coverage-witness-discrepancy-note">
-              An observation that does not line up with the log that is here says nothing about who
-              altered anything, and each of these has ordinary explanations too: a partner who had
-              not pushed when this archive was taken, a partner who kept recording after their last
-              push, or a branch that never carried the file. They are stated so a grader can see
-              them, not so anyone can be accused.
+              These have ordinary explanations: a partner who had not pushed when this archive was
+              taken, a partner who kept recording after their last push, or a branch that never
+              carried the file. They are shown so a grader can see them, not so anyone can be
+              accused.
             </p>
           )}
 
           {witnessing.excluded > 0 && (
             <p data-testid="coverage-witness-excluded">
               {witnessing.excluded} observation{witnessing.excluded === 1 ? ' was' : 's were'} read
-              and deliberately not used. A chain cannot vouch for itself, and an observation about
-              another session of the same proven contributor is not independent evidence — whoever
-              could alter one of those chains could alter both.
+              and deliberately not used: a chain cannot vouch for itself, and whoever could alter
+              one chain of the same contributor could alter both.
             </p>
           )}
           {witnessing.malformed > 0 && (
             <p data-testid="coverage-witness-malformed">
               {witnessing.malformed} observation
-              {witnessing.malformed === 1 ? ' could' : 's could'} not be read in the shape this
-              format defines, so {witnessing.malformed === 1 ? 'it was' : 'they were'} not used.
-              That is a fact about the recorder that wrote them; nothing is concluded from it about
-              anyone.
+              {witnessing.malformed === 1 ? ' was' : 's were'} not in the shape this format defines,
+              so {witnessing.malformed === 1 ? 'it was' : 'they were'} not used. That is about the
+              recorder, not the student.
             </p>
           )}
         </Section>
@@ -471,19 +638,24 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
           ----------------------------------------------------------------- */}
       {(dagCoverage.commits > 0 || dagDefects.length > 0) && (
         <Section title="Commit graph" testId="coverage-dag">
-          <p data-testid="coverage-dag-counts">
-            {dagCoverage.observedCommits} commit{dagCoverage.observedCommits === 1 ? '' : 's'} were
-            observed by a recording session; {dagCoverage.witnessedOnlyCommits} appear only as a
-            parent of another commit, so they existed but no surviving session recorded work at
-            them.
-          </p>
-          {dagCoverage.witnessedOnlyCommits > 0 && (
-            <p data-testid="coverage-witnessed-only-note">
-              A witnessed-only commit says work happened that this record does not cover. It does
-              not say who did that work, and it is not evidence of misconduct — a partner who was
-              not recording produces exactly this.
+          {/* Counts are in the strip. Both paragraphs here are the ordinary
+              case — a witnessed-only commit is what a non-recording partner
+              produces — so both fold away. The DAG defects below do not: a
+              cycle or a conflicting parent is rare and needs its explanation
+              on screen beside it. */}
+          <Why label="coverage">
+            <p data-testid="coverage-dag-counts">
+              {dagCoverage.observedCommits} commit{dagCoverage.observedCommits === 1 ? '' : 's'}{' '}
+              observed by a recording session, {dagCoverage.witnessedOnlyCommits} known only as the
+              parent of another commit.
             </p>
-          )}
+            {dagCoverage.witnessedOnlyCommits > 0 && (
+              <p data-testid="coverage-witnessed-only-note">
+                Work happened at those commits that this record does not cover — a partner who was
+                not recording produces exactly this. It says nothing about who did that work.
+              </p>
+            )}
+          </Why>
           {/*
             Reworded when D12's writer half landed. The old copy said the signed
             format "does not yet carry a repository discriminator", which stopped
@@ -501,20 +673,18 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
           */}
           {facts.repositoryAssumedSingle && (
             <p data-testid="coverage-repo-assumed-single">
-              One or more commits here name no repository, so those are folded into a single assumed
-              repository. A recorder that predates the repository field, and a shallow clone whose
-              root commit cannot be reached, both produce this. If more than one unnamed repository
-              was really observed, the graph above merges them; commits that did name a repository
-              are kept apart from the unnamed ones rather than assumed to be the same. This is a
-              limit on what the graph can show, and it is not a finding.
+              Some commits here name no repository, so those are folded into one assumed repository
+              — if they really came from several, the graph merges them. Commits that did name a
+              repository are kept apart from the unnamed ones. An older recorder and a shallow clone
+              both produce this — a limit on the graph, not a finding.
             </p>
           )}
           {dagDefects.map((d, i) => (
             <p key={`${d.kind}-${i}`} data-testid="coverage-dag-defect">
               {d.kind === 'conflicting_parents' &&
-                `Two signed chains claim different parents for commit ${d.sha.slice(0, 8)}…. Every claim is kept and no edge is asserted in either direction, so nothing downstream is ordered on it.`}
+                `Two signed chains claim different parents for commit ${d.sha.slice(0, 8)}…. Both claims are kept and no edge is drawn either way, so nothing downstream is ordered on it.`}
               {d.kind === 'cycle' &&
-                `The observed commits ${d.shas.map((s) => s.slice(0, 8)).join(', ')} form a cycle, which real git cannot produce. No ordering is derived from them.`}
+                `Commits ${d.shas.map((s) => s.slice(0, 8)).join(', ')} form a cycle, which real git cannot produce. No ordering is derived from them.`}
               {d.kind === 'unreadable_parents' &&
                 `The parent list for commit ${d.sha.slice(0, 8)}… could not be read (${d.reason}). Its incoming edges are treated as unknown rather than as absent.`}
             </p>
@@ -541,14 +711,13 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
           that nothing reported still says "nothing to note".
           ----------------------------------------------------------------- */}
       <Section title="Git observation" testId="coverage-git-observation">
-        {gitObservation.availability === 'available' && (
-          <p data-testid="coverage-git-available">
-            Git observation was reported as available to at least one session here. What each
-            session did and did not see is broken down below — deliberately per session, because
-            &ldquo;available to one of them&rdquo; is not &ldquo;available to all of them&rdquo;,
-            and a bundle can carry sessions from more than one machine.
-          </p>
-        )}
+        {/*
+          `impossible` and `unknown` stay visible; `available` folds away.
+          The two silences are the dangerous ones — this section exists so a
+          grader can tell "could not observe" from "nothing happened", and
+          neither of those sentences may need a click to reach. "Git was
+          available" carries no such risk.
+        */}
         {gitObservation.availability === 'impossible' && (
           /*
            * The `describeGitCapture` sentences are `log-core`'s own, quoted
@@ -562,72 +731,66 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
            * stops an incapacity from reading as inactivity.
            */
           <p data-testid="coverage-git-impossible">
-            <span className="font-medium">No git evidence could be collected here.</span>{' '}
+            <span className="font-medium">The recorder could not see git.</span>{' '}
             {gitObservation.impossibleReason === 'mixed' ? (
               <>
-                The sessions here reported two different reasons, and both prevent git evidence.{' '}
-                {describeGitCapture('unavailable')} {describeGitCapture('not_owned')} Either way
-                nothing could be observed, so the absence of git evidence in this record says
-                nothing about what was done.
+                Sessions here reported two reasons. {describeGitCapture('unavailable')}{' '}
+                {describeGitCapture('not_owned')} An absence of commits means nothing either way —
+                not that nothing was done.
               </>
             ) : gitObservation.impossibleReason === 'not_owned' ? (
               <>
-                Every session in this submission reported the same thing.{' '}
-                {describeGitCapture('not_owned')} There is no git evidence in this record because
-                there was no repository to observe — not because nothing was done.
+                {describeGitCapture('not_owned')} No commits were recorded because there was no
+                repository to watch — not that nothing was done.
               </>
             ) : (
               <>
-                Every session in this submission reported the same thing.{' '}
-                {describeGitCapture('unavailable')} There is no git evidence in this record because
-                none could be gathered — not because nothing was done.
+                {describeGitCapture('unavailable')} No commits were recorded because none could be
+                gathered — not that nothing was done.
               </>
             )}
           </p>
         )}
         {gitObservation.availability === 'unknown' && (
           <p data-testid="coverage-git-unknown">
-            This submission&rsquo;s recorder does not report whether git observation was available
-            to it. An absence of git evidence here is therefore <em>unresolved</em>: it is equally
-            consistent with no git activity having happened and with git never having been
-            observable. Recorders only began reporting this recently, so every submission recorded
-            before then is permanently in this state. It is not a defect and it is not a finding.
+            This recorder does not report whether it could see git, so an absence of commits here is{' '}
+            <em>unexplained</em>: no git activity happened, or git was never observable. Recorders
+            only began reporting this recently, so it is not a defect and it is not a finding.
           </p>
         )}
 
-        {gitObservation.observing > 0 && (
-          <p data-testid="coverage-git-observing">
-            {gitObservation.observing} of {gitObservation.sessions} session
-            {gitObservation.sessions === 1 ? '' : 's'} recorded at least one commit.
-          </p>
-        )}
-        {gitObservation.silentAndIncapable > 0 && (
-          <p data-testid="coverage-git-silent-incapable">
-            {gitObservation.silentAndIncapable} session
-            {gitObservation.silentAndIncapable === 1 ? '' : 's'} recorded no commits and reported
-            that {gitObservation.silentAndIncapable === 1 ? 'it' : 'they'} could not observe git.
-            That silence is fully explained by what{' '}
-            {gitObservation.silentAndIncapable === 1 ? 'that session' : 'those sessions'} could see,
-            and nothing further should be read into it.
-          </p>
-        )}
-        {gitObservation.silentThoughCapable > 0 && (
-          <p data-testid="coverage-git-silent-capable">
-            {gitObservation.silentThoughCapable} session
-            {gitObservation.silentThoughCapable === 1 ? '' : 's'} recorded no commits and reported
-            that git was available. So no git command ran while{' '}
-            {gitObservation.silentThoughCapable === 1 ? 'it was' : 'they were'} recording — which is
-            the ordinary shape of most honest sessions, and is not a finding.
-          </p>
-        )}
-        {gitObservation.silentAndUnreported > 0 && (
-          <p data-testid="coverage-git-silent-unreported">
-            {gitObservation.silentAndUnreported} session
-            {gitObservation.silentAndUnreported === 1 ? '' : 's'} recorded no commits and said
-            nothing about whether git could be observed, so that silence stays ambiguous. It is
-            exactly as ambiguous as it has always been; nothing has been checked and found wanting.
-          </p>
-        )}
+        {/*
+          `coverage-git-available` is gone rather than shortened. Every word of
+          it was scaffolding: it announced that a breakdown followed, and then
+          explained why the breakdown is per session. The strip already says
+          "git observed" and the per-session rows say the rest.
+        */}
+        <Why label="per session">
+          {gitObservation.observing > 0 && (
+            <p data-testid="coverage-git-observing">
+              {gitObservation.observing} of {gitObservation.sessions} session
+              {gitObservation.sessions === 1 ? '' : 's'} recorded a commit.
+            </p>
+          )}
+          {gitObservation.silentAndIncapable > 0 && (
+            <p data-testid="coverage-git-silent-incapable">
+              {gitObservation.silentAndIncapable} recorded no commits and could not see git — that
+              silence is already explained.
+            </p>
+          )}
+          {gitObservation.silentThoughCapable > 0 && (
+            <p data-testid="coverage-git-silent-capable">
+              {gitObservation.silentThoughCapable} recorded no commits while git was working, so no
+              git command ran. Most sessions look like this.
+            </p>
+          )}
+          {gitObservation.silentAndUnreported > 0 && (
+            <p data-testid="coverage-git-silent-unreported">
+              {gitObservation.silentAndUnreported} recorded no commits and did not say whether git
+              was visible, so that silence stays ambiguous.
+            </p>
+          )}
+        </Why>
         {gitObservation.malformed > 0 && (
           /*
            * The reason comes from `log-core`'s `describeCapabilityValueProblem`
@@ -642,7 +805,7 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
             be used
             {gitObservation.malformedProblems.length > 0 &&
               `: ${gitObservation.malformedProblems.map(describeCapabilityValueProblem).join('; ')}`}
-            . That is a fact about the recorder, never about the student.
+            . That is about the recorder, not the student.
           </p>
         )}
       </Section>
@@ -676,37 +839,35 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
       <Section title="File scope" testId="coverage-file-scope">
         {fileScope.reporting === 'unreported' && (
           <p data-testid="coverage-file-scope-unreported">
-            This submission&rsquo;s recorder does not report which files it was watching. An absence
-            of recorded activity for a particular file is therefore <em>unresolved</em>: it is
-            equally consistent with nothing having happened in that file and with that file never
-            having been watched. Recorders only began reporting this recently, so every submission
-            recorded before then is permanently in this state. It is not a defect and it is not a
-            finding.
+            This recorder does not report which files it watched, so a silent file here is{' '}
+            <em>unexplained</em>: nothing happened in it, or nothing was watching it. Recorders only
+            began reporting this recently, so it is not a defect and it is not a finding.
           </p>
         )}
         {fileScope.reporting === 'partial' && (
           <p data-testid="coverage-file-scope-partial">
-            Some sessions here reported which files they were watching and some did not, so what
-            follows is a lower bound rather than the whole scope. A file it does not name may still
-            have been watched by a session that said nothing, and nothing follows from a
-            file&rsquo;s absence from it.
+            Only some sessions reported which files they watched, so this is a lower bound. A file
+            missing from it may still have been watched by a session that said nothing.
           </p>
         )}
+        {/* The only one of the three that folds away: a complete scope is the
+            healthy reading, and its count is already in the strip. `unreported`
+            and `partial` stay visible — each is the sentence that stops a
+            file's silence being read as inactivity. */}
         {fileScope.reporting === 'reported' && (
-          <p data-testid="coverage-file-scope-reported">
-            Every session here reported which files it was watching. {fileScope.watchedFiles.length}{' '}
-            file
-            {fileScope.watchedFiles.length === 1 ? ' was' : 's were'} under observation across this
-            submission.
-          </p>
+          <Why label="scope">
+            <p data-testid="coverage-file-scope-reported">
+              Every session reported its watched files. {fileScope.watchedFiles.length} file
+              {fileScope.watchedFiles.length === 1 ? ' was' : 's were'} under observation.
+            </p>
+          </Why>
         )}
         {fileScope.incompleteSessions > 0 && (
           <p data-testid="coverage-file-scope-incomplete">
             {fileScope.incompleteSessions} session
-            {fileScope.incompleteSessions === 1 ? '' : 's'} reported that the list had been capped
-            at the limit this format allows, so a file the list does not name may still have been
-            watched. A capped list can show that a file <em>was</em> watched; it can never show that
-            one was not.
+            {fileScope.incompleteSessions === 1 ? '' : 's'} hit the format&rsquo;s cap on this list,
+            so a file it does not name may still have been watched. A capped list can show a file{' '}
+            <em>was</em> watched; it can never show one was not.
           </p>
         )}
         {fileScope.malformedSessions > 0 && (
@@ -719,8 +880,8 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
             read
             {fileScope.malformedProblems.length > 0 &&
               `: ${fileScope.malformedProblems.map(describeFileScopeProblem).join('; ')}`}
-            . The report was set aside whole rather than partly read, so nothing was narrowed. That
-            is a fact about the recorder that wrote it, never about the student.
+            . It was set aside whole, so nothing was narrowed. That is about the recorder, not the
+            student.
           </p>
         )}
 
@@ -728,17 +889,15 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
           .filter((f) => f.watched === 'not_watched' && !f.recordedActivity)
           .map((f) => (
             <p key={f.path} data-testid="coverage-file-not-watched">
-              <span className="font-mono text-[11px] font-medium">{f.path}</span> — under review,
-              and outside every session&rsquo;s watched scope, so nothing was recording it. This
-              record contains no activity for it for that reason alone.
+              <span className="font-mono text-[11px] font-medium">{f.path}</span> — under review but
+              outside every watched scope, so nothing was recording it. That alone explains the
+              silence.
             </p>
           ))}
         {fileScope.files.some((f) => f.watched === 'not_watched' && !f.recordedActivity) && (
           <p data-testid="coverage-file-not-watched-note">
-            A file outside the watched scope is a fact about the assignment&rsquo;s configuration,
-            not about the student: the recorder watches what the assignment manifest tells it to
-            watch. These are stated so a silence that is already explained is not read as
-            inactivity. Nothing here is a finding.
+            The recorder watches what the assignment manifest tells it to watch, so this is about
+            the assignment&rsquo;s configuration, not the student. Nothing here is a finding.
           </p>
         )}
       </Section>
@@ -761,12 +920,12 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
             </p>
           ))}
           <p data-testid="coverage-torn-note">
-            The recorder appends one whole line at a time, so an unterminated final line is the
-            signature of a write that was interrupted — a power cut, a full disk, the editor killed
-            mid-flush. The fragment was left out of the analysis only; nothing was altered or
-            deleted, and the digest checks still compare the archived bytes in full. If a signed
-            checkpoint names a sequence number inside the lost fragment it will read as a missing
-            entry — that is this same interruption, not a removal.
+            The recorder appends one whole line at a time, so an unterminated last line means the
+            write was interrupted — a power cut, a full disk, the editor killed mid-flush. The
+            fragment was skipped by the analysis only; nothing was altered or deleted, and the
+            digest checks still compare the archived bytes in full. If a signed checkpoint names a
+            sequence number inside the lost fragment, it reads as a missing entry — same
+            interruption, not a removal.
           </p>
         </Section>
       )}
@@ -784,10 +943,9 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
             </p>
           ))}
           <p data-testid="coverage-unattested-note">
-            A rolling seal is written on the checkpoint cadence, so it commits to a prefix. Any
-            session ended by a crash, a power cut, a full disk, or an archive taken mid-session
-            leaves a tail like this. It limits what can be verified; it is not evidence that the
-            tail was altered.
+            A rolling seal is rewritten on the checkpoint cadence, so it only ever commits to a
+            prefix. A crash, a power cut, a full disk, or an archive taken mid-session all leave a
+            tail like this. It limits what can be verified; it is not evidence the tail was altered.
           </p>
         </Section>
       )}
@@ -803,9 +961,8 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
             </p>
           ))}
           <p data-testid="coverage-dropped-note">
-            These files were left out of the analysis because they could not be read as provenance
-            records. They were not deleted, and their presence is not a finding — a crash-recovery
-            leftover is the ordinary cause.
+            These could not be read as provenance records, so the analysis skipped them. They were
+            not deleted. A crash-recovery leftover is the usual cause.
           </p>
         </Section>
       )}
