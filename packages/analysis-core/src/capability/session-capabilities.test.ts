@@ -27,6 +27,50 @@ import {
   wasFileWatched,
   gitObservationGap,
 } from './session-capabilities.js';
+import type { BundleCapabilityFacts } from './session-capabilities.js';
+
+/**
+ * A minimal `BundleCapabilityFacts` carrying exactly one session's file scope,
+ * for testing `wasFileWatched` directly without round-tripping a bundle.
+ *
+ * `git`/`witness` are irrelevant to `wasFileWatched` and left `'absent'`.
+ */
+function factsWithFileScope(
+  fileScope: { watched: readonly string[]; complete: boolean },
+  opts?: { scopeCapped?: boolean },
+): BundleCapabilityFacts {
+  return {
+    sessions: [
+      {
+        sessionId: 's1',
+        git: { kind: 'absent' },
+        witness: { kind: 'absent' },
+        fileScope: { kind: 'recorded', watched: fileScope.watched, complete: fileScope.complete },
+      },
+    ],
+    counts: {
+      sessions: 1,
+      gitAvailable: 0,
+      gitUnavailable: 0,
+      gitNotOwned: 0,
+      gitUnreported: 1,
+      gitMalformed: 0,
+      witnessAvailable: 0,
+      witnessUnavailable: 0,
+      witnessUnreported: 1,
+      witnessMalformed: 0,
+      fileScopeReported: 1,
+      fileScopeIncomplete: fileScope.complete ? 0 : 1,
+      fileScopeUnreported: 0,
+      fileScopeMalformed: 0,
+    },
+    gitObservation: 'unknown',
+    gitImpossibleReason: null,
+    witnessing: 'unknown',
+    watchedFiles: [...fileScope.watched].sort(),
+    scopeCapped: opts?.scopeCapped ?? false,
+  };
+}
 
 /** A bundle whose sessions carry exactly the given `session.start` extras. */
 async function scope(...sessionStarts: Array<Record<string, unknown>>): Promise<Bundle> {
@@ -374,5 +418,36 @@ describe('the three reports are independent', () => {
     const bundle = await scope({ git_capture: 'available' }, {}, { witness_capture: 'available' });
     const facts = readBundleCapabilities(bundle);
     expect(facts.sessions.map((s) => s.sessionId)).toEqual(bundle.sessions.map((s) => s.sessionId));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// wasFileWatched with a resolved scope — spec §5.1 tier 1
+// ---------------------------------------------------------------------------
+
+describe('wasFileWatched with a resolved scope (tier 1)', () => {
+  const scopeRules = { track: ['src/'], ignore: ['*.class'], attachments: [] };
+
+  it('answers definitively from the rules even when the list is incomplete', () => {
+    // The rules come from the SIGNED manifest in session.start, so this is not
+    // a guess — it is the same evaluation the recorder made. Spec §5.1 tier 1.
+    const facts = factsWithFileScope({ watched: [], complete: false });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('watched');
+    expect(wasFileWatched(facts, 'README.md', scopeRules)).toBe('not_watched');
+    expect(wasFileWatched(facts, 'src/A.class', scopeRules)).toBe('not_watched');
+  });
+
+  it('falls back to the list when no scope is supplied', () => {
+    const facts = factsWithFileScope({ watched: ['Main.java'], complete: true });
+    expect(wasFileWatched(facts, 'Main.java')).toBe('watched');
+    expect(wasFileWatched(facts, 'Other.java')).toBe('not_watched');
+  });
+
+  it('returns unknown from the rules when the recorder reported a capped session', () => {
+    // scope_capped means the recorder stopped admitting in-scope paths. The
+    // rules then describe what SHOULD have been watched, not what was — so
+    // "in scope, no activity" must not be concluded. R2.
+    const facts = factsWithFileScope({ watched: [], complete: false }, { scopeCapped: true });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('unknown');
   });
 });

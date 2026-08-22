@@ -41,8 +41,18 @@
  * Fail toward not knowing.
  */
 
-import { readFileScope, readGitCapture, readWitnessCapture } from '@provenance/log-core';
-import type { FileScopeRead, GitCaptureRead, WitnessCaptureRead } from '@provenance/log-core';
+import {
+  readFileScope,
+  readGitCapture,
+  readWitnessCapture,
+  resolvePathRole,
+} from '@provenance/log-core';
+import type {
+  FileScopeRead,
+  GitCaptureRead,
+  WitnessCaptureRead,
+  ResolvedScope,
+} from '@provenance/log-core';
 import type { Bundle } from '../loader/types.js';
 
 // ---------------------------------------------------------------------------
@@ -127,6 +137,13 @@ export type BundleCapabilityFacts = {
    * has to reason about completeness as well as membership.
    */
   watchedFiles: readonly string[];
+  /**
+   * Any session's recorder reported that its expected-content cap refused an
+   * in-scope path (design spec §4.3). When true, the scope RULES describe what
+   * should have been watched rather than what was, so rule evaluation must
+   * degrade to `unknown` rather than assert `not_watched`.
+   */
+  scopeCapped: boolean;
 };
 
 /**
@@ -246,6 +263,7 @@ export function readBundleCapabilities(bundle: Bundle): BundleCapabilityFacts {
     gitImpossibleReason: gitImpossibleReason(counts),
     witnessing: summarizeWitness(counts),
     watchedFiles: [...watched].sort(),
+    scopeCapped: bundle.manifest.scope_capped === true,
   };
 }
 
@@ -292,7 +310,24 @@ function summarizeWitness(c: CapabilityCounts): BundleCapabilitySummary {
  * would quietly make two different recorders' spellings compare equal on this
  * one axis and unequal everywhere else.
  */
-export function wasFileWatched(facts: BundleCapabilityFacts, path: string): WatchedFileAnswer {
+export function wasFileWatched(
+  facts: BundleCapabilityFacts,
+  path: string,
+  scope?: ResolvedScope,
+): WatchedFileAnswer {
+  // Tier 1 — evaluate the course's own rules. Available whenever the caller
+  // holds a 2.0 manifest, which travels inside session.start, so this needs
+  // nothing from the server and nothing the student could edit.
+  //
+  // Skipped when a recorder reported a capped session: the rules then say what
+  // should have been watched, and asserting `not_watched` OR `watched` from
+  // them would be a claim the record cannot support.
+  if (scope !== undefined && !facts.scopeCapped) {
+    return resolvePathRole(path, scope) === 'reviewed' ? 'watched' : 'not_watched';
+  }
+
+  // Tier 2 — the recorder's own enumerated list. A TRUNCATED or rule-bearing
+  // list can prove 'watched' (the path is in it) but never 'not_watched'.
   let everySessionComplete = facts.counts.sessions > 0;
   for (const session of facts.sessions) {
     if (session.fileScope.kind !== 'recorded') {
@@ -302,6 +337,7 @@ export function wasFileWatched(facts: BundleCapabilityFacts, path: string): Watc
     if (session.fileScope.watched.includes(path)) return 'watched';
     if (!session.fileScope.complete) everySessionComplete = false;
   }
+  // Tier 3 — unknown.
   return everySessionComplete ? 'not_watched' : 'unknown';
 }
 
