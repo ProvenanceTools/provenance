@@ -1267,6 +1267,36 @@ describe('file scope coverage evaluates the signed 2.0 scope rules (tier 1)', ()
     ]);
   });
 
+  it("does not INVERT a stale recorder's complete:true on a rule-bearing scope into WATCHED", async () => {
+    // The real-world hazard, end to end through the wired production path: a
+    // course issues a rule-bearing 2.0 manifest (`track: ['src/']`), a student
+    // is on a not-yet-updated recorder build, and trust verifies correctly
+    // because the MANIFEST is genuinely course-signed — it is the recorder
+    // that is stale. That old recorder treats 'src/' as a literal filename,
+    // matches nothing real, and — believing it fully enumerated a one-entry
+    // list — reports `{ watched: ['src/'], complete: true }`. The honest
+    // answer is 'unknown': tier 1 must not fire (the recorder never evaluated
+    // the rule), and tier 2 must not fire either (its own 'complete' claim is
+    // the same stale, untrustworthy signature) — asserting 'watched', the most
+    // accusatory answer, about a file the recorder demonstrably never watched
+    // is exactly what this fix removes.
+    const keys = await buildTrustChainKeys();
+    const manifest = await buildManifest2({ keys, filesUnderReview: ['src/'] });
+    const { bundle, index } = await fileScopeScope({
+      files: ['src/Solver.java'],
+      sessionStarts: [
+        { ...sessionStart2(manifest), file_scope: { watched: ['src/'], complete: true } },
+      ],
+    });
+    const chain = await establishBundleTrust(bundle, keys.rootPubkeyHex);
+    expect(chain.kind).toBe('verified');
+
+    const facts = coverageFacts(bundle, index);
+    expect(facts.fileScope.files).toEqual([
+      { path: 'src/Solver.java', watched: 'unknown', recordedActivity: false },
+    ]);
+  });
+
   it('does not honour scope rules from an UNVERIFIED manifest', async () => {
     // `session.start.data.manifest` arrives from a file the student can edit.
     // Trusting its ignore/track lists without verifying the trust chain would

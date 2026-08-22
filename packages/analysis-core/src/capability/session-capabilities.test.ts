@@ -511,6 +511,40 @@ describe('wasFileWatched with a resolved scope (tier 1)', () => {
     const facts = factsWithFileScope({ watched: [], complete: false });
     expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('watched');
   });
+
+  it("does not assert WATCHED from a stale recorder's complete:true on a rule-bearing scope", () => {
+    // The exact stale-recorder shape: `track: ['src/']` is a RULE entry (not
+    // exact), and a pre-path-scope recorder treats it as a literal filename —
+    // matching nothing real — while believing it fully enumerated a one-entry
+    // list, so it reports `{ watched: ['src/'], complete: true }`. That report
+    // is `kind: 'recorded'`, so the bare "did every session report?" gate does
+    // not catch it. The honest tier-2 answer for this exact bundle is
+    // `not_watched` (the list is complete and never names the path) — tier 1
+    // must not INVERT that into `'watched'`, the most accusatory answer, about
+    // a file the recorder demonstrably never watched.
+    const facts = factsWithFileScope({ watched: ['src/'], complete: true });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('unknown');
+  });
+
+  it('still fires tier 1 on a rule-bearing scope once every session reports complete:false', () => {
+    // Not a blanket suppression for rule-bearing scopes: a path-scope-aware
+    // recorder is GUARANTEED to report complete:false when the scope carries a
+    // rule entry (recorder-context.ts), so that shape still gets the
+    // definitive rules-based answer.
+    const facts = factsWithFileScope({ watched: [], complete: false });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('watched');
+    expect(wasFileWatched(facts, 'README.md', scopeRules)).toBe('not_watched');
+  });
+
+  it('an EXACT-only scope is unaffected by the complete:false requirement', () => {
+    // No rule entries in `track`, so the stale-recorder hazard does not apply:
+    // a session reporting complete:true is exactly the ordinary case tier 1
+    // was built for, and must still answer definitively.
+    const exactScope = { track: ['Main.java'], ignore: [], attachments: [] };
+    const facts = factsWithFileScope({ watched: ['Main.java'], complete: true });
+    expect(wasFileWatched(facts, 'Main.java', exactScope)).toBe('watched');
+    expect(wasFileWatched(facts, 'Other.java', exactScope)).toBe('not_watched');
+  });
 });
 
 // ---------------------------------------------------------------------------
