@@ -167,6 +167,19 @@ export {
 } from './policy.js';
 export type { CapturePolicy, CapturePolicyBlock } from './policy.js';
 
+// Path scope (design spec 2026-08-22 §3) — the single matcher for scope entries
+export {
+  validateScopeEntry,
+  isExactEntry,
+  matchesScopeEntry,
+  matchesAnyScopeEntry,
+  isHardExcluded,
+  resolvePathRole,
+  HARD_EXCLUDED_PREFIXES,
+  HARD_EXCLUDED_PATHS,
+} from './path-scope.js';
+export type { ScopeEntryProblem, ResolvedScope, PathRole } from './path-scope.js';
+
 // Peer witnessing (program spec §7 mechanism 2 / collaboration spec §5.5)
 export {
   validatePeerObservedPayload,
