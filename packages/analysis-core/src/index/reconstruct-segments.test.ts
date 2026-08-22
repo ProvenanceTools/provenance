@@ -20,10 +20,16 @@ import { describe, expect, it } from 'vitest';
 import type { HashedEnvelope } from '@provenance/log-core';
 import type { SessionContributor } from '../identity/types.js';
 import type { Bundle, ParsedSession } from '../loader/types.js';
-import { buildIndex } from './build-index.js';
+import {
+  buildIndex,
+  buildIndexFromEventRows,
+  sessionsFromEventRows,
+  type ServerEventRow,
+} from './build-index.js';
 import { reconstructFile } from './reconstruct-file.js';
 import {
   buildReconstructionScope,
+  buildReconstructionScopeFromSessions,
   determinateValue,
   describeAmbiguity,
   reconstructFileSegmented,
@@ -468,30 +474,33 @@ describe('two contributors on divergent branches', () => {
 // Merges close the divergence
 // ---------------------------------------------------------------------------
 
-describe('a merge commit resolves the divergence', () => {
-  /**
-   * Alice merges Bob's tip and her editor observes the merged file on disk.
-   * That observation is an anchor: it is ground truth, it discards whatever the
-   * replay had inherited, and it is `≺`-after both tips through the merge
-   * commit's ancestry. One lineage resumes.
-   */
-  function merged() {
-    const specs = divergentPartners();
-    const alice = specs.find((s) => s.id === 's-alice')!;
-    return specs.map((spec) =>
-      spec.id !== 's-alice'
-        ? spec
-        : {
-            ...spec,
-            events: [
-              ...alice.events,
-              gitEvent(5, MERGE, [ALICE_TIP, BOB_TIP]),
-              externalChange(6, PATH, 'sharedALICEBOB-merged\n'),
-            ],
-          },
-    );
-  }
+/**
+ * Alice merges Bob's tip and her editor observes the merged file on disk.
+ * That observation is an anchor: it is ground truth, it discards whatever the
+ * replay had inherited, and it is `≺`-after both tips through the merge
+ * commit's ancestry. One lineage resumes.
+ *
+ * Module-level because the server-row suite at the bottom replays the same
+ * fixture through the paged-row path.
+ */
+function merged() {
+  const specs = divergentPartners();
+  const alice = specs.find((s) => s.id === 's-alice')!;
+  return specs.map((spec) =>
+    spec.id !== 's-alice'
+      ? spec
+      : {
+          ...spec,
+          events: [
+            ...alice.events,
+            gitEvent(5, MERGE, [ALICE_TIP, BOB_TIP]),
+            externalChange(6, PATH, 'sharedALICEBOB-merged\n'),
+          ],
+        },
+  );
+}
 
+describe('a merge commit resolves the divergence', () => {
   it('becomes determinate again after the post-merge disk observation', () => {
     const result = reconstructFileSegmented(scopeOf(merged()).scope, PATH);
     expect(result.kind).toBe('determinate');
@@ -671,5 +680,110 @@ describe('the concurrency gate is not student-controllable', () => {
     const result = reconstructFileSegmented(scope, PATH);
     expect(result.kind).toBe('determinate');
     expect(determinateValue(result)?.content).toBe(reconstructFile(index, PATH).content);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The server-backed path: rows in, same answer out
+// ---------------------------------------------------------------------------
+
+/**
+ * Project a bundle onto the row shape `GET /submissions/:id/events` returns —
+ * per-session `seq`, `wall`, `kind`, and the payload under `payload`. No hashes,
+ * because the API does not send any.
+ */
+function serverRowsOf(bundle: Bundle): ServerEventRow[] {
+  const rows: ServerEventRow[] = [];
+  for (const session of bundle.sessions) {
+    for (const e of session.events) {
+      rows.push({
+        seq: e.seq,
+        kind: e.kind,
+        t: e.t,
+        wall: e.wall,
+        session_id: session.sessionId,
+        payload: e.data,
+      });
+    }
+  }
+  // The API pages in wall order, not session order.
+  rows.sort((a, b) => (a.wall !== b.wall ? (a.wall < b.wall ? -1 : 1) : a.seq - b.seq));
+  return rows;
+}
+
+function rowScopeOf(specs: readonly SessionSpec[]) {
+  const bundle = bundleOf(specs);
+  const rows = serverRowsOf(bundle);
+  const index = buildIndexFromEventRows(rows);
+  return buildReconstructionScopeFromSessions(
+    sessionsFromEventRows(rows),
+    new Map(bundle.contributors!.bySession),
+    index,
+  );
+}
+
+describe('a scope built from server event rows', () => {
+  /**
+   * The defect this path exists to close: the deployed analyzer builds its index
+   * from paged API rows and had no way to build the relation, so it took a solo
+   * scope and linearized two partners' unordered work into one keystroke
+   * sequence — for the same submission `/local` refuses to linearize.
+   */
+  it('answers concurrent for two partners on divergent branches, as the bundle path does', () => {
+    const specs = divergentPartners();
+    const fromRows = reconstructFileSegmented(rowScopeOf(specs), PATH);
+    const fromBundle = reconstructFileSegmented(scopeOf(specs).scope, PATH);
+
+    expect(fromRows.kind).toBe('concurrent');
+    expect(fromBundle.kind).toBe('concurrent');
+    if (fromRows.kind !== 'concurrent' || fromBundle.kind !== 'concurrent') return;
+
+    // Same contributors, same branch contents, same order — no branch preferred.
+    expect(fromRows.divergence.contributorKeys).toEqual(fromBundle.divergence.contributorKeys);
+    expect(fromRows.branches.map((b) => b.value.content)).toEqual(
+      fromBundle.branches.map((b) => b.value.content),
+    );
+    // And no branch is an interleaving of the two.
+    const contents = fromRows.branches.map((b) => b.value.content);
+    expect(contents.some((c) => c.includes('ALICE') && c.includes('BOB'))).toBe(false);
+  });
+
+  it('re-anchors after a merge exactly as the bundle path does', () => {
+    const specs = merged();
+    expect(reconstructFileSegmented(rowScopeOf(specs), PATH).kind).toBe('determinate');
+    expect(determinateValue(reconstructFileSegmented(rowScopeOf(specs), PATH))?.content).toBe(
+      determinateValue(reconstructFileSegmented(scopeOf(specs).scope, PATH))?.content,
+    );
+  });
+
+  /**
+   * The guarantee every shipped course rests on. A solo submission must be BYTE
+   * FOR BYTE what it is today on the server path too, and it must not pay for a
+   * relation: `ordering` stays null, so no DAG is built at all.
+   */
+  it('leaves a solo submission byte-identical, and builds no ordering for it', () => {
+    const specs = [{ id: 's-alice', events: divergentPartners()[0]!.events, student: 'alice' }];
+    const scope = rowScopeOf(specs);
+
+    expect(scope.ordering).toBeNull();
+    expect(determinateValue(reconstructFileSegmented(scope, PATH))?.content).toBe(
+      determinateValue(reconstructFileSegmented(scopeOf(specs).scope, PATH))?.content,
+    );
+  });
+
+  /**
+   * No stamp is the ordinary state of an older deployment, and it must fail
+   * toward today's behaviour rather than toward a refusal to answer.
+   */
+  it('falls back to the solo path when no contributor stamp is supplied', () => {
+    const rows = serverRowsOf(bundleOf(divergentPartners()));
+    const scope = buildReconstructionScopeFromSessions(
+      sessionsFromEventRows(rows),
+      new Map(),
+      buildIndexFromEventRows(rows),
+    );
+
+    expect(scope.ordering).toBeNull();
+    expect(reconstructFileSegmented(scope, PATH).kind).toBe('determinate');
   });
 });

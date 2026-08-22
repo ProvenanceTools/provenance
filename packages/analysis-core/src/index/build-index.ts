@@ -448,3 +448,53 @@ export function buildIndexFromEventRows(rows: ReadonlyArray<ServerEventRow>): Ev
 
   return { bySeq, byKind, byFile, bySessionId, ordered };
 }
+
+// ---------------------------------------------------------------------------
+// sessionsFromEventRows
+// ---------------------------------------------------------------------------
+
+/**
+ * Regroup a flat list of server-shape rows into the per-session shape the
+ * ordering tiers take (`ObservedDagSource` / `EventOrderingSource`).
+ *
+ * The companion to {@link buildIndexFromEventRows}: that one produces the
+ * `EventIndex`, this one produces the second half of what
+ * `buildReconstructionScopeFromSessions` needs, so a client with nothing but
+ * paged rows can build the SAME happens-before relation the server builds from
+ * the parsed bundle. Without it the server-backed Replay tab has no choice but
+ * to assume one contributor.
+ *
+ * Two things this deliberately does not do:
+ *
+ *  - It does not invent `hash` / `prev_hash`. The ordering tiers read `seq`,
+ *    `kind`, `wall` and `data` and nothing else (`SourceEnvelope`), and writing
+ *    empty strings into hash fields to satisfy a type would put a value that
+ *    looks like a chain where there is no chain.
+ *  - It does not re-order sessions. Sessions appear in first-mention order over
+ *    `rows`, which is deterministic for a given page order;
+ *    `buildEventOrdering` sorts session ids itself, so nothing downstream
+ *    depends on the choice.
+ *
+ * Events within a session are sorted by `seq` — the hash chain's own order, and
+ * the one `buildSegments` and the observation buckets assume.
+ */
+export function sessionsFromEventRows(rows: ReadonlyArray<ServerEventRow>): {
+  sessions: {
+    sessionId: string;
+    events: { seq: number; kind: string; wall: string; data: unknown }[];
+  }[];
+} {
+  const bySession = new Map<string, { seq: number; kind: string; wall: string; data: unknown }[]>();
+  const order: string[] = [];
+  for (const row of rows) {
+    let events = bySession.get(row.session_id);
+    if (events === undefined) {
+      events = [];
+      bySession.set(row.session_id, events);
+      order.push(row.session_id);
+    }
+    events.push({ seq: row.seq, kind: row.kind, wall: row.wall, data: row.payload });
+  }
+  for (const events of bySession.values()) events.sort((a, b) => a.seq - b.seq);
+  return { sessions: order.map((sessionId) => ({ sessionId, events: bySession.get(sessionId)! })) };
+}
