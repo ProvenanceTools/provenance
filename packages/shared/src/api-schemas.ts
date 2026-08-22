@@ -2082,10 +2082,18 @@ export type AuditListResponse = z.infer<typeof AuditListResponseSchema>;
 // Submission bundle — submitted files (Group E / Task F1)
 // ---------------------------------------------------------------------------
 
+/**
+ * 'attachment' is NOT a weaker 'unknown'. Unknown means Check 8 could not tell;
+ * attachment means the question does not apply, because the file was sealed
+ * and hashed but deliberately never captured (path scope). Collapsing the two
+ * would put attachments wherever the UI renders unresolved files.
+ */
+export const SubmittedFileVerdictSchema = z.enum(['match', 'mismatch', 'unknown', 'attachment']);
+
 export const SubmittedFileEntrySchema = z.object({
   path: z.string(),
   status: z.enum(['present', 'missing']),
-  verdict: z.enum(['match', 'mismatch', 'unknown']),
+  verdict: SubmittedFileVerdictSchema,
   sha256: z.string().nullable(),
 });
 export type SubmittedFileEntry = z.infer<typeof SubmittedFileEntrySchema>;
@@ -2120,7 +2128,7 @@ export const SubmittedFileContentSchema = z.object({
   path: z.string(),
   content: z.string(),
   status: z.enum(['present', 'missing']),
-  verdict: z.enum(['match', 'mismatch', 'unknown']),
+  verdict: SubmittedFileVerdictSchema,
   content_source: SubmittedContentSourceSchema.default('event_replay'),
 });
 export type SubmittedFileContent = z.infer<typeof SubmittedFileContentSchema>;

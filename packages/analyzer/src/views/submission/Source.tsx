@@ -29,6 +29,7 @@ import { useSubmissionData } from '../../data/SubmissionDataProvider.js';
 import type {
   SubmittedContentSource,
   SubmittedFileContentResult,
+  SubmittedFileVerdict,
 } from '../../data/SubmissionDataProvider.js';
 import { StatusRegion } from '../../components/a11y/StatusRegion.js';
 import { ErrorRegion } from '../../components/a11y/ErrorRegion.js';
@@ -41,6 +42,9 @@ const VERDICT_STYLE: Record<string, string> = {
   match: 'text-green-700 bg-green-50',
   mismatch: 'text-red-700 bg-red-50',
   unknown: 'text-gray-600 bg-gray-100',
+  // Deliberately distinct from both `unknown` and `mismatch`: this is not an
+  // unresolved check, and it must never read as a hedged accusation.
+  attachment: 'text-blue-700 bg-blue-50',
 };
 
 // ---------------------------------------------------------------------------
@@ -72,7 +76,7 @@ type ContentNotice = { title: string; body: string };
  */
 export function contentNotice(
   source: SubmittedContentSource | undefined,
-  verdict: 'match' | 'mismatch' | 'unknown',
+  verdict: SubmittedFileVerdict,
 ): ContentNotice {
   // Only an explicit 'submitted_bytes' earns the stronger wording. Anything
   // else — including a server too old to say — gets the replay caveat.
@@ -80,6 +84,19 @@ export function contentNotice(
     return {
       title: 'The submitted file, read from the bundle',
       body: 'These are the literal bytes sealed into the submitted bundle, not a reconstruction.',
+    };
+  }
+
+  if (verdict === 'attachment') {
+    // NOT a weaker 'unknown': this file has no event provenance by
+    // definition, so there is nothing to replay and nothing to compare — the
+    // assignment listed it as an attachment, never captured.
+    return {
+      title: 'Attachment — never captured, not comparable',
+      body:
+        'This file is an attachment: it is covered by the signed manifest, but the assignment ' +
+        'never captured it as part of the recording. There is no event history to reconstruct ' +
+        'from, so Check 8 does not compare it and this is not a reconstruction of anything.',
     };
   }
 

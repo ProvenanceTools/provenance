@@ -67,8 +67,15 @@ import type { ValidationCheck } from './check-types.js';
 export type SubmittedFileVerdict = {
   path: string;
   status: 'present' | 'missing';
-  /** 'match' | 'mismatch' | 'unknown' (skip) */
-  verdict: 'match' | 'mismatch' | 'unknown';
+  /**
+   * 'match' | 'mismatch' | 'unknown' (skip) | 'attachment' (not comparable).
+   *
+   * `'attachment'` is NOT a weaker 'unknown'. Unknown means we could not tell;
+   * attachment means the question does not apply, because the file was sealed
+   * and hashed but deliberately never captured. Collapsing the two would put
+   * attachments into whatever surface renders unresolved files.
+   */
+  verdict: 'match' | 'mismatch' | 'unknown' | 'attachment';
   submittedSha: string | null;
   recordedSha: string | null;
   detail: string;
@@ -231,6 +238,22 @@ export function submittedFileVerdicts(
   const verdicts: SubmittedFileVerdict[] = [];
 
   for (const [path, f] of bundle.submissionFiles) {
+    if (f.role === 'attachment') {
+      // Attested by hash in the signed manifest, never captured, so there is
+      // nothing to reconstruct and nothing to compare. Spec §9.1.
+      verdicts.push({
+        path,
+        status: f.status,
+        verdict: 'attachment',
+        submittedSha: f.sha256,
+        recordedSha: null,
+        detail:
+          'Carried in the bundle and covered by the signed manifest, but never captured — ' +
+          'the assignment lists it as an attachment, so no event history exists to compare against.',
+        supportingSeqs: [],
+      });
+      continue;
+    }
     if (f.status === 'missing') {
       verdicts.push({
         path,
