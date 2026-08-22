@@ -20,8 +20,13 @@
 
 import { eq, and } from 'drizzle-orm';
 import { reconstructBundleFromDb } from './heuristics/reconstruct-bundle.js';
-import { reconstructFileWithProvenance } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
 import type { ProvenanceKind } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
+import {
+  describeAmbiguity,
+  determinateValue,
+  reconstructFileSegmentedWithProvenance,
+  reconstructionScopeFor,
+} from '@provenance/analysis-core/index/reconstruct-segments.js';
 import { per_file_stats } from '../db/schema.js';
 import type { DrizzleDb } from '../db/client.js';
 import type { StorageClient } from './storage/client.js';
@@ -32,13 +37,35 @@ import { getLogger } from '../logging.js';
 // Return type
 // ---------------------------------------------------------------------------
 
+/**
+ * Why there is no single content — the two non-`determinate` arms of
+ * `SegmentedResult`, flattened for the API boundary.
+ *
+ * `concurrent` and `unknown` are DIFFERENT FACTS and are never merged: the
+ * first says we hold both records and the evidence does not order them, the
+ * second says the relation does not reach these events at all. A grader draws
+ * opposite conclusions from them.
+ */
+export type ReconstructionAmbiguity = {
+  kind: 'concurrent' | 'unknown';
+  detail: string;
+};
+
 export type ReconstructedFile = {
+  /** Empty when {@link ReconstructedFile.ambiguity} is non-null — there is no single content. */
   content: string;
-  /** globalIdx values; will be RLE-encoded at the API boundary. */
+  /** globalIdx values; will be RLE-encoded at the API boundary. Empty when ambiguous. */
   provenance: number[];
   kindByGlobalIdx: Map<number, ProvenanceKind>;
   computedAtMs: number;
   tainted: boolean;
+  /**
+   * `null` for the ordinary `determinate` answer, which is every solo
+   * submission. Non-null means the caller must NOT present `content` as the
+   * file — it is empty precisely so that a viewer cannot render one lineage as
+   * though it were what the student submitted.
+   */
+  ambiguity: ReconstructionAmbiguity | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -170,26 +197,50 @@ export async function reconstructFile(
 
   const t0 = Date.now();
 
-  // Build EventIndex from the stored bundle blob.
-  const { index } = await reconstructBundleFromDb(db, storage, submissionId);
+  // Build Bundle + EventIndex from the stored bundle blob.
+  const { bundle, index } = await reconstructBundleFromDb(db, storage, submissionId);
 
-  // Run v2 reconstructor. `upToGlobalIdx` semantics: exclusive upper bound.
-  const replayState = reconstructFileWithProvenance(index, filePath, atSeq);
+  // Tier 2.2. The scope is memoized per EventIndex, and for a bundle without two
+  // provably different contributors it is the `ordering: null` scope — so every
+  // solo submission short-circuits to the untouched linear replay, byte for
+  // byte, and pays for no graph. `upToGlobalIdx` semantics are unchanged:
+  // exclusive upper bound over the index's own dense numbering.
+  const scope = reconstructionScopeFor(bundle, index);
+  const segmented = reconstructFileSegmentedWithProvenance(scope, filePath, atSeq);
+  const replayState = determinateValue(segmented);
 
   const computedAtMs = Date.now() - t0;
 
   getLogger().debug(
-    { submissionId, filePath, atSeq, computedAtMs, tainted },
+    { submissionId, filePath, atSeq, computedAtMs, tainted, verdict: segmented.kind },
     'file reconstruction completed',
   );
 
-  const result: ReconstructedFile = {
-    content: replayState.content,
-    provenance: Array.from(replayState.provenance),
-    kindByGlobalIdx: replayState.kindByGlobalIdx,
-    computedAtMs,
-    tainted,
-  };
+  // No single content. Serving one branch here — and the unscoped
+  // `reconstructFileWithProvenance` this used to call served a linearization of
+  // ALL of them, with per-character attribution — puts a file that never existed
+  // on anyone's disk in front of a grader as fact.
+  const result: ReconstructedFile =
+    replayState === null
+      ? {
+          content: '',
+          provenance: [],
+          kindByGlobalIdx: new Map(),
+          computedAtMs,
+          tainted,
+          ambiguity: {
+            kind: segmented.kind === 'concurrent' ? 'concurrent' : 'unknown',
+            detail: describeAmbiguity(segmented) ?? '',
+          },
+        }
+      : {
+          content: replayState.content,
+          provenance: Array.from(replayState.provenance),
+          kindByGlobalIdx: replayState.kindByGlobalIdx,
+          computedAtMs,
+          tainted,
+          ambiguity: null,
+        };
 
   cache.set(cacheKey, result);
   return result;

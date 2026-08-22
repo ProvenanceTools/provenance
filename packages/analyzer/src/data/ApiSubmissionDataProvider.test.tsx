@@ -16,6 +16,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { mswServer } from '../test-setup.js';
 import { ApiSubmissionDataProviderContext } from './ApiSubmissionDataProvider.js';
+import { useSubmissionData } from './SubmissionDataProvider.js';
 import { Overview } from '../views/submission/Overview.js';
 
 // ---------------------------------------------------------------------------
@@ -172,6 +173,98 @@ function renderOverviewWithApiProvider(submissionId: string = SUBMISSION_ID) {
     </QueryClientProvider>,
   );
 }
+
+// ---------------------------------------------------------------------------
+// The warn envelope on file content
+// ---------------------------------------------------------------------------
+
+/**
+ * A qualified reconstruction arrives as `{ warning: { code, message } }` and
+ * `content: ""`. This provider declared `warning: z.string()`, which no
+ * response has ever matched, so a warned response failed the parse outright and
+ * the tab showed a load error instead of the explanation the server sent.
+ *
+ * That matters more now that two of the three codes mean "there is no single
+ * content" rather than "this content is best-effort": a client that drops the
+ * warning renders an empty editor for a file two partners edited concurrently,
+ * with nothing on screen saying why.
+ */
+function FileContentProbe({ path }: { path: string }) {
+  const { data, isError } = useSubmissionData().useFileContent(path);
+  if (isError) return <div data-testid="probe-error">error</div>;
+  if (data === undefined) return <div data-testid="probe-loading">loading</div>;
+  return (
+    <div>
+      <div data-testid="probe-content">{data.content}</div>
+      <div data-testid="probe-warning">{data.warning ?? ''}</div>
+      <div data-testid="probe-warning-detail">{data.warning_detail ?? ''}</div>
+    </div>
+  );
+}
+
+function renderFileContentProbe(path: string) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[`/submissions/${SUBMISSION_ID}`]}>
+        <ApiSubmissionDataProviderContext submissionId={SUBMISSION_ID}>
+          <FileContentProbe path={path} />
+        </ApiSubmissionDataProviderContext>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe('ApiSubmissionDataProvider — file content warnings', () => {
+  it.each([
+    ['FILE_RECONSTRUCTION_CONCURRENT', '2 lineage(s) of hw1.py are live and unordered'],
+    ['FILE_RECONSTRUCTION_UNKNOWN', 'the happens-before relation does not cover'],
+    ['FILE_RECONSTRUCTION_TAINTED', 'Reconstruction tainted for file hw1.py'],
+  ])('surfaces %s rather than failing the parse', async (code, message) => {
+    mswServer.use(
+      http.get(`/api/v1/submissions/${SUBMISSION_ID}/files/hw1.py/content`, () =>
+        HttpResponse.json({
+          submission_id: SUBMISSION_ID,
+          path: 'hw1.py',
+          at_seq: 12,
+          content: '',
+          computed_at_ms: 3,
+          warning: { code, message, details: { path: 'hw1.py' } },
+        }),
+      ),
+    );
+
+    renderFileContentProbe('hw1.py');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('probe-warning')).toHaveTextContent(code);
+    });
+    // The server's prose travels verbatim; the client does not re-word it.
+    expect(screen.getByTestId('probe-warning-detail')).toHaveTextContent(message);
+    expect(screen.queryByTestId('probe-error')).toBeNull();
+  });
+
+  it('leaves an ordinary response with no warning at all', async () => {
+    mswServer.use(
+      http.get(`/api/v1/submissions/${SUBMISSION_ID}/files/hw1.py/content`, () =>
+        HttpResponse.json({
+          submission_id: SUBMISSION_ID,
+          path: 'hw1.py',
+          at_seq: 12,
+          content: 'print(1)\n',
+          computed_at_ms: 3,
+        }),
+      ),
+    );
+
+    renderFileContentProbe('hw1.py');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('probe-content')).toHaveTextContent('print(1)');
+    });
+    expect(screen.getByTestId('probe-warning')).toHaveTextContent('');
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Tests

@@ -29,6 +29,9 @@ vi.mock('../../data/useFullEventIndex.js', () => ({
 }));
 
 import { Timeline } from './Timeline.js';
+import { SubmissionDataContext } from '../../data/SubmissionDataProvider.js';
+import type { SubmissionDataProvider } from '../../data/SubmissionDataProvider.js';
+import type { SubmissionSummary } from '@provenance/shared/api-schemas';
 
 // ---------------------------------------------------------------------------
 // Query-result helpers
@@ -98,23 +101,53 @@ function SearchParamProbe() {
   return <div data-testid="search-params">{params.toString()}</div>;
 }
 
-function renderTimeline() {
+/**
+ * The tab reads the submission summary for its contributor stamp — the input the
+ * happens-before relation needs and the paged event rows cannot carry. Only
+ * `useSummary` is exercised; the rest of the provider throws if anything starts
+ * reaching for it, rather than silently returning an empty answer.
+ */
+function makeSummaryOnlyProvider(summary: SubmissionSummary | undefined): SubmissionDataProvider {
+  const unused = () => {
+    throw new Error('the Timeline tab should not call this provider hook');
+  };
+  return {
+    useSummary: () =>
+      (summary === undefined
+        ? makeLoadingResult<SubmissionSummary>()
+        : makeQueryResult(summary)) as UseQueryResult<SubmissionSummary>,
+    useEvents: unused,
+    useEvent: unused,
+    useFlags: unused,
+    useStats: unused,
+    useValidation: unused,
+    useFileList: unused,
+    useFileContent: unused,
+    useFileProvenance: unused,
+    useSubmittedFileList: unused,
+    useSubmittedFileContent: unused,
+  } as unknown as SubmissionDataProvider;
+}
+
+function renderTimeline(summary?: SubmissionSummary) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={['/submissions/sub-1?tab=timeline']}>
         <div style={{ height: '600px', width: '800px' }}>
-          <Routes>
-            <Route
-              path="/submissions/:submissionId"
-              element={
-                <>
-                  <Timeline />
-                  <SearchParamProbe />
-                </>
-              }
-            />
-          </Routes>
+          <SubmissionDataContext.Provider value={makeSummaryOnlyProvider(summary)}>
+            <Routes>
+              <Route
+                path="/submissions/:submissionId"
+                element={
+                  <>
+                    <Timeline />
+                    <SearchParamProbe />
+                  </>
+                }
+              />
+            </Routes>
+          </SubmissionDataContext.Provider>
         </div>
       </MemoryRouter>
     </QueryClientProvider>,

@@ -88,7 +88,6 @@
  */
 
 import { readRepositoryDiscriminator as readDiscriminatorField } from '@provenance/log-core';
-import type { HashedEnvelope } from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
 // Repository scoping
@@ -436,13 +435,34 @@ export type ObservedDag = {
 };
 
 /**
+ * The four envelope fields the ordering tiers actually read.
+ *
+ * Deliberately NOT `HashedEnvelope`. Neither this module nor
+ * `order/happens-before.ts` consults `hash` or `prev_hash` — the chain is the
+ * total order WITHIN a session and is already reflected in `seq`, so the
+ * ordering work reads `seq`, `kind`, `wall` and `data` and nothing else. Saying
+ * so in the type is what lets a caller that has events but no chain (the
+ * server-backed analyzer, which pages `EventRow`s over HTTP) build the same
+ * relation without fabricating hash fields to satisfy a type nobody reads.
+ *
+ * `HashedEnvelope` — and therefore `Bundle` — satisfies this structurally, so
+ * every existing caller is unaffected.
+ */
+export type SourceEnvelope = {
+  readonly seq: number;
+  readonly kind: string;
+  readonly wall: string;
+  readonly data: unknown;
+};
+
+/**
  * The minimum this module needs. `Bundle` satisfies it structurally, so callers
  * pass a bundle; tests can pass a hand-built pair of sessions without a ZIP.
  */
 export type ObservedDagSource = {
   readonly sessions: readonly {
     readonly sessionId: string;
-    readonly events: readonly HashedEnvelope[];
+    readonly events: readonly SourceEnvelope[];
   }[];
 };
 

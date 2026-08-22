@@ -37,6 +37,8 @@ import { summarizeBundleManifest } from '@provenance/analysis-core/manifest/bund
 import type { BundleManifestSummary } from '@provenance/analysis-core/manifest/bundle-manifest.js';
 import { coverageFacts } from '@provenance/analysis-core/coverage/coverage-facts.js';
 import type { CoverageFacts } from '@provenance/analysis-core/coverage/coverage-facts.js';
+import { toWireBundleContributors } from '@provenance/analysis-core/identity/wire.js';
+import type { WireBundleContributors } from '@provenance/analysis-core/identity/wire.js';
 import { projectStudent, maskFilename, protectedLabel } from '../protect.js';
 import { fetchContributors } from '../contributors/fetch-contributors.js';
 import type { SubmissionContributor } from '@provenance/shared/api-schemas';
@@ -117,9 +119,25 @@ export type SubmissionSummary = {
    * This is the `CoverageFacts` AGGREGATE and must stay so. `BundleContributors`
    * must never be put on the wire in its place: its `bySession` is a
    * `ReadonlyMap`, which `JSON.stringify` renders as `{}` — a silent
-   * "no contributors" for every submission.
+   * "no contributors" for every submission. (`contributor_stamp` below carries
+   * the per-session verdicts for a different purpose, and carries them as an
+   * ARRAY for exactly this reason.)
    */
   coverage: CoverageFacts;
+  /**
+   * Who produced each session, for the client's reconstruction scope.
+   *
+   * Not a duplicate of `coverage.identity`, which is counts for a panel. This is
+   * the input Tier 2.2 reasons over: `buildReconstructionScope` needs the event
+   * stream and the contributor stamp, the analyzer already pages the whole event
+   * stream, and this was the only missing half. Without it the server-backed
+   * Replay tab had to assume one contributor and linearized two partners'
+   * unordered work — for a submission `/local` refuses to linearize.
+   *
+   * Free: the stamp was established inside the same `loadSubmissionIndex` call
+   * above, so this is a projection, not a computation.
+   */
+  contributor_stamp: WireBundleContributors | undefined;
   superseded: boolean;
   superseded_by_submission_id: string | null;
   heuristic_config_version: number;
@@ -253,6 +271,12 @@ export async function getSubmissionSummary(
   // established inside loadSubmissionIndex, so this is server/`/local` parity by
   // running the identical function, not by reimplementing it.
   const coverage = coverageFacts(bundle, index);
+  // `undefined` only for a bundle that carries no stamp at all, which reads as
+  // "unstamped" on the client and yields the solo reconstruction scope — today's
+  // behaviour. An EMPTY object here would instead assert "no contributors",
+  // which is a stronger and false claim.
+  const contributor_stamp =
+    bundle.contributors === undefined ? undefined : toWireBundleContributors(bundle.contributors);
 
   // Query 4: per_file_stats for files list
   const fileRows = await db
@@ -327,6 +351,7 @@ export async function getSubmissionSummary(
     files,
     assignment_manifest,
     coverage,
+    contributor_stamp,
     superseded: row.superseded_by_submission_id !== null,
     superseded_by_submission_id: row.superseded_by_submission_id,
     heuristic_config_version: row.heuristic_config_version,

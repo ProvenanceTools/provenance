@@ -230,7 +230,11 @@ export const submissionsPaths = {
       tags: ['Submissions'],
       summary: 'Reconstructed file content at a given seq',
       description:
-        'Cache-Control: max-age=60, private. Returns 200 even for tainted files (with warning).',
+        'Cache-Control: max-age=60, private. Always 200 when the path exists; a qualified ' +
+        'reconstruction is reported through `warning` rather than an error status. ' +
+        'For a group submission whose file two contributors edited on unordered lineages ' +
+        'the answer is `content: ""` plus FILE_RECONSTRUCTION_CONCURRENT — this endpoint ' +
+        'will not pick a branch or interleave them.',
       security: [{ BearerAuth: [] }, { SessionCookie: [] }],
       parameters: [
         {
@@ -255,7 +259,7 @@ export const submissionsPaths = {
       ],
       responses: {
         '200': {
-          description: 'File content (possibly tainted — check warnings)',
+          description: 'File content (possibly qualified — check `warning`)',
           content: {
             'application/json': {
               schema: { $ref: '#/components/schemas/FileContentResponse' },
@@ -270,6 +274,11 @@ export const submissionsPaths = {
     get: {
       tags: ['Submissions'],
       summary: 'Per-character provenance map (RLE) for a file',
+      description:
+        'No single content means no single per-character attribution either: when the ' +
+        'reconstruction is CONCURRENT or UNKNOWN this returns `length: 0`, an empty ' +
+        '`provenance`, and the corresponding `warning`. Attributing one lineage’s ' +
+        'characters would name a contributor on the strength of a coin flip.',
       security: [{ BearerAuth: [] }, { SessionCookie: [] }],
       parameters: [
         {
@@ -289,17 +298,12 @@ export const submissionsPaths = {
               schema: {
                 type: 'object',
                 properties: {
+                  length: { type: 'integer' },
                   provenance: {
                     type: 'array',
                     items: { $ref: '#/components/schemas/ProvenanceRun' },
                   },
-                  warnings: {
-                    type: 'array',
-                    items: {
-                      type: 'object',
-                      properties: { code: { type: 'string' }, message: { type: 'string' } },
-                    },
-                  },
+                  warning: { $ref: '#/components/schemas/FileWarning' },
                 },
               },
             },

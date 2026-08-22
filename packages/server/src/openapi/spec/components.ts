@@ -475,9 +475,111 @@ export const components = {
             },
             assignment_manifest: { $ref: '#/components/schemas/AssignmentManifest' },
             coverage: { $ref: '#/components/schemas/CoverageFacts' },
+            contributor_stamp: { $ref: '#/components/schemas/BundleContributorStamp' },
           },
         },
       ],
+    },
+
+    BundleContributorStamp: {
+      type: 'object',
+      description:
+        'Which contributor produced each session, resolved from the identity block on ' +
+        '`session.start` alone. This is what a client needs — together with the event ' +
+        'stream it already pages — to build the happens-before relation and refuse to ' +
+        'linearize two contributors’ unordered edits. ' +
+        'NONE of it is a finding. `unverifiable` (a claim we could not stand behind) ' +
+        'and `unattributed` (no identity block at all — ordinarily a student who has ' +
+        'not enrolled) are different populations with opposite meanings and must never ' +
+        'be summed; `root_key_configured: false` means no identity check was POSSIBLE. ' +
+        'Absent on a server that predates the field: absence means "not sent", and is ' +
+        'read as unstamped, never as "no contributors".',
+      required: ['by_session', 'contributors', 'root_key_configured', 'counts'],
+      properties: {
+        by_session: {
+          type: 'array',
+          description:
+            'Total over the bundle’s sessions — no session is omitted. An ARRAY, not a ' +
+            'map keyed by session id: the source type is a Map, and a Map serialized as ' +
+            'an object is how every submission would silently report no contributors.',
+          items: { $ref: '#/components/schemas/SessionContributor' },
+        },
+        contributors: {
+          type: 'array',
+          description:
+            'Distinct contributors, in order of first appearance. Attributed sessions ' +
+            'group by verified `student_ref`, so one student on two machines is ONE ' +
+            'contributor. Unverifiable and unattributed keys are per-session singletons ' +
+            'and are never grouped with each other.',
+          items: {
+            type: 'object',
+            required: ['key', 'kind', 'session_ids'],
+            properties: {
+              key: { type: 'string' },
+              kind: { type: 'string', enum: ['attributed', 'unverifiable', 'unattributed'] },
+              student_ref: {
+                type: 'string',
+                nullable: true,
+                description: 'Non-null ONLY for `attributed`. A claim is not a student_ref.',
+              },
+              identity_version: { type: 'string', enum: ['2.0', '2.1'], nullable: true },
+              scope: { type: 'string', enum: ['course', 'institution'], nullable: true },
+              scope_id: { type: 'string', nullable: true },
+              session_ids: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
+        root_key_configured: { type: 'boolean' },
+        counts: {
+          type: 'object',
+          properties: {
+            attributed: { type: 'integer' },
+            unverifiable: { type: 'integer' },
+            unattributed: { type: 'integer' },
+          },
+        },
+      },
+    },
+
+    SessionContributor: {
+      type: 'object',
+      description:
+        'One session’s contributor verdict. Discriminated on `kind`. `student_ref` is ' +
+        'the opaque roster reference — never a name, SID or email — and appears only on ' +
+        'the `attributed` arm; what an `unverifiable` session CLAIMED appears as ' +
+        '`claimed_student_ref` and is never used as a grouping key.',
+      required: ['kind', 'session_id', 'contributor_key'],
+      properties: {
+        kind: { type: 'string', enum: ['attributed', 'unverifiable', 'unattributed'] },
+        session_id: { type: 'string' },
+        contributor_key: { type: 'string' },
+        student_ref: { type: 'string' },
+        identity_version: { type: 'string', enum: ['2.0', '2.1'] },
+        scope: { type: 'string', enum: ['course', 'institution'] },
+        scope_id: { type: 'string' },
+        student_pubkey: { type: 'string' },
+        cert_window: { type: 'object' },
+        credential_window: { type: 'object' },
+        claimed_student_ref: { type: 'string', nullable: true },
+        claimed_scope_id: { type: 'string', nullable: true },
+        claimed_identity_version: { type: 'string', nullable: true },
+        reason: {
+          type: 'object',
+          description:
+            'Why a PRESENT identity block did not produce an attribution. ' +
+            '`no_root_key` and `no_trust_anchor` mean we COULD NOT CHECK; ' +
+            '`anchor_not_root_signed` and `chain_failed` mean we CHECKED AND IT FAILED. ' +
+            'Only the second pair is a finding.',
+          properties: {
+            kind: {
+              type: 'string',
+              enum: ['no_root_key', 'no_trust_anchor', 'anchor_not_root_signed', 'chain_failed'],
+            },
+            detail: { type: 'string' },
+            required: { type: 'string', enum: ['course_cert', 'institution_cert'] },
+          },
+        },
+      },
     },
 
     CoverageFacts: {
@@ -1171,18 +1273,41 @@ export const components = {
     // -------------------------------------------------------------------------
     FileWarning: {
       type: 'object',
+      description:
+        'Present only when the reconstruction is qualified. The three codes are ' +
+        'three DIFFERENT facts and must not be collapsed by a client.',
       properties: {
-        code: { type: 'string' },
+        code: {
+          type: 'string',
+          enum: [
+            'FILE_RECONSTRUCTION_TAINTED',
+            'FILE_RECONSTRUCTION_CONCURRENT',
+            'FILE_RECONSTRUCTION_UNKNOWN',
+          ],
+          description:
+            'TAINTED — one content, best-effort; the replay inherited state it could not verify. ' +
+            'CONCURRENT — two or more provably different contributors edited this file on lineages ' +
+            'the recorded evidence does not order, so NO single content existed and `content` is ' +
+            'empty. UNKNOWN — the happens-before relation does not reach some of these events; ' +
+            'that is the absence of a record, not a claim that the edits raced.',
+        },
         message: { type: 'string' },
+        details: { type: 'object' },
       },
     },
     FileContentResponse: {
       type: 'object',
       required: ['content', 'at_seq'],
       properties: {
-        content: { type: 'string', description: 'Reconstructed file text at the given seq' },
+        content: {
+          type: 'string',
+          description:
+            'Reconstructed file text at the given seq. EMPTY when `warning.code` is ' +
+            'CONCURRENT or UNKNOWN — there is no single content, and a client must not ' +
+            'render one lineage as though it were the submitted file.',
+        },
         at_seq: { type: 'integer', description: 'Seq at which the content was reconstructed' },
-        warnings: { type: 'array', items: { $ref: '#/components/schemas/FileWarning' } },
+        warning: { $ref: '#/components/schemas/FileWarning' },
       },
     },
     IngestScopeConfig: {

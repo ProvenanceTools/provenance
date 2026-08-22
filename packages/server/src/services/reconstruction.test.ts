@@ -23,6 +23,12 @@ import { withTestDb } from '../../test/helpers/db.js';
 import { withTestMinio } from '../../test/helpers/minio.js';
 import { putSubmissionBundle } from '../../test/helpers/seed-bundle.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
+import {
+  buildIdentityKeys,
+  buildInstitutionIdentity,
+  seededKeypair,
+} from '@provenance/analysis-core/test-support/build-identity.js';
+import type { IdentityTestKeys } from '@provenance/analysis-core/test-support/build-identity.js';
 import { _resetConfigForTest, _setConfigForTest } from '../config/index.js';
 import { _resetLoggerForTest } from '../logging.js';
 import { parseEnv } from '../config/env.js';
@@ -310,6 +316,115 @@ describe('reconstructFile — missing file path', () => {
         await expect(
           reconstructFile(db, client, submissionId, 'nonexistent.py'),
         ).rejects.toMatchObject({ code: 'FILE_NOT_FOUND' });
+      });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §6. Two contributors on unordered lineages (Tier 2.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Two partners, each with a verified institution identity, each typing a
+ * distinctive line into the SAME file. No `git.event` and no `prev_session_id`,
+ * so nothing in the recorded evidence orders the two sessions.
+ *
+ * This is the case that survived unnoticed: `reconstruction.ts` called the
+ * UNSCOPED `reconstructFileWithProvenance`, which replays one wall-derived
+ * stream and therefore returned an interleaving of both partners' work — with
+ * per-character attribution, over a public OpenAPI endpoint, with no warning.
+ */
+async function putConcurrentPartnersBundle(
+  db: DrizzleDb,
+  storage: StorageClient,
+  submissionId: string,
+  k: IdentityTestKeys,
+) {
+  const sessions = [];
+  const lines = ['ALICE_LINE', 'BOB_LINE'];
+  for (let i = 0; i < lines.length; i++) {
+    const sk = await seededKeypair(0xa0 + i);
+    sessions.push({
+      events: [
+        {
+          kind: 'doc.change',
+          data: {
+            path: 'main.py',
+            deltas: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+                text: lines[i]!,
+              },
+            ],
+            source: 'typed',
+          },
+        },
+      ],
+      sessionStart: {
+        session_pubkey: sk.pubkeyHex,
+        identity: await buildInstitutionIdentity({
+          keys: k,
+          sessionPubkeyHex: sk.pubkeyHex,
+          studentRef: i === 0 ? 'alice' : 'bob',
+        }),
+      },
+    });
+  }
+  const { zipBuffer } = await buildTestBundle({ sessions });
+  await putSubmissionBundle(db, storage, submissionId, new Uint8Array(zipBuffer));
+}
+
+describe('reconstructFile — two contributors, unordered lineages', () => {
+  it('refuses to linearize: no content, no provenance, a concurrent verdict', async () => {
+    const k = await buildIdentityKeys();
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        _setConfigForTest(
+          parseEnv(makeTestEnv({ PROVENANCE_ROOT_PUBLIC_KEY_HEX: k.root.pubkeyHex })),
+        );
+
+        const { submissionId } = await seedSubmission(db);
+        await putConcurrentPartnersBundle(db, client, submissionId, k);
+        await seedPerFileStats(db, submissionId, 'main.py');
+
+        const result = await reconstructFile(db, client, submissionId, 'main.py');
+
+        expect(result.ambiguity?.kind).toBe('concurrent');
+        // Not "unknown" — we hold both records, and saying we cannot see would
+        // throw away a fact we actually have.
+        expect(result.ambiguity?.detail).not.toBe('');
+
+        // No branch is served, and no interleaving of the two is served either.
+        expect(result.content).toBe('');
+        expect(result.provenance).toEqual([]);
+        expect(result.kindByGlobalIdx.size).toBe(0);
+      });
+    });
+  });
+
+  /**
+   * The counterpart that proves the feature is GATED rather than merely usually
+   * inactive: the same deployment, the same root key, one contributor — and the
+   * answer is byte for byte what it was before any of this existed.
+   */
+  it('leaves a solo submission byte-identical on the same deployment', async () => {
+    const k = await buildIdentityKeys();
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        _setConfigForTest(
+          parseEnv(makeTestEnv({ PROVENANCE_ROOT_PUBLIC_KEY_HEX: k.root.pubkeyHex })),
+        );
+
+        const { submissionId } = await seedSubmission(db);
+        await putFileBundle(db, client, submissionId);
+        await seedPerFileStats(db, submissionId, 'main.py');
+
+        const result = await reconstructFile(db, client, submissionId, 'main.py');
+
+        expect(result.ambiguity).toBeNull();
+        expect(result.content).toBe('hello world');
+        expect(result.provenance).toHaveLength(11);
       });
     });
   });

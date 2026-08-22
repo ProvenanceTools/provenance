@@ -17,8 +17,17 @@
  * Cache-Control: max-age=60, private (PRD §8.9 line 1227).
  *
  * Error semantics:
- *   - FILE_NOT_FOUND (404)        — path not in per_file_stats
- *   - FILE_RECONSTRUCTION_TAINTED — 200 with content:"" + warning field
+ *   - FILE_NOT_FOUND (404)           — path not in per_file_stats
+ *   - FILE_RECONSTRUCTION_TAINTED    — 200 with content:"" + warning field
+ *   - FILE_RECONSTRUCTION_CONCURRENT — 200 with content:"" + warning field.
+ *     Two provably different contributors edited this file on lineages the
+ *     evidence does not order (Tier 2.2), so there is no single content. These
+ *     routes go through the SEGMENTED reconstruction; they used to call the
+ *     unscoped replay, which silently linearized every branch into one string
+ *     and attributed it per character.
+ *   - FILE_RECONSTRUCTION_UNKNOWN    — 200 with content:"" + warning field.
+ *     The happens-before relation does not reach some of these events. Never
+ *     merged with CONCURRENT: the absence of a record is not a raced edit.
  */
 
 import { Hono } from 'hono';
@@ -155,6 +164,26 @@ export function createFilesRouter(): Hono {
 
       c.header('Cache-Control', 'max-age=60, private');
 
+      // Tier 2.2 — no single content. Reported BEFORE `tainted` because it is
+      // the stronger statement: tainted means "one content, best-effort", this
+      // means there is no content to qualify. Same 200 + empty-content + warning
+      // shape the tainted path already uses, so a client that handles one
+      // handles both.
+      if (result.ambiguity !== null) {
+        return c.json({
+          submission_id: submissionId,
+          path: filePath,
+          at_seq: atSeq ?? null,
+          content: '',
+          computed_at_ms: result.computedAtMs,
+          ...Warnings.fileReconstructionAmbiguous(
+            filePath,
+            result.ambiguity.kind,
+            result.ambiguity.detail,
+          ),
+        });
+      }
+
       // Tainted file: PRD §8.9 line 1228 — return 200 with content:"" + warning.
       if (result.tainted) {
         return c.json({
@@ -238,6 +267,25 @@ export function createFilesRouter(): Hono {
       }
 
       c.header('Cache-Control', 'max-age=60, private');
+
+      // Tier 2.2 — no single content means no single per-character attribution
+      // either. Colouring one lineage's characters as though they were the
+      // file's would attribute text to a named contributor on the strength of a
+      // coin flip, which is the fabrication this endpoint most needs to avoid.
+      if (result.ambiguity !== null) {
+        return c.json({
+          submission_id: submissionId,
+          path: filePath,
+          at_seq: atSeq ?? null,
+          length: 0,
+          provenance: [],
+          ...Warnings.fileReconstructionAmbiguous(
+            filePath,
+            result.ambiguity.kind,
+            result.ambiguity.detail,
+          ),
+        });
+      }
 
       const provenanceRuns = encodeRle(result.provenance, result.kindByGlobalIdx);
 

@@ -100,8 +100,13 @@
  * `happens-before.test.ts` for the guard rail.
  */
 
-import type { EventKind, HashedEnvelope } from '@provenance/log-core';
-import { ancestorsOfCommit, type ObservedDag, type RepositoryKey } from '../git/observed-dag.js';
+import type { EventKind } from '@provenance/log-core';
+import {
+  ancestorsOfCommit,
+  type ObservedDag,
+  type RepositoryKey,
+  type SourceEnvelope,
+} from '../git/observed-dag.js';
 import { compareContributors, type SessionContributor } from '../identity/types.js';
 
 // ---------------------------------------------------------------------------
@@ -190,7 +195,7 @@ export type EventOrderingDefect =
 export type EventOrderingSource = {
   readonly sessions: readonly {
     readonly sessionId: string;
-    readonly events: readonly HashedEnvelope[];
+    readonly events: readonly SourceEnvelope[];
   }[];
 };
 

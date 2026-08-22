@@ -96,7 +96,7 @@
  */
 
 import type { EventKind } from '@provenance/log-core';
-import { buildObservedDag } from '../git/observed-dag.js';
+import { buildObservedDag, type ObservedDagSource } from '../git/observed-dag.js';
 import { contributorOf } from '../identity/resolve-contributors.js';
 import { compareContributors, type SessionContributor } from '../identity/types.js';
 import type { Bundle } from '../loader/types.js';
@@ -104,6 +104,7 @@ import {
   buildEventOrdering,
   compareEvents,
   type EventOrdering,
+  type EventOrderingSource,
   type EventRef,
 } from '../order/happens-before.js';
 import type { EventIndex, IndexedEvent } from './event-index.js';
@@ -251,13 +252,43 @@ export function buildReconstructionScope(bundle: Bundle, index: EventIndex): Rec
   for (const session of bundle.sessions) {
     contributorBySession.set(session.sessionId, contributorOf(bundle, session.sessionId));
   }
+  return buildReconstructionScopeFromSessions(bundle, contributorBySession, index);
+}
 
+/**
+ * {@link buildReconstructionScope} for a caller that holds the event stream and
+ * the contributor stamp but no parsed `Bundle`.
+ *
+ * That caller is the server-backed analyzer. It pages `EventRow`s over HTTP and
+ * never sees a ZIP, so before this it could only take
+ * {@link soloReconstructionScope} — which is a statement that the submission has
+ * one contributor, and for a group submission that statement is false. The
+ * result was that the deployed Replay tab linearized two partners' concurrent
+ * work into one keystroke sequence while `/local` refused to, for the same
+ * bundle.
+ *
+ * Everything the relation needs is in `source` (see `SourceEnvelope`: `seq`,
+ * `kind`, `wall`, `data`) plus the stamp — which is why this is a re-parameter-
+ * ization of the bundle path rather than a second implementation of it.
+ * `buildReconstructionScope` delegates here, so there is exactly one place where
+ * "is this scope collaborative, and if so what orders it" is decided.
+ *
+ * @param source               Sessions and their events. A `Bundle` satisfies it.
+ * @param contributorBySession Who produced each session. An empty map is the
+ *                             honest reading of "no stamp available" and yields
+ *                             the solo scope — today's behaviour, never a refusal.
+ */
+export function buildReconstructionScopeFromSessions(
+  source: ObservedDagSource & EventOrderingSource,
+  contributorBySession: ReadonlyMap<string, SessionContributor>,
+  index: EventIndex,
+): ReconstructionScope {
   if (!hasTwoDifferentContributors([...contributorBySession.values()])) {
     return { index, contributorBySession, ordering: null };
   }
 
-  const dag = buildObservedDag(bundle);
-  const ordering = buildEventOrdering({ source: bundle, dag, contributors: contributorBySession });
+  const dag = buildObservedDag(source);
+  const ordering = buildEventOrdering({ source, dag, contributors: contributorBySession });
   return { index, contributorBySession, ordering };
 }
 

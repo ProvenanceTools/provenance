@@ -38,7 +38,9 @@ import type * as MonacoType from 'monaco-editor';
 import { useBundle } from '../../context/BundleContext.js';
 import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
 import type { Flag } from '@provenance/analysis-core/heuristics/types.js';
-import type { Bundle } from '@provenance/analysis-core/loader/types.js';
+import { reconstructionScopeFor } from '@provenance/analysis-core/index/reconstruct-segments.js';
+import type { ReconstructionScope } from '@provenance/analysis-core/index/reconstruct-segments.js';
+import type { BundleContributors } from '@provenance/analysis-core/identity/types.js';
 import { useReplayEngine } from './useReplayEngine.js';
 import { FileTabs } from './FileTabs.js';
 import { SessionSelect } from './SessionSelect.js';
@@ -158,6 +160,17 @@ export function ReplayView() {
   );
   const sourceFilename = selectedBundle?.sourceFilename ?? '';
 
+  // The same memoized scope the timeline and the file views use, so no two tabs
+  // can disagree about who recorded what. Free for a solo bundle: the scope is
+  // `ordering: null` and nothing builds a graph.
+  const scope = useMemo(
+    () =>
+      index === null || selectedBundle === null
+        ? null
+        : reconstructionScopeFor(selectedBundle, index),
+    [index, selectedBundle],
+  );
+
   if (!sessionId || index === null || !sessionExists) {
     if (sessionId && index !== null && !sessionExists) {
       console.warn(
@@ -174,7 +187,8 @@ export function ReplayView() {
       flags={flags}
       sourceFilename={sourceFilename}
       showHeader={true}
-      bundle={selectedBundle}
+      scope={scope}
+      contributors={selectedBundle?.contributors ?? null}
     />
   );
 }
@@ -192,15 +206,28 @@ export type ReplayInnerProps = {
   /** Render the back-button header above FileTabs. Default true (used by /local). */
   showHeader?: boolean;
   /**
-   * The bundle behind `index`, when the caller has one. Lets replay refuse to
-   * render a file whose content at the playhead has no single truth, instead of
-   * picking a branch (Tier 2.2, spec §6 Rule 4).
+   * The reconstruction scope for `index`. Lets replay refuse to render a file
+   * whose content at the playhead has no single truth, instead of picking a
+   * branch (Tier 2.2, spec §6 Rule 4).
    *
-   * The server-backed Replay tab has no parsed Bundle to hand — it builds its
-   * index from API rows — so it omits this and takes the solo scope, i.e. the
-   * behaviour that predates Tier 2.2. Closing that gap is server-side work.
+   * A SCOPE rather than a `Bundle`, deliberately and for the same reason
+   * `TimelineInner` takes one: `/local` builds it with
+   * `reconstructionScopeFor(bundle, index)`, and the server-backed tab builds
+   * the identical thing from the paged rows plus the summary's contributor
+   * stamp (`useServerScope`). A `Bundle` prop could only ever be supplied by one
+   * of the two, which is exactly how the deployed tab ended up silently taking
+   * the solo scope while `/local` refused to linearize the same submission.
+   *
+   * Omitted, or `ordering: null` inside it (a scope with fewer than two provably
+   * different contributors), is the untouched linear behaviour.
    */
-  bundle?: Bundle | null | undefined;
+  scope?: ReconstructionScope | null | undefined;
+  /**
+   * The bundle-level contributor stamp, for the switcher. `null` renders no
+   * switcher at all — the right answer both for a solo submission and for an
+   * unstamped one, and never an apologetic empty control.
+   */
+  contributors?: BundleContributors | null | undefined;
 };
 
 export function ReplayInner({
@@ -209,7 +236,8 @@ export function ReplayInner({
   flags,
   sourceFilename,
   showHeader = true,
-  bundle = null,
+  scope = null,
+  contributors = null,
 }: ReplayInnerProps) {
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -218,7 +246,7 @@ export function ReplayInner({
   // opts out; any other value (or none) leaves it on.
   const [skipIdle, setSkipIdle] = useState<boolean>(() => searchParams.get('skipIdle') !== '0');
 
-  const engine = useReplayEngine(index, { skipIdle, bundle });
+  const engine = useReplayEngine(index, { skipIdle, scope });
   const { state, fileStates, files, seams, fileAmbiguity, play, pause, step, seek } = engine;
 
   // Active file tab — null means "use first file".
@@ -497,7 +525,7 @@ export function ReplayInner({
           select out of the row. */}
       <div className="flex items-center gap-3 px-4 pt-3 pb-1 border-b bg-background shrink-0">
         <ContributorSelect
-          contributors={bundle?.contributors ?? null}
+          contributors={contributors}
           index={index}
           currentSessionId={state.sessionId}
           onSeek={handleJumpSeek}

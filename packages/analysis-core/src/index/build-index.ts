@@ -448,3 +448,59 @@ export function buildIndexFromEventRows(rows: ReadonlyArray<ServerEventRow>): Ev
 
   return { bySeq, byKind, byFile, bySessionId, ordered };
 }
+
+// ---------------------------------------------------------------------------
+// sessionsFromEventRows
+// ---------------------------------------------------------------------------
+
+/**
+ * Regroup a flat list of server-shape rows into the per-session shape the
+ * ordering tiers take (`ObservedDagSource` / `EventOrderingSource`).
+ *
+ * The companion to {@link buildIndexFromEventRows}: that one produces the
+ * `EventIndex`, this one produces the second half of what
+ * `buildReconstructionScopeFromSessions` needs, so a client with nothing but
+ * an index built from paged rows can build the SAME happens-before relation the
+ * server builds from the parsed bundle. Without it, every server-backed surface
+ * — Replay and Timeline both — has no choice but to assume one contributor.
+ *
+ * Takes the INDEX rather than the rows, deliberately. Every consumer already
+ * holds an index and not all of them still hold the rows that produced it, and
+ * `index.bySessionId` carries the four fields the ordering tiers read, in full,
+ * for both a row-built and a bundle-built index. One input, both callers.
+ *
+ * Two things this deliberately does not do:
+ *
+ *  - It does not invent `hash` / `prev_hash`. The ordering tiers read `seq`,
+ *    `kind`, `wall` and `data` and nothing else (`SourceEnvelope`), and writing
+ *    empty strings into hash fields to satisfy a type would put a value that
+ *    looks like a chain where there is no chain.
+ *  - It does not re-order sessions. Sessions appear in `bySessionId` order;
+ *    `buildEventOrdering` sorts session ids itself, so nothing downstream
+ *    depends on the choice.
+ *
+ * Events within a session are sorted by `seq` — the hash chain's own order, and
+ * the one `buildSegments` and the observation buckets assume. That matters here
+ * rather than being belt-and-braces: an index's own order is `globalIdx`, which
+ * is WALL-derived and across two machines can contradict the chain.
+ */
+export function sessionsFromIndex(index: EventIndex): {
+  sessions: {
+    sessionId: string;
+    events: { seq: number; kind: string; wall: string; data: unknown }[];
+  }[];
+} {
+  const sessions: {
+    sessionId: string;
+    events: { seq: number; kind: string; wall: string; data: unknown }[];
+  }[] = [];
+  for (const [sessionId, events] of index.bySessionId) {
+    sessions.push({
+      sessionId,
+      events: [...events]
+        .sort((a, b) => a.seq - b.seq)
+        .map((e) => ({ seq: e.seq, kind: e.kind, wall: e.wall, data: e.payload })),
+    });
+  }
+  return { sessions };
+}
