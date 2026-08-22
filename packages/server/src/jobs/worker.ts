@@ -59,7 +59,11 @@ import { recordIngestJobTerminal } from '../api/middleware/metrics.js';
 import { timePhase, recordPhase, dumpProfile } from './ingest-profile.js';
 import { dedupFile, attachCoSubmitter } from '../services/ingest/dedup.js';
 import { parseBundlePhase } from '../services/ingest/parse-bundle-phase.js';
-import { matchStudent, type MatchStudentResult } from '../services/ingest/match-student.js';
+import {
+  matchStudent,
+  resolveSubmitterFromFilename,
+  type MatchStudentResult,
+} from '../services/ingest/match-student.js';
 import { createSubmission } from '../services/ingest/create-submission.js';
 import { computeAndStoreStats } from '../services/ingest/stats.js';
 import { runAndStoreValidation } from '../services/ingest/validation.js';
@@ -346,11 +350,42 @@ export async function startWorker(): Promise<() => Promise<void>> {
       );
 
       if (dedupResult.isDuplicate) {
-        // A hinted co-submitter joins the existing submission rather than being
+        // WHO does this duplicate belong to?
+        //
+        // A hinted (Gradescope) file already knows: `match_sid` resolved above.
+        // A filename-path file does NOT — matching is phase 4, and phase 4 is
+        // three phases after this one, so `hintedStudentId` is null here for
+        // every non-Gradescope upload.
+        //
+        // Gating the attach on the hint therefore erased the second student of
+        // any byte-identical pair on the filename path: `status: 'duplicate'`,
+        // `matched_student_id: null`, and NO contributor row — the exact S20
+        // erasure `attachCoSubmitter` exists to prevent, reached without
+        // Gradescope being involved at all. It was masked only by timing: when
+        // the two files raced past phase 2 together the late-duplicate branch in
+        // phase 5 caught the loser instead, by which point phase 4 had run and
+        // `studentId` was known. Whether a student survived depended on how the
+        // batch interleaved.
+        //
+        // So resolve the submitter from the filename here too. It needs no
+        // bundle: the student half of the match is the regex `sid` capture plus
+        // the roster, and only the ASSIGNMENT half needs the manifest.
+        const duplicateStudentId =
+          hintedStudentId ??
+          (await timePhase('match_student', () =>
+            resolveSubmitterFromFilename(
+              semesterId,
+              filenameConvention,
+              fileRow.original_filename,
+              rosterResolver,
+            ),
+          ));
+
+        // A co-submitter joins the existing submission rather than being
         // silently erased by the duplicate (census scenario S20). Idempotent.
-        if (hintedStudentId !== null) {
+        if (duplicateStudentId !== null) {
           const superseded = await timePhase('attach_co_submitter', () =>
-            attachCoSubmitter(db, dedupResult.existingSubmissionId, semesterId, hintedStudentId),
+            attachCoSubmitter(db, dedupResult.existingSubmissionId, semesterId, duplicateStudentId),
           );
           await markIngestFilesSuperseded(db, superseded);
         }
@@ -360,13 +395,13 @@ export async function startWorker(): Promise<() => Promise<void>> {
           .set({
             status: 'duplicate',
             submission_id: dedupResult.existingSubmissionId,
-            matched_student_id: hintedStudentId,
+            matched_student_id: duplicateStudentId,
             resolved_at: new Date(),
           })
           .where(eq(ingest_files.id, ingestFileId));
 
         logger.info(
-          { ingestFileId, attachedCoSubmitter: hintedStudentId !== null },
+          { ingestFileId, attachedCoSubmitter: duplicateStudentId !== null },
           'ingest_file: duplicate detected',
         );
         await maybeEnqueueFinalize(boss, db, ingestJobId);

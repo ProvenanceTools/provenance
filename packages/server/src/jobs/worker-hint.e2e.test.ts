@@ -84,6 +84,48 @@ async function stageHintedFile(
   return fileId;
 }
 
+/**
+ * Stage a bundle blob + an ingest_files row with NO `match_sid` — the
+ * filename-convention path, where the student is resolved at phase 4.
+ */
+async function stageFilenameFile(
+  db: DrizzleDb,
+  jobId: string,
+  bundleBytes: Uint8Array,
+  originalFilename: string,
+): Promise<string> {
+  const storageClient = createStorageClient(storageConfigFromEnv(getConfig()));
+  const fileId = crypto.randomUUID();
+  const { blobSha256, sizeBytes } = await stageBlob(
+    { storageClient },
+    { jobId, ingestFileId: fileId, body: bundleBytes.buffer as ArrayBuffer },
+  );
+  await db.insert(ingest_files).values({
+    id: fileId,
+    ingest_job_id: jobId,
+    original_filename: originalFilename,
+    size_bytes: sizeBytes,
+    blob_sha256: blobSha256,
+    status: 'pending',
+    match_sid: null,
+  });
+  return fileId;
+}
+
+/** Poll one ingest_files row until it leaves `pending`. */
+async function waitForFileResolved(db: DrizzleDb, fileId: string): Promise<string | null> {
+  const start = Date.now();
+  while (Date.now() - start < POLL_TIMEOUT_MS) {
+    const [row] = await db
+      .select({ status: ingest_files.status })
+      .from(ingest_files)
+      .where(eq(ingest_files.id, fileId));
+    if (row && row.status !== 'pending') return row.status;
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+  }
+  return null;
+}
+
 async function waitForJobTerminal(db: DrizzleDb, jobId: string): Promise<string | null> {
   const start = Date.now();
   while (Date.now() - start < POLL_TIMEOUT_MS) {
@@ -301,6 +343,131 @@ describe('worker match-hint path (Gradescope export ingest)', () => {
         expect(contrib.kind).toBe('roster');
         expect(contrib.is_submitter).toBe(true);
       }
+    });
+  });
+
+  it('does not erase the second student when a FILENAME-path duplicate is detected', async () => {
+    // The erasure this closes. On the filename path the student is resolved at
+    // phase 4, three phases AFTER dedup, so `hintedStudentId` is null at the
+    // phase-2 duplicate branch for every non-Gradescope upload. Gating the
+    // co-submitter attach on that hint meant the second student of a
+    // byte-identical pair got `status: 'duplicate'`, `matched_student_id: null`
+    // and NO contributor row — the S20 erasure, reached with Gradescope
+    // nowhere in sight, while the job still reported `succeeded`.
+    //
+    // It was masked by timing: when both files raced past phase 2 together the
+    // LATE-duplicate branch in phase 5 caught the loser instead, by which point
+    // phase 4 had run. So this test deliberately does NOT race them — it waits
+    // for the first file to resolve before enqueuing the second, which is the
+    // only way to land on the phase-2 branch every run.
+    await withTestMinio(async ({ client, bucketName }) => {
+      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+      _setConfigForTest(
+        parseEnv({
+          NODE_ENV: 'test',
+          PUBLIC_BASE_URL: 'http://localhost:3000',
+          DATABASE_URL: pgContainer.getConnectionUri(),
+          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_BUCKET: bucketName,
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+          OBJECT_STORAGE_REGION: 'us-east-1',
+          GOOGLE_OAUTH_CLIENT_ID: 'client-id',
+          GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
+          AUTH_ALLOWED_HOSTED_DOMAINS: '["berkeley.edu"]',
+          AUTH_SUPERADMIN_EMAILS: '["admin@berkeley.edu"]',
+          AUTH_COOKIE_SIGNING_SECRET: 'test-signing-secret-for-e2e-tests-123456789',
+          SESSION_TTL_DAYS: '14',
+          INGEST_MAX_BUNDLE_BYTES: '52428800',
+          INGEST_MAX_BATCH_BYTES: '5368709120',
+          INGEST_MAX_BATCH_FILES: '10000',
+        }),
+      );
+
+      const userId = crypto.randomUUID();
+      await db.insert(users).values({
+        id: userId,
+        google_subject: `sub-${userId}`,
+        email: `admin-${userId}@berkeley.edu`,
+        display_name: 'Admin',
+      });
+      const [course] = await db
+        .insert(courses)
+        .values({ name: 'CS 61A', slug: `cs61a-${crypto.randomUUID().slice(0, 8)}` })
+        .returning();
+      const [semester] = await db
+        .insert(semesters)
+        .values({
+          course_id: course!.id,
+          term: 'fa',
+          year: 2024,
+          slug: `fa2024-${crypto.randomUUID().slice(0, 8)}`,
+          display_name: 'Fall 2024',
+          // This time the filenames DO match the convention — that is the path
+          // under test.
+          filename_convention: '^(?<assignment_id>[a-z0-9_-]+)[-_](?<sid>\\d{6,12})\\.zip$',
+        })
+        .returning();
+      const [studentA] = await db
+        .insert(roster_entries)
+        .values({ semester_id: semester!.id, sid: '111111', display_name: 'Student A' })
+        .returning();
+      const [studentB] = await db
+        .insert(roster_entries)
+        .values({ semester_id: semester!.id, sid: '222222', display_name: 'Student B' })
+        .returning();
+
+      const { zipBuffer } = await buildTestBundle({
+        assignmentId: 'proj02',
+        semester: 'fa2024',
+        sessions: [{ eventCount: 3 }],
+      });
+      const bundleBytes = new Uint8Array(zipBuffer);
+
+      workerStop = await startWorker();
+      const { jobId } = await enqueueIngestJob(db, semester!.id, userId);
+
+      const fileA = await stageFilenameFile(db, jobId, bundleBytes, 'proj02-111111.zip');
+      const fileB = await stageFilenameFile(db, jobId, bundleBytes, 'proj02-222222.zip');
+
+      const boss = await getBoss();
+      // Strictly ordered: A must have created the submission before B is
+      // enqueued, so B takes the phase-2 duplicate branch and not the phase-5
+      // late-duplicate one.
+      await boss.send(JOB_KINDS.INGEST_FILE, { ingestFileId: fileA, ingestJobId: jobId });
+      expect(await waitForFileResolved(db, fileA)).toBe('matched');
+      await boss.send(JOB_KINDS.INGEST_FILE, { ingestFileId: fileB, ingestJobId: jobId });
+
+      expect(await waitForJobTerminal(db, jobId)).toBe('succeeded');
+
+      const fileRows = await db
+        .select({
+          id: ingest_files.id,
+          status: ingest_files.status,
+          matched_student_id: ingest_files.matched_student_id,
+          submission_id: ingest_files.submission_id,
+        })
+        .from(ingest_files)
+        .where(eq(ingest_files.ingest_job_id, jobId));
+      const rowA = fileRows.find((r) => r.id === fileA)!;
+      const rowB = fileRows.find((r) => r.id === fileB)!;
+
+      expect(rowA.status).toBe('matched');
+      expect(rowB.status).toBe('duplicate');
+
+      // The assertion that failed before the fix: the duplicate row's person.
+      expect(rowB.matched_student_id).toBe(studentB!.id);
+      expect(rowB.submission_id).toBe(rowA.submission_id);
+
+      // And the one that matters more, because every status column above looks
+      // healthy while the human is gone: BOTH students are contributors.
+      const contribRows = await db
+        .select({ roster_entry_id: submission_contributors.roster_entry_id })
+        .from(submission_contributors)
+        .where(eq(submission_contributors.semester_id, semester!.id));
+      expect(new Set(contribRows.map((c) => c.roster_entry_id))).toEqual(
+        new Set([studentA!.id, studentB!.id]),
+      );
     });
   });
 
