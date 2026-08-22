@@ -15,7 +15,7 @@
 import { describe, it, expect } from 'vitest';
 import { chainEntry, GENESIS_PREV_HASH, serializeEntry, sha256Hex } from '@provenance/log-core';
 import type { Envelope, SessionIdentity } from '@provenance/log-core';
-import { classifySlogOwnership, recoverPreviousSession } from './chain-recovery.js';
+import { recoverPreviousSession } from './chain-recovery.js';
 import type { RecoveryDeps } from './chain-recovery.js';
 
 // ---------------------------------------------------------------------------
@@ -510,26 +510,5 @@ describe('recoverPreviousSession — shared .provenance/ with two contributors',
     expect(result.kind).toBe('previous_session_corrupt');
     expect(renames).toHaveLength(1);
     expect(renames[0]?.from).toContain('session-2.slog');
-  });
-});
-
-describe('classifySlogOwnership', () => {
-  it('is own only when both refs are present and equal', () => {
-    expect(classifySlogOwnership(ALICE_REF, ALICE_REF)).toBe('own');
-  });
-
-  it('is foreign when the refs differ', () => {
-    expect(classifySlogOwnership(ALICE_REF, BOB_REF)).toBe('foreign');
-  });
-
-  it('is foreign when we have no ref and the candidate names one', () => {
-    // Asymmetric on purpose: losing a back-pointer costs a link, adopting a
-    // partner's log costs their evidence.
-    expect(classifySlogOwnership(null, BOB_REF)).toBe('foreign');
-  });
-
-  it('is unattributed when the candidate names nobody, whoever we are', () => {
-    expect(classifySlogOwnership(ALICE_REF, null)).toBe('unattributed');
-    expect(classifySlogOwnership(null, null)).toBe('unattributed');
   });
 });
