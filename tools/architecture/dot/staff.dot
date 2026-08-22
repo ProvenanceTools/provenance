@@ -51,8 +51,8 @@ digraph staff {
     bgcolor="#150a10" labeljust="l"
     node [fillcolor="#2a0f1e" color="#e8559c" fontsize=9]
     t1 [label="overview\nranked flags + headline stats\n+ the assignment-manifest card:\ncourse, cert validity, trust-chain verdict,\nand which signals the COURSE switched off"]
-    t2 [label="timeline\nevery event on a scrubable axis"]
-    t3 [label="replay\nwatch the file being written; external changes\nare framed in place, then the view returns\nto the caret"]
+    t2 [label="timeline\nevery event on a scrubable axis, ordered by ≺\nrather than by wall clock — one useServerScope\nhook feeds this tab and replay alike, off\nSubmissionSummary.contributor_stamp"]
+    t3 [label="replay\nwatch the file being written; external changes\nare framed in place, then the view returns\nto the caret. Same scope as the timeline, so two\npartners' concurrent work is never linearized"]
     t4 [label="validation\nthe 8 checks, with the failing seq"]
     t5 [label="source\nreconstructed content with per-line provenance"]
   }

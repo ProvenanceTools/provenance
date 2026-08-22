@@ -106,9 +106,8 @@ digraph analysis {
     coverage [label="COVERAGE STAGE — facts, never findings\nconcurrent recording · ONE person's two machines ·\nidentity counts + rootKeyConfigured ·\ncommit-graph coverage + DAG defects ·\nthe single-repository caveat · witnessing coverage ·\ngit-observation coverage · FILE SCOPE, per reviewed\npath · unattested rolling-seal tails ·\nTORN TAILS (truncated and KEPT) ·\ndropped artifacts (left out entirely).\nAnswers in all three states: not available,\nnothing to note, or the facts."
               fillcolor="#0d2416" color="#3fbf62" penwidth=1.8]
 
-    witness [label="peer witnessing — READER ONLY\ncorroborated · absent · short ·\ntip_mismatch · indeterminate, plus\nunwitnessed per SESSION.\nFacts only: no Flag, no check, no score,\nand it never names a person.\nNothing in the pipeline calls it yet."
-             fillcolor="#15171d" color="#5d677d" fontcolor="#98a2b6"
-             style="filled,rounded,dashed"]
+    witness [label="peer witnessing — READER ONLY\ncorroborated · absent · short ·\ntip_mismatch · indeterminate, plus\nunwitnessed per SESSION.\nFacts only: no Flag, no check, no score,\nand it never names a person.\nReconciled by the COVERAGE STAGE — discrepancies\naggregated on (file, verdict), corroborated kept\nas a COUNT so it never joins a list of problems."
+             fillcolor="#0d2416" color="#3fbf62" fontsize=9]
   }
 
   rkpub [label="ROOT PUBLIC KEY\nconfigured server-side and in the browser build —\nthe same one value every recorder compiles in"
@@ -141,7 +140,8 @@ digraph analysis {
   extclass -> he [label="⇒ terminal_active_during_\nexternal_change too" color="#9d7bf5" style=dashed]
 
   /* peer witnessing: the reader landed first, exactly as 2.0 and the seal did */
-  index -> witness [label="peer.observed —\nno recorder emitted this\nuntil 2026-08-20" color="#5d677d" style=dashed]
+  index -> witness [label="peer.observed — all three\nrecorders emit it as of 2026-08-20" color="#3fbf62"]
+  witness -> coverage [label="witnessing coverage — counts, capability,\nand the discrepancies. unwitnessed is the ORDINARY\nstate and is never rendered as a deficiency" color="#3fbf62" style=dashed constraint=false]
   contrib -> witness [label="a witness is worth what the chain\ncarrying it is worth: attributed ⇒\nestablished · unattributed ⇒ inferred ·\nunverifiable ⇒ unknown" color="#5d677d" style=dashed]
 
   /* the one enumeration of overlapping sessions, split two ways */

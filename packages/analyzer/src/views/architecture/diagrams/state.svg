@@ -1,6 +1,6 @@
-<svg width="1928pt" height="492pt"
- viewBox="0.00 0.00 1928.00 492.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(21.6 470.21)">
+<svg width="1979pt" height="534pt"
+ viewBox="0.00 0.00 1979.00 534.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(21.6 512.34)">
 <title>state</title>
 
 <g id="node1" class="node">
@@ -155,27 +155,31 @@
 
 <g id="node8" class="node">
 <title>recover</title>
-<path stroke-width="1.4" d="M1872.63,-331.34C1872.63,-331.34 1697.46,-331.34 1697.46,-331.34 1691.46,-331.34 1685.46,-325.34 1685.46,-319.34 1685.46,-319.34 1685.46,-285.38 1685.46,-285.38 1685.46,-279.38 1691.46,-273.38 1697.46,-273.38 1697.46,-273.38 1872.63,-273.38 1872.63,-273.38 1878.63,-273.38 1884.63,-279.38 1884.63,-285.38 1884.63,-285.38 1884.63,-319.34 1884.63,-319.34 1884.63,-325.34 1878.63,-331.34 1872.63,-331.34" class="f-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1785.05" y="-314.88" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">RECOVERING</text>
-<text xml:space="preserve" text-anchor="middle" x="1785.05" y="-303.63" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">read the log tail, find the last valid</text>
-<text xml:space="preserve" text-anchor="middle" x="1785.05" y="-292.38" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">chain link, quarantine the remainder,</text>
-<text xml:space="preserve" text-anchor="middle" x="1785.05" y="-281.13" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">and start a NEW log linked to it</text>
+<path stroke-width="1.4" d="M1923.63,-353.84C1923.63,-353.84 1697.46,-353.84 1697.46,-353.84 1691.46,-353.84 1685.46,-347.84 1685.46,-341.84 1685.46,-341.84 1685.46,-262.88 1685.46,-262.88 1685.46,-256.88 1691.46,-250.88 1697.46,-250.88 1697.46,-250.88 1923.63,-250.88 1923.63,-250.88 1929.63,-250.88 1935.63,-256.88 1935.63,-262.88 1935.63,-262.88 1935.63,-341.84 1935.63,-341.84 1935.63,-347.84 1929.63,-353.84 1923.63,-353.84" class="f-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1810.55" y="-337.38" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">RECOVERING</text>
+<text xml:space="preserve" text-anchor="middle" x="1810.55" y="-326.13" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">read the log tail, find the last valid</text>
+<text xml:space="preserve" text-anchor="middle" x="1810.55" y="-314.88" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">chain link, quarantine the remainder,</text>
+<text xml:space="preserve" text-anchor="middle" x="1810.55" y="-303.63" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">and start a NEW log linked to it.</text>
+<text xml:space="preserve" text-anchor="middle" x="1810.55" y="-292.38" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">Only ever a log this recorder OWNS — decided</text>
+<text xml:space="preserve" text-anchor="middle" x="1810.55" y="-281.13" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">by student_ref ALONE, never by the wall clock:</text>
+<text xml:space="preserve" text-anchor="middle" x="1810.55" y="-269.88" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">a damaged timestamp costs a file its ORDER,</text>
+<text xml:space="preserve" text-anchor="middle" x="1810.55" y="-258.63" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">never its author</text>
 </g>
 
 <g id="edge10" class="edge">
 
-<path fill="none" stroke-width="1.2" d="M1502.1,-145.67C1520.39,-152.28 1540.07,-160.03 1557.71,-168.36 1620.36,-197.93 1688.25,-239.51 1733.16,-268.48" class="s-fmt"/>
-<polygon stroke-width="1.2" points="1731.67,-270.23 1738.37,-271.86 1734.15,-266.41 1731.67,-270.23" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1621.59" y="-216.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">editor restarts</text>
+<path fill="none" stroke-width="1.2" d="M1501.85,-146.2C1520.14,-152.81 1539.88,-160.43 1557.71,-168.36 1609.91,-191.56 1666.19,-221.05 1712.27,-246.45" class="s-fmt"/>
+<polygon stroke-width="1.2" points="1710.91,-248.3 1717.7,-249.45 1713.11,-244.32 1710.91,-248.3" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1621.59" y="-210.15" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">editor restarts</text>
 </g>
 
 <g id="edge11" class="edge">
 
-<path fill="none" stroke-width="1.2" d="M1740.46,-331.83C1696.53,-359.62 1625.68,-399.33 1557.71,-415.36 1521.86,-423.81 1147.39,-424.51 1127.79,-412.36 1072.95,-378.34 1047.96,-302.04 1037.8,-258.46" class="s-fmt"/>
+<path fill="none" stroke-width="1.2" d="M1716.06,-354.45C1577.02,-424.24 1312.34,-526.8 1127.79,-412.36 1072.95,-378.34 1047.96,-302.04 1037.8,-258.46" class="s-fmt"/>
 <polygon stroke-width="1.2" points="1040.04,-258.09 1036.41,-252.24 1035.6,-259.08 1040.04,-258.09" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-440.53" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">a FRESH session.start carrying</text>
-<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-431.53" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">prev_session_id — not session.resumed,</text>
-<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-422.53" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">and always into a NEW log file</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-482.66" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">a FRESH session.start carrying</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-473.66" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">prev_session_id — not session.resumed,</text>
+<text xml:space="preserve" text-anchor="middle" x="1435.25" y="-464.66" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">and always into a NEW log file</text>
 </g>
 
 <g id="edge13" class="edge">
