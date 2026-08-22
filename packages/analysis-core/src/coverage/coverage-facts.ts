@@ -56,11 +56,21 @@
  * tested-after-the-fact one.
  */
 
-import type { PeerObservedPayload } from '@provenance/log-core';
-import { gitObservationGap, readBundleCapabilities } from '../capability/session-capabilities.js';
 import type {
+  CapabilityValueProblem,
+  FileScopeProblem,
+  PeerObservedPayload,
+} from '@provenance/log-core';
+import {
+  gitObservationGap,
+  readBundleCapabilities,
+  wasFileWatched,
+} from '../capability/session-capabilities.js';
+import type {
+  BundleCapabilityFacts,
   BundleCapabilitySummary,
   GitImpossibleReason,
+  WatchedFileAnswer,
 } from '../capability/session-capabilities.js';
 import { ASSUMED_SINGLE_REPOSITORY, buildObservedDag } from '../git/observed-dag.js';
 import type { ObservedDagCoverage, ObservedDagDefect } from '../git/observed-dag.js';
@@ -545,7 +555,161 @@ export type GitObservationCoverage = {
    * report could not be used. A fact about the recorder, never about a student.
    */
   malformed: number;
+  /**
+   * Every distinct reason a present git-capture value could not be read, sorted
+   * and deduplicated. Empty iff {@link GitObservationCoverage.malformed} is 0.
+   *
+   * Carried so a surface can say WHICH way the value was wrong through
+   * `log-core`'s `describeCapabilityValueProblem` rather than guessing. The two
+   * problems are genuinely different — a non-string value and a string outside
+   * the closed enum are different nonconformance — and a surface that renders
+   * `malformed` alone can only describe one of them.
+   */
+  malformedProblems: readonly CapabilityValueProblem[];
 };
+
+// ---------------------------------------------------------------------------
+// File scope (§5.6 item 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * One file the assignment put under review, and whether anything was watching it.
+ *
+ * The join is by VERBATIM path, which is sound by construction rather than by
+ * luck: `file_scope.watched` is resolved from the manifest's
+ * `files_under_review` (see the recorder's `resolveFileScope`), and
+ * `submission_files[].path` is documented as matching a `files_under_review`
+ * entry. Both spellings come from the same manifest list, so neither side
+ * normalizes and neither may start to — see {@link wasFileWatched}.
+ */
+export type WatchedFileFact = {
+  /** Manifest path, verbatim, exactly as a grader can grep for it. */
+  path: string;
+  /**
+   * {@link WatchedFileAnswer} for this path. `'unknown'` is the permanent state
+   * of every file of every bundle recorded before §5.6, and is never a defect.
+   */
+  watched: WatchedFileAnswer;
+  /**
+   * Whether this record carries any event at all for this path.
+   *
+   * Present so a consumer never says "this file has no recorded activity" about
+   * a file that has some. The S25 ambiguity only exists for a file with NO
+   * activity; a file with activity was self-evidently being watched, whatever a
+   * capability report says about it.
+   */
+  recordedActivity: boolean;
+};
+
+/**
+ * How much of the file set this record was actually watching (§5.6 item 1).
+ *
+ * ## The inference this exists to remove
+ *
+ * "No events for `Solver.java`" is ambiguous between _nothing happened in it_
+ * and _it was never watched_ (S25). Nothing else in a bundle can tell those
+ * apart: a file the recorder was never told to watch produces exactly the same
+ * silence as a file the student never opened. This is the only field that
+ * separates them, and it separates them per file rather than in aggregate,
+ * because a scope is a set and a grader's question is about one member of it.
+ *
+ * ## Never a finding, in either direction
+ *
+ * `'not_watched'` is EXCULPATORY: it says the recorder was not told to watch
+ * that file, which is a course-configuration fact about the assignment manifest,
+ * not conduct by the student. `'unknown'` is the ordinary, permanent state of
+ * every pre-§5.6 bundle and means only that the recorder does not report. No
+ * `Flag`, no check, no score — see the module docstring.
+ */
+export type FileScopeCoverage = {
+  /**
+   *  - `'reported'` — every session said which files it was watching.
+   *  - `'partial'` — some did and some did not, so the watched set is a lower
+   *    bound rather than the whole scope.
+   *  - `'unreported'` — no session said anything usable. **The state of every
+   *    bundle recorded before the field existed**, and never a defect.
+   */
+  reporting: 'reported' | 'partial' | 'unreported';
+  /** Sessions in the bundle. The denominator for the three below. */
+  sessions: number;
+  /** Sessions carrying a readable file scope, complete or truncated. */
+  reportedSessions: number;
+  /**
+   * Of those, how many said their list had been capped. A capped list can prove
+   * a file WAS watched and can never prove one was not — see
+   * {@link wasFileWatched}.
+   */
+  incompleteSessions: number;
+  /** Sessions whose recorder does not report a file scope. Never a defect. */
+  unreportedSessions: number;
+  /** Sessions whose file scope was present and could not be read. */
+  malformedSessions: number;
+  /**
+   * Every distinct reason a present file scope could not be read, sorted and
+   * deduplicated, for `log-core`'s `describeFileScopeProblem`. Note these are
+   * reported by NAME and never quote the offending path — that is the privacy
+   * check the reader exists to perform.
+   */
+  malformedProblems: readonly FileScopeProblem[];
+  /**
+   * The union of every session's watched list, sorted and deduplicated.
+   *
+   * Display only, and a LOWER BOUND whenever `reporting` is not `'reported'` or
+   * any session's list was capped. It is not the basis of {@link files}.
+   */
+  watchedFiles: readonly string[];
+  /**
+   * One entry per `submission_files` path, in manifest order.
+   *
+   * Empty on a legacy 1.0 bundle, which carries no `submission_files` at all —
+   * so there is no file set to ask the question about, which is absence of a
+   * question rather than a negative answer.
+   */
+  files: readonly WatchedFileFact[];
+};
+
+function fileScopeCoverage(
+  bundle: Bundle,
+  index: EventIndex,
+  capabilities: BundleCapabilityFacts,
+): FileScopeCoverage {
+  const c = capabilities.counts;
+
+  const problems = new Set<FileScopeProblem>();
+  for (const session of capabilities.sessions) {
+    if (session.fileScope.kind === 'malformed') problems.add(session.fileScope.problem);
+  }
+
+  const reporting: FileScopeCoverage['reporting'] =
+    c.sessions === 0
+      ? 'unreported'
+      : c.fileScopeReported === c.sessions
+        ? 'reported'
+        : c.fileScopeReported === 0 && c.fileScopeMalformed === 0
+          ? 'unreported'
+          : 'partial';
+
+  const files: WatchedFileFact[] = [];
+  for (const path of bundle.manifest.submission_files ?? []) {
+    files.push({
+      path: path.path,
+      watched: wasFileWatched(capabilities, path.path),
+      recordedActivity: (index.byFile.get(path.path)?.length ?? 0) > 0,
+    });
+  }
+
+  return {
+    reporting,
+    sessions: c.sessions,
+    reportedSessions: c.fileScopeReported,
+    incompleteSessions: c.fileScopeIncomplete,
+    unreportedSessions: c.fileScopeUnreported,
+    malformedSessions: c.fileScopeMalformed,
+    malformedProblems: [...problems].sort(),
+    watchedFiles: capabilities.watchedFiles,
+    files,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // The aggregate
@@ -597,6 +761,15 @@ export type CoverageFacts = {
    * "nothing was observed" pass for "nothing happened".
    */
   gitObservation: GitObservationCoverage;
+  /**
+   * Which files this record was actually watching (§5.6 item 1), and therefore
+   * which files' silence is explained by scope rather than by inactivity.
+   *
+   * Kept SEPARATE from every other field here for the same reason
+   * `gitObservation` is separate from `dagCoverage`: this says whether a file
+   * could have been seen at all, and nothing else in the bundle does.
+   */
+  fileScope: FileScopeCoverage;
 };
 
 /**
@@ -637,8 +810,21 @@ export function coverageFacts(bundle: Bundle, index: EventIndex): CoverageFacts 
       silentThoughCapable: gap.silentThoughCapable,
       silentAndUnreported: gap.silentAndUnreported,
       malformed: capabilities.counts.gitMalformed,
+      malformedProblems: gitMalformedProblems(capabilities),
     },
+    fileScope: fileScopeCoverage(bundle, index, capabilities),
   };
+}
+
+/** Every distinct reason a present `git_capture` could not be read. */
+function gitMalformedProblems(
+  capabilities: BundleCapabilityFacts,
+): readonly CapabilityValueProblem[] {
+  const problems = new Set<CapabilityValueProblem>();
+  for (const session of capabilities.sessions) {
+    if (session.git.kind === 'malformed') problems.add(session.git.problem);
+  }
+  return [...problems].sort();
 }
 
 /**
@@ -682,6 +868,10 @@ export function hasCoverageFacts(f: CoverageFacts): boolean {
     f.witnessing.malformed > 0 ||
     // Someone reported whether git was observable. `'unknown'` is not a report.
     f.gitObservation.availability !== 'unknown' ||
-    f.gitObservation.malformed > 0
+    f.gitObservation.malformed > 0 ||
+    // Someone reported which files they were watching. `'unreported'` is not a
+    // report, and a file answering `'unknown'` is not one either — that is every
+    // file of every pre-§5.6 bundle.
+    f.fileScope.reporting !== 'unreported'
   );
 }

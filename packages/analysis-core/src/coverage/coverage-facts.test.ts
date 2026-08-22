@@ -46,6 +46,7 @@ import {
   multiMachineRecordingFacts,
   unattestedTails,
 } from './coverage-facts.js';
+import type { CoverageFacts } from './coverage-facts.js';
 import { ASSUMED_SINGLE_REPOSITORY, buildObservedDag } from '../git/observed-dag.js';
 
 // ---------------------------------------------------------------------------
@@ -1029,5 +1030,212 @@ describe('peer witnessing is a coverage fact, not a finding', () => {
   it('is deterministic over a bundle carrying witnesses', async () => {
     const { bundle, index } = await witnessedScope({ omitWitnessed: true, repeats: 3 });
     expect(coverageFacts(bundle, index)).toEqual(coverageFacts(bundle, index));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// File scope (§5.6 item 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * A bundle whose manifest puts `files` under review and whose sessions carry
+ * exactly the given `session.start` extras.
+ *
+ * `activity` names the paths the first session edits, which is what separates
+ * "this file was silent" from "this file was busy" — the whole point of asking
+ * whether a SILENT file was being watched at all.
+ */
+async function fileScopeScope(opts: {
+  files: string[];
+  sessionStarts: Array<Record<string, unknown>>;
+  activity?: string[];
+}): Promise<{ bundle: Bundle; index: EventIndex }> {
+  const { zipBuffer } = await buildTestBundle({
+    submissionFiles: opts.files.map((path) => ({
+      path,
+      status: 'present' as const,
+      content: `# ${path}\n`,
+    })),
+    sessions: opts.sessionStarts.map((sessionStart, i) => ({
+      sessionStart,
+      events:
+        i === 0
+          ? (opts.activity ?? []).map((path) => ({
+              kind: 'doc.change',
+              data: { path, deltas: [{ range: null, text: 'x = 1\n' }], source: 'keystroke' },
+            }))
+          : [],
+    })),
+  });
+  const result = await loadBundle(zipBuffer, 'test.zip');
+  if (!result.ok) throw new Error(`Bundle load failed: ${JSON.stringify(result.error)}`);
+  const bundle = result.value;
+  return { bundle, index: buildIndex(bundle) };
+}
+
+/**
+ * `fileScopeScope` never resolves contributors, so its bundles report
+ * `rootKeyConfigured: false`, which tips `hasCoverageFacts` on its own. Neutral
+ * identity isolates the ONE question these assertions are about: does a file
+ * scope, or its absence, make the panel speak?
+ */
+function withNeutralIdentity(facts: CoverageFacts): CoverageFacts {
+  return {
+    ...facts,
+    identity: { ...facts.identity, resolved: true, rootKeyConfigured: true },
+  };
+}
+
+describe('file scope is a coverage fact, not a finding', () => {
+  it('a recorder that reports nothing reads UNREPORTED, every file UNKNOWN, and stays silent', async () => {
+    // EVERY bundle recorded before §5.6, permanently. If this ever reads as
+    // `not_watched`, the whole archive starts asserting that files nobody could
+    // prove were watched were provably not watched.
+    const { bundle, index } = await fileScopeScope({
+      files: ['hw1.py', 'util.py'],
+      sessionStarts: [{}],
+    });
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.fileScope.reporting).toBe('unreported');
+    expect(facts.fileScope.unreportedSessions).toBe(1);
+    expect(facts.fileScope.watchedFiles).toEqual([]);
+    expect(facts.fileScope.files.map((f) => f.watched)).toEqual(['unknown', 'unknown']);
+    // An absent report is a fact about a release date, never about a submission.
+    expect(hasCoverageFacts(withNeutralIdentity(facts))).toBe(false);
+  });
+
+  it('a complete scope answers WATCHED for what it names and NOT_WATCHED for what it does not', async () => {
+    const { bundle, index } = await fileScopeScope({
+      files: ['hw1.py', 'provided.py'],
+      sessionStarts: [{ file_scope: { watched: ['hw1.py'], complete: true } }],
+    });
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.fileScope.reporting).toBe('reported');
+    expect(facts.fileScope.reportedSessions).toBe(1);
+    expect(facts.fileScope.incompleteSessions).toBe(0);
+    expect(facts.fileScope.watchedFiles).toEqual(['hw1.py']);
+    expect(facts.fileScope.files).toEqual([
+      { path: 'hw1.py', watched: 'watched', recordedActivity: false },
+      { path: 'provided.py', watched: 'not_watched', recordedActivity: false },
+    ]);
+    // A report existed, so there is now something true to say.
+    expect(hasCoverageFacts(withNeutralIdentity(facts))).toBe(true);
+  });
+
+  it('a TRUNCATED list can prove watched and can never prove not_watched', async () => {
+    // The asymmetry is the whole reason `complete` is a required boolean: a path
+    // missing from a capped list may be in the part that was cut.
+    const { bundle, index } = await fileScopeScope({
+      files: ['hw1.py', 'provided.py'],
+      sessionStarts: [{ file_scope: { watched: ['hw1.py'], complete: false } }],
+    });
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.fileScope.reporting).toBe('reported');
+    expect(facts.fileScope.incompleteSessions).toBe(1);
+    expect(facts.fileScope.files.map((f) => f.watched)).toEqual(['watched', 'unknown']);
+  });
+
+  it('one silent session takes every unnamed file to UNKNOWN — never to not_watched', async () => {
+    // Fail toward not knowing: the session that said nothing may have been the
+    // one watching the file.
+    const { bundle, index } = await fileScopeScope({
+      files: ['hw1.py', 'provided.py'],
+      sessionStarts: [{ file_scope: { watched: ['hw1.py'], complete: true } }, {}],
+    });
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.fileScope.reporting).toBe('partial');
+    expect(facts.fileScope.reportedSessions).toBe(1);
+    expect(facts.fileScope.unreportedSessions).toBe(1);
+    expect(facts.fileScope.files.map((f) => f.watched)).toEqual(['watched', 'unknown']);
+  });
+
+  it('an EMPTY complete scope is a real answer, not an absent one', async () => {
+    const { bundle, index } = await fileScopeScope({
+      files: ['hw1.py'],
+      sessionStarts: [{ file_scope: { watched: [], complete: true } }],
+    });
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.fileScope.reporting).toBe('reported');
+    expect(facts.fileScope.files[0]!.watched).toBe('not_watched');
+  });
+
+  it('records whether a file has activity, so a busy file is never called silent', async () => {
+    const { bundle, index } = await fileScopeScope({
+      files: ['hw1.py', 'provided.py'],
+      sessionStarts: [{ file_scope: { watched: ['hw1.py'], complete: true } }],
+      activity: ['hw1.py'],
+    });
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.fileScope.files).toEqual([
+      { path: 'hw1.py', watched: 'watched', recordedActivity: true },
+      { path: 'provided.py', watched: 'not_watched', recordedActivity: false },
+    ]);
+  });
+
+  it('a malformed scope is rejected whole and named by problem, never by path', async () => {
+    const { bundle, index } = await fileScopeScope({
+      files: ['hw1.py'],
+      sessionStarts: [{ file_scope: { watched: ['/Users/someone/hw1.py'], complete: true } }],
+    });
+    const facts = coverageFacts(bundle, index);
+
+    expect(facts.fileScope.malformedSessions).toBe(1);
+    expect(facts.fileScope.reportedSessions).toBe(0);
+    expect(facts.fileScope.malformedProblems).toEqual(['path_absolute']);
+    // Rejected WHOLE: the offending path never reaches the fact, and the file it
+    // could not answer for stays unknown rather than becoming not_watched.
+    expect(facts.fileScope.watchedFiles).toEqual([]);
+    expect(facts.fileScope.files[0]!.watched).toBe('unknown');
+    // Something reported, unreadably. That is still a report.
+    expect(facts.fileScope.reporting).toBe('partial');
+  });
+
+  it('a legacy 1.0 bundle has no file set to ask about, which is not a negative answer', async () => {
+    const { bundle, index } = await capabilityScope({
+      file_scope: { watched: ['hw1.py'], complete: true },
+    });
+    const facts = coverageFacts(bundle, index);
+
+    expect(bundle.manifest.submission_files).toBeUndefined();
+    expect(facts.fileScope.files).toEqual([]);
+    expect(facts.fileScope.watchedFiles).toEqual(['hw1.py']);
+  });
+
+  it('is deterministic', async () => {
+    const { bundle, index } = await fileScopeScope({
+      files: ['hw1.py', 'provided.py'],
+      sessionStarts: [{ file_scope: { watched: ['hw1.py'], complete: true } }, {}],
+    });
+    expect(coverageFacts(bundle, index)).toEqual(coverageFacts(bundle, index));
+  });
+});
+
+describe('a malformed git capture says WHICH way it was malformed', () => {
+  it('distinguishes a non-string value from a value outside the enum', async () => {
+    // The two are different nonconformance and a surface holding only a count
+    // can describe at most one of them — so it describes the wrong one for the
+    // other. Carried so `describeCapabilityValueProblem` can say which.
+    const notAString = await capabilityScope({ git_capture: 7 });
+    expect(coverageFacts(notAString.bundle, notAString.index).gitObservation).toMatchObject({
+      malformed: 1,
+      malformedProblems: ['not_a_string'],
+    });
+
+    const unknownValue = await capabilityScope({ git_capture: 'sort-of' });
+    expect(coverageFacts(unknownValue.bundle, unknownValue.index).gitObservation).toMatchObject({
+      malformed: 1,
+      malformedProblems: ['unknown_value'],
+    });
+  });
+
+  it('is empty when nothing was malformed', async () => {
+    const { bundle, index } = await capabilityScope({ git_capture: 'available' });
+    expect(coverageFacts(bundle, index).gitObservation.malformedProblems).toEqual([]);
   });
 });
