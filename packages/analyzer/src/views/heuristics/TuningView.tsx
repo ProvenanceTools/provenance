@@ -56,6 +56,23 @@ const KNOWN_HEURISTIC_IDS = ALL_FLAG_IDS;
 const CROSS_SUBMISSION_HEURISTIC_ID_SET = new Set(CROSS_SUBMISSION_HEURISTIC_IDS);
 
 // ---------------------------------------------------------------------------
+// paste_matches_known_source: no corpus source exists, so it can never fire.
+//
+// The heuristic matches pastes against `config.pasteMatchesKnownSource.corpus`
+// (see analysis-core/heuristics/config.ts), which defaults to `[]` and has no
+// upload path, storage, or config plumbing anywhere in packages/server/src or
+// packages/analyzer/src — course staff have no way to populate it. Ships
+// registered (so a future corpus feature can wire it up) but is inert in
+// every deployed semester today.
+//
+// Unlike the cross-submission case, BOTH controls are meaningless here, not
+// just weight: with an empty corpus the heuristic emits 0 flags regardless of
+// enabled/disabled, so letting staff flip either control would imply a lever
+// that does nothing. Both are disabled, with a visible explanation — see
+// docs/heuristics.md for the staff-facing version of this note.
+const INERT_HEURISTIC_IDS = new Set<string>(['paste_matches_known_source']);
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -265,7 +282,9 @@ export function TuningView() {
           {KNOWN_HEURISTIC_IDS.map((id) => {
             const flagCfg = candidate.per_flag[id] ?? { enabled: true, weight: 1.0 };
             const isCrossFlag = CROSS_SUBMISSION_HEURISTIC_ID_SET.has(id);
+            const isInert = INERT_HEURISTIC_IDS.has(id);
             const weightNoteId = `tuning-weight-note-${id}`;
+            const inertNoteId = `tuning-inert-note-${id}`;
             return (
               <div key={id} className="px-4 py-3 border-b border-gray-100">
                 <div className="flex items-center justify-between mb-1">
@@ -283,6 +302,8 @@ export function TuningView() {
                       className="h-3 w-3"
                       data-testid={`toggle-${id}`}
                       aria-label={`Enable ${id}`}
+                      disabled={isInert}
+                      aria-describedby={isInert ? inertNoteId : undefined}
                     />
                     <span className="text-xs text-gray-500">{flagCfg.enabled ? 'on' : 'off'}</span>
                   </label>
@@ -295,12 +316,14 @@ export function TuningView() {
                     step={0.1}
                     value={flagCfg.weight}
                     onChange={(e) => handleWeight(id, parseFloat(e.target.value))}
-                    disabled={isCrossFlag}
+                    disabled={isCrossFlag || isInert}
                     className="flex-1 h-1 disabled:opacity-50 disabled:cursor-not-allowed"
                     data-testid={`slider-${id}`}
                     aria-labelledby={`tuning-label-${id}`}
                     aria-valuetext={`${flagCfg.weight.toFixed(1)} weight`}
-                    aria-describedby={isCrossFlag ? weightNoteId : undefined}
+                    aria-describedby={
+                      isCrossFlag ? weightNoteId : isInert ? inertNoteId : undefined
+                    }
                   />
                   <span className="text-xs text-gray-500 w-8 text-right">
                     {flagCfg.weight.toFixed(1)}
@@ -313,6 +336,16 @@ export function TuningView() {
                     data-testid={`weight-note-${id}`}
                   >
                     Cross-submission flags are surfaced, not scored. Weight does not apply.
+                  </p>
+                )}
+                {isInert && (
+                  <p
+                    id={inertNoteId}
+                    className="mt-1 text-xs text-gray-600"
+                    data-testid={`inert-note-${id}`}
+                  >
+                    No corpus source exists yet — this heuristic can never fire. Enable and weight
+                    have no effect.
                   </p>
                 )}
               </div>
