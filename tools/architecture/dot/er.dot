@@ -45,7 +45,7 @@ digraph er {
     label="  SUBMISSIONS  " fontsize=9.5 fontcolor="#3fbf62" color="#153c25"
     penwidth=1.5 style=rounded bgcolor="#0a130d" labeljust="l"
     node [fillcolor="#0d2416" color="#3fbf62"]
-    submissions[label="submissions\nblob_sha256 · version_index\nversion_owner_key — GENERATED ALWAYS,\nso a row cannot disagree with its own lineage" penwidth=1.9]
+    submissions[label="submissions\nblob_sha256 · version_index\nversion_owner_key — GENERATED ALWAYS,\nso a row cannot disagree with its own lineage.\nsource_group_key — 0033, a partial UNIQUE on\n(semester_id, source_group_key) so a declared group\ncannot split into two apparent submissions" penwidth=1.9]
     subcontrib[label="submission_contributors — 0029\none row per PERSON, roster side and bundle\nside reconciled onto ONE row.\nD14 scoring lives here." penwidth=1.9]
     stats     [label="per_file_stats"]
     valres    [label="validation_results"]
@@ -58,7 +58,7 @@ digraph er {
     node [fillcolor="#2a0f1e" color="#e8559c"]
     xflags    [label="cross_flags"]
     xparts    [label="cross_flag_participants"]
-    xexcl     [label="cross_flag_exclusions"]
+    xexcl     [label="cross_flag_exclusions — 0031\nreason CHECK widened by 0032 to TWO values:\nsame_repository_lineage · shared_recording_scope.\nshared_commits[] and shared_sessions[] both carried,\nwhichever proof fired"]
   }
 
   subgraph cluster_ing {
@@ -66,7 +66,7 @@ digraph er {
     penwidth=1.5 style=rounded bgcolor="#0a1413" labeljust="l"
     node [fillcolor="#0e2422" color="#17bfae"]
     ijobs     [label="ingest_jobs"]
-    ifiles    [label="ingest_files"]
+    ifiles    [label="ingest_files\nsource_group_key — 0033, the declared\nGradescope group, persisted"]
     rjobs     [label="recompute_jobs"]
   }
 
