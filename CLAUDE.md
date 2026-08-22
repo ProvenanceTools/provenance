@@ -124,7 +124,7 @@ Workspace-wide (run from repo root):
 - `npm run test:tools` — run the `tools/` suites (course-keypair / cert-minting / manifest-signing, and the recorder→analyzer seal conformance gate). `tools/` is not an npm workspace, so these are invisible to `npm run test`; they ran under nothing at all until a root `vitest.config.ts` was added, deliberately scoped to `tools/**` so a bare `vitest` cannot wander into the server's testcontainers suites.
 - `npm run typecheck` — `tsc --noEmit` across the workspace.
 - `npm run lint` — ESLint (only the `src/` trees of the five packages) + Prettier check.
-- `npm run package:recorder` — build the dev-key VSIX for local install.
+- `npm run package:recorder` — build the dev-key VSIX for local install. It **must** run the `bundle` (esbuild) step, not just `build` (tsc): the VSIX is packaged with `vsce package --no-dependencies` and `.vscodeignore` excludes `node_modules/**`, so anything not inlined by esbuild cannot be resolved once installed. A tsc-only VSIX installs fine and then dies on activation with `Cannot find package '@provenance/log-core'`, because tsc leaves that import bare while esbuild inlines it. Nothing catches this before install — a packaged VSIX is never smoke-tested — so treat the bundle step as load-bearing rather than an optimization.
 - `npm run update-hashes` — refresh the analyzer's known-good extension-hash allowlist (see README for required flags).
 - Staff key/manifest tools, all thin wrappers around `node --experimental-strip-types tools/<tool>.ts` (pass flags after `--`; see README "Course staff: key & manifest workflow"):
   - `npm run keygen:course` — generate an ed25519 keypair (root, course, **or** institution — same shape; positional path only unless you also want a course cert).
