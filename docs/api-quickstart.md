@@ -271,7 +271,7 @@ curl -s \
 curl -s -X POST \
   -H "Authorization: Bearer $PROVENANCE_TOKEN" \
   -H "Content-Type: application/json" \
-  "$PROVENANCE_BASE_URL/semesters/$SEMESTER_ID/heuristic-config/recompute" \
+  "$PROVENANCE_BASE_URL/semesters/$SEMESTER_ID/recompute" \
   -d '{}' \
   | python3 -m json.tool
 ```

@@ -18,7 +18,7 @@ At submission time, **"Provenance: Prepare Submission Bundle"** (command palette
 
 The status bar always shows "**Provenance: recording**" while the extension is active. This is both the in-product disclosure required for the telemetry to be ethical, and a tamper signal — if it disappears, something is wrong.
 
-The extension activates **only** when the workspace root contains a valid `.provenance-manifest` manifest signed by the course's offline key. In any other folder, the extension does nothing — no logging, no UI noise, no `.provenance/` directory.
+The extension activates **only** when the workspace root contains a valid `.provenance-manifest` manifest signed by the course's offline key **and** carrying an inline `course_cert` that chains to the root public key the extension embeds. In any other folder, the extension does nothing — no logging, no UI noise, no `.provenance/` directory.
 
 ## Activation manifest (`.provenance-manifest`)
 
@@ -77,7 +77,7 @@ This is a **deterrent**, not a cryptographic guarantee. The threat model is in P
 | Attack                                                                                     | Detection                                                                                                                                                             |
 | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Hand-edit the JSON log to remove or rewrite an entry                                       | Hash chain breaks at that seq; `validateChain` reports the location                                                                                                   |
-| Drop a fake `.provenance-manifest` manifest into any folder to make the recorder log there | Manifest signature fails to verify against the embedded course public key; extension silently does nothing                                                            |
+| Drop a fake `.provenance-manifest` manifest into any folder to make the recorder log there | Manifest trust chain fails to verify against the embedded **root** public key (a forged `course_cert` cannot be root-signed); extension silently does nothing         |
 | Replay last week's session for this week's assignment                                      | Each session pubkey is bound to that session's `manifest_sig`; analyzer detects the mismatch                                                                          |
 | Tamper between sessions (edit a saved `.slog`)                                             | Next session's startup chain-recovery quarantines the corrupt file and emits `recorder.recovered_from_corruption`                                                     |
 | Edit assignment files via Claude Code / Codex / `vim` / `cp` outside VS Code               | Per-file expected-content model detects hash drift at next save; FileSystemWatcher catches edits while VS Code is unfocused; both produce `fs.external_change` events |

@@ -374,7 +374,7 @@ async function main(): Promise<void> {
       `'${args.institutionId}' (root pubkey ${rootKeypair.public_key_hex}).\n` +
       '[mint-institution-cert] Set it on the API server together with the institution PRIVATE\n' +
       '[mint-institution-cert] key that pairs with the public key above:\n' +
-      "[mint-institution-cert]   PROVENANCE_INSTITUTION_KEY='{\"private_key_hex\":\"<64 hex>\"," +
+      '[mint-institution-cert]   PROVENANCE_INSTITUTION_KEY=\'{"private_key_hex":"<64 hex>",' +
       '"cert":<this JSON>}\'\n' +
       '[mint-institution-cert] The certificate is public and travels inside bundles; the private\n' +
       '[mint-institution-cert] key never leaves the server. Restart the API to pick it up.\n',

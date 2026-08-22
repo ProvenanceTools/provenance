@@ -217,12 +217,12 @@ student credentials — a separate branch of the same chain, covered in step 3 b
 
 Every staff tool has an npm script, so nothing here needs a `node` invocation:
 
-| Script                          | Tool                              | What it does                            |
-| ------------------------------- | --------------------------------- | --------------------------------------- |
+| Script                          | Tool                               | What it does                                               |
+| ------------------------------- | ---------------------------------- | ---------------------------------------------------------- |
 | `npm run keygen:course`         | `tools/generate-course-keypair.ts` | Generate an ed25519 keypair (root, course, or institution) |
-| `npm run mint:course-cert`      | `tools/mint-course-cert.ts`        | Root-sign a `course_cert`               |
-| `npm run mint:institution-cert` | `tools/mint-institution-cert.ts`   | Root-sign an `institution_cert`         |
-| `npm run sign:manifest`         | `tools/sign-manifest.ts`           | Sign a `.provenance-manifest`           |
+| `npm run mint:course-cert`      | `tools/mint-course-cert.ts`        | Root-sign a `course_cert`                                  |
+| `npm run mint:institution-cert` | `tools/mint-institution-cert.ts`   | Root-sign an `institution_cert`                            |
+| `npm run sign:manifest`         | `tools/sign-manifest.ts`           | Sign a `.provenance-manifest`                              |
 
 Pass tool flags after `--` (e.g. `npm run mint:course-cert -- --course-id …`). Each
 script is a thin wrapper around `node --experimental-strip-types tools/<tool>.ts`,
@@ -254,7 +254,7 @@ hardened machine, and back up the private key to physical media.
 npm run keygen:course -- /Volumes/SECURE/root-keypair.json
 ```
 
-Positional path only — do **not** pass `--course-id` here; that mints a *course*
+Positional path only — do **not** pass `--course-id` here; that mints a _course_
 certificate, which is a different artifact.
 
 ### 2. Course keypair + certificate (per course, at onboarding)
