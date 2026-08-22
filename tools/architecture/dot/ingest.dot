@@ -38,8 +38,8 @@ digraph ingest {
     label="  DEDUP — before any heavy work  " fontsize=9.5 fontcolor="#4b90f7"
     color="#16294a" penwidth=1.5 style=rounded bgcolor="#0a0f18" labeljust="l"
     node [fillcolor="#0d1c33" color="#4b90f7" fontsize=9.5]
-    dd  [label="(semester_id, blob_sha256)\nalready present?" shape=diamond fillcolor="#12161f"
-         fontsize=9 height=0.9 width=2.0]
+    dd  [label="already present?\nThe DECLARED GROUP is asked FIRST —\n(semester_id, source_group_key), 0033 —\nand only then (semester_id, blob_sha256)." shape=diamond fillcolor="#12161f"
+         fontsize=9 height=1.5 width=3.4]
     ddskip [label="skip\nre-sending an unchanged bundle is cheap\n— this is what lets provgate treat its\nwatermark as an optimisation"
             fillcolor="#15171d" color="#5d677d" fontcolor="#98a2b6" style="filled,rounded,dashed" fontsize=9]
   }
@@ -77,7 +77,7 @@ digraph ingest {
     ins   [label="insert submission, per_file_stats,\nvalidation_results, flags"]
     contrib[label="finalizeContributors — AFTER heuristics, deliberately\nestablishBundleContributors MUTATES the bundle and several\nheuristics read that stamp, so stamping earlier would change\nwhich flags an ingest produces. Roster side and bundle side\nreconcile onto ONE row per person; unattributed and\nunverifiable sessions get NO row."
             fillcolor="#1e1830" color="#9d7bf5" fontsize=9]
-    lock  [label="pg_advisory_xact_lock\n(semester_id, blob_sha256)\nTwo co-submitters carry byte-identical bundles, so both\ncleared dedup before either committed and both created a\nsubmission. Serial execution looked perfect; only\nconcurrency reinstated the fan-out."
+    lock  [label="pg_advisory_xact_lock — TWO of them\n(semester_id, blob_sha256), then, for a grouped file only,\n(semester_id, 'group:' + source_group_key). Always in that\norder, so two writers can never hold them crosswise and\ndeadlock; a file with no group key takes exactly one.\nTwo co-submitters carry byte-identical bundles, so both\ncleared dedup before either committed and both created a\nsubmission. Serial execution looked perfect; only\nconcurrency reinstated the fan-out."
             fillcolor="#2a1216" color="#ff6b6b" fontsize=9]
     fail  [label="rollback\nblob orphan left for the retention\nsweep — non-fatal by design"
            fillcolor="#2a1216" color="#ff6b6b" fontsize=9]
@@ -114,7 +114,7 @@ digraph ingest {
   stats -> val
   val -> heur
   heur -> lock [label="all computation done" color="#4b90f7"]
-  lock -> upa [label="RE-CHECK dedup inside the lock —\na hit here is handled exactly as a\nphase-2 hit: attach, do not create" color="#ff6b6b"]
+  lock -> upa [label="RE-CHECK each key inside its own lock —\na hit here is handled exactly as a\nphase-2 hit: attach, do not create" color="#ff6b6b"]
   upa -> ver
   ver -> mv
   mv -> fail [label="blob write fails" color="#ff6b6b" style=dashed]
