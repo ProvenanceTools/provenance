@@ -2449,3 +2449,100 @@ git commit --no-gpg-sign -m "docs(architecture): the map shows rule-based scope,
 - **provjet (Kotlin)** — port `matchesScopeEntry` / `validateScopeEntry` / `resolvePathRole`, drive `tools/path-scope-vectors.json`, apply the §4.2 pre-filter rule to its own file watcher, cap at 512. Separate repo: `~/projects/provenance-jetbrains-recorder`.
 - **provnvim (Lua)** — same, in `~/projects/provenance-neovim-recorder`. Note its manifest lives at exactly `<cwd>/.provenance-manifest`, and its JCS sorts keys bytewise — but scope entries are array VALUES, not object keys, so the ASCII-key constraint does not bind them.
 - **Server-side surfacing** — if a grader should see attachment paths/hashes in the submission UI, that is its own small plan on top of Task 7's `role`.
+
+---
+
+### Task 13: The rolling seal learns the same scope (added during execution)
+
+**Why this task exists.** It was missing from the plan as written, and Task 7's review found the gap. `packages/recorder/src/io/rolling-seal-writer.ts` still takes `filesUnderReview: readonly string[]` and enumerates it exactly (`:102`, `:224`). A rolling seal is the **git-submission** path — the format-1.2 manifest maintained continuously so a git-submitted repo is always sealed. So a course whose scope is `src/` gets a rolling manifest that lists **nothing at all**, and the classic and rolling seals of the same session disagree about what was under review. Not an R2 risk (its exact-list `missing` behaviour is safe), but the feature is incomplete for `submission: 'git'` without it, and that mode is the whole point of the multi-course program.
+
+**Files:**
+
+- Modify: `packages/recorder/src/io/rolling-seal-writer.ts`
+- Modify: `packages/recorder/src/io/rolling-seal-writer.test.ts`
+- Modify: the rolling-seal call site (find with `grep -rn "RollingSealWriter\|startRollingSeal" --include=*.ts packages/recorder/src | grep -v test`)
+
+**Interfaces:**
+
+- Consumes: `ResolvedScope`, `resolvePathRole`, `isExactEntry`, `scopeFromManifest` (Tasks 1–2); the workspace walk and role assignment from Task 7's `seal.ts`.
+- Produces: `RollingSealDeps.scope: ResolvedScope` replacing `filesUnderReview`; `RollingSealDeps.scopeCapped: boolean`.
+
+- [ ] **Step 1: Extract the walk so it is written once**
+
+Task 7 put `walkWorkspace` in `seal.ts`. Both seals now need it, and two copies of a directory walk that must agree about hard exclusions is exactly the divergence this feature exists to avoid. Move it to `packages/recorder/src/io/workspace-walk.ts`, exported, and have `seal.ts` import it. Move its tests with it. No behaviour change in this step — `npm run test --workspace=packages/recorder` must stay green.
+
+- [ ] **Step 2: Write the failing test**
+
+Add to `packages/recorder/src/io/rolling-seal-writer.test.ts`:
+
+```ts
+it('seals rule-matched files, so a folder-scoped course is not sealed empty', async () => {
+  const root = await makeWorkspace({
+    'src/Main.java': 'class Main {}',
+    'src/A.class': 'BINARY',
+    'logs/run.log': 'output',
+  });
+  await writeRollingSeal(
+    rollingDeps(root, {
+      scope: { track: ['src/'], ignore: ['*.class'], attachments: ['logs/'] },
+    }),
+  );
+  const m = await readRollingManifest(root);
+  const byPath = new Map(m.submission_files.map((f) => [f.path, f]));
+  expect(byPath.get('src/Main.java')?.role).toBe('reviewed');
+  expect(byPath.get('logs/run.log')?.role).toBe('attachment');
+  expect(byPath.has('src/A.class')).toBe(false);
+});
+
+it('marks an absent EXACT entry missing and says nothing about rule entries', async () => {
+  const root = await makeWorkspace({ 'Present.java': 'x' });
+  await writeRollingSeal(
+    rollingDeps(root, {
+      scope: { track: ['*.java', 'Required.java'], ignore: [], attachments: [] },
+    }),
+  );
+  const m = await readRollingManifest(root);
+  expect(m.submission_files.filter((f) => f.status === 'missing').map((f) => f.path)).toEqual([
+    'Required.java',
+  ]);
+});
+
+it('omits scope_capped when the cap did not bite', async () => {
+  const root = await makeWorkspace({ 'a.java': 'x' });
+  await writeRollingSeal(
+    rollingDeps(root, {
+      scope: { track: ['*.java'], ignore: [], attachments: [] },
+      scopeCapped: false,
+    }),
+  );
+  expect('scope_capped' in (await readRollingManifest(root))).toBe(false);
+});
+```
+
+Use the file's existing helper names if they differ; keep the assertions.
+
+- [ ] **Step 3: Run test to verify it fails**
+
+Run: `npm run test --workspace=packages/recorder -- rolling-seal-writer`
+Expected: FAIL — `RollingSealDeps` has `filesUnderReview`, not `scope`.
+
+- [ ] **Step 4: Implement**
+
+Replace `filesUnderReview: readonly string[]` in `RollingSealDeps` with `scope: ResolvedScope` and add `scopeCapped: boolean`. Replace the enumeration loop with the same three-part logic Task 7 put in `seal.ts`: walk the workspace, assign each file a role via `resolvePathRole`, keep `'reviewed'` and `'attachment'`, then add a `missing` record for each EXACT track entry that is absent — attempting a read before concluding absence, exactly as `seal.ts` does. Spread `scope_capped` so `false` omits the key.
+
+**A rolling seal runs on a cadence, not once.** The classic seal walks the workspace one time; this one walks on every checkpoint. Confirm against the file's existing docstring what that cadence is, and if the walk makes a checkpoint materially more expensive, say so in your report rather than optimising unasked — a correctness-preserving perf note is wanted, an invented cache is not.
+
+- [ ] **Step 5: Update the call site**
+
+Pass `scope: scopeFromManifest(manifest)` and `scopeCapped: registry.capHit()`, matching how `extension.ts` feeds `sealBundle`.
+
+- [ ] **Step 6: Verify and commit**
+
+Run: `npm run typecheck && npm run lint && npm run test --workspace=packages/recorder && npm run test --workspace=packages/log-core && npm run test --workspace=packages/analysis-core`
+
+```bash
+git add packages/recorder/src/io/rolling-seal-writer.ts packages/recorder/src/io/rolling-seal-writer.test.ts packages/recorder/src/io/workspace-walk.ts packages/recorder/src/commands/seal.ts
+git commit --no-gpg-sign -m "feat(recorder): the rolling seal resolves the same path scope as the classic seal" -- packages/recorder/src/io/rolling-seal-writer.ts packages/recorder/src/io/rolling-seal-writer.test.ts packages/recorder/src/io/workspace-walk.ts packages/recorder/src/commands/seal.ts
+```
+
+Add the call site and any moved test files to both the `add` and the pathspec.
