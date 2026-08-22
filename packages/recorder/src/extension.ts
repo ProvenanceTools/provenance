@@ -275,7 +275,7 @@ export async function activateImpl(deps: ActivateDeps): Promise<ActiveSession | 
         // case, which was wrong on every clause for a dropped source file).
         if (sealDroppedArtifacts(result.warnings)) {
           void vscode.window.showWarningMessage(
-            'Provenance bundle produced. Some files could not be included — either session recording artifacts left out so the bundle can be opened, or workspace files that could not be read (or were duplicates of another sealed file) at seal time. Nothing was removed from disk. Mention this to course staff.',
+            'Provenance bundle produced. Some files could not be included — either session recording artifacts left out so the bundle can be opened, or workspace files that could not be read, resolved outside this workspace folder, or were duplicates of another sealed file at seal time. Nothing was removed from disk. Mention this to course staff.',
           );
         }
       } else if (result.kind === 'no_sessions') {
@@ -577,7 +577,7 @@ function registerSealCommand(context: vscode.ExtensionContext, extensionDistPath
         // case, which was wrong on every clause for a dropped source file).
         if (sealDroppedArtifacts(result.warnings)) {
           void vscode.window.showWarningMessage(
-            'Provenance bundle produced. Some files could not be included — either session recording artifacts left out so the bundle can be opened, or workspace files that could not be read (or were duplicates of another sealed file) at seal time. Nothing was removed from disk. Mention this to course staff.',
+            'Provenance bundle produced. Some files could not be included — either session recording artifacts left out so the bundle can be opened, or workspace files that could not be read, resolved outside this workspace folder, or were duplicates of another sealed file at seal time. Nothing was removed from disk. Mention this to course staff.',
           );
         }
       } else if (result.kind === 'no_sessions') {

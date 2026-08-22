@@ -21,6 +21,7 @@ import * as fsPromises from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import JSZip from 'jszip';
 import {
   chainEntry,
@@ -887,10 +888,14 @@ describe('path scope at seal time', () => {
     if (result.kind !== 'ok') return;
 
     const manifest = await readSealedManifest();
-    const entry = (manifest.submission_files ?? []).find((f) => f.path === '../ESCAPE.txt');
-    // Reported, if at all, as missing — never as present with the outside
-    // file's real bytes/hash.
-    expect(entry?.status ?? 'missing').toBe('missing');
+    // ABSENT — not present (which would leak the outside file's bytes/hash),
+    // and not `missing` either: `missing` is an affirmative claim that the
+    // student did not submit the file, and refusing to read a path is not
+    // evidence of that (fix round 4, Critical 1). The earlier form of this
+    // assertion was `expect(entry?.status ?? 'missing').toBe('missing')`,
+    // which passed on BOTH outcomes and so tested nothing here.
+    expect((manifest.submission_files ?? []).some((f) => f.path === '../ESCAPE.txt')).toBe(false);
+    expect(result.warnings.outOfWorkspacePathRejected).toBe(true);
 
     // And definitely not sealed into the zip under any spelling.
     const zip = await JSZip.loadAsync(await fsPromises.readFile(result.bundlePath));
@@ -913,6 +918,7 @@ describe('path scope at seal time', () => {
         unreadableInScopeFile: true,
         unreadableScopeDirectory: false,
         duplicateEntryDropped: false,
+        outOfWorkspacePathRejected: false,
       }),
     ).toBe(true);
     expect(
@@ -925,6 +931,7 @@ describe('path scope at seal time', () => {
         unreadableInScopeFile: false,
         unreadableScopeDirectory: true,
         duplicateEntryDropped: false,
+        outOfWorkspacePathRejected: false,
       }),
     ).toBe(true);
     expect(
@@ -937,6 +944,7 @@ describe('path scope at seal time', () => {
         unreadableInScopeFile: false,
         unreadableScopeDirectory: false,
         duplicateEntryDropped: true,
+        outOfWorkspacePathRejected: false,
       }),
     ).toBe(true);
     expect(
@@ -949,6 +957,7 @@ describe('path scope at seal time', () => {
         unreadableInScopeFile: false,
         unreadableScopeDirectory: false,
         duplicateEntryDropped: false,
+        outOfWorkspacePathRejected: false,
       }),
     ).toBe(false);
   });
@@ -1079,12 +1088,175 @@ describe('path scope at seal time', () => {
     if (result.kind !== 'ok') return;
 
     const manifest = await readSealedManifest();
-    const entry = (manifest.submission_files ?? []).find((f) => f.path === 'out.txt');
-    // Reported, if at all, as missing — never as present with the outside
-    // file's real bytes.
-    expect(entry?.status ?? 'missing').toBe('missing');
+    // ABSENT, and disclosed — see the `../ESCAPE.txt` test above for why the
+    // old `entry?.status ?? 'missing'` form could not distinguish the fix from
+    // the bug (fix round 4, Fix 3).
+    expect((manifest.submission_files ?? []).some((f) => f.path === 'out.txt')).toBe(false);
+    expect(result.warnings.outOfWorkspacePathRejected).toBe(true);
 
     const zip = await JSZip.loadAsync(await fsPromises.readFile(result.bundlePath));
     expect(Object.keys(zip.files).some((n) => n.endsWith('out.txt'))).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Fix round 4 regressions
+  // ---------------------------------------------------------------------------
+
+  it('(C1) a tracked file the student SYMLINKED outside the workspace is dropped and disclosed, never reported missing', async () => {
+    // Fix round 4, Critical 1 — the headline case. `ln -s ~/shared/data.csv
+    // data.csv` is an ordinary thing a student does, and `data.csv` is an
+    // exact `track` entry (every 1.x manifest's files_under_review is nothing
+    // BUT exact entries). The walk never sights it, because `Dirent.isFile()`
+    // is false for a symlink entry, so it falls through to the exact-entry
+    // loop, where the round-3 containment check correctly refuses to read it —
+    // and then returned `missing`. Staff were shown "File listed in
+    // files_under_review but absent on disk at seal time" about a file that is
+    // on disk and fully readable, and because every warning stayed false,
+    // `sealDroppedArtifacts()` was false, so the student was shown nothing at
+    // all.
+    const sharedDir = path.join(tmpDir, 'shared');
+    await fsPromises.mkdir(sharedDir, { recursive: true });
+    await fsPromises.writeFile(path.join(sharedDir, 'data.csv'), 'a,b,c\n1,2,3\n', 'utf8');
+
+    const ws = await makeWorkspace({ 'src/Main.java': 'class Main {}' });
+    await fsPromises.symlink(path.join(sharedDir, 'data.csv'), path.join(ws.root, 'data.csv'));
+
+    const result = await sealBundle(
+      sealDeps(ws, {
+        scope: { track: ['src/', 'data.csv'], ignore: [], attachments: [] },
+      }),
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+
+    const manifest = await readSealedManifest();
+    const files = manifest.submission_files ?? [];
+    // No record AT ALL for data.csv — in particular no `missing` record.
+    expect(files.some((f) => f.path === 'data.csv')).toBe(false);
+    expect(files.filter((f) => f.status === 'missing')).toEqual([]);
+    // The distinct fact, named for what actually happened, and reaching the
+    // student: "we refused to read this", not "you didn't submit it".
+    expect(result.warnings.outOfWorkspacePathRejected).toBe(true);
+    expect(result.warnings.unreadableInScopeFile).toBe(false);
+    expect(sealDroppedArtifacts(result.warnings)).toBe(true);
+
+    // The outside bytes are still not in the bundle (the round-3 property).
+    const zip = await JSZip.loadAsync(await fsPromises.readFile(result.bundlePath));
+    expect(Object.keys(zip.files).some((n) => n.endsWith('data.csv'))).toBe(false);
+    // The rest of the seal is unaffected.
+    expect(zip.file('src/Main.java')).not.toBeNull();
+  });
+
+  it('(C2) an exact entry under a SYMLINKED DIRECTORY pointing outside the workspace is dropped, never reported missing', async () => {
+    // Fix round 4, Critical 1, second construction: `ln -s ~/shared/lib lib`
+    // with `lib/Foo.java` as the exact entry. The walk does not descend into a
+    // symlinked directory (Dirent.isDirectory() is lstat-flavoured), so this
+    // reaches the exact-entry loop the same way (C1) does.
+    const sharedLib = path.join(tmpDir, 'shared-lib');
+    await fsPromises.mkdir(sharedLib, { recursive: true });
+    await fsPromises.writeFile(path.join(sharedLib, 'Foo.java'), 'class Foo {}', 'utf8');
+
+    const ws = await makeWorkspace({});
+    await fsPromises.symlink(sharedLib, path.join(ws.root, 'lib'));
+
+    const result = await sealBundle(
+      sealDeps(ws, { scope: { track: ['lib/Foo.java'], ignore: [], attachments: [] } }),
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+
+    const manifest = await readSealedManifest();
+    expect((manifest.submission_files ?? []).some((f) => f.path === 'lib/Foo.java')).toBe(false);
+    expect((manifest.submission_files ?? []).filter((f) => f.status === 'missing')).toEqual([]);
+    expect(result.warnings.outOfWorkspacePathRejected).toBe(true);
+
+    const zip = await JSZip.loadAsync(await fsPromises.readFile(result.bundlePath));
+    expect(Object.keys(zip.files).some((n) => n.endsWith('Foo.java'))).toBe(false);
+  });
+
+  it('(C3) sealDroppedArtifacts reaches the student for an out-of-workspace rejection', async () => {
+    // Fix round 4, Critical 1: the flag must participate in the predicate both
+    // extension.ts seal call sites gate their "mention this to course staff"
+    // message on — otherwise the drop is invisible to the person who could
+    // explain it.
+    const quiet = {
+      chainBroken: false,
+      unreadableSession: false,
+      orphanedMeta: false,
+      emptySession: false,
+      orphanedRollingSeal: false,
+      unreadableInScopeFile: false,
+      unreadableScopeDirectory: false,
+      duplicateEntryDropped: false,
+      outOfWorkspacePathRejected: false,
+    };
+    expect(sealDroppedArtifacts(quiet)).toBe(false);
+    expect(sealDroppedArtifacts({ ...quiet, outOfWorkspacePathRejected: true })).toBe(true);
+  });
+
+  it('(F4) a non-regular file at a tracked path does not hang the seal, and is dropped rather than reported missing', async () => {
+    // Fix round 4, Fix 4. `rm Main.java && mkfifo Main.java` — a FIFO at an
+    // exact `track` entry, invisible to the walk's `isFile()` check.
+    // `fsPromises.readFile` on a FIFO BLOCKS FOREVER waiting for a writer, and
+    // nothing in `sealBundle`'s call stack has a timeout, so the student could
+    // not submit at all. Pre-fix this test does not fail on an assertion — it
+    // fails by exceeding vitest's timeout, which is exactly the bug.
+    const ws = await makeWorkspace({ 'src/Other.java': 'class Other {}' });
+    const fifoPath = path.join(ws.root, 'Main.java');
+    execFileSync('mkfifo', [fifoPath]);
+
+    const result = await sealBundle(
+      sealDeps(ws, {
+        scope: { track: ['src/', 'Main.java'], ignore: [], attachments: [] },
+      }),
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+
+    const manifest = await readSealedManifest();
+    // A FIFO is not evidence of anything, and it is certainly not an absence:
+    // dropped and disclosed, never `missing`.
+    expect((manifest.submission_files ?? []).some((f) => f.path === 'Main.java')).toBe(false);
+    expect((manifest.submission_files ?? []).filter((f) => f.status === 'missing')).toEqual([]);
+    expect(result.warnings.unreadableInScopeFile).toBe(true);
+    // The rest of the seal still completed normally.
+    expect((manifest.submission_files ?? []).some((f) => f.path === 'src/Other.java')).toBe(true);
+  });
+
+  it('(F2) failing the containment check CLOSED still classifies by the real reason, in both directions', async () => {
+    // Fix round 4, Fix 2. `resolveContainment` no longer returns "allowed" when
+    // `realpath` throws; it reports `unresolved` with the errno, and
+    // `readReviewedFile` classifies that errno exactly as the read itself
+    // would have (the two syscalls walk the same path with the same permission
+    // checks, so they always fail identically). This test pins BOTH arms of
+    // that equivalence, because the naive way to fail closed — rejecting
+    // outright — would silently convert a genuinely absent exact entry into a
+    // dropped one and destroy the only legitimate `missing` this system emits.
+    const ws = await makeWorkspace({ 'src/Main.java': 'secret' });
+    const dirPath = path.join(ws.root, 'src');
+    await fsPromises.chmod(dirPath, 0o000);
+    try {
+      const result = await sealBundle(
+        sealDeps(ws, {
+          // 'src/Main.java'  -> realpath fails EACCES (unreadable ancestor)
+          // 'Absent.java'    -> realpath fails ENOENT (genuinely not there)
+          scope: { track: ['src/Main.java', 'Absent.java'], ignore: [], attachments: [] },
+        }),
+      );
+      expect(result.kind).toBe('ok');
+      if (result.kind !== 'ok') return;
+
+      const files = (await readSealedManifest()).submission_files ?? [];
+      // EACCES arm: dropped and disclosed as unreadable — NOT out-of-workspace
+      // (it never escaped anything) and above all NOT missing.
+      expect(files.some((f) => f.path === 'src/Main.java')).toBe(false);
+      expect(result.warnings.unreadableInScopeFile).toBe(true);
+      expect(result.warnings.outOfWorkspacePathRejected).toBe(false);
+      // ENOENT arm: the one affirmative claim this system is allowed to make
+      // survives failing closed.
+      expect(files.find((f) => f.path === 'Absent.java')?.status).toBe('missing');
+    } finally {
+      await fsPromises.chmod(dirPath, 0o755);
+    }
   });
 });
