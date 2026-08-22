@@ -149,6 +149,7 @@ The student-facing description that ships with the VSIX lives at
 ### Documentation
 
 - [`docs/admin-guide.md`](docs/admin-guide.md) — hosting, Google OAuth setup, retention policy, backups, restore drill
+- [`docs/key-management.md`](docs/key-management.md) — every key in the system: who holds it, what it signs, setup, rotation
 - [`docs/api-quickstart.md`](docs/api-quickstart.md) — Python and curl examples for the v3 API
 - [`packages/server/README.md`](packages/server/README.md) — server-specific dev instructions
 
@@ -214,6 +215,9 @@ chain (Manifest 2.0; full design in
 
 The root key also certifies the deployment's **institution key**, which is what signs
 student credentials — a separate branch of the same chain, covered in step 3 below.
+
+For the whole picture — every key, who holds it, what its compromise costs, and how
+rotation works — see [`docs/key-management.md`](docs/key-management.md).
 
 Every staff tool has an npm script, so nothing here needs a `node` invocation:
 

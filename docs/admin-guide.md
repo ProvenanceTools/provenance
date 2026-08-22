@@ -690,6 +690,10 @@ There is no `GOOGLE_OAUTH_REDIRECT_URI`. The callback URL is always
 
 ### 10.6 Trust-chain keys
 
+> Whole-system view — every key in Provenance, who holds it, what it signs, and how
+> rotation and compromise work — is [`key-management.md`](key-management.md). This
+> section covers only the two variables this server reads.
+
 | Variable                         | Required | Default | Meaning                                                                                                                                                                                                                                    |
 | -------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `PROVENANCE_ROOT_PUBLIC_KEY_HEX` | No       | empty   | 64 lowercase hex chars, or empty. Anchors validation check 2 for Manifest 2.0 bundles. See below.                                                                                                                                          |
