@@ -56,10 +56,12 @@
  * tested-after-the-fact one.
  */
 
+import { scopeFromManifest } from '@provenance/log-core';
 import type {
   CapabilityValueProblem,
   FileScopeProblem,
   PeerObservedPayload,
+  ResolvedScope,
 } from '@provenance/log-core';
 import {
   gitObservationGap,
@@ -77,6 +79,11 @@ import type { ObservedDagCoverage, ObservedDagDefect } from '../git/observed-dag
 import type { BundleContributors } from '../identity/types.js';
 import type { EventIndex } from '../index/event-index.js';
 import type { Bundle, DroppedArtifact } from '../loader/types.js';
+import {
+  bundleCapturePolicyTrust,
+  isManifest2Binding,
+  readSessionManifests,
+} from '../manifest/bundle-manifest.js';
 import { reconcileWitnesses } from '../witness/reconcile-witnesses.js';
 import type {
   BundleWitnessReconciliation,
@@ -668,6 +675,27 @@ export type FileScopeCoverage = {
   files: readonly WatchedFileFact[];
 };
 
+/**
+ * The course-signed §5.1 tier-1 rules for this bundle, or `undefined` when
+ * there is none to trust.
+ *
+ * `undefined` — never the rules from an unverified manifest — whenever the
+ * bundle's trust chain has not verified. `session.start.data.manifest` arrives
+ * from a file the student can edit; the `ignore`/`attachments`/`track` lists
+ * are exactly the course policy the false-accusation work in this slice exists
+ * to protect, and honouring an UNSIGNED (or wrongly signed) version of it would
+ * let a student fabricate the very explanation `wasFileWatched` hands back as
+ * exculpatory context — the mirror image of `resolveBundleCapturePolicy`'s "an
+ * unverified policy is not a policy" (`manifest/bundle-manifest.ts`). Falling
+ * back to `undefined` degrades tier 1 straight to tier 2, the answer this
+ * behaved with before path scope existed.
+ */
+function resolvedScopeFor(bundle: Bundle): ResolvedScope | undefined {
+  if (bundleCapturePolicyTrust(bundle) !== 'verified') return undefined;
+  const binding = readSessionManifests(bundle).find(isManifest2Binding);
+  return binding === undefined ? undefined : scopeFromManifest(binding.manifest);
+}
+
 function fileScopeCoverage(
   bundle: Bundle,
   index: EventIndex,
@@ -689,11 +717,12 @@ function fileScopeCoverage(
           ? 'unreported'
           : 'partial';
 
+  const scope = resolvedScopeFor(bundle);
   const files: WatchedFileFact[] = [];
   for (const path of bundle.manifest.submission_files ?? []) {
     files.push({
       path: path.path,
-      watched: wasFileWatched(capabilities, path.path),
+      watched: wasFileWatched(capabilities, path.path, scope),
       recordedActivity: (index.byFile.get(path.path)?.length ?? 0) > 0,
     });
   }

@@ -875,4 +875,28 @@ describe('synthesizeRollingUnionManifest', () => {
     )!;
     expect(out.manifest.sessions.map((s) => s.session_id)).toEqual(['m', 'a', 'z']);
   });
+
+  // `scope_capped`'s own doc comment promises "ANY session's recorder
+  // reported…" (session-capabilities.ts). Before this fix the union dropped the
+  // field entirely, so a git-submitted bundle whose recorder disclosed a capped
+  // session read `scope_capped: undefined` (i.e. falsy) — the exact "in scope,
+  // no activity" inference the field exists to block would then fire against a
+  // student from a record the recorder itself said was incomplete.
+  it('reports scope_capped true when ANY per-session rolling manifest sets it', () => {
+    const uncapped = seal('a', []);
+    const capped = {
+      ...seal('b', []),
+      manifest: { ...seal('b', []).manifest, scope_capped: true },
+    };
+    const out = synthesizeRollingUnionManifest([uncapped, capped], order('a', 'b'))!;
+    expect(out.manifest.scope_capped).toBe(true);
+  });
+
+  it('omits scope_capped, rather than asserting false, when no session reports it', () => {
+    // Absence must stay absence: a rolling seal from before path scope existed
+    // must not start claiming "not capped" — that is a claim none of its
+    // sessions actually made.
+    const out = synthesizeRollingUnionManifest([seal('a', []), seal('b', [])], order('a', 'b'))!;
+    expect(out.manifest.scope_capped).toBeUndefined();
+  });
 });

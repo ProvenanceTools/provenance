@@ -380,6 +380,52 @@ describe('attachments are never compared against reconstruction (R2)', () => {
     expect(check.status).toBe('pass');
     expect(check.detail).not.toMatch(/logs\/run\.log/);
   });
+
+  it('still reports real tampering on an attachment whose bytes disagree with the manifest sha', () => {
+    // Real, detectable bundle tampering — present bytes that do not hash to
+    // their own signed manifest sha256 — needs no event provenance to catch,
+    // and 'attachment' must not become an unearned exculpatory claim about
+    // bytes the manifest hash has already contradicted. Under-reporting is the
+    // safe direction for an ACCUSATION; this is a false ASSURANCE instead, and
+    // that direction is not safe.
+    const bundle = makeBundle({
+      submissionFiles: [
+        {
+          path: 'logs/run.log',
+          status: 'present',
+          sha256: 'ab'.repeat(32),
+          hashOk: false,
+          bytes: TAMPERED_BYTES,
+          role: 'attachment',
+        },
+      ],
+      events: [],
+    });
+    const verdicts = submittedFileVerdicts(bundle, { chainIntact: true });
+    const v = verdicts.find((x) => x.path === 'logs/run.log');
+    expect(v?.verdict).toBe('mismatch');
+    expect(v?.detail).toMatch(/tampered/i);
+  });
+
+  it('a stored attachment whose bytes were stripped still reports attachment, not tampered', () => {
+    // A stored (provenance-only) bundle has no bytes for ANY file, attachment
+    // or not — `hashOk` is trivially false there. That must not be read as
+    // tampering, same as the non-attachment path below in this file.
+    const bundle = makeBundle({
+      submissionFiles: [
+        {
+          path: 'logs/run.log',
+          status: 'present',
+          sha256: 'ab'.repeat(32),
+          hashOk: false,
+          role: 'attachment',
+        },
+      ],
+      events: [],
+    });
+    const verdicts = submittedFileVerdicts(bundle, { chainIntact: true });
+    expect(verdicts.find((x) => x.path === 'logs/run.log')?.verdict).toBe('attachment');
+  });
 });
 
 // ---------------------------------------------------------------------------

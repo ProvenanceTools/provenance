@@ -451,6 +451,66 @@ describe('wasFileWatched with a resolved scope (tier 1)', () => {
     const facts = factsWithFileScope({ watched: [], complete: false }, { scopeCapped: true });
     expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('unknown');
   });
+
+  it('does not assert from rules a session never evaluated', () => {
+    // A recorder that predates path scope may still emit `file_scope` under
+    // its OLD exact-match semantics, or may not report it at all. Either way,
+    // asserting 'watched' — the strongest of the three answers — from rules
+    // the recorder gives no evidence of having applied would be an accusatory
+    // error: the file may genuinely have gone unwatched despite being "in
+    // scope" on paper.
+    const absent: BundleCapabilityFacts = {
+      sessions: [
+        {
+          sessionId: 's1',
+          git: { kind: 'absent' },
+          witness: { kind: 'absent' },
+          fileScope: { kind: 'absent' },
+        },
+      ],
+      counts: {
+        sessions: 1,
+        gitAvailable: 0,
+        gitUnavailable: 0,
+        gitNotOwned: 0,
+        gitUnreported: 1,
+        gitMalformed: 0,
+        witnessAvailable: 0,
+        witnessUnavailable: 0,
+        witnessUnreported: 1,
+        witnessMalformed: 0,
+        fileScopeReported: 0,
+        fileScopeIncomplete: 0,
+        fileScopeUnreported: 1,
+        fileScopeMalformed: 0,
+      },
+      gitObservation: 'unknown',
+      gitImpossibleReason: null,
+      witnessing: 'unknown',
+      watchedFiles: [],
+      scopeCapped: false,
+    };
+    expect(wasFileWatched(absent, 'src/Solver.java', scopeRules)).toBe('unknown');
+
+    const malformed: BundleCapabilityFacts = {
+      ...absent,
+      sessions: [
+        {
+          ...absent.sessions[0]!,
+          fileScope: { kind: 'malformed', problem: 'path_absolute' },
+        },
+      ],
+    };
+    expect(wasFileWatched(malformed, 'src/Solver.java', scopeRules)).toBe('unknown');
+  });
+
+  it('still asserts from the rules once every session actually reported a file scope', () => {
+    // The gate is per-bundle-reporting, not a blanket suppression: a bundle
+    // whose every session DID evaluate file_scope (however incomplete) still
+    // gets the definitive rules-based answer.
+    const facts = factsWithFileScope({ watched: [], complete: false });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('watched');
+  });
 });
 
 // ---------------------------------------------------------------------------

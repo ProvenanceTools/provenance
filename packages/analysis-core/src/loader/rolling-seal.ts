@@ -382,6 +382,16 @@ export function synthesizeRollingUnionManifest(
     }
   }
 
+  // `scope_capped`'s own doc comment promises "ANY session's recorder
+  // reported…", so the union must OR every per-session value together rather
+  // than silently dropping the field. A git-submitted (rolling-sealed) bundle
+  // whose recorder disclosed a capped session must not read `false` here —
+  // that would let `wasFileWatched` assert "in scope, no activity" against a
+  // student from a record the recorder itself said was incomplete. Omitted
+  // (not `false`) when no per-session manifest reports it at all, matching the
+  // field's own "absent means this recorder does not report" contract.
+  const scopeCapped = ordered.some((seal) => seal.manifest.scope_capped === true);
+
   const manifest: BundleManifest = {
     format_version: ROLLING_MANIFEST_FORMAT_VERSION,
     assignment_id: first.manifest.assignment_id,
@@ -391,6 +401,7 @@ export function synthesizeRollingUnionManifest(
     extension_hash: ordered[ordered.length - 1]!.manifest.extension_hash,
     sessions: ordered.map((seal) => seal.manifest.sessions[0]),
     submission_files: [...submissionFiles.values()],
+    ...(scopeCapped ? { scope_capped: true } : {}),
   };
 
   return { manifest, defects };

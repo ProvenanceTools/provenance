@@ -322,7 +322,19 @@ export function wasFileWatched(
   // Skipped when a recorder reported a capped session: the rules then say what
   // should have been watched, and asserting `not_watched` OR `watched` from
   // them would be a claim the record cannot support.
-  if (scope !== undefined && !facts.scopeCapped) {
+  //
+  // Also skipped when any session's `file_scope` is absent or malformed. A
+  // recorder that predates path scope may still emit `file_scope` under its
+  // OLD exact-match semantics — treating a directory or suffix rule as a
+  // literal filename, watching nothing that rule was meant to cover — and a
+  // recorder that never reports `file_scope` at all gives no evidence it ever
+  // evaluated the rules in the first place. Either way, asserting `'watched'`
+  // (the strongest of the three answers — "absence of events means the events
+  // did not happen") from rules the recorder may never have applied is an
+  // accusatory error tier 1 must not make.
+  const everySessionEvaluatedScope =
+    facts.sessions.length > 0 && facts.sessions.every((s) => s.fileScope.kind === 'recorded');
+  if (scope !== undefined && !facts.scopeCapped && everySessionEvaluatedScope) {
     return resolvePathRole(path, scope) === 'reviewed' ? 'watched' : 'not_watched';
   }
 

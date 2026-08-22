@@ -30,6 +30,12 @@ import type { IdentityTestKeys } from '../test-support/build-identity.js';
 import { establishBundleContributors } from '../identity/resolve-contributors.js';
 import { multipleSessionsOverlapHeuristic } from '../heuristics/multiple-sessions-overlap.js';
 import { mergeConfig } from '../heuristics/config.js';
+import { establishBundleTrust } from '../manifest/bundle-manifest.js';
+import {
+  buildTrustChainKeys,
+  buildManifest2,
+  sessionStart2,
+} from '../test-support/build-manifest-2.js';
 import type { Bundle } from '../loader/types.js';
 import type { EventIndex } from '../index/event-index.js';
 import {
@@ -1213,6 +1219,77 @@ describe('file scope is a coverage fact, not a finding', () => {
       sessionStarts: [{ file_scope: { watched: ['hw1.py'], complete: true } }, {}],
     });
     expect(coverageFacts(bundle, index)).toEqual(coverageFacts(bundle, index));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// coverageFacts wires the course's own §5.1 tier-1 rules into wasFileWatched
+// ---------------------------------------------------------------------------
+
+describe('file scope coverage evaluates the signed 2.0 scope rules (tier 1)', () => {
+  it('answers WATCHED from the rules for an in-scope path even off an incomplete list', async () => {
+    // Without the rules wired in, an incomplete file_scope list can only ever
+    // prove `unknown` for a path it does not name. §5.1 tier 1 exists to do
+    // better than that when a verified 2.0 manifest is present — this is the
+    // exculpatory row the whole slice is for.
+    const keys = await buildTrustChainKeys();
+    const manifest = await buildManifest2({ keys, filesUnderReview: ['src/'] });
+    const { bundle, index } = await fileScopeScope({
+      files: ['src/Solver.java'],
+      sessionStarts: [{ ...sessionStart2(manifest), file_scope: { watched: [], complete: false } }],
+    });
+    const chain = await establishBundleTrust(bundle, keys.rootPubkeyHex);
+    expect(chain.kind).toBe('verified');
+
+    const facts = coverageFacts(bundle, index);
+    expect(facts.fileScope.files).toEqual([
+      { path: 'src/Solver.java', watched: 'watched', recordedActivity: false },
+    ]);
+  });
+
+  it('does not assert from the rules when no session shows it evaluated them', async () => {
+    // A session that embeds a verified 2.0 manifest but reports no `file_scope`
+    // at all gives no evidence the recorder ever applied the rules — asserting
+    // 'watched' from them anyway would be exactly the accusatory error tier 1
+    // must not make (session-capabilities.ts, Important 2).
+    const keys = await buildTrustChainKeys();
+    const manifest = await buildManifest2({ keys, filesUnderReview: ['src/'] });
+    const { bundle, index } = await fileScopeScope({
+      files: ['src/Solver.java'],
+      sessionStarts: [sessionStart2(manifest)],
+    });
+    const chain = await establishBundleTrust(bundle, keys.rootPubkeyHex);
+    expect(chain.kind).toBe('verified');
+
+    const facts = coverageFacts(bundle, index);
+    expect(facts.fileScope.files).toEqual([
+      { path: 'src/Solver.java', watched: 'unknown', recordedActivity: false },
+    ]);
+  });
+
+  it('does not honour scope rules from an UNVERIFIED manifest', async () => {
+    // `session.start.data.manifest` arrives from a file the student can edit.
+    // Trusting its ignore/track lists without verifying the trust chain would
+    // let a student fabricate the exculpatory "outside every watched scope"
+    // sentence for a file that was never actually excluded — the mirror image
+    // of `resolveBundleCapturePolicy`'s "an unverified policy is not a policy".
+    const keys = await buildTrustChainKeys();
+    const manifest = await buildManifest2({ keys, filesUnderReview: ['src/'] });
+    const { bundle, index } = await fileScopeScope({
+      files: ['src/Solver.java'],
+      sessionStarts: [{ ...sessionStart2(manifest), file_scope: { watched: [], complete: false } }],
+    });
+    // No root key supplied — establishBundleTrust cannot verify, so the chain
+    // is 'unconfigured' rather than 'verified'.
+    const chain = await establishBundleTrust(bundle, undefined);
+    expect(chain.kind).toBe('unconfigured');
+
+    const facts = coverageFacts(bundle, index);
+    // Falls back to tier 2: the list is incomplete and names nothing, so the
+    // honest answer is unknown — never the rules-based 'watched'.
+    expect(facts.fileScope.files).toEqual([
+      { path: 'src/Solver.java', watched: 'unknown', recordedActivity: false },
+    ]);
   });
 });
 

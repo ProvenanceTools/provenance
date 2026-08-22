@@ -239,6 +239,26 @@ export function submittedFileVerdicts(
 
   for (const [path, f] of bundle.submissionFiles) {
     if (f.role === 'attachment') {
+      // Real, detectable tampering — present bytes that disagree with their own
+      // signed manifest sha256 — needs no event provenance to catch, and an
+      // attachment is not exempt from it. Reporting 'attachment' here would be
+      // an unearned exculpatory claim ("covered by the signed manifest") about
+      // bytes the manifest hash has already contradicted. This is the SAME
+      // tamper sub-check as the non-attachment path below; it must run before
+      // the branch returns, because no attachment may reach the reconstruction
+      // comparison the rest of this function performs.
+      if (f.bytes !== undefined && !f.hashOk) {
+        verdicts.push({
+          path,
+          status: 'present',
+          verdict: 'mismatch',
+          submittedSha: f.sha256,
+          recordedSha: null,
+          detail: 'Submitted bytes do not match their own manifest sha256 (tampered bundle).',
+          supportingSeqs: [],
+        });
+        continue;
+      }
       // Attested by hash in the signed manifest, never captured, so there is
       // nothing to reconstruct and nothing to compare. Spec §9.1.
       verdicts.push({
