@@ -737,7 +737,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   // while VS Code unfocused" path). Must come after docWiring so getLastDocChangeAt works.
   const fsWatcher = startFsWatcher({
     assignmentRoot,
-    filesUnderReview: manifest.files_under_review,
+    scope,
     registry: expectedContentRegistry,
     emit: (data) => sessionHost.emit('fs.external_change', data),
     getLastDocChangeAt: (p) => docWiring.getLastDocChangeAt(p),

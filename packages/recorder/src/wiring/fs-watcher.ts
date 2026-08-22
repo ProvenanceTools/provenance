@@ -9,8 +9,12 @@
  * an external write — lives in doc-wiring.ts.
  *
  * Design notes:
- * - Each file in filesUnderReview gets its own FileSystemWatcher created via
- *   vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, path)).
+ * - Each entry in scope.track gets its own FileSystemWatcher created via
+ *   vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, pattern)),
+ *   where pattern is the entry widened by watcherPatternFor — a coarse
+ *   pre-filter only (design spec §4.2). VS Code's glob engine is not our
+ *   matcher, so every path a watcher delivers is re-checked with
+ *   resolvePathRole before anything is emitted.
  * - onDidChange (modify): if the change happened within recentDocChangeToleranceMs of
  *   the last doc.change OR the last doc.save for that file, we skip it — VS
  *   Code-mediated saves are already captured on the doc.* path. Only truly
@@ -37,8 +41,8 @@
  */
 
 import * as vscode from 'vscode';
-import type { FsExternalChangePayload } from '@provenance/log-core';
-import { sha256Hex } from '@provenance/log-core';
+import type { FsExternalChangePayload, ResolvedScope } from '@provenance/log-core';
+import { sha256Hex, resolvePathRole } from '@provenance/log-core';
 import type { ExpectedContentRegistry } from '../state/expected-content-registry.js';
 import type { ExplanationTagger } from '../events/explanation-tags.js';
 import { buildExternalChangeContent } from '../events/external-change-content.js';
@@ -51,7 +55,8 @@ export type FsExternalChangeData = FsExternalChangePayload;
 
 export type FsWatcherDeps = {
   assignmentRoot: string;
-  filesUnderReview: readonly string[];
+  /** The resolved scope. Watchers are built from `scope.track`; every delivered path is re-checked. */
+  scope: ResolvedScope;
   registry: ExpectedContentRegistry;
   emit: (data: FsExternalChangeData) => void;
   /** Returns the time of the last doc.change for path (monotonic ms), or -Infinity. */
@@ -75,17 +80,51 @@ export type FsWatcherDeps = {
 };
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Widen a scope entry into an editor watcher glob.
+ *
+ * This is a COARSE PRE-FILTER and nothing more (design spec §4.2). VS Code's
+ * glob engine is not our matcher, and JetBrains' and Neovim's are two more; a
+ * port that emitted on its watcher's verdict alone would make the same manifest
+ * watch different files on different editors. Every path a watcher delivers is
+ * re-checked with `resolvePathRole` before anything is emitted, so widening
+ * here is safe and narrowing here would be a bug.
+ */
+export function watcherPatternFor(entry: string): string {
+  if (entry.endsWith('/')) return `${entry}**`;
+  if (entry.startsWith('*')) return `**/${entry}`;
+  return entry;
+}
+
+/**
+ * The workspace-relative, forward-slash path for a watcher URI.
+ *
+ * Forward slashes always: the whole protocol — `doc.*` payload paths,
+ * `files_under_review`, the matcher — is forward-slash, and a Windows recorder
+ * emitting backslashes would join against nothing.
+ */
+function relativePathOf(assignmentRoot: string, uri: vscode.Uri): string {
+  const root = assignmentRoot.endsWith('/') ? assignmentRoot : `${assignmentRoot}/`;
+  const full = uri.fsPath.split('\\').join('/');
+  const normalizedRoot = root.split('\\').join('/');
+  return full.startsWith(normalizedRoot) ? full.slice(normalizedRoot.length) : full;
+}
+
+// ---------------------------------------------------------------------------
 // startFsWatcher
 // ---------------------------------------------------------------------------
 
 /**
- * Start a FileSystemWatcher for each file in filesUnderReview.
+ * Start a FileSystemWatcher for each entry in scope.track.
  * Returns a Disposable that disposes all watchers.
  */
 export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
   const {
     assignmentRoot,
-    filesUnderReview,
+    scope,
     registry,
     emit,
     getLastDocChangeAt,
@@ -98,11 +137,14 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
 
   const watchers: vscode.Disposable[] = [];
 
-  for (const relativePath of filesUnderReview) {
-    const pattern = new vscode.RelativePattern(assignmentRoot, relativePath);
+  for (const entry of scope.track) {
+    const pattern = new vscode.RelativePattern(assignmentRoot, watcherPatternFor(entry));
     const watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
-    const handleChange = (_uri: vscode.Uri) => {
+    const handleChange = (uri: vscode.Uri) => {
+      const relativePath = relativePathOf(assignmentRoot, uri);
+      if (resolvePathRole(relativePath, scope) !== 'reviewed') return;
+
       // Check whether this change is too close to a recent editor touch — a
       // doc.change OR a doc.save — i.e. it was VS Code-mediated and is already
       // captured on the doc.* path. The save anchor is load-bearing: VS Code's
@@ -172,7 +214,10 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
       );
     };
 
-    const handleCreate = (_uri: vscode.Uri) => {
+    const handleCreate = (uri: vscode.Uri) => {
+      const relativePath = relativePathOf(assignmentRoot, uri);
+      if (resolvePathRole(relativePath, scope) !== 'reviewed') return;
+
       // A file appeared on disk where one wasn't before. This is the path
       // a `git checkout`, `mv`, `cp`, or `claude` CLI tool that writes a
       // brand-new file would hit. (When the file was previously deleted
@@ -230,7 +275,10 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
       );
     };
 
-    const handleDelete = (_uri: vscode.Uri) => {
+    const handleDelete = (uri: vscode.Uri) => {
+      const relativePath = relativePathOf(assignmentRoot, uri);
+      if (resolvePathRole(relativePath, scope) !== 'reviewed') return;
+
       const expected = registry.get(relativePath);
       if (expected === undefined) {
         // File was never opened/known; nothing to compare against. Emit a

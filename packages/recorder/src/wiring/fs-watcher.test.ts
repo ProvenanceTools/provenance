@@ -72,7 +72,8 @@ vi.mock('vscode', () => {
 // Imports after vi.mock
 // ---------------------------------------------------------------------------
 
-import { startFsWatcher } from './fs-watcher.js';
+import { startFsWatcher, watcherPatternFor } from './fs-watcher.js';
+import type { FsExternalChangeData } from './fs-watcher.js';
 import { ExpectedContentRegistry } from '../state/expected-content-registry.js';
 import { ExplanationTagger } from '../events/explanation-tags.js';
 import { sha256Hex } from '@provenance/log-core';
@@ -101,7 +102,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py', 'utils.py'],
+      scope: { track: ['hw.py', 'utils.py'], ignore: [], attachments: [] },
       registry,
       emit: vi.fn(),
       getLastDocChangeAt: () => -Infinity,
@@ -119,7 +120,7 @@ describe('startFsWatcher', () => {
 
     const disposable = startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit: vi.fn(),
       getLastDocChangeAt: () => -Infinity,
@@ -144,7 +145,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       // Last doc.change was 100ms ago; tolerance is default 250ms → within tolerance
@@ -176,7 +177,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       // Last doc.change was 5 seconds ago — way outside tolerance
@@ -222,7 +223,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       // Last doc.change is ancient (VS Code's autosave delay defaults to 1000ms,
@@ -282,7 +283,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       // Well outside the timing tolerance on both anchors, so only the
@@ -371,7 +372,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit: vi.fn(),
       getLastDocChangeAt: () => -Infinity,
@@ -403,7 +404,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -431,7 +432,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -466,7 +467,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -502,7 +503,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -535,7 +536,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -579,7 +580,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -607,7 +608,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -637,7 +638,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -677,7 +678,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -714,7 +715,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -758,7 +759,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -775,5 +776,48 @@ describe('startFsWatcher', () => {
     await flushPromises();
     expect(emit).toHaveBeenCalledOnce();
     expect((emit.mock.calls[0]![0] as { operation: string }).operation).toBe('modify');
+  });
+
+  it('does not emit for a path the editor glob admits but the matcher rejects', async () => {
+    // 'src/**' is handed to VS Code as a coarse pre-filter. If the editor
+    // delivers something outside our own matcher — a different glob dialect, a
+    // case-insensitive filesystem — we must stay silent. Design spec §4.2.
+    capturedWatchers.length = 0;
+    const scope = { track: ['src/'], ignore: ['*.class'], attachments: [] };
+    const registry = new ExpectedContentRegistry(scope);
+    const emitted: FsExternalChangeData[] = [];
+
+    startFsWatcher({
+      assignmentRoot: '/workspace',
+      scope,
+      registry,
+      emit: (d) => emitted.push(d),
+      getLastDocChangeAt: () => -Infinity,
+      getLastSaveAt: () => -Infinity,
+      getNow: () => 1000,
+      readFile: vi.fn().mockResolvedValue('compiled'),
+    });
+
+    const watcher = getWatchers().find(
+      (w) => (w.pattern as { pattern: string }).pattern === 'src/**',
+    );
+    watcher?.createHandler?.({ fsPath: '/workspace/src/A.class' });
+
+    await flushPromises();
+    expect(emitted).toEqual([]);
+  });
+});
+
+describe('watcherPatternFor', () => {
+  it('widens a directory entry to a recursive editor glob', () => {
+    expect(watcherPatternFor('src/')).toBe('src/**');
+  });
+
+  it('widens a suffix entry to any depth', () => {
+    expect(watcherPatternFor('*.java')).toBe('**/*.java');
+  });
+
+  it('leaves an exact path alone', () => {
+    expect(watcherPatternFor('Makefile')).toBe('Makefile');
   });
 });
