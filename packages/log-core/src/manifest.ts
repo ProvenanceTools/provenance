@@ -15,7 +15,8 @@
  * payload:
  *
  *   canonicalize({format_version, course_id, assignment_id, semester, issued_at,
- *                 files_under_review, collaboration, submission, scope, policy})
+ *                 files_under_review, ignore, attachments, collaboration, submission,
+ *                 scope, policy})
  *
  * `buildSignedPayload` excludes `sig` in both versions, and excludes
  * `course_cert` in 2.0 — the course does not sign its own certificate.
@@ -43,6 +44,8 @@ import type { Result } from './result.js';
 import { parseCourseCert, verifyCourseCert, checkCertWindow } from './course-cert.js';
 import type { CourseCert, CertWindowStatus } from './course-cert.js';
 import type { CapturePolicyBlock } from './policy.js';
+import { validateScopeEntry } from './path-scope.js';
+import type { ResolvedScope } from './path-scope.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -92,6 +95,22 @@ export type Manifest = {
    * round-trips byte-for-byte through signature verification.
    */
   policy?: CapturePolicyBlock;
+  /**
+   * Paths the recorder must NOT capture at all (design spec §3, §3.4).
+   *
+   * Inside the signed payload for the same reason `policy` is: a professor can
+   * narrow capture, a student cannot. An entry here means no events are
+   * produced for those paths — INCLUDING exculpatory ones, which is why the
+   * composer says so in as many words.
+   */
+  ignore?: readonly string[];
+  /**
+   * Paths sealed into the bundle and hashed, but never captured (design spec §3).
+   *
+   * An attachment has no event provenance by definition, so check 8 must not
+   * compare it against reconstruction — see `verify-submitted-code.ts`.
+   */
+  attachments?: readonly string[];
   /**
    * Root-signed certificate authorizing the course key. Travels inline but sits
    * OUTSIDE the course-signed payload.
@@ -292,6 +311,8 @@ function buildSignedPayload(manifest: Omit<Manifest, 'sig'>): Uint8Array {
       semester: manifest.semester,
       issued_at: manifest.issued_at,
       files_under_review: manifest.files_under_review,
+      ignore: manifest.ignore,
+      attachments: manifest.attachments,
       collaboration: manifest.collaboration,
       submission: manifest.submission,
       scope: manifest.scope,
@@ -312,6 +333,29 @@ function buildSignedPayload(manifest: Omit<Manifest, 'sig'>): Uint8Array {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/**
+ * Validate one scope list. Used for all three at 2.0.
+ *
+ * At 1.x this is NOT called: 1.x parsing must never reject (see the module
+ * docstring), and a 1.x manifest's entries carry exact-path meaning regardless
+ * of how they are spelled.
+ */
+function checkScopeList(value: unknown, field: string): ManifestError | null {
+  if (!Array.isArray(value)) {
+    return { kind: 'invalid_shape', field, reason: 'must be an array' };
+  }
+  for (const entry of value as unknown[]) {
+    if (typeof entry !== 'string') {
+      return { kind: 'invalid_shape', field, reason: 'all elements must be strings' };
+    }
+    const problem = validateScopeEntry(entry);
+    if (problem !== null) {
+      return { kind: 'invalid_shape', field, reason: `"${entry}": ${problem.detail}` };
+    }
+  }
+  return null;
+}
 
 /**
  * Parse a `.provenance-manifest`/`provenance-manifest` file (text content) into a Manifest.
@@ -440,6 +484,14 @@ export function parseManifestValue(parsed: unknown): Result<Manifest, ManifestEr
   if (typeof obj['course_id'] !== 'string' || obj['course_id'].length === 0) {
     return err({ kind: 'invalid_shape', field: 'course_id', reason: 'must be a non-empty string' });
   }
+  const ignoreProblem = checkScopeList(obj['ignore'], 'ignore');
+  if (ignoreProblem !== null) return err(ignoreProblem);
+  const attachmentsProblem = checkScopeList(obj['attachments'], 'attachments');
+  if (attachmentsProblem !== null) return err(attachmentsProblem);
+  // files_under_review already passed the array/string check in the shared
+  // section above; at 2.0 its entries must also satisfy the entry grammar.
+  const trackProblem = checkScopeList(obj['files_under_review'], 'files_under_review');
+  if (trackProblem !== null) return err(trackProblem);
   const enumField = <T extends string>(
     field: string,
     allowed: readonly string[],
@@ -491,6 +543,8 @@ export function parseManifestValue(parsed: unknown): Result<Manifest, ManifestEr
   return ok({
     ...base,
     course_id: obj['course_id'] as string,
+    ignore: obj['ignore'] as readonly string[],
+    attachments: obj['attachments'] as readonly string[],
     collaboration: collaboration.value,
     submission: submission.value,
     scope: scope.value,
@@ -685,4 +739,19 @@ export async function verifyManifestChain(
     cert,
     window: checkCertWindow(cert, checked.issued_at),
   });
+}
+
+/**
+ * The three scope lists as a {@link ResolvedScope}.
+ *
+ * The ONLY way a consumer should build one. A 1.x manifest has no `ignore` or
+ * `attachments`, so both default to empty — which resolves every path to
+ * `'reviewed'` or `'unscoped'` exactly as 1.x always behaved.
+ */
+export function scopeFromManifest(manifest: Manifest): ResolvedScope {
+  return {
+    track: manifest.files_under_review,
+    ignore: manifest.ignore ?? [],
+    attachments: manifest.attachments ?? [],
+  };
 }

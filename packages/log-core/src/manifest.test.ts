@@ -8,6 +8,7 @@ import {
   signManifest,
   verifyManifestChain,
   manifestFormatVersion,
+  scopeFromManifest,
 } from './manifest.js';
 import type { Manifest } from './manifest.js';
 import { signCourseCert, verifyCourseCert } from './course-cert.js';
@@ -446,6 +447,8 @@ async function makeV2Manifest(opts?: {
     semester: 'fa26',
     issued_at: '2026-09-08T00:00:00Z',
     files_under_review: ['src/Main.java'],
+    ignore: [],
+    attachments: [],
     collaboration: 'solo',
     submission: 'bundle',
     scope: 'directory',
@@ -810,6 +813,8 @@ describe('2.0 signed payload', () => {
       semester: 's',
       issued_at: '2026-09-08T00:00:00Z',
       files_under_review: [],
+      ignore: [],
+      attachments: [],
       collaboration: 'solo',
       submission: 'bundle',
       scope: 'directory',
@@ -1150,5 +1155,86 @@ describe('verifyManifestChain', () => {
     expect(parsed.value.scope).toBeUndefined();
     expect(parsed.value.policy).toBeUndefined();
     expect(parsed.value.course_cert).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Manifest 2.0 path scope fields — ignore / attachments
+// ---------------------------------------------------------------------------
+
+describe('Manifest 2.0 path scope fields', () => {
+  it('requires ignore and attachments on a 2.0 manifest', async () => {
+    const { manifest: m } = await makeV2Manifest();
+    const withoutIgnore = { ...m };
+    delete (withoutIgnore as Record<string, unknown>)['ignore'];
+    const r = parseManifestValue(withoutIgnore);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatchObject({ kind: 'invalid_shape', field: 'ignore' });
+
+    const withoutAttachments = { ...m };
+    delete (withoutAttachments as Record<string, unknown>)['attachments'];
+    const r2 = parseManifestValue(withoutAttachments);
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.error).toMatchObject({ kind: 'invalid_shape', field: 'attachments' });
+  });
+
+  it('accepts empty arrays as the explicit "not used" spelling', async () => {
+    const { manifest: m } = await makeV2Manifest();
+    const r = parseManifestValue({ ...m, ignore: [], attachments: [] });
+    expect(r.ok).toBe(true);
+  });
+
+  it('rejects a malformed entry in any of the three lists', async () => {
+    const { manifest: m } = await makeV2Manifest();
+    for (const field of ['files_under_review', 'ignore', 'attachments'] as const) {
+      const r = parseManifestValue({ ...m, [field]: ['../escape'] });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toMatchObject({ kind: 'invalid_shape', field });
+    }
+  });
+
+  it('accepts the new entry forms at 2.0', async () => {
+    const { manifest: m } = await makeV2Manifest();
+    const r = parseManifestValue({
+      ...m,
+      files_under_review: ['src/', 'Makefile', '*.java'],
+      ignore: ['*.class', 'target/'],
+      attachments: ['logs/'],
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('accepts a directory-shaped entry at 1.x rather than rejecting it', () => {
+    // 1.x parsing must NEVER reject: archived submissions have to validate for
+    // years. At 1.x "src/" simply means a file named "src/", which matches
+    // nothing — exactly the pre-2.0 behaviour.
+    const legacy = {
+      assignment_id: 'a',
+      semester: 'fa26',
+      issued_at: '2026-01-01T00:00:00Z',
+      files_under_review: ['src/', '*.java', '../escape'],
+      sig: 'a'.repeat(128),
+    };
+    const r = parseManifestValue(legacy);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.files_under_review).toEqual(['src/', '*.java', '../escape']);
+  });
+
+  it('scopeFromManifest reads the three lists, defaulting 1.x to empty', () => {
+    const legacy = {
+      assignment_id: 'a',
+      semester: 'fa26',
+      issued_at: '2026-01-01T00:00:00Z',
+      files_under_review: ['Main.java'],
+      sig: 'a'.repeat(128),
+    };
+    const parsed = parseManifestValue(legacy);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(scopeFromManifest(parsed.value)).toEqual({
+      track: ['Main.java'],
+      ignore: [],
+      attachments: [],
+    });
   });
 });

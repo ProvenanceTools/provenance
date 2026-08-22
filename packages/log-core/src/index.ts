@@ -66,6 +66,7 @@ export {
   signManifest,
   verifyManifestChain,
   manifestFormatVersion,
+  scopeFromManifest,
   MANIFEST_FORMAT_VERSION_LEGACY,
   MANIFEST_FORMAT_VERSION_2,
 } from './manifest.js';

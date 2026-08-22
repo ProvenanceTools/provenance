@@ -52,6 +52,8 @@ export type BuildManifest2Opts = {
   semester?: string;
   issuedAt?: string;
   filesUnderReview?: string[];
+  ignore?: string[];
+  attachments?: string[];
   collaboration?: 'solo' | 'group';
   submission?: 'bundle' | 'git';
   scope?: 'directory' | 'repo';
@@ -74,6 +76,8 @@ export async function buildManifest2(opts: BuildManifest2Opts): Promise<Manifest
     semester = 'fa26',
     issuedAt = '2026-09-08T00:00:00Z',
     filesUnderReview = ['hw1.py'],
+    ignore = [],
+    attachments = [],
     collaboration = 'solo',
     submission = 'bundle',
     scope = 'directory',
@@ -101,6 +105,8 @@ export async function buildManifest2(opts: BuildManifest2Opts): Promise<Manifest
     semester,
     issued_at: issuedAt,
     files_under_review: filesUnderReview,
+    ignore,
+    attachments,
     collaboration,
     submission,
     scope,
