@@ -665,6 +665,20 @@ const COVERAGE_WITH_FACTS: NonNullable<SubmissionSummary['coverage']> = {
     silentThoughCapable: 0,
     silentAndUnreported: 3,
     malformed: 0,
+    malformedProblems: [],
+  },
+  // Likewise pre-§5.6: no session says which files it was watching, so every
+  // file's silence stays exactly as ambiguous as it has always been.
+  fileScope: {
+    reporting: 'unreported',
+    sessions: 3,
+    reportedSessions: 0,
+    incompleteSessions: 0,
+    unreportedSessions: 3,
+    malformedSessions: 0,
+    malformedProblems: [],
+    watchedFiles: [],
+    files: [],
   },
 };
 

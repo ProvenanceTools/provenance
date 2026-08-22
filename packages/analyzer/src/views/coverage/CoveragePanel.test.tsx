@@ -7,6 +7,12 @@
 
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import {
+  describeCapabilityValueProblem,
+  describeFileScopeProblem,
+  describeGitCapture,
+  describeWitnessCapture,
+} from '@provenance/log-core';
 import type { PeerObservedPayload } from '@provenance/log-core';
 import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
 import { loadBundle } from '@provenance/analysis-core/loader/parse-bundle.js';
@@ -87,8 +93,10 @@ async function buildScope(
     capabilities?: Record<string, unknown>;
     /** `peer.observed` payloads this session recorded about other logs. */
     witnesses?: PeerObservedPayload[];
+    /** Paths this session edits, so a file can be busy rather than silent. */
+    activity?: string[];
   }>,
-  opts: { rootKey?: string } = {},
+  opts: { rootKey?: string; submissionFiles?: string[] } = {},
 ): Promise<{ bundle: Bundle; index: EventIndex }> {
   const k = await keys();
   const sessions = [];
@@ -111,6 +119,12 @@ async function buildScope(
         ...(spec.witnesses ?? []).map((w) => ({
           kind: 'peer.observed',
           data: { ...w },
+          wall: wallAt(spec.startMin),
+          t: spec.startMin * 60_000,
+        })),
+        ...(spec.activity ?? []).map((path) => ({
+          kind: 'doc.change',
+          data: { path, deltas: [{ range: null, text: 'x = 1\n' }], source: 'keystroke' },
           wall: wallAt(spec.startMin),
           t: spec.startMin * 60_000,
         })),
@@ -139,7 +153,18 @@ async function buildScope(
       },
     });
   }
-  const { zipBuffer } = await buildTestBundle({ sessions });
+  const { zipBuffer } = await buildTestBundle({
+    sessions,
+    ...(opts.submissionFiles === undefined
+      ? {}
+      : {
+          submissionFiles: opts.submissionFiles.map((path) => ({
+            path,
+            status: 'present' as const,
+            content: `# ${path}\n`,
+          })),
+        }),
+  });
   const result = await loadBundle(new Blob([zipBuffer]), 'test.zip');
   if (!result.ok) throw new Error('load failed');
   await establishBundleContributors(result.value, opts.rootKey ?? k.root.pubkeyHex);
@@ -617,7 +642,7 @@ describe('git observation says which kind of silence this is', () => {
     ]);
     const first = renderOpen(notOwned.bundle, notOwned.index);
     const notOwnedText = screen.getByTestId('coverage-git-impossible').textContent ?? '';
-    expect(notOwnedText).toMatch(/sat outside any repository it could see/i);
+    expect(notOwnedText).toMatch(/no repository it could see belonged to this assignment/i);
     expect(notOwnedText).toMatch(/there was no repository to observe/i);
     first.unmount();
 
@@ -631,7 +656,10 @@ describe('git observation says which kind of silence this is', () => {
     ]);
     renderOpen(unavailable.bundle, unavailable.index);
     const unavailableText = screen.getByTestId('coverage-git-impossible').textContent ?? '';
-    expect(unavailableText).toMatch(/git integration was not present/i);
+    expect(unavailableText).toMatch(/exposed no git integration/i);
+    // Both causes, not just the first: an extension that was absent and one
+    // whose API could not be reached send a reader to different places.
+    expect(unavailableText).toMatch(/could not be reached/i);
     // The two must not be the same sentence.
     expect(unavailableText).not.toBe(notOwnedText);
   });
@@ -796,6 +824,327 @@ describe('peer witnessing reads as evidence about a log, never about a person', 
     const note = screen.getByTestId('coverage-witness-capability-impossible');
     expect(note.textContent).toMatch(/limit on what this record can show/i);
     expect(note.textContent).toMatch(/not something anyone did/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §5.6 item 1 — file scope
+//
+// The field exists to remove ONE inference: "no events for this file" is
+// otherwise ambiguous between _nothing happened in it_ and _it was never
+// watched_. Nothing here is a finding in either direction — "not watched" is
+// exculpatory, and an absent report is a fact about a release date.
+// ---------------------------------------------------------------------------
+
+/** A complete `file_scope` report naming exactly `watched`. */
+const scopeOf = (watched: string[], complete = true) => ({
+  file_scope: { watched, complete },
+});
+
+describe('file scope says whether a silent file was ever being watched', () => {
+  it('an unreported scope reads as "this recorder does not report", never as a defect', async () => {
+    // EVERY bundle recorded before §5.6, permanently. This is the assertion the
+    // whole archive depends on.
+    const { bundle, index } = await buildScope([{ who: 'anonymous', startMin: 0, endMin: 60 }], {
+      submissionFiles: ['hw1.py', 'provided.py'],
+    });
+    renderOpen(bundle, index);
+
+    const note = screen.getByTestId('coverage-file-scope-unreported');
+    expect(note.textContent).toMatch(/does not report which files it was watching/i);
+    expect(note.textContent).toMatch(/unresolved/i);
+    expect(note.textContent).toMatch(/it is not a defect and it is not a finding/i);
+    // Nothing is claimed about any individual file, in either direction.
+    expect(screen.queryByTestId('coverage-file-not-watched')).toBeNull();
+    expect(note.textContent).not.toMatch(/failed|missing|suspicious|should have|never touched/i);
+  });
+
+  it('a file outside a complete scope is stated as EXPLAINED, never as absence of work', async () => {
+    const { bundle, index } = await buildScope(
+      [
+        {
+          who: { studentRef: 'alice' },
+          startMin: 0,
+          endMin: 60,
+          capabilities: scopeOf(['hw1.py']),
+        },
+      ],
+      { submissionFiles: ['hw1.py', 'provided.py'] },
+    );
+    renderOpen(bundle, index);
+
+    expect(screen.getByTestId('coverage-file-scope-reported').textContent).toMatch(
+      /every session here reported which files it was watching/i,
+    );
+
+    const rows = screen.getAllByTestId('coverage-file-not-watched');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toMatch(/provided\.py/);
+    expect(rows[0]!.textContent).toMatch(/outside every session’s watched scope/i);
+    expect(rows[0]!.textContent).toMatch(/nothing was recording it/i);
+    // The watched file is not listed: there is no ambiguity to resolve for it.
+    expect(rows[0]!.textContent).not.toMatch(/hw1\.py/);
+
+    const note = screen.getByTestId('coverage-file-not-watched-note');
+    expect(note.textContent).toMatch(/fact about the assignment’s configuration/i);
+    expect(note.textContent).toMatch(/nothing here is a finding/i);
+    expect(note.textContent).not.toMatch(/suspicious|misconduct|failed|warning/i);
+  });
+
+  it('one silent session takes every unnamed file to unknown, and says so', async () => {
+    const { bundle, index } = await buildScope(
+      [
+        {
+          who: { studentRef: 'alice' },
+          startMin: 0,
+          endMin: 60,
+          capabilities: scopeOf(['hw1.py']),
+        },
+        { who: { studentRef: 'bob' }, startMin: 120, endMin: 180 },
+      ],
+      { submissionFiles: ['hw1.py', 'provided.py'] },
+    );
+    renderOpen(bundle, index);
+
+    const note = screen.getByTestId('coverage-file-scope-partial');
+    expect(note.textContent).toMatch(/lower bound rather than the whole scope/i);
+    expect(note.textContent).toMatch(/may still have been watched by a session that said nothing/i);
+    // Fail toward not knowing: no file is asserted to be unwatched.
+    expect(screen.queryByTestId('coverage-file-not-watched')).toBeNull();
+  });
+
+  it('a busy file is never listed as having no activity, whatever the scope says', async () => {
+    // `provided.py` is outside the reported scope AND has events. Listing it as
+    // "this record contains no activity for it" beside its own events would be
+    // a contradiction, so it is not listed at all.
+    const { bundle, index } = await buildScope(
+      [
+        {
+          who: { studentRef: 'alice' },
+          startMin: 0,
+          endMin: 60,
+          capabilities: scopeOf(['hw1.py']),
+          activity: ['provided.py'],
+        },
+      ],
+      { submissionFiles: ['hw1.py', 'provided.py'] },
+    );
+    renderOpen(bundle, index);
+
+    expect(screen.queryByTestId('coverage-file-not-watched')).toBeNull();
+    expect(screen.queryByTestId('coverage-file-not-watched-note')).toBeNull();
+  });
+
+  it('a capped list is said to prove watched and never to prove not_watched', async () => {
+    const { bundle, index } = await buildScope(
+      [
+        {
+          who: { studentRef: 'alice' },
+          startMin: 0,
+          endMin: 60,
+          capabilities: scopeOf(['hw1.py'], false),
+        },
+      ],
+      { submissionFiles: ['hw1.py', 'provided.py'] },
+    );
+    renderOpen(bundle, index);
+
+    expect(screen.getByTestId('coverage-file-scope-incomplete').textContent).toMatch(
+      /can never show that one was not/i,
+    );
+    expect(screen.queryByTestId('coverage-file-not-watched')).toBeNull();
+  });
+
+  it('a malformed scope is named by problem and never echoes the offending path', async () => {
+    // An absolute path is what the reader exists to stop — it carries the
+    // account name and the machine's layout (S14(b)). The panel must state the
+    // problem without republishing the value.
+    const { bundle, index } = await buildScope(
+      [
+        {
+          who: { studentRef: 'alice' },
+          startMin: 0,
+          endMin: 60,
+          capabilities: scopeOf(['/Users/someone/hw1.py']),
+        },
+      ],
+      { submissionFiles: ['hw1.py'] },
+    );
+    renderOpen(bundle, index);
+
+    const note = screen.getByTestId('coverage-file-scope-malformed');
+    expect(note.textContent).toContain(describeFileScopeProblem('path_absolute'));
+    expect(note.textContent).not.toMatch(/someone/);
+    expect(note.textContent).toMatch(/never about the student/i);
+    // Rejected whole, so nothing about any file is asserted.
+    expect(screen.queryByTestId('coverage-file-not-watched')).toBeNull();
+  });
+
+  it('never renders in the flag vocabulary', async () => {
+    const { bundle, index } = await buildScope(
+      [
+        {
+          who: { studentRef: 'alice' },
+          startMin: 0,
+          endMin: 60,
+          capabilities: scopeOf(['hw1.py']),
+        },
+      ],
+      { submissionFiles: ['hw1.py', 'provided.py'] },
+    );
+    renderOpen(bundle, index);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByTestId('coverage-file-scope').textContent).not.toMatch(
+      /warning|violation|suspicious|misconduct|failed/i,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The canonical wording
+//
+// `log-core` owns the staff-facing sentence for each capability state so that
+// this analyzer and the three recorder repos cannot phrase one verdict four
+// ways. These assertions pin the panel's copy to the helper's OUTPUT rather
+// than to a literal, so a second hand-written copy cannot reappear silently.
+// ---------------------------------------------------------------------------
+
+describe('capability verdicts are quoted from log-core, not re-worded here', () => {
+  it('quotes describeGitCapture for each impossible reason', async () => {
+    const unavailable = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        capabilities: { git_capture: 'unavailable' },
+      },
+    ]);
+    const first = renderOpen(unavailable.bundle, unavailable.index);
+    expect(screen.getByTestId('coverage-git-impossible').textContent).toContain(
+      describeGitCapture('unavailable'),
+    );
+    first.unmount();
+
+    const notOwned = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        capabilities: { git_capture: 'not_owned' },
+      },
+    ]);
+    const second = renderOpen(notOwned.bundle, notOwned.index);
+    expect(screen.getByTestId('coverage-git-impossible').textContent).toContain(
+      describeGitCapture('not_owned'),
+    );
+    second.unmount();
+
+    const mixed = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        capabilities: { git_capture: 'unavailable' },
+      },
+      {
+        who: { studentRef: 'bob' },
+        startMin: 120,
+        endMin: 180,
+        capabilities: { git_capture: 'not_owned' },
+      },
+    ]);
+    renderOpen(mixed.bundle, mixed.index);
+    const mixedText = screen.getByTestId('coverage-git-impossible').textContent ?? '';
+    // Both reasons, both quoted — a mixed scope is not either half.
+    expect(mixedText).toContain(describeGitCapture('unavailable'));
+    expect(mixedText).toContain(describeGitCapture('not_owned'));
+  });
+
+  it('keeps the "not because nothing was done" guard the helper does not carry', async () => {
+    // The helper says what the recorder could not do. It does NOT say that this
+    // is not a statement about the student, and that clause is the one this
+    // project has paid for. Quoting the helper must never drop it.
+    for (const capture of ['unavailable', 'not_owned'] as const) {
+      const { bundle, index } = await buildScope([
+        {
+          who: { studentRef: 'alice' },
+          startMin: 0,
+          endMin: 60,
+          capabilities: { git_capture: capture },
+        },
+      ]);
+      const view = renderOpen(bundle, index);
+      expect(screen.getByTestId('coverage-git-impossible').textContent).toMatch(
+        /not because nothing was done/i,
+      );
+      view.unmount();
+    }
+  });
+
+  it('quotes describeWitnessCapture when no session could witness', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        capabilities: { witness_capture: 'unavailable' },
+      },
+    ]);
+    renderOpen(bundle, index);
+    const text = screen.getByTestId('coverage-witness-capability-impossible').textContent ?? '';
+    expect(text).toContain(describeWitnessCapture('unavailable'));
+    expect(text).toMatch(/not something anyone did/i);
+  });
+
+  it('quotes describeCapabilityValueProblem, so a non-string is not called an undefined value', async () => {
+    // The old literal said "a value this format does not define", which is only
+    // ever true of `unknown_value`. A session reporting a NON-STRING was being
+    // described as something it was not.
+    const notAString = await buildScope([
+      { who: { studentRef: 'alice' }, startMin: 0, endMin: 60, capabilities: { git_capture: 7 } },
+    ]);
+    const first = renderOpen(notAString.bundle, notAString.index);
+    expect(screen.getByTestId('coverage-git-malformed').textContent).toContain(
+      describeCapabilityValueProblem('not_a_string'),
+    );
+    first.unmount();
+
+    const unknownValue = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        capabilities: { git_capture: 'sort-of' },
+      },
+    ]);
+    renderOpen(unknownValue.bundle, unknownValue.index);
+    const text = screen.getByTestId('coverage-git-malformed').textContent ?? '';
+    expect(text).toContain(describeCapabilityValueProblem('unknown_value'));
+    expect(text).toMatch(/never about the student/i);
+  });
+
+  /**
+   * The `'available'` sentences are deliberately NOT the helpers'. The helper is
+   * per-SESSION ("this session was watching…") and the panel's summary is
+   * per-BUNDLE ("at least one session here"). Quoting a per-session claim as a
+   * bundle-level one would assert something about sessions that never reported.
+   */
+  it('does NOT quote the per-session helper for the bundle-level available case', async () => {
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        startMin: 0,
+        endMin: 60,
+        capabilities: { git_capture: 'available', witness_capture: 'available' },
+      },
+    ]);
+    renderOpen(bundle, index);
+    expect(screen.getByTestId('coverage-git-available').textContent).toMatch(
+      /at least one session/i,
+    );
+    expect(screen.getByTestId('coverage-witness-capability-available').textContent).toMatch(
+      /at least one session/i,
+    );
   });
 });
 

@@ -1262,6 +1262,85 @@ export const CoverageFactsSchema = z.object({
     /** Every session of every pre-§5.6 bundle lands here. Never a defect. */
     silentAndUnreported: z.number().int(),
     malformed: z.number().int(),
+    /**
+     * Every distinct reason a present value could not be read, so a surface can
+     * say WHICH way it was wrong. A non-string value and a string outside the
+     * closed enum are different nonconformance, and a surface holding only
+     * `malformed` describes the wrong one for one of them.
+     */
+    malformedProblems: z.array(z.enum(['not_a_string', 'unknown_value'])),
+  }),
+  /**
+   * Which files this record was actually watching (collaboration spec §5.6
+   * item 1), and therefore whose silence is explained by scope rather than by
+   * inactivity.
+   *
+   * The inference this removes is S25's: "no events for `Solver.java`" is
+   * otherwise ambiguous between _nothing happened in it_ and _it was never
+   * watched_, and nothing else in a bundle tells those apart.
+   *
+   * **Never a finding, in either direction.** `not_watched` is EXCULPATORY — the
+   * recorder was not told to watch that file, which is a fact about the
+   * assignment manifest and not about the student. `unknown` and
+   * `reporting: 'unreported'` are the permanent state of every bundle recorded
+   * before the field existed and are not defects.
+   */
+  fileScope: z.object({
+    /**
+     * `'reported'` — every session said which files it was watching.
+     * `'partial'` — some did and some did not, so the watched set is a lower
+     * bound. `'unreported'` — nobody said anything usable; the state of every
+     * pre-§5.6 bundle, and never a defect.
+     */
+    reporting: z.enum(['reported', 'partial', 'unreported']),
+    sessions: z.number().int(),
+    reportedSessions: z.number().int(),
+    /** Of those, how many said their list had been capped. */
+    incompleteSessions: z.number().int(),
+    /** Recorders that do not report a file scope. Never a defect. */
+    unreportedSessions: z.number().int(),
+    malformedSessions: z.number().int(),
+    /**
+     * Distinct reasons a present scope could not be read, by NAME. These never
+     * quote the offending path — rejecting an absolute path or a remote URL
+     * before it reaches a staff surface is the privacy check the reader exists
+     * to perform (S14(b)).
+     */
+    malformedProblems: z.array(
+      z.enum([
+        'not_an_object',
+        'watched_not_an_array',
+        'complete_not_a_boolean',
+        'path_not_a_string',
+        'path_empty',
+        'path_absolute',
+        'path_escapes_scope',
+        'path_has_colon',
+      ]),
+    ),
+    /** Union of every reported watched list. A LOWER BOUND unless `reported`. */
+    watchedFiles: z.array(z.string()),
+    /**
+     * One entry per `submission_files` path, in manifest order. Empty on a
+     * legacy 1.0 bundle, which has no file set to ask the question about — an
+     * absent question, not a negative answer.
+     */
+    files: z.array(
+      z.object({
+        path: z.string(),
+        /**
+         * `'not_watched'` requires EVERY session to have reported a COMPLETE
+         * scope naming other files. A truncated list can prove `'watched'` and
+         * can never prove `'not_watched'`.
+         */
+        watched: z.enum(['watched', 'not_watched', 'unknown']),
+        /**
+         * Whether this record holds any event for the path. Present so no
+         * surface says "no recorded activity" about a file that has some.
+         */
+        recordedActivity: z.boolean(),
+      }),
+    ),
   }),
 });
 export type CoverageFacts = z.infer<typeof CoverageFactsSchema>;
