@@ -1152,18 +1152,41 @@ export const components = {
     // -------------------------------------------------------------------------
     FileWarning: {
       type: 'object',
+      description:
+        'Present only when the reconstruction is qualified. The three codes are ' +
+        'three DIFFERENT facts and must not be collapsed by a client.',
       properties: {
-        code: { type: 'string' },
+        code: {
+          type: 'string',
+          enum: [
+            'FILE_RECONSTRUCTION_TAINTED',
+            'FILE_RECONSTRUCTION_CONCURRENT',
+            'FILE_RECONSTRUCTION_UNKNOWN',
+          ],
+          description:
+            'TAINTED — one content, best-effort; the replay inherited state it could not verify. ' +
+            'CONCURRENT — two or more provably different contributors edited this file on lineages ' +
+            'the recorded evidence does not order, so NO single content existed and `content` is ' +
+            'empty. UNKNOWN — the happens-before relation does not reach some of these events; ' +
+            'that is the absence of a record, not a claim that the edits raced.',
+        },
         message: { type: 'string' },
+        details: { type: 'object' },
       },
     },
     FileContentResponse: {
       type: 'object',
       required: ['content', 'at_seq'],
       properties: {
-        content: { type: 'string', description: 'Reconstructed file text at the given seq' },
+        content: {
+          type: 'string',
+          description:
+            'Reconstructed file text at the given seq. EMPTY when `warning.code` is ' +
+            'CONCURRENT or UNKNOWN — there is no single content, and a client must not ' +
+            'render one lineage as though it were the submitted file.',
+        },
         at_seq: { type: 'integer', description: 'Seq at which the content was reconstructed' },
-        warnings: { type: 'array', items: { $ref: '#/components/schemas/FileWarning' } },
+        warning: { $ref: '#/components/schemas/FileWarning' },
       },
     },
     IngestScopeConfig: {

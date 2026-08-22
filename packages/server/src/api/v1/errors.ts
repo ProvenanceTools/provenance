@@ -79,7 +79,23 @@ export type ApiErrorCode =
   // Warn-level (HTTP 200 with warning field)
   | 'EMAIL_DOMAIN_NOT_ALLOWED'
   | 'ASSIGNMENT_ID_MISMATCH_BUNDLE'
-  | 'FILE_RECONSTRUCTION_TAINTED';
+  /** One content, best-effort — the replay inherited state it could not verify. */
+  | 'FILE_RECONSTRUCTION_TAINTED'
+  /**
+   * Two or more provably different contributors edited this file on lineages the
+   * recorded evidence does not order (Tier 2.2). There is NO single content, so
+   * `content` is empty rather than one branch presented as the file.
+   */
+  | 'FILE_RECONSTRUCTION_CONCURRENT'
+  /**
+   * The happens-before relation does not cover some of this file's events, so no
+   * statement can be made about their order.
+   *
+   * A DIFFERENT fact from `FILE_RECONSTRUCTION_CONCURRENT` and never merged with
+   * it: "two records raced" and "we have no record" lead a grader to opposite
+   * conclusions.
+   */
+  | 'FILE_RECONSTRUCTION_UNKNOWN';
 
 // ---------------------------------------------------------------------------
 // ApiError class
@@ -620,6 +636,30 @@ export const Warnings = {
         code: 'FILE_RECONSTRUCTION_TAINTED',
         message: `Reconstruction tainted for file ${path}: ${reason}`,
         details: { path, reason },
+      },
+    };
+  },
+
+  /**
+   * No single content for this file (Tier 2.2).
+   *
+   * `kind` picks the code, and the two codes are never interchangeable — see
+   * their doc comments on {@link ApiErrorCode}. `detail` is analysis-core's own
+   * grader-readable sentence, passed through verbatim rather than re-worded
+   * here: the wording is the safeguard, and two versions of it is how one of
+   * them ends up saying the edits raced when we simply cannot see.
+   */
+  fileReconstructionAmbiguous(
+    path: string,
+    kind: 'concurrent' | 'unknown',
+    detail: string,
+  ): WarningBody {
+    return {
+      warning: {
+        code:
+          kind === 'concurrent' ? 'FILE_RECONSTRUCTION_CONCURRENT' : 'FILE_RECONSTRUCTION_UNKNOWN',
+        message: detail,
+        details: { path, kind },
       },
     };
   },
