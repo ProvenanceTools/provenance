@@ -433,7 +433,8 @@ export function describeGitCapture(capture: GitCaptureCapability): string {
     case 'unavailable':
       return (
         'Git observation was not available on this machine — the editor exposed no git ' +
-        'integration — so this session could not have recorded any git activity.'
+        'integration, or its API could not be reached — so this session could not have ' +
+        'recorded any git activity.'
       );
     case 'not_owned':
       return (

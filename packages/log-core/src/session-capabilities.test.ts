@@ -156,6 +156,19 @@ describe('describeGitCapture', () => {
       expect(t).not.toContain('tamper');
     }
   });
+
+  /**
+   * `GIT_CAPTURE_VALUES` documents TWO causes for `'unavailable'` — "the git
+   * extension was absent, or its API could not be obtained" — and the sentence
+   * has to carry both. A reader told only that no integration was present will
+   * go looking for an uninstalled extension on a machine where the extension was
+   * installed and simply did not answer, which is a different thing to check.
+   */
+  it('names both causes of an unavailable capture, as the enum doc does', () => {
+    const t = describeGitCapture('unavailable').toLowerCase();
+    expect(t).toContain('no git integration');
+    expect(t).toContain('could not be reached');
+  });
 });
 
 // ---------------------------------------------------------------------------
