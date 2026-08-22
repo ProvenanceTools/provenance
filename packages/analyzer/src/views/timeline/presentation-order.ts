@@ -81,10 +81,15 @@ import {
  *
  * Structurally satisfied by `ReconstructionScope`, so `/local` passes the
  * memoized scope it already builds. `null` — and `ordering: null` inside it —
- * both mean "no relation available here", which is the honest state for the
- * server-backed Timeline tab: it builds its index from event rows and has no
- * bundle, so it has no contributor stamp and no observed commit DAG to build a
- * relation from.
+ * both mean "no relation available here", which stays the honest answer for a
+ * solo submission or a bundle whose contributors cannot be established.
+ *
+ * The server-backed Timeline tab is NOT such a case any more. It builds its
+ * index from event rows, but `useServerScope` reconstitutes the relation from
+ * those rows plus `SubmissionSummary.contributor_stamp`: `buildObservedDag`
+ * and `buildEventOrdering` read only `seq`, `kind`, `wall` and `data`, every
+ * one of which an `EventRow` carries. Both routes therefore go through the
+ * same hook, so the two tabs cannot disagree about who recorded what.
  */
 export type TimelineOrderScope = {
   readonly ordering: EventOrdering | null;

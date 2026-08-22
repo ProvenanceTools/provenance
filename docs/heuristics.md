@@ -182,7 +182,13 @@ already charged to the acting student:
 `extension_set_changed_mid_assignment` · `clock_jumps` · `gap_in_heartbeats` ·
 `paste_matches_known_source` · `large_paste` (its OUTPUT — one flag per paste event)
 
-### Must stay whole-scope (10)
+### Must stay whole-scope (11 names, 10 of them exclusively)
+
+`large_paste` appears in both lists and is the only one that does: its OUTPUT is already
+per-contributor (one flag per paste event), while its INPUT is not — the deletion ledger that
+classifies a cut-and-paste as an `internal_move` is built from the whole-scope replay, so a
+partner's typed code is what keeps the move at `info`. Seven exclusively-scoped + ten
+exclusively-whole-scope + `large_paste` on both sides is the full eighteen.
 
 Narrowing the event window to one contributor turns honest pair work into a finding against a
 named student. Three distinct mechanisms:
