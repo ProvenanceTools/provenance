@@ -46,13 +46,27 @@
     { "entry": "*", "problem": "bad_wildcard" },
     { "entry": "a?.java", "problem": "forbidden_char" },
     { "entry": "a[0-9].java", "problem": "forbidden_char" },
-    { "entry": "{a,b}.java", "problem": "forbidden_char" }
+    { "entry": "{a,b}.java", "problem": "forbidden_char" },
+    { "entry": "a0-9].java", "problem": "forbidden_char" },
+    { "entry": "b}.java", "problem": "forbidden_char" }
   ],
   "role": [
     {
       "comment": "Hard exclusion beats every course list.",
       "path": ".provenance/manifest.json",
       "scope": { "track": ["*.json"], "ignore": [], "attachments": ["*.json"] },
+      "expect": "excluded"
+    },
+    {
+      "comment": "Hard exclusion also covers the exact-path form (HARD_EXCLUDED_PATHS), not just the directory-prefix form. A port that only implements the .provenance/ and .git/ prefix checks would pass every other vector here but miss this one.",
+      "path": ".provenance-manifest",
+      "scope": { "track": [".provenance-manifest"], "ignore": [], "attachments": [] },
+      "expect": "excluded"
+    },
+    {
+      "comment": "Same exact-path exclusion, the non-dotfile spelling.",
+      "path": "provenance-manifest",
+      "scope": { "track": ["provenance-manifest"], "ignore": [], "attachments": [] },
       "expect": "excluded"
     },
     {

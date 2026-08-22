@@ -32,7 +32,7 @@ describe('path-scope conformance vectors', () => {
   it('every vector list is non-empty, so a truncated file cannot pass silently', () => {
     expect(vectors.match.length).toBeGreaterThan(10);
     expect(vectors.editorGlobHazards.cases.length).toBeGreaterThan(0);
-    expect(vectors.validate.length).toBeGreaterThan(15);
-    expect(vectors.role.length).toBeGreaterThan(4);
+    expect(vectors.validate.length).toBeGreaterThan(21);
+    expect(vectors.role.length).toBeGreaterThan(6);
   });
 });
