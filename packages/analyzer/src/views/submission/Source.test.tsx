@@ -150,6 +150,7 @@ function makeProvider(
         content: '',
         status: 'missing',
         verdict: 'unknown',
+        content_source: 'event_replay',
       });
     },
   };
@@ -199,7 +200,13 @@ describe('Source tab', () => {
       files: [{ path: 'hw03.py', status: 'present', verdict: 'match', sha256: 'abc123' }],
     };
     const contentMap: Record<string, SubmittedFileContentResult> = {
-      'hw03.py': { path: 'hw03.py', content: 'print(1)\n', status: 'present', verdict: 'match' },
+      'hw03.py': {
+        path: 'hw03.py',
+        content: 'print(1)\n',
+        status: 'present',
+        verdict: 'match',
+        content_source: 'event_replay',
+      },
     };
     const provider = makeProvider(filesResult, contentMap);
     renderSource(provider);
@@ -276,6 +283,97 @@ describe('Source tab', () => {
     await waitFor(() => {
       expect(screen.getByTestId('source-empty')).toBeInTheDocument();
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Content provenance notice
+  //
+  // The pane is a reconstruction on the server-backed path. Unlabelled, it reads
+  // as the submitted code — and under a `mismatch` verdict it is provably not.
+  // -------------------------------------------------------------------------
+
+  async function renderSelected(content: SubmittedFileContentResult) {
+    const filesResult: SubmittedFileListResult = {
+      available: true,
+      files: [
+        { path: content.path, status: 'present', verdict: content.verdict, sha256: 'abc123' },
+      ],
+    };
+    renderSource(makeProvider(filesResult, { [content.path]: content }));
+    await waitFor(() => expect(screen.getByText(content.path)).toBeInTheDocument());
+    fireEvent.click(screen.getByText(content.path));
+    return waitFor(() => screen.getByTestId('source-content-provenance'));
+  }
+
+  it('labels a replayed pane as reconstructed, not as the submitted file', async () => {
+    const el = await renderSelected({
+      path: 'hw03.py',
+      content: 'print(1)\n',
+      status: 'present',
+      verdict: 'match',
+      content_source: 'event_replay',
+    });
+
+    expect(el).toHaveTextContent('Reconstructed from the recording');
+    expect(el).toHaveTextContent('it is not the file that was submitted');
+    // The match verdict is still stated — the caveat must not swallow it.
+    expect(el).toHaveTextContent('does match the last state the recorder observed on disk');
+  });
+
+  it('says outright that a mismatched pane is not the submitted code', async () => {
+    const el = await renderSelected({
+      path: 'hw03.py',
+      content: 'print(1)\n',
+      status: 'present',
+      verdict: 'mismatch',
+      content_source: 'event_replay',
+    });
+
+    expect(el).toHaveTextContent('the submitted file did not match it');
+    // The finding itself, plainly, neither hedged nor amplified.
+    expect(el).toHaveTextContent('does not match the last state the recorder observed on disk');
+    // And the part a grader would otherwise assume: the diff is not on screen.
+    expect(el).toHaveTextContent('nothing in it is the submitted code');
+  });
+
+  it('says a verdict-less pane establishes nothing about the submitted code', async () => {
+    const el = await renderSelected({
+      path: 'hw03.py',
+      content: 'print(1)\n',
+      status: 'present',
+      verdict: 'unknown',
+      content_source: 'event_replay',
+    });
+
+    expect(el).toHaveTextContent('did not reach a verdict');
+    expect(el).toHaveTextContent('is not established');
+  });
+
+  it('makes the stronger claim when the provider holds the real submitted bytes', async () => {
+    const el = await renderSelected({
+      path: 'hw03.py',
+      content: 'print(1)\n',
+      status: 'present',
+      verdict: 'match',
+      content_source: 'submitted_bytes',
+    });
+
+    expect(el).toHaveTextContent('The submitted file, read from the bundle');
+    expect(el).toHaveTextContent('literal bytes sealed into the submitted bundle');
+    expect(el).not.toHaveTextContent('Reconstructed');
+  });
+
+  it('makes no claim about the pane before a file is selected', async () => {
+    const filesResult: SubmittedFileListResult = {
+      available: true,
+      files: [{ path: 'hw03.py', status: 'present', verdict: 'match', sha256: 'abc123' }],
+    };
+    renderSource(makeProvider(filesResult));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('source-no-selection')).toHaveTextContent('Select a file');
+    });
+    expect(screen.queryByTestId('source-content-provenance')).toBeNull();
   });
 
   it('shows "missing" label for missing-status files', async () => {
