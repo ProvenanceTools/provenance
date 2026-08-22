@@ -311,6 +311,39 @@ describe('CrossFlagListView — the cross-scope exclusion register', () => {
     expect(screen.getByText(/Established by 1 commit reference/)).toBeInTheDocument();
   });
 
+  it('describes a shared_recording_scope exclusion WITHOUT claiming a repository', async () => {
+    // A pair whose recorder never observed git — a host with no git
+    // integration, commits made from a terminal, a shared folder. The archives
+    // really do hold each other's signed logs, but nobody demonstrated a
+    // repository, and the register must not assert one. See migration 0032.
+    const ex = makeExclusion({
+      reason: 'shared_recording_scope',
+      shared_commits: [],
+      shared_sessions: [
+        `session:${'aa'.repeat(32)} 11111111-1111-4111-8111-111111111111`,
+        `session:${'bb'.repeat(32)} 22222222-2222-4222-8222-222222222222`,
+      ],
+    });
+    setupListHandler([], null, [ex]);
+    renderListView();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('cross-scope-exclusions')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/Shared recording scope/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Established by 2 recorded sessions present in more than one/),
+    ).toBeInTheDocument();
+    // The count must be the SESSIONS, never the (empty) commit list, and the
+    // panel must not say "repository" about these two.
+    expect(screen.queryByText(/commit reference/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Same repository lineage/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(`session:${'aa'.repeat(32)} 11111111-1111-4111-8111-111111111111`),
+    ).toBeInTheDocument();
+  });
+
   it('names the commits that proved the lineage', async () => {
     setupListHandler([], null, [makeExclusion()]);
     renderListView();

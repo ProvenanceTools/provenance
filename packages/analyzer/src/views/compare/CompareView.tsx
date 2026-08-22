@@ -25,6 +25,7 @@ import { useBundle } from '../../context/BundleContext.js';
 import type { Bundle } from '@provenance/analysis-core/loader/types.js';
 import type { CrossFlag } from '@provenance/analysis-core/heuristics/cross/types.js';
 import type { SameScopeExclusion } from '@provenance/analysis-core/coverage/cross-scope.js';
+import { exclusionCopy, EXCLUSION_PANEL_INTRO } from '@/lib/exclusion-copy.js';
 
 // ---------------------------------------------------------------------------
 // Severity chip colours (same mapping as SeverityChip in overview)
@@ -171,42 +172,39 @@ function SameScopeExclusionPanel({ exclusions }: { exclusions: SameScopeExclusio
       <h2 id="cross-exclusions-heading" className="text-base font-semibold mb-1">
         Not cross-compared
       </h2>
-      <p className="text-sm text-muted-foreground mb-3">
-        These submissions are the same repository: each archive contains the other&rsquo;s recorded
-        sessions, so a match between them says nothing about sharing between students.
-        Cross-comparison between them is not applicable. Every other pair was compared normally.
-      </p>
+      <p className="text-sm text-muted-foreground mb-3">{EXCLUSION_PANEL_INTRO}</p>
       <ul className="space-y-3" role="list">
-        {exclusions.map((ex) => (
-          <li
-            key={ex.bundleIds.join('|')}
-            className="rounded border bg-muted/30 p-3"
-            data-testid={`cross-scope-exclusion-${ex.bundleIds.join('|')}`}
-          >
-            <p className="text-sm font-medium">{ex.sourceFilenames.join(' · ')}</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Same repository lineage —{' '}
-              {ex.excludedPairCount === 1
-                ? '1 comparison not applicable'
-                : `${ex.excludedPairCount} comparisons not applicable`}
-              . Established by {ex.sharedCommits.length}{' '}
-              {ex.sharedCommits.length === 1 ? 'commit reference' : 'commit references'} shared
-              across these archives.
-            </p>
-            <ul className="mt-2 space-y-0.5" data-testid="cross-scope-exclusion-commits">
-              {ex.sharedCommits.slice(0, 5).map((key) => (
-                <li key={key} className="font-mono text-[11px] text-muted-foreground break-all">
-                  {key}
-                </li>
-              ))}
-              {ex.sharedCommits.length > 5 && (
-                <li className="text-[11px] text-muted-foreground italic">
-                  and {ex.sharedCommits.length - 5} more
-                </li>
-              )}
-            </ul>
-          </li>
-        ))}
+        {exclusions.map((ex) => {
+          const copy = exclusionCopy(ex);
+          return (
+            <li
+              key={ex.bundleIds.join('|')}
+              className="rounded border bg-muted/30 p-3"
+              data-testid={`cross-scope-exclusion-${ex.bundleIds.join('|')}`}
+            >
+              <p className="text-sm font-medium">{ex.sourceFilenames.join(' · ')}</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {copy.label} —{' '}
+                {ex.excludedPairCount === 1
+                  ? '1 comparison not applicable'
+                  : `${ex.excludedPairCount} comparisons not applicable`}
+                . Established by {copy.evidence.length} {copy.evidenceNoun} {copy.evidenceClause}.
+              </p>
+              <ul className="mt-2 space-y-0.5" data-testid="cross-scope-exclusion-commits">
+                {copy.evidence.slice(0, 5).map((key) => (
+                  <li key={key} className="font-mono text-[11px] text-muted-foreground break-all">
+                    {key}
+                  </li>
+                ))}
+                {copy.evidence.length > 5 && (
+                  <li className="text-[11px] text-muted-foreground italic">
+                    and {copy.evidence.length - 5} more
+                  </li>
+                )}
+              </ul>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );

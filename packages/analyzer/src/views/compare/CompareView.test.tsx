@@ -615,6 +615,7 @@ describe('CompareView - same-scope exclusions', () => {
     bundleIds: ['bundle-a', 'bundle-b'],
     sourceFilenames: ['student-a.zip', 'student-b.zip'],
     sharedCommits: ['repository:assumed-single ' + 'ab'.repeat(20)],
+    sharedSessions: [],
     excludedPairCount: 1,
   };
 
@@ -660,6 +661,7 @@ describe('CompareView - same-scope exclusions', () => {
       bundleIds: ['bundle-a', 'bundle-b', 'bundle-z'],
       sourceFilenames: ['student-a.zip', 'student-b.zip', 'student-z.zip'],
       sharedCommits: ['repository:assumed-single ' + 'cd'.repeat(20)],
+      sharedSessions: [],
       excludedPairCount: 3,
     };
     // Only bundle-a and bundle-b are loaded in the stub, so bundle-z is not

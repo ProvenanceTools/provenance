@@ -17,6 +17,7 @@ import { RowLink } from '../../components/a11y/RowLink.js';
 import type { CrossFlagDetailItem, CrossScopeExclusionItem } from '@provenance/shared/api-schemas';
 import type { CrossFlagFilters } from '../../api/queries.js';
 import { contributorsLabel } from '../../lib/contributor-display.js';
+import { exclusionCopy, EXCLUSION_PANEL_INTRO } from '@/lib/exclusion-copy.js';
 
 // ---------------------------------------------------------------------------
 // Severity badge
@@ -66,56 +67,53 @@ function CrossScopeExclusionPanel({ exclusions }: { exclusions: CrossScopeExclus
       <h2 id="cross-exclusions-heading" className="text-sm font-semibold text-gray-900">
         Not cross-compared
       </h2>
-      <p className="mt-1 text-xs text-gray-600">
-        These submissions are the same repository: each archive contains the other&rsquo;s recorded
-        sessions, so a match between them says nothing about sharing between students.
-        Cross-comparison between them is not applicable. Every other pair was compared normally.
-      </p>
+      <p className="mt-1 text-xs text-gray-600">{EXCLUSION_PANEL_INTRO}</p>
       <ul className="mt-3 space-y-2" role="list">
-        {exclusions.map((ex) => (
-          <li
-            key={ex.id}
-            className="rounded border border-gray-200 bg-white p-2"
-            data-testid={`cross-scope-exclusion-${ex.id}`}
-          >
-            <p className="text-xs font-medium text-gray-900">
-              {ex.members
-                .map(
-                  (m) =>
-                    // `fallbackStudent` covers a response that predates `contributors`.
-                    contributorsLabel(m.contributors, { fallbackStudent: m.student }) ||
-                    m.source_filename,
-                )
-                .join(' · ')}
-            </p>
-            <p className="mt-1 text-xs text-gray-600">
-              Same repository lineage —{' '}
-              {ex.excluded_pair_count === 1
-                ? '1 comparison not applicable'
-                : `${ex.excluded_pair_count} comparisons not applicable`}
-              {/* "commit references", not "commits": a mixed-scope proof lists
-                  the SAME sha under two repository keys, because neither key
-                  was observed by both sides. Counting those as two commits
-                  recorded in more than one archive would be a false claim, in
-                  the one place a grader looks for the evidence. */}
-              . Established by {ex.shared_commits.length}{' '}
-              {ex.shared_commits.length === 1 ? 'commit reference' : 'commit references'} shared
-              across these archives.
-            </p>
-            <ul className="mt-1.5 space-y-0.5" data-testid="cross-scope-exclusion-commits">
-              {ex.shared_commits.slice(0, 5).map((key) => (
-                <li key={key} className="font-mono text-[11px] text-gray-500 break-all">
-                  {key}
-                </li>
-              ))}
-              {ex.shared_commits.length > 5 && (
-                <li className="text-[11px] italic text-gray-500">
-                  and {ex.shared_commits.length - 5} more
-                </li>
-              )}
-            </ul>
-          </li>
-        ))}
+        {exclusions.map((ex) => {
+          const copy = exclusionCopy({
+            reason: ex.reason,
+            sharedCommits: ex.shared_commits,
+            // `?? []` covers a cached response written before migration 0032.
+            sharedSessions: ex.shared_sessions ?? [],
+          });
+          return (
+            <li
+              key={ex.id}
+              className="rounded border border-gray-200 bg-white p-2"
+              data-testid={`cross-scope-exclusion-${ex.id}`}
+            >
+              <p className="text-xs font-medium text-gray-900">
+                {ex.members
+                  .map(
+                    (m) =>
+                      // `fallbackStudent` covers a response that predates `contributors`.
+                      contributorsLabel(m.contributors, { fallbackStudent: m.student }) ||
+                      m.source_filename,
+                  )
+                  .join(' · ')}
+              </p>
+              <p className="mt-1 text-xs text-gray-600">
+                {copy.label} —{' '}
+                {ex.excluded_pair_count === 1
+                  ? '1 comparison not applicable'
+                  : `${ex.excluded_pair_count} comparisons not applicable`}
+                . Established by {copy.evidence.length} {copy.evidenceNoun} {copy.evidenceClause}.
+              </p>
+              <ul className="mt-1.5 space-y-0.5" data-testid="cross-scope-exclusion-commits">
+                {copy.evidence.slice(0, 5).map((key) => (
+                  <li key={key} className="font-mono text-[11px] text-gray-500 break-all">
+                    {key}
+                  </li>
+                ))}
+                {copy.evidence.length > 5 && (
+                  <li className="text-[11px] italic text-gray-500">
+                    and {copy.evidence.length - 5} more
+                  </li>
+                )}
+              </ul>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
