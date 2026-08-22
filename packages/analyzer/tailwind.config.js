@@ -1,6 +1,18 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
+  /**
+   * Explicitly class-driven, NOT the Tailwind default of `media`.
+   *
+   * The analyzer has no theme toggle and never sets a `dark` class, so the
+   * intended appearance is light everywhere. Under the default, `dark:`
+   * variants fire off the viewer's OS setting — and since only two of the
+   * ~120 components in `src/` carry any `dark:` variants at all, a staff
+   * member with their machine in dark mode saw those two go dark inside an
+   * otherwise light page. Pinning the strategy makes the unused variants
+   * inert instead of selectively active.
+   */
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {
