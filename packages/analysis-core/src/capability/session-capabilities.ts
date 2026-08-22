@@ -341,6 +341,22 @@ export function wasFileWatched(
   return everySessionComplete ? 'not_watched' : 'unknown';
 }
 
+/**
+ * Was this path excluded by the ASSIGNMENT, as opposed to merely unwatched?
+ *
+ * Spec §9.3 / R1. "No evidence exists for this file" and "no evidence exists
+ * for this file because the course excluded it" are different sentences, and
+ * only the second one is fair to put in front of someone adjudicating a case.
+ * `wasFileWatched` answers whether; this answers why.
+ *
+ * Deliberately false for a hard-excluded path: `.provenance/` and `.git/` are
+ * excluded by the protocol, not by anyone's course policy, and attributing that
+ * choice to the course would be false.
+ */
+export function ignoredByAssignment(path: string, scope: ResolvedScope): boolean {
+  return resolvePathRole(path, scope) === 'ignored';
+}
+
 // ---------------------------------------------------------------------------
 // Pairing item 2 with what the commit graph actually saw
 // ---------------------------------------------------------------------------

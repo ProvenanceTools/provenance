@@ -26,6 +26,7 @@ import {
   readBundleCapabilities,
   wasFileWatched,
   gitObservationGap,
+  ignoredByAssignment,
 } from './session-capabilities.js';
 import type { BundleCapabilityFacts } from './session-capabilities.js';
 
@@ -449,5 +450,35 @@ describe('wasFileWatched with a resolved scope (tier 1)', () => {
     // "in scope, no activity" must not be concluded. R2.
     const facts = factsWithFileScope({ watched: [], complete: false }, { scopeCapped: true });
     expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('unknown');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ignoredByAssignment — spec §9.3, R1
+// ---------------------------------------------------------------------------
+
+describe('ignoredByAssignment', () => {
+  const scopeRules = { track: ['src/'], ignore: ['*.class', 'vendor/'], attachments: ['logs/'] };
+
+  it('is true only for a path the course ignore list matches', () => {
+    expect(ignoredByAssignment('src/A.class', scopeRules)).toBe(true);
+    expect(ignoredByAssignment('vendor/dep.java', scopeRules)).toBe(true);
+    expect(ignoredByAssignment('src/Main.java', scopeRules)).toBe(false);
+    expect(ignoredByAssignment('logs/run.log', scopeRules)).toBe(false);
+  });
+
+  it("does not claim a hard-excluded path was the course's choice", () => {
+    // `.provenance/` is excluded by the protocol, not by the assignment. Saying
+    // "your course excluded this" about it would be false.
+    expect(ignoredByAssignment('.provenance/manifest.json', scopeRules)).toBe(false);
+  });
+
+  it('pairs with wasFileWatched to distinguish the two silences', () => {
+    const facts = factsWithFileScope({ watched: [], complete: false });
+    // Both are not_watched, but only one of them is the course's doing.
+    expect(wasFileWatched(facts, 'src/A.class', scopeRules)).toBe('not_watched');
+    expect(wasFileWatched(facts, 'README.md', scopeRules)).toBe('not_watched');
+    expect(ignoredByAssignment('src/A.class', scopeRules)).toBe(true);
+    expect(ignoredByAssignment('README.md', scopeRules)).toBe(false);
   });
 });
