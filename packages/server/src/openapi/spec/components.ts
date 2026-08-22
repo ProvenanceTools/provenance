@@ -502,6 +502,7 @@ export const components = {
         'repositoryAssumedSingle',
         'witnessing',
         'gitObservation',
+        'fileScope',
       ],
       properties: {
         identity: {
@@ -777,6 +778,7 @@ export const components = {
             'silentThoughCapable',
             'silentAndUnreported',
             'malformed',
+            'malformedProblems',
           ],
           properties: {
             availability: { type: 'string', enum: ['available', 'impossible', 'unknown'] },
@@ -796,6 +798,111 @@ export const components = {
             silentThoughCapable: { type: 'integer' },
             silentAndUnreported: { type: 'integer' },
             malformed: { type: 'integer' },
+            malformedProblems: {
+              type: 'array',
+              description:
+                'Every distinct reason a present value could not be read. A non-string ' +
+                'value and a string outside the closed enum are different ' +
+                'nonconformance, and a reader holding only `malformed` describes the ' +
+                'wrong one for one of them.',
+              items: { type: 'string', enum: ['not_a_string', 'unknown_value'] },
+            },
+          },
+        },
+        fileScope: {
+          type: 'object',
+          description:
+            'Which files this record was actually watching (collaboration spec 5.6 ' +
+            'item 1). It removes S25’s inference: "no events for Solver.java" is ' +
+            'otherwise ambiguous between nothing having happened in it and its never ' +
+            'having been watched, and nothing else in a bundle tells those apart. ' +
+            'NEVER a finding in either direction — `not_watched` is EXCULPATORY (the ' +
+            'recorder was not told to watch that file, a fact about the assignment ' +
+            'manifest, not about the student), and `unknown` / `reporting: ' +
+            'unreported` are the permanent state of every bundle recorded before the ' +
+            'field existed.',
+          required: [
+            'reporting',
+            'sessions',
+            'reportedSessions',
+            'incompleteSessions',
+            'unreportedSessions',
+            'malformedSessions',
+            'malformedProblems',
+            'watchedFiles',
+            'files',
+          ],
+          properties: {
+            reporting: {
+              type: 'string',
+              enum: ['reported', 'partial', 'unreported'],
+              description:
+                '`reported` — every session said which files it was watching. ' +
+                '`partial` — some did and some did not, so the watched set is a lower ' +
+                'bound. `unreported` — nobody said anything usable; the state of every ' +
+                'pre-5.6 bundle, and never a defect.',
+            },
+            sessions: { type: 'integer' },
+            reportedSessions: { type: 'integer' },
+            incompleteSessions: { type: 'integer' },
+            unreportedSessions: { type: 'integer' },
+            malformedSessions: { type: 'integer' },
+            malformedProblems: {
+              type: 'array',
+              description:
+                'Distinct reasons a present scope could not be read, by NAME. These ' +
+                'never quote the offending path — rejecting an absolute path or a ' +
+                'remote URL before it reaches a staff surface is the privacy check the ' +
+                'reader exists to perform.',
+              items: {
+                type: 'string',
+                enum: [
+                  'not_an_object',
+                  'watched_not_an_array',
+                  'complete_not_a_boolean',
+                  'path_not_a_string',
+                  'path_empty',
+                  'path_absolute',
+                  'path_escapes_scope',
+                  'path_has_colon',
+                ],
+              },
+            },
+            watchedFiles: {
+              type: 'array',
+              description:
+                'Union of every reported watched list. A LOWER BOUND unless reporting ' +
+                'is `reported` and no list was capped.',
+              items: { type: 'string' },
+            },
+            files: {
+              type: 'array',
+              description:
+                'One entry per submission_files path, in manifest order. Empty on a ' +
+                'legacy 1.0 bundle, which has no file set to ask the question about — ' +
+                'an absent question, not a negative answer.',
+              items: {
+                type: 'object',
+                required: ['path', 'watched', 'recordedActivity'],
+                properties: {
+                  path: { type: 'string' },
+                  watched: {
+                    type: 'string',
+                    enum: ['watched', 'not_watched', 'unknown'],
+                    description:
+                      '`not_watched` requires EVERY session to have reported a COMPLETE ' +
+                      'scope naming other files. A truncated list can prove `watched` ' +
+                      'and can never prove `not_watched`.',
+                  },
+                  recordedActivity: {
+                    type: 'boolean',
+                    description:
+                      'Whether this record holds any event for the path. Present so no ' +
+                      'surface says "no recorded activity" about a file that has some.',
+                  },
+                },
+              },
+            },
           },
         },
       },
