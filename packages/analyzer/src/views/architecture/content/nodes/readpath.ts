@@ -49,15 +49,19 @@ export const nodes: Record<string, ArchNode> = {
   },
   r_src: {
     title: 'Source tab',
-    body: 'The tab that has to work without the thing it displays. Submitted source bytes are stripped at ingest, so nothing here is read from stored file content. The file list and per-file verdicts are derived from the signed manifest compared against the on-disk hashes recorded in the event stream; because the manifest is signature-verified, the code trusts its sha for present files rather than re-hashing bytes that are gone.\n\nThe content shown is reconstructed by replaying the log to the end. For a file whose verdict is match, that reconstruction equals the submitted source; for a mismatch it is the recorded final state, which by definition differs from what was handed in. The single case reconstruction cannot reproduce (bytes altered without touching the manifest) was already caught at ingest and lives in the stored validation result.',
+    body: 'The tab that has to work without the thing it displays. Submitted source bytes are stripped at ingest, so nothing here is read from stored file content. The file list and per-file verdicts are derived from the signed manifest compared against the on-disk hashes recorded in the event stream; because the manifest is signature-verified, the code trusts its sha for present files rather than re-hashing bytes that are gone.\n\nThe content shown is reconstructed by replaying the log to the end, and the tab now refuses to overclaim what that reconstruction is. Its lede says in as many words that this pane is not the file that was submitted; for a file whose verdict is match it says only that the submitted code is EXPECTED to be identical to what is shown, because the hash agreeing is a statement about the last state the recorder observed on disk, not a byte-for-byte proof that the replay reproduced it. Reconstruction fidelity is not itself verified anywhere, so asserting equality would have been the tab quoting a guarantee no code makes. For a mismatch the pane is the recorded final state, which by definition differs from what was handed in.\n\nThe chain-integrity gate that decides whether any of those verdicts may be trusted is now READ rather than re-derived. getStoredChainIntact selects validation_results.check_3_status and passes a { chainIntact } gate down into submittedFileVerdicts; the tab used to run its own live runValidation(bundle) over the re-parsed blob, which is a second implementation of a question the ingest pipeline had already answered and stored. Two implementations of "did the chain verify" are two answers waiting to disagree, and the one a grader reads must be the one the validation tab shows.',
     invariant:
-      'The Source tab never reads stored source bytes; there are none. Verdicts come from the signed manifest; content is replayed from the log.',
+      'The Source tab never reads stored source bytes; there are none. Verdicts come from the signed manifest, the chain gate from the stored validation row, and content is replayed from the log — which is expected to match, never asserted to.',
     links: [
       {
         label: 'submitted-files.ts',
         href: `${GH}/packages/server/src/services/submissions/submitted-files.ts`,
       },
       { label: 'Source.tsx', href: `${GH}/packages/analyzer/src/views/submission/Source.tsx` },
+      {
+        label: 'validation.ts (getStoredChainIntact)',
+        href: `${GH}/packages/server/src/services/submissions/validation.ts`,
+      },
     ],
   },
   r_recomp: {
@@ -146,8 +150,8 @@ export const nodes: Record<string, ArchNode> = {
     ],
   },
   recon: {
-    title: 'reconstructFileWithProvenance',
-    body: 'Replays the edits for one file up to a global index and returns not just the resulting text but a provenance tag per position (typed, pasted, or arrived by external change) which is what lets the UI colour a line by how it came to exist.\n\nIt is honest about its own limits. When a file was reshaped by a large paste or an external edit its reconstruction is marked tainted at ingest, and the content route then returns an empty body with a warning rather than text it cannot fully account for. Reconstruction reads only the log; it never consulted stored source even before stripping made that impossible.\n\nTainted is not the only way there can be no answer. Where two contributors edited one file on branches the recorded evidence does not order, there is no single content at all, and the segment-based path reports that as its own state rather than replaying the wall-ordered interleaving of two machines\u2019 clocks \u2014 which would produce text that existed on neither. The analyzer\u2019s in-browser provider already distinguishes the three answers; the server read path still calls the linear entry point and therefore still resolves such a file by wall order, which is the remaining gap on this route.',
+    title: 'reconstructFileSegmentedWithProvenance',
+    body: 'Replays the edits for one file up to a global index and returns not just the resulting text but a provenance tag per position (typed, pasted, or arrived by external change) which is what lets the UI colour a line by how it came to exist.\n\nIt is honest about its own limits. When a file was reshaped by a large paste or an external edit its reconstruction is marked tainted at ingest, and the content route then returns an empty body with a warning rather than text it cannot fully account for. Reconstruction reads only the log; it never consulted stored source even before stripping made that impossible.\n\nTainted is not the only way there can be no answer. Where two contributors edited one file on branches the recorded evidence does not order, there is no single content at all, and the segment-based path reports that as its own state rather than replaying the wall-ordered interleaving of two machines\u2019 clocks \u2014 which would produce text that existed on neither. Both routes now distinguish the three answers. The server read path builds a real ReconstructionScope through reconstructionScopeFor(bundle, index) and calls the SEGMENTED entry point, so an unorderable file comes back as an empty body carrying FILE_RECONSTRUCTION_CONCURRENT or FILE_RECONSTRUCTION_UNKNOWN rather than as text. That was the last gap on this route, and closing it mattered because the alternative was not a missing feature: serving one branch, or the linearization of all of them with per-character attribution, puts a file that existed on nobody\u2019s disk in front of a grader as fact.\n\nThe unscoped reconstructFileWithProvenance still exists and is still reached \u2014 the segmented path delegates to it for any file no second contributor touched, and stats.ts, internal-move.ts and the Source tab\u2019s content extractor call it directly. None of those is an ambiguity-sensitive read: the first two are ingest-time analysis, and the third is explicitly labelled event_replay to the reader.',
     links: [
       {
         label: 'reconstruct-segments.ts',
@@ -156,6 +160,10 @@ export const nodes: Record<string, ArchNode> = {
       {
         label: 'reconstruct-file-provenance.ts',
         href: `${GH}/packages/analysis-core/src/index/reconstruct-file-provenance.ts`,
+      },
+      {
+        label: 'reconstruction.ts (server)',
+        href: `${GH}/packages/server/src/services/reconstruction.ts`,
       },
     ],
   },

@@ -42,7 +42,7 @@ digraph readpath {
     stamp [label="establishBundleTrust, then\nestablishBundleContributors\nstamps bundle.contributors IN PLACE —\ninside the cached region, so it costs\nonce per parse, never once per read"
            fillcolor="#1e1830" color="#9d7bf5"]
     idx   [label="EventIndex\nordered access, per-session views"]
-    recon [label="reconstructFileWithProvenance\nreplays edits to rebuild file content,\ntagging every line typed / pasted / external"]
+    recon [label="reconstructFileSegmentedWithProvenance\nreplays edits to rebuild file content, tagging every\nline typed / pasted / external. Answers in THREE states:\ndeterminate · concurrent · unknown — the server route\nreturns FILE_RECONSTRUCTION_CONCURRENT / _UNKNOWN with an\nempty body rather than linearizing two clocks."]
     ret   [label="{ bundle, index }" shape=note]
   }
 
@@ -56,6 +56,7 @@ digraph readpath {
   r_replay -> lsi [color="#e8559c"]
   r_recomp -> lsi [color="#e8559c"]
   r_src    -> fetch [label="own loadBundle + buildIndex —\nbypasses the LRU-cached index" color="#e8559c" style=dashed]
+  r_src    -> pgq [label="chain-integrity GATE read from the stored\nvalidation_results.check_3_status — the tab\nno longer re-derives it with a live runValidation,\nso both surfaces quote one answer" color="#e8559c"]
 
   lsi -> cache
   cache -> ret   [label="hit" color="#3fbf62"]
