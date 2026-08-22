@@ -1266,6 +1266,136 @@ export const CoverageFactsSchema = z.object({
 });
 export type CoverageFacts = z.infer<typeof CoverageFactsSchema>;
 
+// ---------------------------------------------------------------------------
+// The contributor stamp, on the wire (Tier 1.1 / Tier 2.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * `analysis-core`'s `BundleContributors`, in a shape JSON can carry.
+ *
+ * ## Why this is on the wire at all
+ *
+ * `buildReconstructionScope` needs two things: the event stream, and who
+ * produced each session. The analyzer pages the whole event stream already —
+ * everything the observed DAG and the happens-before relation read (`seq`,
+ * `kind`, `wall`, `data`) is in an `EventRow`. The stamp was the ONLY missing
+ * input, and without it the server-backed Replay tab had to assume one
+ * contributor and therefore linearized two partners' unordered work into a
+ * single keystroke sequence, for a submission `/local` refuses to linearize.
+ *
+ * The server establishes this stamp on every read already
+ * (`loadSubmissionIndex` → `establishBundleContributors`); it simply was not
+ * sent.
+ *
+ * ## Why `by_session` is an ARRAY
+ *
+ * `BundleContributors.bySession` is a `ReadonlyMap`, and a Map serializes to
+ * `{}` — a wire shape that reports "no contributors" for every submission,
+ * which is the quiet-and-false claim `CoverageFactsSchema` above was also
+ * written to avoid. It is a list of total, per-session verdicts here, and it is
+ * NOT derivable from `contributors[]`: the grouped form deliberately drops the
+ * per-session arm detail (what an unverifiable session claimed, and why we did
+ * not stand behind it).
+ *
+ * ## Nothing here is a finding
+ *
+ * `unverifiable` and `unattributed` are different facts and must never be summed
+ * into one "problem" count: a claim we could not stand behind is a finding, a
+ * student who never enrolled is not. `root_key_configured: false` means NO
+ * IDENTITY CHECK WAS POSSIBLE — one unset environment variable — and rendering
+ * it as failed verification turns a deployment fact into a class-wide integrity
+ * finding. See `analysis-core/src/identity/types.ts` for the full contract.
+ */
+const CertWindowStatusSchema = z.union([
+  z.object({ in_window: z.literal(true) }),
+  z.object({
+    in_window: z.literal(false),
+    reason: z.enum(['before_valid_from', 'after_valid_until', 'unparseable_timestamp']),
+  }),
+]);
+
+/**
+ * Why an identity block that was PRESENT did not produce an attribution.
+ *
+ * `no_root_key` and `no_trust_anchor` mean **we could not check**;
+ * `anchor_not_root_signed` and `chain_failed` mean **we checked and it failed**.
+ * A UI that wants to say "this identity does not verify" must read the KIND, not
+ * merely that the session is unverifiable.
+ *
+ * `error` is log-core's `IdentityChainError` carried opaquely. It is a developer
+ * diagnostic that no staff surface renders, and restating its dozen arms here
+ * would be a second copy of a log-core union free to drift from the original.
+ */
+const IdentityUnverifiableReasonSchema = z.object({
+  kind: z.enum(['no_root_key', 'no_trust_anchor', 'anchor_not_root_signed', 'chain_failed']),
+  detail: z.string(),
+  /** Present only for `no_trust_anchor`. */
+  required: z.enum(['course_cert', 'institution_cert']).optional(),
+  error: z.unknown().optional(),
+});
+
+export const WireSessionContributorSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('attributed'),
+    session_id: z.string(),
+    contributor_key: z.string(),
+    /** The verified roster reference. Opaque; never a name, SID, or email. */
+    student_ref: z.string(),
+    identity_version: z.enum(['2.0', '2.1']),
+    scope: z.enum(['course', 'institution']),
+    scope_id: z.string(),
+    student_pubkey: z.string(),
+    cert_window: CertWindowStatusSchema,
+    credential_window: CertWindowStatusSchema,
+  }),
+  z.object({
+    kind: z.literal('unverifiable'),
+    session_id: z.string(),
+    /** A singleton `unverifiable:<sessionId>` — never the ref it claims. */
+    contributor_key: z.string(),
+    /** What the artifact claimed, verbatim. Display only, never a grouping key. */
+    claimed_student_ref: z.string().nullable(),
+    claimed_scope_id: z.string().nullable(),
+    claimed_identity_version: z.string().nullable(),
+    reason: IdentityUnverifiableReasonSchema,
+  }),
+  z.object({
+    kind: z.literal('unattributed'),
+    session_id: z.string(),
+    /** A singleton `unattributed:<sessionId>`. Two of these are never grouped. */
+    contributor_key: z.string(),
+  }),
+]);
+export type WireSessionContributor = z.infer<typeof WireSessionContributorSchema>;
+
+export const WireContributorSchema = z.object({
+  key: z.string(),
+  kind: z.enum(['attributed', 'unverifiable', 'unattributed']),
+  /** Non-null ONLY for `attributed`. A claim is not a `student_ref`. */
+  student_ref: z.string().nullable(),
+  identity_version: z.enum(['2.0', '2.1']).nullable(),
+  scope: z.enum(['course', 'institution']).nullable(),
+  scope_id: z.string().nullable(),
+  /** Sessions that resolved to this contributor, in bundle order. */
+  session_ids: z.array(z.string()),
+});
+export type WireContributor = z.infer<typeof WireContributorSchema>;
+
+export const BundleContributorStampSchema = z.object({
+  /** Total over the bundle's sessions — no session is omitted. */
+  by_session: z.array(WireSessionContributorSchema),
+  /** Distinct contributors, in order of first appearance. */
+  contributors: z.array(WireContributorSchema),
+  /** `false` means no identity check was possible at all on this deployment. */
+  root_key_configured: z.boolean(),
+  counts: z.object({
+    attributed: z.number().int(),
+    unverifiable: z.number().int(),
+    unattributed: z.number().int(),
+  }),
+});
+export type BundleContributorStamp = z.infer<typeof BundleContributorStampSchema>;
+
 export const SubmissionSummarySchema = z.object({
   id: z.string().uuid(),
   /**
@@ -1332,6 +1462,22 @@ export const SubmissionSummarySchema = z.object({
    * renders that as "not available", never as zeroes.
    */
   coverage: CoverageFactsSchema.optional(),
+  /**
+   * Who produced each session — the input the segmented reconstruction (Tier
+   * 2.2) needs and the paged `EventRow`s cannot carry. Derived from the same
+   * `loadSubmissionIndex` call that produces `sessions[]`, so it costs no extra
+   * query and no extra blob parse.
+   *
+   * Distinct from {@link SubmissionSummarySchema.contributors}, which is the
+   * roster-joined, scored, per-PERSON view (D9/D14). This one is the raw
+   * per-SESSION verdict the analysis engine reasons over.
+   *
+   * Optional so a client talking to a server that predates it keeps parsing.
+   * Absence means ONE thing — the server did not send it — and the analyzer
+   * reads that as "unstamped", which yields the solo reconstruction scope: the
+   * behaviour that predates this, never a refusal to answer.
+   */
+  contributor_stamp: BundleContributorStampSchema.optional(),
 });
 export type SubmissionSummary = z.infer<typeof SubmissionSummarySchema>;
 
