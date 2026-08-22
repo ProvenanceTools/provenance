@@ -41,6 +41,33 @@
  * `commands/seal.ts`. A classic sealed bundle keeps the same 1.1 manifest, the
  * same canonical bytes and the same signature it has today.
  *
+ * ## Path scope, and inheriting `commands/seal.ts`'s hard-won invariants
+ *
+ * The `files_under_review` exact list is gone — a course now names a folder
+ * (`src/`) or a suffix (`*.java`) via a {@link ResolvedScope}, resolved from the
+ * course manifest by `scopeFromManifest`. A rule entry cannot be enumerated, so
+ * this module walks the workspace (via the shared `workspace-walk.ts`, the same
+ * walk `commands/seal.ts` uses) and assigns each file a role with
+ * `resolvePathRole`, exactly as the classic seal does — otherwise a course
+ * scoped to `src/` would get a rolling manifest that lists NOTHING, and the two
+ * seals of the same session would disagree about what was under review.
+ *
+ * `missing` is an AFFIRMATIVE claim about the student — "this file was named and
+ * is not there" — read by staff in academic-integrity proceedings, so it is
+ * reachable from exactly ONE condition: an EXACT `scope.track` entry whose read
+ * fails with ENOENT. A rule entry asserts nothing about any particular file
+ * existing, so a rule match that vanishes is silently dropped, never `missing`.
+ * A walk-discovered file that cannot be read (permission error, race, a
+ * directory changing shape underneath the walk), a path that resolves outside
+ * the workspace root (a student's `ln -s ~/shared/x x`, or a `..` in an exact
+ * entry), and a duplicate real-path collision between an exact entry and a
+ * file the walk already sealed under a different spelling are all DROPPED —
+ * never recorded `missing`. Unlike `commands/seal.ts`, this module has no
+ * `SealWarnings` surface to raise a flag on: a rolling reseal is a background
+ * operation with no user-facing "seal now" action to attach a warning banner
+ * to, so a drop here is silent rather than disclosed. The property that
+ * matters — never a false accusation — holds either way.
+ *
  * ## Atomicity, and the window that cannot be closed
  *
  * A rolling manifest is rewritten every ~100 events into a directory that is
@@ -63,6 +90,19 @@
  * `{ kind: 'error' }` (CLAUDE.md: errors are values when expected). Nothing here
  * throws, so a checkpoint's sign-and-write cannot be aborted by the seal, and
  * the session records on.
+ *
+ * ## Cadence and cost
+ *
+ * This is called at session start, after every checkpoint (every ~100 recorded
+ * entries — `session-registry.ts`'s `CHECKPOINT_INTERVAL`), and once more at
+ * `dispose()` with `final: true`. Path-scope's walk therefore runs far more
+ * often than `commands/seal.ts`'s single walk at submission time: every
+ * checkpoint now recurses the whole workspace tree (pruning only `.git/` and
+ * `.provenance/`) and reads+hashes every in-scope file, where the pre-path-scope
+ * version only read the exact files named in `files_under_review`. See this
+ * module's test file and the task report for a measurement; no caching was
+ * added here without being asked, per the task's instruction to report the
+ * cost rather than invent a fix.
  */
 
 import * as fsPromises from 'node:fs/promises';
@@ -73,10 +113,13 @@ import {
   signBundleManifest,
   rollingManifestFilenames,
   ROLLING_MANIFEST_FORMAT_VERSION,
+  resolvePathRole,
+  isExactEntry,
 } from '@provenance/log-core';
-import type { BundleManifest, SubmissionFileEntry } from '@provenance/log-core';
+import type { BundleManifest, SubmissionFileEntry, ResolvedScope } from '@provenance/log-core';
 import { atomicWriteFilePair } from './atomic-write.js';
 import type { AtomicWriteFs } from './atomic-write.js';
+import { walkWorkspace, hasHardExcludedSegment } from './workspace-walk.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -94,12 +137,14 @@ export type RollingSealOptions = {
   prevSessionId: string | null;
   /** Absolute path of this session's `.slog`. Its `.meta` is `${slogPath}.meta`. */
   slogPath: string;
-  /** Assignment root, for resolving `filesUnderReview` (which are relative to it). */
+  /** Assignment root, for resolving the scope (rule matches are relative to it). */
   assignmentRoot: string;
   assignmentId: string;
   semester: string;
-  /** `files_under_review` from the verified course manifest. */
-  filesUnderReview: readonly string[];
+  /** The resolved scope from the course manifest. Replaces the old exact-path list. */
+  scope: ResolvedScope;
+  /** Whether the recorder's expected-content cap refused an in-scope path this session. */
+  scopeCapped: boolean;
   /** This session's ed25519 private key. 32 bytes. */
   sessionPrivkey: Uint8Array;
   /**
@@ -159,21 +204,227 @@ async function sha256OfFile(filePath: string): Promise<string> {
   }
 }
 
-/** Read one `files_under_review` entry's on-disk state, or mark it missing. */
-async function readSubmissionFile(
-  workspaceRoot: string,
-  relPath: string,
-): Promise<SubmissionFileEntry> {
+type TrackedFile =
+  | { path: string; status: 'present'; sha256: string }
+  | { path: string; status: 'missing'; sha256: null };
+
+/**
+ * `readTrackedFile`'s full result set, including the two outcomes that must
+ * NEVER become a `TrackedFile`: a path whose existence could not actually be
+ * determined (`unreadable`), and a path that resolves outside the workspace
+ * root (`out_of_workspace`). Mirrors `commands/seal.ts`'s `ReadResult` split —
+ * `missing` is the only affirmative claim about the student in this whole
+ * type, so it is reachable from exactly ONE condition, ENOENT, and every other
+ * way a read can fail has its own non-accusatory outcome instead.
+ */
+type ReadResult =
+  | TrackedFile
+  | { path: string; status: 'unreadable' }
+  | { path: string; status: 'out_of_workspace' };
+
+/**
+ * Where a candidate path really lives relative to the workspace root, after
+ * resolving ALL symlinks on BOTH sides. See `commands/seal.ts`'s
+ * `resolveContainment` for the full reasoning (both sides must be realpath'd,
+ * this fails CLOSED on a resolution error, and the syscall equivalence that
+ * makes failing closed free) — reproduced here rather than imported because
+ * only `workspace-walk.ts`'s walk itself was extracted to be shared; this
+ * check stays a local implementation of the same rule.
+ */
+type Containment =
+  | { kind: 'inside' }
+  | { kind: 'outside' }
+  | { kind: 'unresolved'; code: string | undefined };
+
+async function resolveContainment(realRoot: string, absPath: string): Promise<Containment> {
+  let realPath: string;
   try {
-    const bytes = await fsPromises.readFile(path.join(workspaceRoot, relPath));
+    realPath = await fsPromises.realpath(absPath);
+  } catch (e) {
+    return { kind: 'unresolved', code: (e as NodeJS.ErrnoException).code };
+  }
+  return realPath === realRoot || realPath.startsWith(realRoot + path.sep)
+    ? { kind: 'inside' }
+    : { kind: 'outside' };
+}
+
+/**
+ * Read one tracked path's on-disk state: present-with-hash, missing (ENOENT
+ * only), unreadable (any other read failure — permission denied, a directory
+ * where a file was expected, a non-regular file, a symlink cycle, ...), or
+ * out-of-workspace (resolves, after following every symlink, outside the
+ * workspace root). Mirrors `commands/seal.ts`'s `readReviewedFile`, minus the
+ * raw bytes (the rolling seal only ever needs the hash, never a zip payload).
+ */
+async function readTrackedFile(
+  workspaceRoot: string,
+  workspaceRealRoot: string,
+  relPath: string,
+): Promise<ReadResult> {
+  const abs = path.join(workspaceRoot, relPath);
+  const containment = await resolveContainment(workspaceRealRoot, abs);
+  if (containment.kind === 'outside') {
+    // Never `missing` — see `commands/seal.ts`'s Critical 1 for why. The
+    // overwhelmingly common way to reach this is not an attack: a student's
+    // `ln -s ~/shared/data.csv data.csv` with `data.csv` an exact `track`
+    // entry.
+    return { path: relPath, status: 'out_of_workspace' };
+  }
+  if (containment.kind === 'unresolved') {
+    // Fail closed: the path was NOT verified, so it is not opened. Classify it
+    // exactly as the read itself would have.
+    return containment.code === 'ENOENT'
+      ? { path: relPath, status: 'missing', sha256: null }
+      : { path: relPath, status: 'unreadable' };
+  }
+  // Only a REGULAR file may be read — a FIFO would block `readFile` forever
+  // with no timeout anywhere in this call stack, and this runs on every
+  // checkpoint, so hanging here would hang the whole session. `stat` never
+  // blocks on a FIFO; only `open` does.
+  let isRegularFile: boolean;
+  try {
+    isRegularFile = (await fsPromises.stat(abs)).isFile();
+  } catch (e) {
+    const statCode = (e as NodeJS.ErrnoException).code;
+    return statCode === 'ENOENT'
+      ? { path: relPath, status: 'missing', sha256: null }
+      : { path: relPath, status: 'unreadable' };
+  }
+  if (!isRegularFile) {
+    return { path: relPath, status: 'unreadable' };
+  }
+  try {
+    const bytes = await fsPromises.readFile(abs);
     return {
       path: relPath,
       status: 'present',
       sha256: createHash('sha256').update(bytes).digest('hex'),
     };
-  } catch {
-    return { path: relPath, status: 'missing', sha256: null };
+  } catch (e) {
+    // `missing` may only be minted for the one errno that actually means "this
+    // file does not exist": ENOENT. Every other code — EACCES, EISDIR, ELOOP,
+    // EMFILE, ... — means the file's existence is either known-true or simply
+    // undetermined, and reporting `missing` for any of those would be a false
+    // claim about the student.
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      return { path: relPath, status: 'missing', sha256: null };
+    }
+    return { path: relPath, status: 'unreadable' };
   }
+}
+
+/**
+ * Every in-scope file's current on-disk state, as `SubmissionFileEntry`s.
+ *
+ * Same three-part shape as `commands/seal.ts` step 3:
+ *   1. Walk the workspace (shared `workspace-walk.ts`), assign each file a
+ *      role via `resolvePathRole`, and read the ones that are `reviewed` or
+ *      `attachment`. A walk-discovered path that cannot be read is DROPPED,
+ *      never recorded `missing` — a rule entry asserts nothing about any
+ *      particular file existing.
+ *   2. Every EXACT `scope.track` entry the walk did not already sight gets its
+ *      own read attempt, in `scope.track` order for stable output. Only THIS
+ *      loop may mint a `missing` record, and only for its own ENOENT.
+ *   3. An exact entry whose real path collides with a file the walk already
+ *      sealed under a different spelling is DROPPED (the bytes are not lost —
+ *      sealed under the other path — but the duplicate claim is not kept).
+ *
+ * Ordered, not `Promise.all`: the manifest's `submission_files` order must be
+ * stable across checkpoints, otherwise the canonical bytes churn for no
+ * reason.
+ */
+async function collectSubmissionFiles(
+  workspaceRoot: string,
+  scope: ResolvedScope,
+): Promise<SubmissionFileEntry[]> {
+  let workspaceRealRoot: string;
+  try {
+    workspaceRealRoot = await fsPromises.realpath(workspaceRoot);
+  } catch {
+    // Fail CLOSED, matching `resolveContainment`: if the root itself cannot be
+    // realpath'd, every candidate's real form will fail to match this lexical
+    // fallback, so every candidate is rejected as `outside` rather than opened
+    // unverified.
+    workspaceRealRoot = path.resolve(workspaceRoot);
+  }
+
+  const walkResult = await walkWorkspace(workspaceRoot);
+
+  const sightedInScope = new Set<string>();
+  const found: Array<TrackedFile & { role: 'reviewed' | 'attachment' }> = [];
+
+  for (const rel of walkResult.paths) {
+    const role = resolvePathRole(rel, scope);
+    if (role !== 'reviewed' && role !== 'attachment') continue;
+    // Recorded as sighted BEFORE the read is attempted — see
+    // `commands/seal.ts` fix round 2, Important 1 — so a file the walk saw but
+    // could not re-open is never retried by the exact-entry loop below into a
+    // false `missing`.
+    sightedInScope.add(rel);
+    const result = await readTrackedFile(workspaceRoot, workspaceRealRoot, rel);
+    if (result.status !== 'present') {
+      // 'missing' (vanished between listing and reading), 'unreadable', or
+      // 'out_of_workspace' (unreachable via a walk-discovered path in
+      // practice, since the walk only yields real, non-symlink dirents, but
+      // classified honestly regardless). Never recorded — this path was
+      // discovered by the walk, not asserted by the manifest.
+      continue;
+    }
+    found.push({ ...result, role });
+  }
+
+  // Real-path cache for the exact-entry dedupe below. Lazy: a session with no
+  // exact entry colliding with an already-walked file never calls `realpath`
+  // here at all.
+  const realPathCache = new Map<string, string>();
+  async function realPathOf(relPath: string): Promise<string> {
+    const cached = realPathCache.get(relPath);
+    if (cached !== undefined) return cached;
+    let real: string;
+    try {
+      real = await fsPromises.realpath(path.join(workspaceRoot, relPath));
+    } catch {
+      real = path.resolve(workspaceRoot, relPath);
+    }
+    realPathCache.set(relPath, real);
+    return real;
+  }
+
+  for (const entry of scope.track) {
+    if (!isExactEntry(entry)) continue;
+    if (resolvePathRole(entry, scope) !== 'reviewed') continue;
+    // The walk's own directory-level pruning never sees an EXACT entry that
+    // names a path inside a nested `.git/`/`.provenance/` — this loop reads
+    // directly by string, bypassing that pruning entirely.
+    if (hasHardExcludedSegment(entry)) continue;
+    if (sightedInScope.has(entry)) continue;
+
+    const result = await readTrackedFile(workspaceRoot, workspaceRealRoot, entry);
+    if (result.status === 'out_of_workspace' || result.status === 'unreadable') {
+      // DROPPED, never `missing` — see `readTrackedFile`'s docstring.
+      continue;
+    }
+    if (result.status === 'present') {
+      const candidateReal = await realPathOf(entry);
+      let duplicate = false;
+      for (const f of found) {
+        if (f.status !== 'present') continue;
+        if ((await realPathOf(f.path)) === candidateReal) {
+          duplicate = true;
+          break;
+        }
+      }
+      if (duplicate) continue;
+    }
+    found.push({ ...result, role: 'reviewed' });
+  }
+
+  return found.map((f) =>
+    f.status === 'present'
+      ? { path: f.path, status: 'present', sha256: f.sha256, role: f.role }
+      : { path: f.path, status: 'missing', sha256: null, role: f.role },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -185,8 +436,8 @@ async function readSubmissionFile(
  *
  * Steps:
  *   1. Hash the `.slog` and `.slog.meta` as they currently stand on disk.
- *   2. Hash every `files_under_review` entry; absent ones are recorded
- *      `status: 'missing'`, exactly as the classic seal records them.
+ *   2. Walk the workspace and resolve every in-scope file's on-disk state —
+ *      see `collectSubmissionFiles`.
  *   3. Build a 1.2 manifest covering this one session.
  *   4. Canonicalize + sign with this session's own private key, via the same
  *      `signBundleManifest` the classic seal uses — so both shapes are produced
@@ -204,7 +455,8 @@ export async function writeRollingSeal(opts: RollingSealOptions): Promise<Rollin
     assignmentRoot,
     assignmentId,
     semester,
-    filesUnderReview,
+    scope,
+    scopeCapped,
     sessionPrivkey,
     extensionHash,
   } = opts;
@@ -215,13 +467,8 @@ export async function writeRollingSeal(opts: RollingSealOptions): Promise<Rollin
     const slogSha256 = await sha256OfFile(slogPath);
     const metaSha256 = await sha256OfFile(`${slogPath}.meta`);
 
-    // Step 2: on-disk state of the reviewed files. Ordered, not Promise.all —
-    // the manifest's submission_files order must be stable across checkpoints,
-    // otherwise the canonical bytes churn for no reason.
-    const submissionFiles: SubmissionFileEntry[] = [];
-    for (const rel of filesUnderReview) {
-      submissionFiles.push(await readSubmissionFile(assignmentRoot, rel));
-    }
+    // Step 2: walk the workspace and resolve every in-scope file.
+    const submissionFiles = await collectSubmissionFiles(assignmentRoot, scope);
 
     // Step 3: exactly one session, non-null id, matching the filename below.
     const manifest: BundleManifest = {
@@ -238,6 +485,12 @@ export async function writeRollingSeal(opts: RollingSealOptions): Promise<Rollin
         },
       ],
       submission_files: submissionFiles,
+      // OMITTED entirely unless capped, never written as `false`. An absent
+      // key and a `false` value canonicalize — and therefore hash — to two
+      // different byte strings, so writing `false` explicitly would silently
+      // change the signed message from what a course whose cap never bit
+      // would otherwise produce.
+      ...(scopeCapped ? { scope_capped: true } : {}),
       // OMITTED entirely unless final, never written as `final: false`. A
       // non-final rolling manifest must stay byte-identical to what 1.2 emitted
       // before this field existed: the canonical bytes are the signed message,

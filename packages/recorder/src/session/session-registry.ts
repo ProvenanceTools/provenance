@@ -469,6 +469,17 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     encryptedPrivkey,
   });
 
+  // Step 4c-pre: Resolve the course's path scope, and construct this session's
+  // expected-content registry. Moved here (ahead of step 11, where doc-wiring
+  // and fs-watcher also need it) because the rolling seal below closes over it
+  // too, and its first rewrite happens at step 6c — well before step 11 runs.
+  // Computed once so the rolling seal, the classic seal, doc-wiring, and
+  // fs-watcher all resolve the SAME scope and share the SAME registry instance
+  // for this session; two different registries would let `capHit()` disagree
+  // with what the recorder actually refused.
+  const scope = scopeFromManifest(manifest);
+  const expectedContentRegistry = new ExpectedContentRegistry(scope);
+
   // Step 4c: The ROLLING SEAL (program spec §8). A git-submitted assignment has
   // no seal step, so the recorder rewrites this session's own
   // `.provenance/manifest-<session_id>.json` + `.sig` on every checkpoint —
@@ -547,7 +558,8 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
         assignmentRoot,
         assignmentId: manifest.assignment_id,
         semester: manifest.semester,
-        filesUnderReview: manifest.files_under_review,
+        scope,
+        scopeCapped: expectedContentRegistry.capHit(),
         sessionPrivkey: keypair.privateKey,
         extensionHash: await getExtensionHashOnce(),
         ...(isFinal ? { final: true } : {}),
@@ -698,8 +710,8 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   };
 
   // Step 11: Start doc-event wiring (PRD §4.2 + §4.3 paste detection).
-  const scope = scopeFromManifest(manifest);
-  const expectedContentRegistry = new ExpectedContentRegistry(scope);
+  // `scope` and `expectedContentRegistry` were already constructed at step
+  // 4c-pre, ahead of the rolling seal's first rewrite at step 6c.
 
   // ExplanationTagger for formatter/git explanation of external changes.
   const explanationTagger = new ExplanationTagger({ getNow: () => clock.now() });
