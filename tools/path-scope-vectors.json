@@ -44,6 +44,8 @@
     { "entry": "src/*.java", "problem": "bad_wildcard" },
     { "entry": "**/a.java", "problem": "bad_wildcard" },
     { "entry": "*", "problem": "bad_wildcard" },
+    { "entry": "*.java/", "problem": "bad_wildcard" },
+    { "entry": "*/", "problem": "bad_wildcard" },
     { "entry": "a?.java", "problem": "forbidden_char" },
     { "entry": "a[0-9].java", "problem": "forbidden_char" },
     { "entry": "{a,b}.java", "problem": "forbidden_char" },

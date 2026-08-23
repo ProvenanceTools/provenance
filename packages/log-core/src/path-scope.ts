@@ -172,6 +172,21 @@ export function validateScopeEntry(entry: string): ScopeEntryProblem | null {
   if (entry === '*') {
     return { kind: 'bad_wildcard', detail: 'A leading "*" must be followed by a suffix.' };
   }
+  // A suffix entry that also ends in "/" validates as legal but is DEAD: the
+  // matcher tests the directory form first, so `*.java/` can only ever match a
+  // path that literally begins `*.java/`, which no workspace-relative path
+  // does. A course that wrote it would sign a manifest that watches nothing and
+  // find out weeks later. Rejecting at parse time is the whole point of this
+  // function — the two forms are mutually exclusive, so asking for both is
+  // always a mistake, never a shorthand.
+  if (entry.startsWith('*') && entry.endsWith('/')) {
+    return {
+      kind: 'bad_wildcard',
+      detail:
+        'A leading "*" matches a filename suffix, so the entry may not also end with "/". ' +
+        'Write "*.java" to match files by suffix, or "java/" to match a directory.',
+    };
+  }
 
   for (const c of FORBIDDEN_CHARS) {
     if (entry.includes(c)) {

@@ -87,6 +87,15 @@ describe('validateScopeEntry', () => {
     expect(validateScopeEntry('*')?.kind).toBe('bad_wildcard');
   });
 
+  it('rejects a suffix entry that also ends in "/" — legal-looking but dead', () => {
+    // `matchesScopeEntry` tests the directory form FIRST, so `*.java/` can only
+    // ever match a path literally starting `*.java/`. Accepting it signs a
+    // manifest that watches nothing.
+    expect(validateScopeEntry('*.java/')?.kind).toBe('bad_wildcard');
+    expect(validateScopeEntry('*/')?.kind).toBe('bad_wildcard');
+    expect(matchesScopeEntry('src/Main.java', '*.java/')).toBe(false);
+  });
+
   it('rejects glob metacharacters we do not implement', () => {
     expect(validateScopeEntry('a?.java')?.kind).toBe('forbidden_char');
     expect(validateScopeEntry('a[0-9].java')?.kind).toBe('forbidden_char');
