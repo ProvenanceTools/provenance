@@ -71,7 +71,19 @@ import {
   signCheckpoint,
   readRepositoryDiscriminator,
 } from '@provenance/log-core';
-import type { SessionKeypair } from '@provenance/log-core';
+import type { SessionKeypair, ResolvedScope } from '@provenance/log-core';
+
+/**
+ * Build a {@link ResolvedScope} from a flat exact-path list, matching the
+ * pre-path-scope `filesUnderReview` shape every fixture in this file still
+ * hands in: every entry is an exact `track` path, nothing is ignored, and
+ * nothing is an attachment. Mirrors `scopeFromManifest`'s 1.x-manifest default
+ * (see `packages/log-core/src/manifest.ts`), which is the production behaviour
+ * this file is pinning.
+ */
+function scopeOf(filesUnderReview: readonly string[]): ResolvedScope {
+  return { track: filesUnderReview, ignore: [], attachments: [] };
+}
 
 // The analyzer's REAL read path.
 import {
@@ -432,7 +444,8 @@ async function buildSealedBundle(opts: {
     provenanceDir,
     assignmentId: ASSIGNMENT_ID,
     semester: SEMESTER,
-    filesUnderReview,
+    scope: scopeOf(filesUnderReview),
+    scopeCapped: false,
     // The seal signs with the ACTIVE (most recent) session's private key.
     sessionPrivkey: sessions[sessions.length - 1]!.keypair.privateKey,
     sessionPubkeyHex: sessions[sessions.length - 1]!.keypair.publicKeyHex,
@@ -452,6 +465,10 @@ async function buildSealedBundle(opts: {
     orphanedMeta: false,
     emptySession: false,
     orphanedRollingSeal: false,
+    unreadableInScopeFile: false,
+    unreadableScopeDirectory: false,
+    duplicateEntryDropped: false,
+    outOfWorkspacePathRejected: false,
   });
 
   return {
@@ -1082,7 +1099,8 @@ async function buildRollingSealedBundle(opts: {
       assignmentRoot: root,
       assignmentId: ASSIGNMENT_ID,
       semester: SEMESTER,
-      filesUnderReview,
+      scope: scopeOf(filesUnderReview),
+      scopeCapped: false,
       sessionPrivkey: recorded.keypair.privateKey,
       extensionHash: EXTENSION_HASH,
       ...(sealIsFinal ? { final: true } : {}),
@@ -1223,7 +1241,8 @@ describe('rolling seal → analysis-core load + validate (git-submitted shape)',
           provenanceDir,
           assignmentId: ASSIGNMENT_ID,
           semester: SEMESTER,
-          filesUnderReview: [...recorded.finalContent.keys()],
+          scope: scopeOf([...recorded.finalContent.keys()]),
+          scopeCapped: false,
           sessionPrivkey: recorded.keypair.privateKey,
           sessionPubkeyHex: recorded.keypair.publicKeyHex,
           computeExtensionHash: async () => EXTENSION_HASH,
@@ -1251,7 +1270,8 @@ describe('rolling seal → analysis-core load + validate (git-submitted shape)',
         assignmentRoot: root,
         assignmentId: ASSIGNMENT_ID,
         semester: SEMESTER,
-        filesUnderReview: [...recorded.finalContent.keys()],
+        scope: scopeOf([...recorded.finalContent.keys()]),
+        scopeCapped: false,
         sessionPrivkey: recorded.keypair.privateKey,
         extensionHash: EXTENSION_HASH,
       });
@@ -1288,7 +1308,8 @@ describe('rolling seal → analysis-core load + validate (git-submitted shape)',
         provenanceDir: scenario.provenanceDir,
         assignmentId: ASSIGNMENT_ID,
         semester: SEMESTER,
-        filesUnderReview: [...scenario.finalContent.keys()],
+        scope: scopeOf([...scenario.finalContent.keys()]),
+        scopeCapped: false,
         sessionPrivkey: scenario.sessions[0]!.keypair.privateKey,
         sessionPubkeyHex: scenario.sessions[0]!.keypair.publicKeyHex,
         computeExtensionHash: async () => EXTENSION_HASH,
@@ -1621,7 +1642,8 @@ async function openLiveSession(opts: {
         assignmentRoot: path.dirname(provenanceDir),
         assignmentId: ASSIGNMENT_ID,
         semester: SEMESTER,
-        filesUnderReview: [...finalContent.keys()],
+        scope: scopeOf([...finalContent.keys()]),
+        scopeCapped: false,
         sessionPrivkey: keypair.privateKey,
         extensionHash: EXTENSION_HASH,
       });
@@ -2254,7 +2276,8 @@ describe('a both-shapes bundle keeps WHOLE-FILE semantics', () => {
       provenanceDir: scenario.provenanceDir,
       assignmentId: ASSIGNMENT_ID,
       semester: SEMESTER,
-      filesUnderReview: [...scenario.finalContent.keys()],
+      scope: scopeOf([...scenario.finalContent.keys()]),
+      scopeCapped: false,
       sessionPrivkey: scenario.sessions[0]!.keypair.privateKey,
       sessionPubkeyHex: scenario.sessions[0]!.keypair.publicKeyHex,
       computeExtensionHash: async () => EXTENSION_HASH,
@@ -2356,7 +2379,8 @@ describe('a both-shapes bundle keeps WHOLE-FILE semantics', () => {
       provenanceDir: scenario.provenanceDir,
       assignmentId: ASSIGNMENT_ID,
       semester: SEMESTER,
-      filesUnderReview: [...scenario.finalContent.keys()],
+      scope: scopeOf([...scenario.finalContent.keys()]),
+      scopeCapped: false,
       sessionPrivkey: scenario.sessions[0]!.keypair.privateKey,
       sessionPubkeyHex: scenario.sessions[0]!.keypair.publicKeyHex,
       computeExtensionHash: async () => EXTENSION_HASH,
@@ -2786,7 +2810,8 @@ async function sealDir(opts: {
     provenanceDir: opts.provenanceDir,
     assignmentId: ASSIGNMENT_ID,
     semester: SEMESTER,
-    filesUnderReview: opts.filesUnderReview,
+    scope: scopeOf(opts.filesUnderReview),
+    scopeCapped: false,
     sessionPrivkey: opts.keypair.privateKey,
     sessionPubkeyHex: opts.keypair.publicKeyHex,
     computeExtensionHash: async () => EXTENSION_HASH,
@@ -2914,6 +2939,10 @@ describe('a session torn down before its first flush', () => {
       orphanedMeta: false,
       emptySession: true,
       orphanedRollingSeal: true,
+      unreadableInScopeFile: false,
+      unreadableScopeDirectory: false,
+      duplicateEntryDropped: false,
+      outOfWorkspacePathRejected: false,
     });
   });
 
@@ -3157,6 +3186,10 @@ describe('the classic seal path is untouched by the orphan guard', () => {
       orphanedMeta: false,
       emptySession: false,
       orphanedRollingSeal: false,
+      unreadableInScopeFile: false,
+      unreadableScopeDirectory: false,
+      duplicateEntryDropped: false,
+      outOfWorkspacePathRejected: false,
     });
 
     // Now litter the same directory with everything the guard drops.
@@ -3460,7 +3493,8 @@ async function buildWitnessScenario(): Promise<WitnessScenario> {
       assignmentRoot: root,
       assignmentId: ASSIGNMENT_ID,
       semester: SEMESTER,
-      filesUnderReview: [...content.keys()],
+      scope: scopeOf([...content.keys()]),
+      scopeCapped: false,
       sessionPrivkey: s.keypair.privateKey,
       extensionHash: EXTENSION_HASH,
       final: true,
