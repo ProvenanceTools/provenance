@@ -885,13 +885,22 @@ export function CoveragePanel({ facts }: CoveragePanelProps) {
           </p>
         )}
 
+        {/* Design spec §9.3. "No evidence exists for this file" and "no evidence
+            exists for this file BECAUSE THE COURSE EXCLUDED IT" are different
+            sentences, and only the second is fair to put in front of someone
+            adjudicating a case. `notWatchedReason` is what lets this say the
+            second one when it is true; `null` means no trusted scope answered,
+            so the generic sentence stands rather than a reason being invented. */}
         {fileScope.files
           .filter((f) => f.watched === 'not_watched' && !f.recordedActivity)
           .map((f) => (
             <p key={f.path} data-testid="coverage-file-not-watched">
-              <span className="font-mono text-[11px] font-medium">{f.path}</span> — under review but
-              outside every watched scope, so nothing was recording it. That alone explains the
-              silence.
+              <span className="font-mono text-[11px] font-medium">{f.path}</span>
+              {f.notWatchedReason === 'ignored_by_assignment'
+                ? ' — excluded by the assignment\u2019s own signed ignore list, so the recorder produced no evidence for it at all, exculpatory evidence included. The silence here is the course\u2019s configuration, not the student\u2019s conduct.'
+                : f.notWatchedReason === 'attachment'
+                  ? ' — carried as an attachment: sealed into the bundle and hashed, never captured. No event history exists for it by design, which is not the same fact as nothing having happened in it.'
+                  : ' — under review but outside every watched scope, so nothing was recording it. That alone explains the silence.'}
             </p>
           ))}
         {fileScope.files.some((f) => f.watched === 'not_watched' && !f.recordedActivity) && (

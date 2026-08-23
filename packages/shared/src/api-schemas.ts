@@ -1339,6 +1339,27 @@ export const CoverageFactsSchema = z.object({
          * surface says "no recorded activity" about a file that has some.
          */
         recordedActivity: z.boolean(),
+        /**
+         * WHY there is no evidence for this path, when `watched` is
+         * `'not_watched'` (design spec §9.3). "No evidence exists for this
+         * file" and "no evidence exists for this file BECAUSE THE COURSE
+         * EXCLUDED IT" are different sentences, and only the second is fair to
+         * put in front of someone adjudicating a case.
+         *
+         * `null` is the honest "no reason could be established" — the answer
+         * whenever `watched` is not `'not_watched'`, and whenever no VERIFIED
+         * course manifest existed to derive a reason from. A consumer must
+         * render the generic sentence for `null` rather than inventing an
+         * exclusion the course may not have declared.
+         *
+         * Required rather than optional, deliberately: server and analyzer ship
+         * from one repo and one deploy, and an optional key here would infer as
+         * `| undefined` and force every renderer to grow a third branch for a
+         * state that cannot occur.
+         */
+        notWatchedReason: z
+          .enum(['ignored_by_assignment', 'attachment', 'out_of_scope'])
+          .nullable(),
       }),
     ),
   }),

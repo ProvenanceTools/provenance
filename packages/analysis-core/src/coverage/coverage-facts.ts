@@ -56,7 +56,7 @@
  * tested-after-the-fact one.
  */
 
-import { scopeFromManifest } from '@provenance/log-core';
+import { resolvePathRole, scopeFromManifest } from '@provenance/log-core';
 import type {
   CapabilityValueProblem,
   FileScopeProblem,
@@ -65,6 +65,7 @@ import type {
 } from '@provenance/log-core';
 import {
   gitObservationGap,
+  ignoredByAssignment,
   readBundleCapabilities,
   wasFileWatched,
 } from '../capability/session-capabilities.js';
@@ -580,6 +581,23 @@ export type GitObservationCoverage = {
 // ---------------------------------------------------------------------------
 
 /**
+ * Why a path the assignment carries has no evidence behind it.
+ *
+ * Design spec §9.3 / R1. Each value names a COURSE-SIGNED policy choice, never
+ * conduct by a student, and none of them is a finding:
+ *
+ *  - `'ignored_by_assignment'` — the course's `ignore` list matched it, so the
+ *    recorder produced no evidence for it at all, EXCULPATORY evidence
+ *    included. This is the sentence §9.3 exists to make sayable.
+ *  - `'attachment'` — the course listed it as an attachment, so it was sealed
+ *    and hashed but never captured. No event history exists for it BY DESIGN,
+ *    which is a different fact from "nothing happened in it".
+ *  - `'out_of_scope'` — no list matched it. Today's ordinary answer, and the
+ *    only one of the three that existed before path scope.
+ */
+export type NotWatchedReason = 'ignored_by_assignment' | 'attachment' | 'out_of_scope';
+
+/**
  * One file the assignment put under review, and whether anything was watching it.
  *
  * The join is by VERBATIM path, which is sound by construction rather than by
@@ -606,6 +624,17 @@ export type WatchedFileFact = {
    * capability report says about it.
    */
   recordedActivity: boolean;
+  /**
+   * WHY there is no evidence for this path, when `watched` is `'not_watched'`.
+   *
+   * Design spec §9.3. `'not_watched'` alone leaves a grader unable to tell "the
+   * course excluded this file" from "it fell outside every watched scope", and
+   * the spec's binding sentence is that the analyzer must always be able to say
+   * the first one when it is true. `null` whenever the question does not arise,
+   * or whenever no TRUSTED scope exists to derive a reason from — see
+   * {@link notWatchedReasonFor}. Never a finding, in any of its values.
+   */
+  notWatchedReason: NotWatchedReason | null;
 };
 
 /**
@@ -689,11 +718,103 @@ export type FileScopeCoverage = {
  * unverified policy is not a policy" (`manifest/bundle-manifest.ts`). Falling
  * back to `undefined` degrades tier 1 straight to tier 2, the answer this
  * behaved with before path scope existed.
+ *
+ * ## Every binding, strictest wins — not the first one found
+ *
+ * One bundle can carry DIFFERENT manifests per session; the whole reason
+ * `readSessionManifests` returns a list is that a course may re-issue a
+ * corrected manifest mid-assignment, and the sessions on either side of that
+ * carry different signed scopes. Its two neighbours in this repo already assume
+ * exactly that: `resolveBundleCapturePolicy` ANDs across every binding, and
+ * `bundleCollaboration` takes the stricter of the values it sees.
+ *
+ * Picking ONE binding — which a `.find()` did — was unsound in the direction
+ * that matters. If it landed on an exact-only manifest while another session's
+ * was rule-bearing, `wasFileWatched`'s `hasRuleEntries` came out false, tier 1
+ * engaged on a scope it should have declined, and a path drawn from the OTHER
+ * manifest resolved to `'watched'` — the strongest of the three answers,
+ * "absence of events means the events did not happen" — for a session that
+ * never watched it.
+ *
+ * The merge is the UNION of all three lists, and union IS strictest-wins here
+ * because `resolvePathRole`'s precedence runs ignored > attachment > reviewed >
+ * unscoped: a path any manifest ignores resolves `'ignored'` however many
+ * others track it, and the merged `track` carries every rule entry any binding
+ * contributed, so `hasRuleEntries` can no longer be hidden by a sibling. The
+ * effect on the answer is always toward the exculpatory side — `'not_watched'`
+ * is a fact about course configuration, `'watched'` is what an argument gets
+ * built on — which is the same direction `resolveBundleCapturePolicy`'s AND
+ * errs in.
+ *
+ * Sorted so the merged scope is deterministic across bundle orderings.
  */
 function resolvedScopeFor(bundle: Bundle): ResolvedScope | undefined {
   if (bundleCapturePolicyTrust(bundle) !== 'verified') return undefined;
-  const binding = readSessionManifests(bundle).find(isManifest2Binding);
-  return binding === undefined ? undefined : scopeFromManifest(binding.manifest);
+
+  const track = new Set<string>();
+  const ignore = new Set<string>();
+  const attachments = new Set<string>();
+  let sawManifest = false;
+
+  for (const binding of readSessionManifests(bundle)) {
+    if (!isManifest2Binding(binding)) continue;
+    sawManifest = true;
+    const scope = scopeFromManifest(binding.manifest);
+    for (const entry of scope.track) track.add(entry);
+    for (const entry of scope.ignore) ignore.add(entry);
+    for (const entry of scope.attachments) attachments.add(entry);
+  }
+
+  if (!sawManifest) return undefined;
+  return {
+    track: [...track].sort(),
+    ignore: [...ignore].sort(),
+    attachments: [...attachments].sort(),
+  };
+}
+
+/**
+ * Why this path has no evidence — the sentence design spec §9.3 requires the
+ * analyzer to be able to say.
+ *
+ * "No evidence exists for this file" and "no evidence exists for this file
+ * **because the course excluded it**" are different sentences, and only the
+ * second is fair to put in front of someone adjudicating a case. R1 is explicit
+ * that a signal missing because it could not be evaluated must say so.
+ *
+ * `null` is the honest answer in two situations, and is never a defect:
+ *
+ *   - the question does not arise (`watched` is not `'not_watched'`); or
+ *   - there is no TRUSTED scope to derive a reason from, so tier 2 or tier 3
+ *     produced the answer. Inventing "the course excluded it" from an unsigned
+ *     or unverified manifest would hand a student the exculpatory sentence they
+ *     could have written themselves — the same hole `resolvedScopeFor` refuses
+ *     to open.
+ *
+ * All three reasons are facts about the COURSE'S SIGNED POLICY rather than
+ * about what a recorder managed to do, so they stay sound even for a bundle
+ * whose recorder reported a capped scope: a cap says the record is incomplete,
+ * not that the manifest said something else.
+ *
+ * A hard-excluded path (`.provenance/`, `.git/`) deliberately yields `null`
+ * rather than a course reason — that exclusion is the protocol's, and
+ * attributing it to the course would be false. That distinction is exactly what
+ * `ignoredByAssignment` was written for, and calling it here is what finally
+ * puts §9.3 in front of a grader.
+ */
+function notWatchedReasonFor(
+  watched: WatchedFileAnswer,
+  path: string,
+  scope: ResolvedScope | undefined,
+): NotWatchedReason | null {
+  if (watched !== 'not_watched' || scope === undefined) return null;
+  if (ignoredByAssignment(path, scope)) return 'ignored_by_assignment';
+  const role = resolvePathRole(path, scope);
+  if (role === 'attachment') return 'attachment';
+  if (role === 'unscoped') return 'out_of_scope';
+  // 'excluded' (the protocol's choice, never the course's) and 'reviewed'
+  // (unreachable — tier 1 would have answered 'watched') both fall through.
+  return null;
 }
 
 function fileScopeCoverage(
@@ -720,10 +841,12 @@ function fileScopeCoverage(
   const scope = resolvedScopeFor(bundle);
   const files: WatchedFileFact[] = [];
   for (const path of bundle.manifest.submission_files ?? []) {
+    const watched = wasFileWatched(capabilities, path.path, scope);
     files.push({
       path: path.path,
-      watched: wasFileWatched(capabilities, path.path, scope),
+      watched,
       recordedActivity: (index.byFile.get(path.path)?.length ?? 0) > 0,
+      notWatchedReason: notWatchedReasonFor(watched, path.path, scope),
     });
   }
 

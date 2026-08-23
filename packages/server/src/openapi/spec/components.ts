@@ -985,7 +985,7 @@ export const components = {
                 'an absent question, not a negative answer.',
               items: {
                 type: 'object',
-                required: ['path', 'watched', 'recordedActivity'],
+                required: ['path', 'watched', 'recordedActivity', 'notWatchedReason'],
                 properties: {
                   path: { type: 'string' },
                   watched: {
@@ -1001,6 +1001,17 @@ export const components = {
                     description:
                       'Whether this record holds any event for the path. Present so no ' +
                       'surface says "no recorded activity" about a file that has some.',
+                  },
+                  notWatchedReason: {
+                    type: 'string',
+                    nullable: true,
+                    enum: ['ignored_by_assignment', 'attachment', 'out_of_scope', null],
+                    description:
+                      'Why there is no evidence for this path, when `watched` is ' +
+                      '`not_watched`. Each value names a course-signed policy choice, ' +
+                      'never conduct by a student, and none is a finding. `null` means ' +
+                      'no reason could be established — render the generic sentence ' +
+                      'rather than inventing an exclusion the course may not have made.',
                   },
                 },
               },

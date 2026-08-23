@@ -1123,8 +1123,15 @@ describe('file scope is a coverage fact, not a finding', () => {
     expect(facts.fileScope.incompleteSessions).toBe(0);
     expect(facts.fileScope.watchedFiles).toEqual(['hw1.py']);
     expect(facts.fileScope.files).toEqual([
-      { path: 'hw1.py', watched: 'watched', recordedActivity: false },
-      { path: 'provided.py', watched: 'not_watched', recordedActivity: false },
+      { path: 'hw1.py', watched: 'watched', recordedActivity: false, notWatchedReason: null },
+      {
+        path: 'provided.py',
+        watched: 'not_watched',
+        recordedActivity: false,
+        // Tier 2 answered, so there is no trusted scope to derive a reason
+        // from — inventing one would be a claim the record cannot support.
+        notWatchedReason: null,
+      },
     ]);
     // A report existed, so there is now something true to say.
     expect(hasCoverageFacts(withNeutralIdentity(facts))).toBe(true);
@@ -1179,8 +1186,13 @@ describe('file scope is a coverage fact, not a finding', () => {
     const facts = coverageFacts(bundle, index);
 
     expect(facts.fileScope.files).toEqual([
-      { path: 'hw1.py', watched: 'watched', recordedActivity: true },
-      { path: 'provided.py', watched: 'not_watched', recordedActivity: false },
+      { path: 'hw1.py', watched: 'watched', recordedActivity: true, notWatchedReason: null },
+      {
+        path: 'provided.py',
+        watched: 'not_watched',
+        recordedActivity: false,
+        notWatchedReason: null,
+      },
     ]);
   });
 
@@ -1243,7 +1255,12 @@ describe('file scope coverage evaluates the signed 2.0 scope rules (tier 1)', ()
 
     const facts = coverageFacts(bundle, index);
     expect(facts.fileScope.files).toEqual([
-      { path: 'src/Solver.java', watched: 'watched', recordedActivity: false },
+      {
+        path: 'src/Solver.java',
+        watched: 'watched',
+        recordedActivity: false,
+        notWatchedReason: null,
+      },
     ]);
   });
 
@@ -1263,7 +1280,12 @@ describe('file scope coverage evaluates the signed 2.0 scope rules (tier 1)', ()
 
     const facts = coverageFacts(bundle, index);
     expect(facts.fileScope.files).toEqual([
-      { path: 'src/Solver.java', watched: 'unknown', recordedActivity: false },
+      {
+        path: 'src/Solver.java',
+        watched: 'unknown',
+        recordedActivity: false,
+        notWatchedReason: null,
+      },
     ]);
   });
 
@@ -1293,7 +1315,124 @@ describe('file scope coverage evaluates the signed 2.0 scope rules (tier 1)', ()
 
     const facts = coverageFacts(bundle, index);
     expect(facts.fileScope.files).toEqual([
-      { path: 'src/Solver.java', watched: 'unknown', recordedActivity: false },
+      {
+        path: 'src/Solver.java',
+        watched: 'unknown',
+        recordedActivity: false,
+        notWatchedReason: null,
+      },
+    ]);
+  });
+
+  it('merges EVERY session manifest, so a rule-bearing sibling cannot be hidden', async () => {
+    // A bundle can carry different manifests per session — a course re-issuing
+    // a corrected manifest mid-assignment is the ordinary way to get one — and
+    // `resolveBundleCapturePolicy` / `bundleCollaboration` already assume that.
+    // Picking ONE binding with `.find()` meant that if it landed on the
+    // exact-only manifest, `hasRuleEntries` came out false, tier 1 engaged on a
+    // scope it should have declined, and a path from the OTHER manifest
+    // resolved to 'watched' — the accusatory answer — for a session that never
+    // watched it.
+    const keys = await buildTrustChainKeys();
+    const exactOnly = await buildManifest2({ keys, filesUnderReview: ['hw1.py'] });
+    const ruleBearing = await buildManifest2({ keys, filesUnderReview: ['src/'] });
+    const { bundle, index } = await fileScopeScope({
+      files: ['src/Solver.java'],
+      sessionStarts: [
+        // Session 1's own list is complete — legitimately, since its manifest
+        // carries no rule entry at all.
+        { ...sessionStart2(exactOnly), file_scope: { watched: ['hw1.py'], complete: true } },
+        { ...sessionStart2(ruleBearing), file_scope: { watched: [], complete: false } },
+      ],
+    });
+    // Stamped directly. `verifyBundleTrustChain` verifies only the FIRST 2.0
+    // manifest and then requires every session to report that manifest's `sig`,
+    // so a bundle whose sessions carry genuinely different manifests can only
+    // reach a verified stamp through a tampered log — which check 2 and check 3
+    // both catch on their own. This test is about what the MERGE does once the
+    // gate is open, and the answer has to be the same either way: a sibling
+    // binding may never steer tier 1 toward the accusatory answer.
+    bundle.capturePolicyTrust = 'verified';
+
+    const facts = coverageFacts(bundle, index);
+    // The merged scope carries `src/`, so `hasRuleEntries` is true, session 1's
+    // `complete: true` is the stale signature tier 1 refuses, and the honest
+    // answer is 'unknown' rather than the rules-derived 'watched'.
+    expect(facts.fileScope.files[0]!.watched).toBe('unknown');
+  });
+
+  it('takes the STRICTEST role across manifests: one manifest ignoring beats another tracking', async () => {
+    // `resolvePathRole`'s precedence runs ignored > attachment > reviewed, so
+    // the union merge lands on the least accusatory answer available — the same
+    // direction `resolveBundleCapturePolicy`'s AND errs in.
+    const keys = await buildTrustChainKeys();
+    const tracks = await buildManifest2({ keys, filesUnderReview: ['src/'] });
+    const ignores = await buildManifest2({
+      keys,
+      filesUnderReview: ['src/'],
+      ignore: ['*.java'],
+    });
+    const { bundle, index } = await fileScopeScope({
+      files: ['src/Solver.java'],
+      sessionStarts: [
+        { ...sessionStart2(tracks), file_scope: { watched: [], complete: false } },
+        { ...sessionStart2(ignores), file_scope: { watched: [], complete: false } },
+      ],
+    });
+    // See the note in the test above on why the stamp is set directly.
+    bundle.capturePolicyTrust = 'verified';
+
+    const facts = coverageFacts(bundle, index);
+    expect(facts.fileScope.files[0]!.watched).toBe('not_watched');
+    // §9.3: and it says WHY — "the course excluded it", not merely "no evidence".
+    expect(facts.fileScope.files[0]!.notWatchedReason).toBe('ignored_by_assignment');
+  });
+
+  it('names the course ignore list as the reason a file has no evidence (§9.3)', async () => {
+    const keys = await buildTrustChainKeys();
+    const manifest = await buildManifest2({
+      keys,
+      filesUnderReview: ['src/'],
+      ignore: ['*.class'],
+    });
+    const { bundle, index } = await fileScopeScope({
+      files: ['src/A.class'],
+      sessionStarts: [{ ...sessionStart2(manifest), file_scope: { watched: [], complete: false } }],
+    });
+    const chain = await establishBundleTrust(bundle, keys.rootPubkeyHex);
+    expect(chain.kind).toBe('verified');
+
+    const facts = coverageFacts(bundle, index);
+    expect(facts.fileScope.files).toEqual([
+      {
+        path: 'src/A.class',
+        watched: 'not_watched',
+        recordedActivity: false,
+        notWatchedReason: 'ignored_by_assignment',
+      },
+    ]);
+  });
+
+  it('distinguishes an ATTACHMENT from a file outside every scope', async () => {
+    // An attachment has no event history BY DESIGN. Telling a grader it was
+    // "outside every watched scope" is a different and false sentence.
+    const keys = await buildTrustChainKeys();
+    const manifest = await buildManifest2({
+      keys,
+      filesUnderReview: ['src/'],
+      attachments: ['*.log'],
+    });
+    const { bundle, index } = await fileScopeScope({
+      files: ['run.log', 'README.md'],
+      sessionStarts: [{ ...sessionStart2(manifest), file_scope: { watched: [], complete: false } }],
+    });
+    const chain = await establishBundleTrust(bundle, keys.rootPubkeyHex);
+    expect(chain.kind).toBe('verified');
+
+    const facts = coverageFacts(bundle, index);
+    expect(facts.fileScope.files.map((f) => f.notWatchedReason)).toEqual([
+      'attachment',
+      'out_of_scope',
     ]);
   });
 
@@ -1318,7 +1457,12 @@ describe('file scope coverage evaluates the signed 2.0 scope rules (tier 1)', ()
     // Falls back to tier 2: the list is incomplete and names nothing, so the
     // honest answer is unknown — never the rules-based 'watched'.
     expect(facts.fileScope.files).toEqual([
-      { path: 'src/Solver.java', watched: 'unknown', recordedActivity: false },
+      {
+        path: 'src/Solver.java',
+        watched: 'unknown',
+        recordedActivity: false,
+        notWatchedReason: null,
+      },
     ]);
   });
 });

@@ -890,6 +890,83 @@ describe('file scope says whether a silent file was ever being watched', () => {
     expect(note.textContent).not.toMatch(/suspicious|misconduct|failed|warning/i);
   });
 
+  it('says the course EXCLUDED a file, not merely that nothing watched it (§9.3)', async () => {
+    // The spec's binding sentence: the analyzer must always be able to say "no
+    // evidence exists for this file BECAUSE THE COURSE EXCLUDED IT", which is a
+    // different sentence from "no evidence exists". Without it a grader reads
+    // an ignored file and an out-of-scope file as the same silence.
+    const { bundle, index } = await buildScope(
+      [
+        {
+          who: { studentRef: 'alice' },
+          startMin: 0,
+          endMin: 60,
+          capabilities: scopeOf(['hw1.py']),
+        },
+      ],
+      { submissionFiles: ['hw1.py', 'provided.py'] },
+    );
+    const facts = coverageFacts(bundle, index);
+    render(
+      <CoveragePanel
+        facts={{
+          ...facts,
+          fileScope: {
+            ...facts.fileScope,
+            files: facts.fileScope.files.map((f) =>
+              f.path === 'provided.py'
+                ? { ...f, notWatchedReason: 'ignored_by_assignment' as const }
+                : f,
+            ),
+          },
+        }}
+      />,
+    );
+
+    const rows = screen.getAllByTestId('coverage-file-not-watched');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toMatch(/provided\.py/);
+    expect(rows[0]!.textContent).toMatch(/excluded by the assignment/i);
+    expect(rows[0]!.textContent).toMatch(/exculpatory evidence included/i);
+    // Never the generic sentence when a real reason is available.
+    expect(rows[0]!.textContent).not.toMatch(/outside every watched scope/i);
+    // Still not a finding, in either register.
+    expect(rows[0]!.textContent).not.toMatch(/suspicious|misconduct|failed|warning/i);
+  });
+
+  it('says an attachment was never captured BY DESIGN, not that it fell out of scope', async () => {
+    const { bundle, index } = await buildScope(
+      [
+        {
+          who: { studentRef: 'alice' },
+          startMin: 0,
+          endMin: 60,
+          capabilities: scopeOf(['hw1.py']),
+        },
+      ],
+      { submissionFiles: ['hw1.py', 'provided.py'] },
+    );
+    const facts = coverageFacts(bundle, index);
+    render(
+      <CoveragePanel
+        facts={{
+          ...facts,
+          fileScope: {
+            ...facts.fileScope,
+            files: facts.fileScope.files.map((f) =>
+              f.path === 'provided.py' ? { ...f, notWatchedReason: 'attachment' as const } : f,
+            ),
+          },
+        }}
+      />,
+    );
+
+    const row = screen.getAllByTestId('coverage-file-not-watched')[0]!;
+    expect(row.textContent).toMatch(/sealed into the bundle and hashed, never captured/i);
+    expect(row.textContent).toMatch(/by design/i);
+    expect(row.textContent).not.toMatch(/outside every watched scope/i);
+  });
+
   it('one silent session takes every unnamed file to unknown, and says so', async () => {
     const { bundle, index } = await buildScope(
       [
