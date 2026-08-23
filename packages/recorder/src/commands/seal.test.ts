@@ -688,6 +688,131 @@ describe('path scope at seal time', () => {
     expect('scope_capped' in (await readSealedManifest())).toBe(false);
   });
 
+  it('ORs scope_capped across every session in the bundle, not just the live one', async () => {
+    // `BundleManifest.scope_capped` is documented as "ANY session's recorder
+    // reported…", and the rolling-seal union in `analysis-core` honours that.
+    // The classic seal used to pass ONE live registry's `capHit()` straight
+    // through — so a student whose earlier session capped and whose current one
+    // did not sealed the key ABSENT, and absence is exactly what lets
+    // `wasFileWatched` engage tier 1 and answer 'watched' with no recorded
+    // activity. That is the inference the field exists to block, landing on a
+    // student who did nothing.
+    const ws = await makeWorkspace({ 'a.java': 'x' });
+    // The earlier session's own rolling seal is the durable record of its cap
+    // bit; its registry is long gone.
+    await fsPromises.writeFile(
+      path.join(provenanceDir, `manifest-${TEST_SESSION_ID}.json`),
+      JSON.stringify({ format_version: '1.2', scope_capped: true }),
+      'utf8',
+    );
+
+    await sealBundle(
+      sealDeps(ws, {
+        scope: { track: ['*.java'], ignore: [], attachments: [] },
+        // The LIVE session did not cap.
+        scopeCapped: false,
+      }),
+    );
+    expect((await readSealedManifest()).scope_capped).toBe(true);
+  });
+
+  it('ignores a rolling seal whose session this bundle does not carry', async () => {
+    // The same orphan rule the zip step applies: a seal naming a session that
+    // is not here describes a recording this bundle makes no claim about, so it
+    // cannot contribute a cap bit to it either.
+    const ws = await makeWorkspace({ 'a.java': 'x' });
+    await fsPromises.writeFile(
+      path.join(provenanceDir, 'manifest-11111111-1111-1111-1111-111111111111.json'),
+      JSON.stringify({ format_version: '1.2', scope_capped: true }),
+      'utf8',
+    );
+
+    await sealBundle(
+      sealDeps(ws, {
+        scope: { track: ['*.java'], ignore: [], attachments: [] },
+        scopeCapped: false,
+      }),
+    );
+    expect('scope_capped' in (await readSealedManifest())).toBe(false);
+  });
+
+  it('never mints scope_capped from an unreadable or malformed rolling seal', async () => {
+    // Absent report, not a `true` report. Guessing `true` would be harmless to
+    // a student but would make the field meaningless; guessing either way from
+    // garbage is not a claim the record supports.
+    const ws = await makeWorkspace({ 'a.java': 'x' });
+    await fsPromises.writeFile(
+      path.join(provenanceDir, `manifest-${TEST_SESSION_ID}.json`),
+      'not json at all',
+      'utf8',
+    );
+
+    await sealBundle(
+      sealDeps(ws, {
+        scope: { track: ['*.java'], ignore: [], attachments: [] },
+        scopeCapped: false,
+      }),
+    );
+    expect('scope_capped' in (await readSealedManifest())).toBe(false);
+  });
+
+  it('warns when an in-scope ATTACHMENT is a symlink the walk declined to follow', async () => {
+    // The walk classifies dirents lstat-style, so a symlinked file is never in
+    // `paths`, and only an EXACT `track` entry gets rescued by the direct read.
+    // An attachment has no rescue: it vanished from the bundle with no flag at
+    // all, which is the one drop in this module that left no trace.
+    const ws = await makeWorkspace({ 'logs/real.log': 'output' });
+    await fsPromises.symlink(
+      path.join(ws.root, 'logs', 'real.log'),
+      path.join(ws.root, 'logs', 'link.log'),
+    );
+
+    const result = await sealBundle(
+      sealDeps(ws, {
+        scope: { track: [], ignore: [], attachments: ['logs/'] },
+      }),
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.warnings.inScopeSymlinkSkipped).toBe(true);
+    expect(sealDroppedArtifacts(result.warnings)).toBe(true);
+    // Still NOT followed — that stays deliberate (cycles, workspace escape).
+    const manifest = await readSealedManifest();
+    expect((manifest.submission_files ?? []).map((f) => f.path)).toEqual(['logs/real.log']);
+  });
+
+  it('does not warn about a symlink an EXACT track entry rescued', async () => {
+    // Reading by string follows the link, so this file IS in the bundle. A
+    // warning here would tell staff something was dropped when nothing was.
+    const ws = await makeWorkspace({ 'real/Main.java': 'class Main {}' });
+    await fsPromises.symlink(
+      path.join(ws.root, 'real', 'Main.java'),
+      path.join(ws.root, 'Link.java'),
+    );
+
+    const result = await sealBundle(
+      sealDeps(ws, { scope: { track: ['Link.java'], ignore: [], attachments: [] } }),
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.warnings.inScopeSymlinkSkipped).toBe(false);
+    const manifest = await readSealedManifest();
+    expect((manifest.submission_files ?? []).map((f) => f.path)).toEqual(['Link.java']);
+  });
+
+  it('does not warn about a symlink that is out of scope entirely', async () => {
+    // A `node_modules`-shaped symlink farm must produce no noise.
+    const ws = await makeWorkspace({ 'src/Main.java': 'class Main {}', 'notes.txt': 'x' });
+    await fsPromises.symlink(path.join(ws.root, 'notes.txt'), path.join(ws.root, 'notes-link.txt'));
+
+    const result = await sealBundle(
+      sealDeps(ws, { scope: { track: ['src/'], ignore: [], attachments: [] } }),
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.warnings.inScopeSymlinkSkipped).toBe(false);
+  });
+
   it('drops (never reports missing) a walk-discovered file it cannot read, and warns', async () => {
     // A rule entry (`src/`) asserts nothing about any particular file, so a
     // file the walk SAW but could not re-open a moment later (edited away,
@@ -893,6 +1018,7 @@ describe('path scope at seal time', () => {
         unreadableScopeDirectory: false,
         duplicateEntryDropped: false,
         outOfWorkspacePathRejected: false,
+        inScopeSymlinkSkipped: false,
       }),
     ).toBe(true);
     expect(
@@ -906,6 +1032,7 @@ describe('path scope at seal time', () => {
         unreadableScopeDirectory: true,
         duplicateEntryDropped: false,
         outOfWorkspacePathRejected: false,
+        inScopeSymlinkSkipped: false,
       }),
     ).toBe(true);
     expect(
@@ -919,6 +1046,7 @@ describe('path scope at seal time', () => {
         unreadableScopeDirectory: false,
         duplicateEntryDropped: true,
         outOfWorkspacePathRejected: false,
+        inScopeSymlinkSkipped: false,
       }),
     ).toBe(true);
     expect(
@@ -932,6 +1060,7 @@ describe('path scope at seal time', () => {
         unreadableScopeDirectory: false,
         duplicateEntryDropped: false,
         outOfWorkspacePathRejected: false,
+        inScopeSymlinkSkipped: false,
       }),
     ).toBe(false);
   });
@@ -1163,6 +1292,7 @@ describe('path scope at seal time', () => {
       unreadableScopeDirectory: false,
       duplicateEntryDropped: false,
       outOfWorkspacePathRejected: false,
+      inScopeSymlinkSkipped: false,
     };
     expect(sealDroppedArtifacts(quiet)).toBe(false);
     expect(sealDroppedArtifacts({ ...quiet, outOfWorkspacePathRejected: true })).toBe(true);

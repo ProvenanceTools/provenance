@@ -132,6 +132,28 @@ export type SealWarnings = {
    * only trace.
    */
   outOfWorkspacePathRejected: boolean;
+  /**
+   * True if a path the scope put under review — or listed as an ATTACHMENT —
+   * was a SYMLINK, and so was never walked into the bundle at all.
+   *
+   * The walk classifies dirents `lstat`-style, so a symlinked file is not
+   * `isFile()` and never reaches `paths` (`io/workspace-walk.ts`). Exactly one
+   * such path has a rescue: an EXACT `track` entry with role `reviewed`, which
+   * the exact-entry loop reads directly by string — a read that DOES follow the
+   * link. Every attachment, and every file a RULE entry (`src/`, `*.java`)
+   * matched, has no rescue and simply vanishes.
+   *
+   * That drop is not new; going unflagged was. Every other drop in this module
+   * raises something, and a silently absent in-scope file is precisely the gap
+   * that lets a reader infer "in scope, no bytes" about a student who
+   * symlinked a data file exactly as their course told them to. Not following
+   * the link stays deliberate — following would let a cycle spin the walk
+   * forever and let a link escape the workspace — so DISCLOSING the drop is
+   * the whole fix.
+   *
+   * Included in `sealDroppedArtifacts` for the same reason as the flags above.
+   */
+  inScopeSymlinkSkipped: boolean;
 };
 
 /**
@@ -150,7 +172,8 @@ export function sealDroppedArtifacts(warnings: SealWarnings): boolean {
     warnings.unreadableInScopeFile ||
     warnings.unreadableScopeDirectory ||
     warnings.duplicateEntryDropped ||
-    warnings.outOfWorkspacePathRejected
+    warnings.outOfWorkspacePathRejected ||
+    warnings.inScopeSymlinkSkipped
   );
 }
 
@@ -169,7 +192,16 @@ export type SealDeps = {
   semester: string;
   /** The resolved scope from the course manifest. Replaces the old exact-path list. */
   scope: ResolvedScope;
-  /** Whether the recorder's expected-content cap refused an in-scope path this session. */
+  /**
+   * Whether the LIVE session's expected-content cap refused an in-scope path.
+   *
+   * One session's answer, not the bundle's. `scope_capped` on the sealed
+   * manifest is documented as "ANY session's recorder reported…", and a classic
+   * bundle carries every `.slog` in `.provenance/` — including sessions from
+   * previous editor runs, whose registries are long gone. Those sessions'
+   * answers are recovered from their own rolling seals; see
+   * `readRolledScopeCapped` below.
+   */
   scopeCapped: boolean;
   /** Active session private key for signing the bundle manifest. 32 bytes. */
   sessionPrivkey: Uint8Array;
@@ -186,6 +218,64 @@ export type SealDeps = {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Did ANY session this bundle carries report a capped expected-content registry?
+ *
+ * `BundleManifest.scope_capped` is documented as a WHOLE-BUNDLE fact — "ANY
+ * session's recorder reported…" — and `analysis-core`'s rolling-seal union
+ * honours that by ORing across every per-session manifest. The classic seal
+ * used to pass one live registry's `capHit()` straight through, which is a
+ * different claim: a classic bundle packs every `.slog` in `.provenance/`,
+ * including sessions from editor runs that ended days ago and whose registries
+ * no longer exist. A student whose session 1 capped and whose session 3 did not
+ * therefore sealed the key ABSENT, and absence is what lets `wasFileWatched`
+ * engage tier 1 and answer `'watched'` with no recorded activity — exactly the
+ * inference this field exists to block, landing on a student who did nothing.
+ *
+ * The durable per-session record of that bit is each session's own rolling
+ * seal, which every session writes (at session start, at checkpoints, and once
+ * more at dispose) and which carries `scope_capped` inside its signed bytes.
+ * Only seals for sessions the bundle actually PACKS are consulted, matching the
+ * orphan guard at the zip step: a seal naming a session that is not here
+ * describes a recording this bundle makes no claim about.
+ *
+ * A session with no rolling seal at all (a roll that failed, a `.provenance/`
+ * a `git checkout` swept) contributes nothing — an ABSENT report, not a
+ * `false` one. That is the same "absent means this recorder does not report"
+ * contract the field itself carries, and it is the honest answer: we cannot
+ * recover a bit nobody wrote down.
+ *
+ * Reads only; never trusts the seal for anything but this one boolean, and
+ * never mints `true` from a malformed or unreadable file.
+ */
+async function readRolledScopeCapped(
+  provenanceDir: string,
+  dirEntries: readonly string[],
+  packedSessionIds: ReadonlySet<string>,
+): Promise<boolean> {
+  for (const filename of dirEntries) {
+    const rolling = parseRollingManifestFilename(filename);
+    if (rolling === null || rolling.part !== 'json') continue;
+    if (!packedSessionIds.has(rolling.sessionId)) continue;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await fsPromises.readFile(path.join(provenanceDir, filename), 'utf8'));
+    } catch {
+      // Unreadable or unparseable: no report, not a `false` report.
+      continue;
+    }
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      (parsed as { scope_capped?: unknown }).scope_capped === true
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Compute sha256 of file bytes at the given path.
@@ -317,6 +407,7 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
     unreadableScopeDirectory: false,
     duplicateEntryDropped: false,
     outOfWorkspacePathRejected: false,
+    inScopeSymlinkSkipped: false,
   };
 
   // ---------------------------------------------------------------------------
@@ -677,6 +768,24 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
     reviewedFiles.push({ ...result, role: 'reviewed' });
   }
 
+  // Disclose every in-scope SYMLINK the walk declined to follow and the
+  // exact-entry loop above did not rescue. Evaluated here, after that loop, so
+  // an exact `track` entry naming a symlinked source file — which IS sealed,
+  // because reading by string follows the link — does not raise a warning about
+  // a file that is in the bundle. What is left is the genuinely dropped set:
+  // symlinked ATTACHMENTS, and symlinked files a RULE entry matched.
+  //
+  // Not following the link is deliberate and stays (cycles, workspace escape);
+  // the fix is that the drop is now visible instead of silent.
+  const sealedPaths = new Set(reviewedFiles.map((f) => f.path));
+  for (const link of walkResult.symlinkPaths) {
+    const role = resolvePathRole(link, scope);
+    if (role !== 'reviewed' && role !== 'attachment') continue;
+    if (sealedPaths.has(link)) continue;
+    warnings.inScopeSymlinkSkipped = true;
+    break;
+  }
+
   const submissionFiles = reviewedFiles.map((f) =>
     f.status === 'present'
       ? { path: f.path, status: 'present' as const, sha256: f.sha256, role: f.role }
@@ -694,6 +803,11 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
     };
   }
 
+  // The live session's registry answers for THIS session only; every other
+  // session in the bundle answers through its own rolling seal.
+  const bundleScopeCapped =
+    scopeCapped || (await readRolledScopeCapped(provenanceDir, allEntries, packedSessionIds));
+
   const manifest: BundleManifest = {
     format_version: '1.1',
     assignment_id: assignmentId,
@@ -701,7 +815,12 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
     extension_hash: extensionHash,
     sessions: sessionEntries,
     submission_files: submissionFiles,
-    ...(scopeCapped ? { scope_capped: true } : {}),
+    // Whole-bundle OR, not the live session's bit alone — see
+    // `readRolledScopeCapped`. Still OMITTED entirely unless something reported
+    // capped: an absent key and `false` canonicalize to different bytes, and
+    // the signed message must stay byte-identical to what an uncapped session
+    // has always produced.
+    ...(bundleScopeCapped ? { scope_capped: true } : {}),
   };
 
   // Step 5: Canonicalize + sign + atomic-write manifest.json and manifest.sig.

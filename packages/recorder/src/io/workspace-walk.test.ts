@@ -65,5 +65,42 @@ describe('walkWorkspace', () => {
     expect(result.paths).toContain('real/Nested.java');
     // Nothing was walked through the `loop/` symlink at all.
     expect(result.paths.some((p) => p.startsWith('loop/'))).toBe(false);
+    // …but the entry is REPORTED, so the caller can disclose the drop.
+    expect(result.symlinkPaths).toContain('loop');
+  });
+
+  it('reports a symlinked FILE in symlinkPaths rather than dropping it silently', async () => {
+    // `d.isFile()` is false for a symlink entry, so a symlinked file never
+    // reaches `paths`. Before this list existed, an in-scope one just vanished
+    // from the bundle with no flag anywhere — the only drop in the seal that
+    // left no trace at all.
+    await write('logs/real.log', 'output');
+    await fsPromises.symlink(path.join(tmpDir, 'logs/real.log'), path.join(tmpDir, 'logs/lnk.log'));
+
+    const result = await walkWorkspace(tmpDir);
+
+    expect(result.paths).toContain('logs/real.log');
+    expect(result.paths).not.toContain('logs/lnk.log');
+    expect(result.symlinkPaths).toEqual(['logs/lnk.log']);
+  });
+
+  it('does not report a hard-excluded symlink', async () => {
+    // A link the protocol excludes is not in scope and never was; reporting it
+    // would make the caller warn about a drop that is the protocol working.
+    await write('real-manifest', '{}');
+    await fsPromises.symlink(
+      path.join(tmpDir, 'real-manifest'),
+      path.join(tmpDir, '.provenance-manifest'),
+    );
+
+    const result = await walkWorkspace(tmpDir);
+
+    expect(result.symlinkPaths).toEqual([]);
+  });
+
+  it('reports no symlinks and an empty list for an ordinary workspace', async () => {
+    await write('src/Main.java', 'class Main {}');
+    const result = await walkWorkspace(tmpDir);
+    expect(result.symlinkPaths).toEqual([]);
   });
 });

@@ -469,6 +469,7 @@ async function buildSealedBundle(opts: {
     unreadableScopeDirectory: false,
     duplicateEntryDropped: false,
     outOfWorkspacePathRejected: false,
+    inScopeSymlinkSkipped: false,
   });
 
   return {
@@ -2943,6 +2944,7 @@ describe('a session torn down before its first flush', () => {
       unreadableScopeDirectory: false,
       duplicateEntryDropped: false,
       outOfWorkspacePathRejected: false,
+      inScopeSymlinkSkipped: false,
     });
   });
 
@@ -3190,6 +3192,7 @@ describe('the classic seal path is untouched by the orphan guard', () => {
       unreadableScopeDirectory: false,
       duplicateEntryDropped: false,
       outOfWorkspacePathRejected: false,
+      inScopeSymlinkSkipped: false,
     });
 
     // Now litter the same directory with everything the guard drops.

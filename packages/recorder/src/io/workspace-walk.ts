@@ -37,7 +37,27 @@ export function hasHardExcludedSegment(relPath: string): boolean {
 }
 
 /** Result of walking one subtree: the files found, and whether any directory in it refused to list. */
-export type WalkResult = { paths: string[]; hadUnreadableDir: boolean };
+export type WalkResult = {
+  paths: string[];
+  hadUnreadableDir: boolean;
+  /**
+   * Entries the walk saw as SYMLINKS and therefore did not report in `paths`.
+   *
+   * The walk deliberately does not follow links (see the docstring below), so a
+   * symlinked file — and a symlinked directory's whole subtree — is absent from
+   * `paths`. For most of a workspace that is correct and uninteresting. For a
+   * path the scope puts under review or lists as an attachment it is a SILENT
+   * DROP from the evidence bundle, and every other drop in `commands/seal.ts`
+   * raises a flag. This list is what lets the caller raise one too: it applies
+   * `resolvePathRole` itself (the walk knows nothing about the scope) and warns
+   * only for the links that were actually in scope, so an ordinary
+   * `node_modules` symlink farm produces no noise.
+   *
+   * The link is reported by its own workspace-relative path, never by its
+   * target: the target is exactly what this walk refuses to resolve.
+   */
+  symlinkPaths: string[];
+};
 
 /**
  * Every file under `root`, as workspace-relative forward-slash paths.
@@ -75,6 +95,9 @@ export type WalkResult = { paths: string[]; hadUnreadableDir: boolean };
  * not reported as `isFile()` here and so never appears in the walk's output; an
  * EXACT `track` entry naming one is still resolved correctly by each seal's own
  * read step, because that step reads it directly, which does follow the link.
+ * Every other in-scope symlink — an ATTACHMENT, or a file a RULE entry matched —
+ * has no such rescue and is simply dropped, so each link the walk declines is
+ * reported in {@link WalkResult.symlinkPaths} for the caller to disclose.
  *
  * A directory this function cannot `readdir` (most often a permissions
  * problem) is not silently treated as empty: `hadUnreadableDir` bubbles that up
@@ -86,9 +109,10 @@ export async function walkWorkspace(root: string, rel = ''): Promise<WalkResult>
   try {
     dirents = await fsPromises.readdir(path.join(root, rel), { withFileTypes: true });
   } catch {
-    return { paths: [], hadUnreadableDir: true };
+    return { paths: [], hadUnreadableDir: true, symlinkPaths: [] };
   }
   const out: string[] = [];
+  const symlinkPaths: string[] = [];
   let hadUnreadableDir = false;
   for (const d of dirents) {
     const childRel = rel === '' ? d.name : `${rel}/${d.name}`;
@@ -98,10 +122,22 @@ export async function walkWorkspace(root: string, rel = ''): Promise<WalkResult>
       }
       const child = await walkWorkspace(root, childRel);
       out.push(...child.paths);
+      symlinkPaths.push(...child.symlinkPaths);
       if (child.hadUnreadableDir) hadUnreadableDir = true;
     } else if (d.isFile()) {
       out.push(childRel);
+    } else if (d.isSymbolicLink()) {
+      // NOT followed, and that stays non-negotiable: following would let a link
+      // cycle spin this walk forever and let `ln -s / escape` seal the machine.
+      // But the entry is RECORDED so the caller can disclose the drop — a
+      // symlinked attachment or rule-matched source file vanishing from the
+      // bundle with no flag at all was the one drop here that left no trace.
+      // Hard-excluded segments are skipped for the same reason directories are:
+      // a link inside `.git/` is not in scope and never was.
+      if (!hasHardExcludedSegment(childRel) && !isHardExcluded(childRel)) {
+        symlinkPaths.push(childRel);
+      }
     }
   }
-  return { paths: out, hadUnreadableDir };
+  return { paths: out, hadUnreadableDir, symlinkPaths };
 }
