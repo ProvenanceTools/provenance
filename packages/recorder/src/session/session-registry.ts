@@ -469,6 +469,17 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     encryptedPrivkey,
   });
 
+  // Step 4c-pre: Resolve the course's path scope, and construct this session's
+  // expected-content registry. Moved here (ahead of step 11, where doc-wiring
+  // and fs-watcher also need it) because the rolling seal below closes over it
+  // too, and its first rewrite happens at step 6c — well before step 11 runs.
+  // Computed once so the rolling seal, the classic seal, doc-wiring, and
+  // fs-watcher all resolve the SAME scope and share the SAME registry instance
+  // for this session; two different registries would let `capHit()` disagree
+  // with what the recorder actually refused.
+  const scope = scopeFromManifest(manifest);
+  const expectedContentRegistry = new ExpectedContentRegistry(scope);
+
   // Step 4c: The ROLLING SEAL (program spec §8). A git-submitted assignment has
   // no seal step, so the recorder rewrites this session's own
   // `.provenance/manifest-<session_id>.json` + `.sig` on every checkpoint —
@@ -519,6 +530,31 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   let rollingSealChain: Promise<void> = Promise.resolve();
 
   /**
+   * The checkpoint-triggered roll's time floor (task 13, fix round 1).
+   *
+   * `CHECKPOINT_INTERVAL` (100 entries) is an EVENT-count bound, not a time
+   * bound — 100 events can be a few seconds of fast typing or several minutes
+   * of thinking. A course scoped with a broad suffix rule (e.g. `track:
+   * ["*.js"]`) against a workspace with a large, non-hard-excluded directory
+   * present on disk (a checked-out `node_modules/`) walks and re-hashes every
+   * matching file on every roll — measured at ~4.2s for one such workspace —
+   * which at a 100-event cadence could mean a multi-MB signed manifest being
+   * atomically rewritten into a git working tree every 10-20s of active
+   * typing. 60s between checkpoint-triggered rolls is ample staleness for a
+   * background artifact whose worst case (data loss window) is already bounded
+   * by the SAME 100-event gap this floor sits behind, and it does not touch
+   * `isHardExcluded` or invent a cache — it only widens an already-unbounded
+   * time gap between rolls.
+   *
+   * Deliberately NOT applied to the session-start roll (step 6c) or the
+   * `dispose()` final roll — see `rewriteRollingSeal`'s `force`/`final`
+   * bypass below.
+   */
+  const ROLLING_SEAL_MIN_INTERVAL_MS = 60_000;
+  /** Monotonic time (`clock.now()`) of the last roll actually performed, or `null` before the first. */
+  let lastRollAt: number | null = null;
+
+  /**
    * Rewrite the rolling seal. Never throws and never rejects: a seal failure
    * must not abort the checkpoint that carries it, and must never stop
    * recording. Recording is more important than sealing.
@@ -529,10 +565,31 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
    * checkpoint drained — see the call site. Every other roll leaves it off,
    * because the log is still growing and claiming otherwise would make the
    * student's next keystroke look like an append past a finished seal.
+   *
+   * `force` bypasses the `ROLLING_SEAL_MIN_INTERVAL_MS` time floor. Only the
+   * session-start caller (step 6c) passes it — that first roll is what a
+   * short, checkpoint-free session relies on for coverage at all, so it must
+   * never be skipped. `final: true` bypasses the floor too, unconditionally:
+   * the last seal this session will ever get must always be written, however
+   * recently the previous one landed. The checkpoint call site (below, inside
+   * `onEntry`) passes neither, so it alone is subject to the floor.
    */
-  function rewriteRollingSeal(opts?: { final?: boolean }): Promise<void> {
+  function rewriteRollingSeal(opts?: { final?: boolean; force?: boolean }): Promise<void> {
     if (!rollingSealEnabled) return Promise.resolve();
     const isFinal = opts?.final === true;
+    const bypassFloor = isFinal || opts?.force === true;
+    if (
+      !bypassFloor &&
+      lastRollAt !== null &&
+      clock.now() - lastRollAt < ROLLING_SEAL_MIN_INTERVAL_MS
+    ) {
+      // Too soon since the last roll. The on-disk seal is still a valid (if
+      // slightly stale) PREFIX seal — never treated as whole-file by a reader,
+      // since only a `final: true` seal makes that claim — and the next
+      // checkpoint, or dispose()'s unconditional final roll, will catch up.
+      return Promise.resolve();
+    }
+    lastRollAt = clock.now();
     rollingSealChain = rollingSealChain.then(() => rollingSealOnce(isFinal));
     return rollingSealChain;
   }
@@ -547,7 +604,8 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
         assignmentRoot,
         assignmentId: manifest.assignment_id,
         semester: manifest.semester,
-        filesUnderReview: manifest.files_under_review,
+        scope,
+        scopeCapped: expectedContentRegistry.capHit(),
         sessionPrivkey: keypair.privateKey,
         extensionHash: await getExtensionHashOnce(),
         ...(isFinal ? { final: true } : {}),
@@ -620,6 +678,13 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
           // so `meta_sha256` covers it, and after the .catch above so a failed
           // checkpoint still gets the best seal available. rewriteRollingSeal
           // never rejects, so it cannot poison the chain dispose() awaits.
+          //
+          // No `force`/`final` here: this is the ONE call site subject to
+          // `ROLLING_SEAL_MIN_INTERVAL_MS` — a checkpoint fired less than 60s
+          // after the last actual roll is a no-op, since the walk-and-hash
+          // cost that motivates the floor runs at THIS cadence, not the
+          // session-start or dispose() rolls (see `rewriteRollingSeal`'s
+          // docstring).
           .then(() => rewriteRollingSeal());
       }
     },
@@ -651,7 +716,13 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   // caller (or a test's teardown) has already torn down. The cost is one
   // dist/ walk plus one ed25519 sign at activation, alongside the keypair
   // generation and encrypted-privkey write already happening here.
-  await rewriteRollingSeal();
+  //
+  // `force: true`: this is the FIRST roll, before `lastRollAt` has a baseline,
+  // so the time floor would never actually bite here regardless — but forcing
+  // it explicitly documents that this roll is unconditional, matching
+  // `rewriteRollingSeal`'s own contract, rather than relying on `lastRollAt`
+  // starting `null`.
+  await rewriteRollingSeal({ force: true });
 
   // Step 7: Start heartbeat (PRD §4.2: session.heartbeat every 30s).
   const hbDeps = deps.heartbeatDeps ?? defaultHeartbeatDeps();
@@ -698,8 +769,8 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   };
 
   // Step 11: Start doc-event wiring (PRD §4.2 + §4.3 paste detection).
-  const scope = scopeFromManifest(manifest);
-  const expectedContentRegistry = new ExpectedContentRegistry(scope);
+  // `scope` and `expectedContentRegistry` were already constructed at step
+  // 4c-pre, ahead of the rolling seal's first rewrite at step 6c.
 
   // ExplanationTagger for formatter/git explanation of external changes.
   const explanationTagger = new ExplanationTagger({ getNow: () => clock.now() });

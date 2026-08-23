@@ -64,7 +64,8 @@ describe('writeRollingSeal', () => {
       assignmentRoot,
       assignmentId: 'hw03',
       semester: 'fa26',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
+      scopeCapped: false,
       sessionPrivkey: keypair.privateKey,
       extensionHash: EXTENSION_HASH,
       ...overrides,
@@ -203,20 +204,29 @@ describe('writeRollingSeal', () => {
   it('records files under review as present-with-hash or missing-with-null', async () => {
     await fs.writeFile(path.join(assignmentRoot, 'here.py'), 'x = 1\n', 'utf8');
 
-    const result = await writeRollingSeal(opts({ filesUnderReview: ['here.py', 'gone.py'] }));
+    const result = await writeRollingSeal(
+      opts({ scope: { track: ['here.py', 'gone.py'], ignore: [], attachments: [] } }),
+    );
     if (result.kind !== 'written') throw new Error('expected written');
 
     const manifest = JSON.parse(result.canonicalJson) as {
-      submission_files: Array<{ path: string; status: string; sha256: string | null }>;
+      submission_files: Array<{
+        path: string;
+        status: string;
+        sha256: string | null;
+        role: string;
+      }>;
     };
     expect(manifest.submission_files).toEqual([
-      { path: 'here.py', status: 'present', sha256: sha256Hex('x = 1\n') },
-      { path: 'gone.py', status: 'missing', sha256: null },
+      { path: 'here.py', status: 'present', sha256: sha256Hex('x = 1\n'), role: 'reviewed' },
+      { path: 'gone.py', status: 'missing', sha256: null, role: 'reviewed' },
     ]);
   });
 
   it('seals a session with no files under review at all', async () => {
-    const result = await writeRollingSeal(opts({ filesUnderReview: [] }));
+    const result = await writeRollingSeal(
+      opts({ scope: { track: [], ignore: [], attachments: [] } }),
+    );
     expect(result.kind).toBe('written');
     if (result.kind !== 'written') return;
 
@@ -472,6 +482,125 @@ describe('writeRollingSeal', () => {
       expect(b['final']).toBe(true);
       delete b['final'];
       expect(canonicalize(b)).toBe(canonicalize(a));
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Path scope (task 13) — the rolling seal must resolve the same scope the
+  // classic seal does, or a git-submitted, folder-scoped course gets a
+  // rolling manifest that lists nothing at all.
+  // -------------------------------------------------------------------------
+
+  describe('path scope at rolling-seal time', () => {
+    it('seals rule-matched files, so a folder-scoped course is not sealed empty', async () => {
+      await fs.mkdir(path.join(assignmentRoot, 'src'), { recursive: true });
+      await fs.writeFile(path.join(assignmentRoot, 'src/Main.java'), 'class Main {}', 'utf8');
+      await fs.writeFile(path.join(assignmentRoot, 'src/A.class'), 'BINARY', 'utf8');
+      await fs.mkdir(path.join(assignmentRoot, 'logs'), { recursive: true });
+      await fs.writeFile(path.join(assignmentRoot, 'logs/run.log'), 'output', 'utf8');
+
+      const result = await writeRollingSeal(
+        opts({ scope: { track: ['src/'], ignore: ['*.class'], attachments: ['logs/'] } }),
+      );
+      expect(result.kind).toBe('written');
+      if (result.kind !== 'written') return;
+
+      const manifest = JSON.parse(result.canonicalJson) as {
+        submission_files: Array<{ path: string; status: string; role?: string }>;
+      };
+      const byPath = new Map(manifest.submission_files.map((f) => [f.path, f]));
+      expect(byPath.get('src/Main.java')?.role).toBe('reviewed');
+      expect(byPath.get('logs/run.log')?.role).toBe('attachment');
+      expect(byPath.has('src/A.class')).toBe(false);
+    });
+
+    it('marks an absent EXACT entry missing and says nothing about rule entries', async () => {
+      await fs.writeFile(path.join(assignmentRoot, 'Present.java'), 'x', 'utf8');
+
+      const result = await writeRollingSeal(
+        opts({ scope: { track: ['*.java', 'Required.java'], ignore: [], attachments: [] } }),
+      );
+      if (result.kind !== 'written') throw new Error('expected written');
+
+      const manifest = JSON.parse(result.canonicalJson) as {
+        submission_files: Array<{ path: string; status: string }>;
+      };
+      expect(
+        manifest.submission_files.filter((f) => f.status === 'missing').map((f) => f.path),
+      ).toEqual(['Required.java']);
+    });
+
+    it('omits scope_capped when the cap did not bite', async () => {
+      await fs.writeFile(path.join(assignmentRoot, 'a.java'), 'x', 'utf8');
+
+      const result = await writeRollingSeal(
+        opts({ scope: { track: ['*.java'], ignore: [], attachments: [] }, scopeCapped: false }),
+      );
+      if (result.kind !== 'written') throw new Error('expected written');
+      expect('scope_capped' in JSON.parse(result.canonicalJson)).toBe(false);
+    });
+
+    it('includes scope_capped: true when the cap did bite', async () => {
+      const result = await writeRollingSeal(
+        opts({ scope: { track: ['a.java'], ignore: [], attachments: [] }, scopeCapped: true }),
+      );
+      if (result.kind !== 'written') throw new Error('expected written');
+      const manifest = JSON.parse(result.canonicalJson) as { scope_capped?: boolean };
+      expect(manifest.scope_capped).toBe(true);
+    });
+
+    it('never seals a hard-excluded path, however greedy the scope', async () => {
+      await fs.mkdir(path.join(assignmentRoot, '.git'), { recursive: true });
+      await fs.writeFile(path.join(assignmentRoot, '.git/config'), 'x', 'utf8');
+      await fs.writeFile(path.join(assignmentRoot, 'ok.txt'), 'x', 'utf8');
+
+      const result = await writeRollingSeal(
+        opts({ scope: { track: ['*'], ignore: [], attachments: [] } }),
+      );
+      if (result.kind !== 'written') throw new Error('expected written');
+
+      const manifest = JSON.parse(result.canonicalJson) as {
+        submission_files: Array<{ path: string }>;
+      };
+      const paths = manifest.submission_files.map((f) => f.path);
+      expect(paths.some((p) => p.startsWith('.git/'))).toBe(false);
+      expect(paths.some((p) => p.startsWith('.provenance/'))).toBe(false);
+      expect(paths).toContain('ok.txt');
+    });
+
+    it('drops (never reports missing) a walk-sighted rule-matched file it cannot read', async () => {
+      // The classic seal's structural property, round-tripped: a rule entry
+      // asserts nothing about any particular file's existence, so a
+      // walk-discovered file the read step cannot open is silently DROPPED,
+      // not `missing`. Unlike deleting the file before the walk runs (which
+      // the walk never sights at all, and so proves nothing about the drop
+      // logic — that shape was this test's bug in fix round 1), a chmod
+      // leaves the directory entry intact: `walkWorkspace` sights it and
+      // role-resolves it to `reviewed`, and only the later `readFile` fails
+      // (EACCES, not ENOENT), which is what this test actually needs to
+      // exercise the drop path rather than trivially pass against an
+      // untouched workspace.
+      const dir = path.join(assignmentRoot, 'gone');
+      await fs.mkdir(dir, { recursive: true });
+      const filePath = path.join(dir, 'File.java');
+      await fs.writeFile(filePath, 'x', 'utf8');
+      await fs.chmod(filePath, 0o000);
+
+      try {
+        const result = await writeRollingSeal(
+          opts({ scope: { track: ['*.java'], ignore: [], attachments: [] } }),
+        );
+        if (result.kind !== 'written') throw new Error('expected written');
+
+        const manifest = JSON.parse(result.canonicalJson) as {
+          submission_files: Array<{ path: string; status: string }>;
+        };
+        // Dropped entirely — neither `present` nor `missing`.
+        expect(manifest.submission_files.some((f) => f.path === 'gone/File.java')).toBe(false);
+        expect(manifest.submission_files.some((f) => f.status === 'missing')).toBe(false);
+      } finally {
+        await fs.chmod(filePath, 0o644);
+      }
     });
   });
 });

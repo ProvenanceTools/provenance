@@ -14,7 +14,7 @@ import {
   validateBundleManifestShape,
   validateRollingSessionManifest,
 } from '@provenance/log-core';
-import type { Manifest } from '@provenance/log-core';
+import type { Manifest, Clock } from '@provenance/log-core';
 import * as vscodeMock from 'vscode';
 import { startSession, SessionRegistry } from './session-registry.js';
 import type { ActiveSession } from './session-registry.js';
@@ -417,6 +417,7 @@ describe('startSession — rolling seal', () => {
   async function start(
     root: string = assignmentRoot,
     submission?: 'bundle' | 'git',
+    clock: Clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z')),
   ): Promise<ActiveSession> {
     const base = await signedManifest({
       assignment_id: 'hw03',
@@ -435,7 +436,7 @@ describe('startSession — rolling seal', () => {
       extension: makeExtension(),
       vscodeVersion: '1.97.0',
       platform: 'darwin-arm64',
-      clock: new FixedClock(0, new Date('2026-01-01T00:00:00.000Z')),
+      clock,
       provenanceDirOverride: provenanceDir,
     });
   }
@@ -557,11 +558,15 @@ describe('startSession — rolling seal', () => {
   });
 
   it('rewrites the seal on a checkpoint, tracking the growing .slog', async () => {
-    const session = await start();
+    // Past the checkpoint roll's time floor (task 13, fix round 1) — see the
+    // 'checkpoint roll time floor' block below for the floor's own coverage.
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const session = await start(assignmentRoot, undefined, clock);
     const sessionId = await sessionIdOf(session);
     const manifestPath = path.join(provenanceDir, `manifest-${sessionId}.json`);
     const atStart = await fs.readFile(manifestPath, 'utf8');
 
+    clock.advance(60_000);
     emitPastCheckpoint(session);
     await session.writer.flush();
     await session.getPendingCheckpoint();
@@ -576,6 +581,77 @@ describe('startSession — rolling seal', () => {
     expect(validateRollingSessionManifest(shape.value, sessionId).ok).toBe(true);
 
     await session.dispose();
+  });
+
+  // -------------------------------------------------------------------------
+  // The checkpoint roll's time floor (task 13, fix round 1). 100 events is an
+  // event-count bound, not a time bound, and a broad rule-scoped course can
+  // make one roll expensive (measured ~4.2s against a suffix rule matching
+  // 21,623 files) — so a checkpoint that lands too soon after the last actual
+  // roll must not perform another one. The session-start roll and dispose()'s
+  // final roll are exempt: see the two tests below.
+  // -------------------------------------------------------------------------
+
+  it('skips a checkpoint roll that lands inside the time floor, leaving the prior seal on disk', async () => {
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const session = await start(assignmentRoot, undefined, clock);
+    const sessionId = await sessionIdOf(session);
+    const manifestPath = path.join(provenanceDir, `manifest-${sessionId}.json`);
+    const atStart = await fs.readFile(manifestPath, 'utf8');
+
+    // Well under the 60s floor — the checkpoint roll below must be a no-op.
+    clock.advance(1_000);
+    emitPastCheckpoint(session);
+    await session.writer.flush();
+    await session.getPendingCheckpoint();
+
+    const afterCheckpoint = await fs.readFile(manifestPath, 'utf8');
+    expect(afterCheckpoint).toBe(atStart);
+
+    await session.dispose();
+  });
+
+  it('rolls again once the floor has elapsed, even after a skipped checkpoint', async () => {
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const session = await start(assignmentRoot, undefined, clock);
+    const sessionId = await sessionIdOf(session);
+    const manifestPath = path.join(provenanceDir, `manifest-${sessionId}.json`);
+    const atStart = await fs.readFile(manifestPath, 'utf8');
+
+    // First checkpoint: inside the floor, skipped.
+    clock.advance(1_000);
+    emitPastCheckpoint(session);
+    await session.writer.flush();
+    await session.getPendingCheckpoint();
+    expect(await fs.readFile(manifestPath, 'utf8')).toBe(atStart);
+
+    // Second checkpoint: now past 60s since the session-start roll — must fire.
+    clock.advance(60_000);
+    emitPastCheckpoint(session);
+    await session.writer.flush();
+    await session.getPendingCheckpoint();
+    expect(await fs.readFile(manifestPath, 'utf8')).not.toBe(atStart);
+
+    await session.dispose();
+  });
+
+  it('the dispose() final roll always fires, even seconds after the last roll', async () => {
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const session = await start(assignmentRoot, undefined, clock);
+    const sessionId = await sessionIdOf(session);
+    const manifestPath = path.join(provenanceDir, `manifest-${sessionId}.json`);
+    const atStart = await fs.readFile(manifestPath, 'utf8');
+
+    // Barely any time passes before the session ends — well inside the floor.
+    clock.advance(500);
+    await session.dispose();
+
+    // dispose()'s final roll is unconditional: it must have rewritten the
+    // seal (to `final: true`) despite landing inside the time floor.
+    const afterDispose = await fs.readFile(manifestPath, 'utf8');
+    expect(afterDispose).not.toBe(atStart);
+    const parsed = JSON.parse(afterDispose) as { final?: boolean };
+    expect(parsed.final).toBe(true);
   });
 
   // -------------------------------------------------------------------------

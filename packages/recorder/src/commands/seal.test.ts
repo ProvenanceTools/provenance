@@ -645,19 +645,11 @@ describe('path scope at seal time', () => {
     expect(await zip.file('logs/run.log')!.async('string')).toBe('output');
   });
 
-  it('never seals a hard-excluded path, however greedy the manifest', async () => {
-    const ws = await makeWorkspace({
-      'src/Main.java': 'x',
-      '.provenance/should-not-appear.txt': 'x',
-      '.git/objects/pack-abc.pack': 'x',
-    });
-    await sealBundle(sealDeps(ws, { scope: { track: ['*'], ignore: [], attachments: [] } }));
-    const manifest = await readSealedManifest();
-    for (const f of manifest.submission_files ?? []) {
-      expect(f.path.startsWith('.provenance/')).toBe(false);
-      expect(f.path.startsWith('.git/')).toBe(false);
-    }
-  });
+  // 'never seals a hard-excluded path, however greedy the manifest' moved to
+  // `io/workspace-walk.test.ts` (task 13, fix round 1, Minor 4) — it exercised
+  // only `walkWorkspace`'s own directory-level pruning, not anything specific
+  // to `sealBundle`, so it now tests the shared module directly instead of
+  // incidentally through one of its two callers.
 
   it('marks an absent EXACT entry missing, and says nothing about rule entries', async () => {
     // R2. A course writing "*.java" asserts nothing about any particular file
@@ -789,27 +781,9 @@ describe('path scope at seal time', () => {
     }
   });
 
-  it('does not recurse into a symlinked directory (lstat-flavoured Dirent classification)', async () => {
-    // Dirent.isDirectory() does not follow symlinks, so a symlink to a
-    // directory (including one pointing back at an ancestor, which would
-    // otherwise cycle forever) is classified as neither a directory nor a file
-    // by this walk and is simply skipped.
-    const ws = await makeWorkspace({ 'real/Nested.java': 'class Nested {}' });
-    const cyclePath = path.join(ws.root, 'loop');
-    await fsPromises.symlink(ws.root, cyclePath);
-
-    const result = await sealBundle(
-      sealDeps(ws, { scope: { track: ['*'], ignore: [], attachments: [] } }),
-    );
-    expect(result.kind).toBe('ok');
-    if (result.kind !== 'ok') return;
-
-    const manifest = await readSealedManifest();
-    const paths = (manifest.submission_files ?? []).map((f) => f.path);
-    expect(paths).toContain('real/Nested.java');
-    // Nothing was walked through the `loop/` symlink at all.
-    expect(paths.some((p) => p.startsWith('loop/'))).toBe(false);
-  });
+  // 'does not recurse into a symlinked directory (lstat-flavoured Dirent
+  // classification)' moved to `io/workspace-walk.test.ts` (task 13, fix round
+  // 1, Minor 4) — same reasoning as the hard-exclusion test above.
 
   // ---------------------------------------------------------------------------
   // Fix round 2 regressions
