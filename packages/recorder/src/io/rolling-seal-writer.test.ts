@@ -568,23 +568,39 @@ describe('writeRollingSeal', () => {
       expect(paths).toContain('ok.txt');
     });
 
-    it('drops (never reports missing) a rule-matched file that vanishes before it can be read', async () => {
+    it('drops (never reports missing) a walk-sighted rule-matched file it cannot read', async () => {
       // The classic seal's structural property, round-tripped: a rule entry
-      // asserts nothing about any particular file's existence, so an absent
-      // rule match is silently dropped, not `missing`.
-      await fs.mkdir(path.join(assignmentRoot, 'gone'), { recursive: true });
-      await fs.writeFile(path.join(assignmentRoot, 'gone/File.java'), 'x', 'utf8');
-      await fs.rm(path.join(assignmentRoot, 'gone/File.java'));
+      // asserts nothing about any particular file's existence, so a
+      // walk-discovered file the read step cannot open is silently DROPPED,
+      // not `missing`. Unlike deleting the file before the walk runs (which
+      // the walk never sights at all, and so proves nothing about the drop
+      // logic — that shape was this test's bug in fix round 1), a chmod
+      // leaves the directory entry intact: `walkWorkspace` sights it and
+      // role-resolves it to `reviewed`, and only the later `readFile` fails
+      // (EACCES, not ENOENT), which is what this test actually needs to
+      // exercise the drop path rather than trivially pass against an
+      // untouched workspace.
+      const dir = path.join(assignmentRoot, 'gone');
+      await fs.mkdir(dir, { recursive: true });
+      const filePath = path.join(dir, 'File.java');
+      await fs.writeFile(filePath, 'x', 'utf8');
+      await fs.chmod(filePath, 0o000);
 
-      const result = await writeRollingSeal(
-        opts({ scope: { track: ['*.java'], ignore: [], attachments: [] } }),
-      );
-      if (result.kind !== 'written') throw new Error('expected written');
+      try {
+        const result = await writeRollingSeal(
+          opts({ scope: { track: ['*.java'], ignore: [], attachments: [] } }),
+        );
+        if (result.kind !== 'written') throw new Error('expected written');
 
-      const manifest = JSON.parse(result.canonicalJson) as {
-        submission_files: Array<{ path: string; status: string }>;
-      };
-      expect(manifest.submission_files.some((f) => f.status === 'missing')).toBe(false);
+        const manifest = JSON.parse(result.canonicalJson) as {
+          submission_files: Array<{ path: string; status: string }>;
+        };
+        // Dropped entirely — neither `present` nor `missing`.
+        expect(manifest.submission_files.some((f) => f.path === 'gone/File.java')).toBe(false);
+        expect(manifest.submission_files.some((f) => f.status === 'missing')).toBe(false);
+      } finally {
+        await fs.chmod(filePath, 0o644);
+      }
     });
   });
 });

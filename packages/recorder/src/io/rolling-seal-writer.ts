@@ -120,6 +120,8 @@ import type { BundleManifest, SubmissionFileEntry, ResolvedScope } from '@proven
 import { atomicWriteFilePair } from './atomic-write.js';
 import type { AtomicWriteFs } from './atomic-write.js';
 import { walkWorkspace, hasHardExcludedSegment } from './workspace-walk.js';
+import { readWorkspaceFile } from './workspace-file-read.js';
+import type { WorkspaceFileReadResult } from './workspace-file-read.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -204,115 +206,16 @@ async function sha256OfFile(filePath: string): Promise<string> {
   }
 }
 
-type TrackedFile =
-  | { path: string; status: 'present'; sha256: string }
-  | { path: string; status: 'missing'; sha256: null };
-
 /**
- * `readTrackedFile`'s full result set, including the two outcomes that must
- * NEVER become a `TrackedFile`: a path whose existence could not actually be
- * determined (`unreadable`), and a path that resolves outside the workspace
- * root (`out_of_workspace`). Mirrors `commands/seal.ts`'s `ReadResult` split —
- * `missing` is the only affirmative claim about the student in this whole
- * type, so it is reachable from exactly ONE condition, ENOENT, and every other
- * way a read can fail has its own non-accusatory outcome instead.
+ * `readWorkspaceFile`'s `present`/`missing` outcomes (see
+ * `io/workspace-file-read.ts`) — the only two that may be pushed into
+ * `collectSubmissionFiles`'s `found`. Its other two outcomes, `unreadable`
+ * and `out_of_workspace`, are always handled (dropped) at the call sites
+ * below before a result ever reaches this narrower type — see
+ * `readWorkspaceFile`'s docstring for why `missing` is reachable from exactly
+ * ONE condition (ENOENT).
  */
-type ReadResult =
-  | TrackedFile
-  | { path: string; status: 'unreadable' }
-  | { path: string; status: 'out_of_workspace' };
-
-/**
- * Where a candidate path really lives relative to the workspace root, after
- * resolving ALL symlinks on BOTH sides. See `commands/seal.ts`'s
- * `resolveContainment` for the full reasoning (both sides must be realpath'd,
- * this fails CLOSED on a resolution error, and the syscall equivalence that
- * makes failing closed free) — reproduced here rather than imported because
- * only `workspace-walk.ts`'s walk itself was extracted to be shared; this
- * check stays a local implementation of the same rule.
- */
-type Containment =
-  | { kind: 'inside' }
-  | { kind: 'outside' }
-  | { kind: 'unresolved'; code: string | undefined };
-
-async function resolveContainment(realRoot: string, absPath: string): Promise<Containment> {
-  let realPath: string;
-  try {
-    realPath = await fsPromises.realpath(absPath);
-  } catch (e) {
-    return { kind: 'unresolved', code: (e as NodeJS.ErrnoException).code };
-  }
-  return realPath === realRoot || realPath.startsWith(realRoot + path.sep)
-    ? { kind: 'inside' }
-    : { kind: 'outside' };
-}
-
-/**
- * Read one tracked path's on-disk state: present-with-hash, missing (ENOENT
- * only), unreadable (any other read failure — permission denied, a directory
- * where a file was expected, a non-regular file, a symlink cycle, ...), or
- * out-of-workspace (resolves, after following every symlink, outside the
- * workspace root). Mirrors `commands/seal.ts`'s `readReviewedFile`, minus the
- * raw bytes (the rolling seal only ever needs the hash, never a zip payload).
- */
-async function readTrackedFile(
-  workspaceRoot: string,
-  workspaceRealRoot: string,
-  relPath: string,
-): Promise<ReadResult> {
-  const abs = path.join(workspaceRoot, relPath);
-  const containment = await resolveContainment(workspaceRealRoot, abs);
-  if (containment.kind === 'outside') {
-    // Never `missing` — see `commands/seal.ts`'s Critical 1 for why. The
-    // overwhelmingly common way to reach this is not an attack: a student's
-    // `ln -s ~/shared/data.csv data.csv` with `data.csv` an exact `track`
-    // entry.
-    return { path: relPath, status: 'out_of_workspace' };
-  }
-  if (containment.kind === 'unresolved') {
-    // Fail closed: the path was NOT verified, so it is not opened. Classify it
-    // exactly as the read itself would have.
-    return containment.code === 'ENOENT'
-      ? { path: relPath, status: 'missing', sha256: null }
-      : { path: relPath, status: 'unreadable' };
-  }
-  // Only a REGULAR file may be read — a FIFO would block `readFile` forever
-  // with no timeout anywhere in this call stack, and this runs on every
-  // checkpoint, so hanging here would hang the whole session. `stat` never
-  // blocks on a FIFO; only `open` does.
-  let isRegularFile: boolean;
-  try {
-    isRegularFile = (await fsPromises.stat(abs)).isFile();
-  } catch (e) {
-    const statCode = (e as NodeJS.ErrnoException).code;
-    return statCode === 'ENOENT'
-      ? { path: relPath, status: 'missing', sha256: null }
-      : { path: relPath, status: 'unreadable' };
-  }
-  if (!isRegularFile) {
-    return { path: relPath, status: 'unreadable' };
-  }
-  try {
-    const bytes = await fsPromises.readFile(abs);
-    return {
-      path: relPath,
-      status: 'present',
-      sha256: createHash('sha256').update(bytes).digest('hex'),
-    };
-  } catch (e) {
-    // `missing` may only be minted for the one errno that actually means "this
-    // file does not exist": ENOENT. Every other code — EACCES, EISDIR, ELOOP,
-    // EMFILE, ... — means the file's existence is either known-true or simply
-    // undetermined, and reporting `missing` for any of those would be a false
-    // claim about the student.
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') {
-      return { path: relPath, status: 'missing', sha256: null };
-    }
-    return { path: relPath, status: 'unreadable' };
-  }
-}
+type TrackedFile = Extract<WorkspaceFileReadResult, { status: 'present' | 'missing' }>;
 
 /**
  * Every in-scope file's current on-disk state, as `SubmissionFileEntry`s.
@@ -362,7 +265,7 @@ async function collectSubmissionFiles(
     // could not re-open is never retried by the exact-entry loop below into a
     // false `missing`.
     sightedInScope.add(rel);
-    const result = await readTrackedFile(workspaceRoot, workspaceRealRoot, rel);
+    const result = await readWorkspaceFile(workspaceRoot, workspaceRealRoot, rel);
     if (result.status !== 'present') {
       // 'missing' (vanished between listing and reading), 'unreadable', or
       // 'out_of_workspace' (unreachable via a walk-discovered path in
@@ -400,9 +303,9 @@ async function collectSubmissionFiles(
     if (hasHardExcludedSegment(entry)) continue;
     if (sightedInScope.has(entry)) continue;
 
-    const result = await readTrackedFile(workspaceRoot, workspaceRealRoot, entry);
+    const result = await readWorkspaceFile(workspaceRoot, workspaceRealRoot, entry);
     if (result.status === 'out_of_workspace' || result.status === 'unreadable') {
-      // DROPPED, never `missing` — see `readTrackedFile`'s docstring.
+      // DROPPED, never `missing` — see `readWorkspaceFile`'s docstring.
       continue;
     }
     if (result.status === 'present') {

@@ -53,6 +53,8 @@ import {
 import type { BundleManifest, SignedBundleManifest, ResolvedScope } from '@provenance/log-core';
 import { atomicWriteFile } from '../io/atomic-write.js';
 import { walkWorkspace, hasHardExcludedSegment } from '../io/workspace-walk.js';
+import { readWorkspaceFile } from '../io/workspace-file-read.js';
+import type { WorkspaceFileReadResultWithBytes } from '../io/workspace-file-read.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -217,197 +219,15 @@ async function fileSize(filePath: string): Promise<number> {
   }
 }
 
-type ReviewedFile =
-  | { path: string; status: 'present'; sha256: string; bytes: Uint8Array }
-  | { path: string; status: 'missing'; sha256: null };
-
 /**
- * `readReviewedFile`'s full result set, including the two outcomes that must
- * NEVER become a `ReviewedFile`: a path whose existence could not actually be
- * determined (`unreadable`), and a path that resolves outside the workspace
- * root (`out_of_workspace`). `ReviewedFile` (present | missing) is what's
- * allowed to be PUSHED into `sealBundle`'s `reviewedFiles`; the other two are
- * always handled (dropped, warned) at the call site first (fix round 3,
- * Important 1; fix round 4, Critical 1).
- *
- * The split is deliberate and structural: `missing` is the only affirmative
- * claim about the student in this whole type, so it is reachable from exactly
- * ONE condition — ENOENT — and every other way a read can fail to produce
- * bytes has its own non-accusatory outcome instead.
+ * `readWorkspaceFile`'s `present`/`missing` outcomes (see
+ * `io/workspace-file-read.ts`) — the only two that may be PUSHED into
+ * `sealBundle`'s `reviewedFiles`. Its other two outcomes, `unreadable` and
+ * `out_of_workspace`, must NEVER become a `ReviewedFile`; both are always
+ * handled (dropped, warned) at the call site first (fix round 3, Important 1;
+ * fix round 4, Critical 1) before a result ever reaches this narrower type.
  */
-type ReadResult =
-  | ReviewedFile
-  | { path: string; status: 'unreadable' }
-  | { path: string; status: 'out_of_workspace' };
-
-/**
- * Where a candidate path really lives relative to the workspace root.
- *
- * `unresolved` carries the errno so the caller can classify it EXACTLY the way
- * the read attempt itself would have — see `resolveContainment`'s docstring
- * for why that equivalence is what makes failing closed free.
- */
-type Containment =
-  | { kind: 'inside' }
-  | { kind: 'outside' }
-  | { kind: 'unresolved'; code: string | undefined };
-
-/**
- * Where `absPath` really sits relative to `realRoot`, after resolving ALL
- * symlinks on BOTH sides.
- *
- * Both sides must be realpath'd, not just one: realpathing only `absPath`
- * would still miss the actual escape this exists for — a symlink INSIDE the
- * workspace (e.g. `out.txt`) whose target resolves OUTSIDE it (fix round 3,
- * Important 2) — because a lexically-inside symlink only reveals where it
- * really points once ITS OWN link is followed. And realpathing only `absPath`
- * while comparing against the LEXICAL root would reject every path in a
- * perfectly ordinary macOS workspace: `/var/folders/...` (Node's default
- * `os.tmpdir()`, and this file's own test suite) is itself a symlink to
- * `/private/var/folders/...`, so the root's own lexical and real forms
- * already disagree before any workspace file is considered.
- *
- * FAILS CLOSED (fix round 4, Fix 2). This function's predecessor,
- * `isWithinRoot`, returned TRUE ("cannot prove escape") whenever `realpath`
- * threw, and let the read proceed against an unverified path. That fail-open
- * existed for exactly one reason: the rejection branch used to mint a
- * `missing` record, so rejecting an ordinary in-workspace file that merely sat
- * under an unreadable directory would have produced a FALSE ACCUSATION. Fix
- * round 4's Critical 1 removed that consequence — rejection now drops the
- * entry and raises `outOfWorkspacePathRejected` — so the justification is
- * gone, and a security check no longer defaults to "allow" on error.
- *
- * Failing closed costs nothing real, because of a syscall equivalence:
- * `realpath(p)` and `readFile(p)` walk the same path with the same resolution
- * rules and the same permission checks, so whenever `realpath` fails,
- * `readFile` fails with the identical errno. `unresolved` therefore carries
- * that errno up, and `readReviewedFile` classifies it EXACTLY as it would have
- * classified the read's own failure: ENOENT -> `missing` (the file genuinely
- * is not there, and there is no target outside the root to leak), anything
- * else -> `unreadable`. The outcome is byte-for-byte the same as before for
- * every non-escaping path; the only change is that a path we could not verify
- * is never opened.
- *
- * `realRoot` is precomputed ONCE per `sealBundle` call (see `workspaceRealRoot`
- * in step 3) rather than realpath'd again on every call here — the walk
- * already bounds how many files reach this check to "in-scope files", not
- * "everything under the root", so the per-call cost is one `realpath` for
- * `absPath` plus a string comparison.
- */
-async function resolveContainment(realRoot: string, absPath: string): Promise<Containment> {
-  let realPath: string;
-  try {
-    realPath = await fsPromises.realpath(absPath);
-  } catch (e) {
-    return { kind: 'unresolved', code: (e as NodeJS.ErrnoException).code };
-  }
-  return realPath === realRoot || realPath.startsWith(realRoot + path.sep)
-    ? { kind: 'inside' }
-    : { kind: 'outside' };
-}
-
-/**
- * Read a reviewed file's raw on-disk bytes + sha256, mark it missing, or mark
- * it unreadable. `relPath` is workspace-relative; resolved against
- * `workspaceRoot`. `workspaceRealRoot` is `workspaceRoot` with all symlinks
- * already resolved (see `isWithinRoot`).
- */
-async function readReviewedFile(
-  workspaceRoot: string,
-  workspaceRealRoot: string,
-  relPath: string,
-): Promise<ReadResult> {
-  const abs = path.join(workspaceRoot, relPath);
-  const containment = await resolveContainment(workspaceRealRoot, abs);
-  if (containment.kind === 'outside') {
-    // A path that resolves outside the workspace root — a `..` segment in an
-    // EXACT track entry, or a symlink INSIDE the workspace whose target is
-    // OUTSIDE it — is never read, whatever the manifest claims.
-    // `validateScopeEntry` deliberately never runs against a 1.x manifest's
-    // `files_under_review` (1.x parsing must never reject — `manifest.ts`),
-    // so this containment check is the seal's own last line of defense (fix
-    // round 2, Important 3; symlink form closed in fix round 3, Important 2).
-    //
-    // It returns its OWN outcome and NEVER `missing` (fix round 4, Critical 1).
-    // The overwhelmingly common way to reach this branch is not an attack at
-    // all: a student runs `ln -s ~/shared/data.csv data.csv`, and `data.csv`
-    // is an exact `track` entry. The walk never sights it (`Dirent.isFile()`
-    // is false for a symlink entry), so it falls through to the exact-entry
-    // loop and lands here — with a file that is on disk and fully readable.
-    // Minting `missing` for it told staff "File listed in files_under_review
-    // but absent on disk at seal time" about a file the student really did
-    // submit: the single worst output this system can produce, and, because
-    // every warning was false, one the student was never even shown. Every
-    // 1.x manifest's `files_under_review` is nothing but exact entries, so
-    // that exposed every tracked file any student had ever symlinked.
-    //
-    // A path the walk itself produced can never trip this: it is always built
-    // from real (non-symlink) directory entries under `workspaceRoot`, all
-    // the way down (see `walkWorkspace`).
-    return { path: relPath, status: 'out_of_workspace' };
-  }
-  if (containment.kind === 'unresolved') {
-    // Fail closed: the path was NOT verified, so it is not opened. Classify it
-    // exactly as the read itself would have — see `resolveContainment`'s
-    // docstring for the syscall equivalence that makes this lossless.
-    return containment.code === 'ENOENT'
-      ? { path: relPath, status: 'missing', sha256: null }
-      : { path: relPath, status: 'unreadable' };
-  }
-  // Only a REGULAR file may be read (fix round 4, Fix 4). `fsPromises.readFile`
-  // on a FIFO BLOCKS FOREVER waiting for a writer, with no timeout anywhere in
-  // this call stack: a student who does `rm Main.java && mkfifo Main.java`
-  // (`Main.java` being an exact `track` entry, and FIFOs being invisible to the
-  // walk's `isFile()` check) would hang `sealBundle` and be unable to submit at
-  // all. `stat` never blocks on a FIFO — only `open` does — so this gate is
-  // safe to take first. It also gives directories (an ordinary staff manifest
-  // typo naming `src` instead of `src/`) a cleaner home than catching EISDIR
-  // off the read, and covers sockets, devices, and block specials for free.
-  // `stat` follows symlinks, matching `readFile`'s own semantics, so a symlink
-  // to a regular file inside the workspace still passes.
-  let isRegularFile: boolean;
-  try {
-    isRegularFile = (await fsPromises.stat(abs)).isFile();
-  } catch (e) {
-    const statCode = (e as NodeJS.ErrnoException).code;
-    return statCode === 'ENOENT'
-      ? { path: relPath, status: 'missing', sha256: null }
-      : { path: relPath, status: 'unreadable' };
-  }
-  if (!isRegularFile) {
-    return { path: relPath, status: 'unreadable' };
-  }
-  try {
-    const bytes = await fsPromises.readFile(abs);
-    const hash = createHash('sha256');
-    hash.update(bytes);
-    return {
-      path: relPath,
-      status: 'present',
-      sha256: hash.digest('hex'),
-      bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
-    };
-  } catch (e) {
-    // `missing` is an AFFIRMATIVE claim about the student — "this file does
-    // not exist" — so it may only be minted for the one errno that actually
-    // means that: ENOENT. Every other code — EACCES (permission denied),
-    // EISDIR (a staff manifest typo named a directory instead of a file —
-    // normally caught by the regular-file gate above, kept here for the race
-    // where the path changes shape in between), ELOOP (symlink cycle),
-    // EMFILE (too many open files),
-    // ERR_FS_FILE_TOO_LARGE, ... — means the file's existence is either
-    // known-true or simply undetermined, and reporting `missing` for any of
-    // those is a false claim about the student (fix round 3, Important 1).
-    // This is what makes the walk loop's existing drop-and-warn protection
-    // (see step 3) structural for the exact-entry loop too, instead of
-    // depending on the walk having managed to SEE the file first.
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') {
-      return { path: relPath, status: 'missing', sha256: null };
-    }
-    return { path: relPath, status: 'unreadable' };
-  }
-}
+type ReviewedFile = Extract<WorkspaceFileReadResultWithBytes, { status: 'present' | 'missing' }>;
 
 /**
  * Extract session_id and prev_session_id from the first entry of a parsed slog.
@@ -725,7 +545,9 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
     const role = resolvePathRole(rel, scope);
     if (role !== 'reviewed' && role !== 'attachment') continue;
     sightedInScope.add(rel);
-    const result = await readReviewedFile(workspaceRoot, workspaceRealRoot, rel);
+    const result = await readWorkspaceFile(workspaceRoot, workspaceRealRoot, rel, {
+      withBytes: true,
+    });
     if (result.status === 'out_of_workspace') {
       // Unreachable in practice — the walk only ever yields real, non-symlink
       // directory entries under the root — but classified honestly rather than
@@ -786,7 +608,7 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
   // membership: the walk enumerates directory entries by the OS's exact
   // on-disk spelling and Dirent's lstat-flavoured type, so it can miss a path
   // that differs only in case on a case-insensitive filesystem, or a symlink
-  // (`isFile()` is false for a symlink entry) — both of which `readReviewedFile`
+  // (`isFile()` is false for a symlink entry) — both of which `readWorkspaceFile`
   // resolves correctly because it opens the path directly, the same way the
   // pre-path-scope seal always did.
   for (const entry of scope.track) {
@@ -802,12 +624,14 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
     // Already sighted by the walk under this exact spelling — do not re-read.
     if (sightedInScope.has(entry)) continue;
 
-    const result = await readReviewedFile(workspaceRoot, workspaceRealRoot, entry);
+    const result = await readWorkspaceFile(workspaceRoot, workspaceRealRoot, entry, {
+      withBytes: true,
+    });
     if (result.status === 'out_of_workspace') {
       // The entry resolves outside the workspace root. DROP it — never
       // `missing`, which would be an affirmative false claim about a file that
       // may well be sitting on disk and perfectly readable (the student
-      // symlink case; see `readReviewedFile`). The distinct flag is what tells
+      // symlink case; see `io/workspace-file-read.ts`). The distinct flag is what tells
       // staff "we refused to read this" instead of "the student didn't submit
       // it" (fix round 4, Critical 1).
       warnings.outOfWorkspacePathRejected = true;
