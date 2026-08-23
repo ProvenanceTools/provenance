@@ -43,7 +43,7 @@ digraph chain {
     node [fillcolor="#241a0c" color="#F97316" fontsize=9.5]
 
     cert  [label="course_cert\ncourse_id · course_pubkey\nvalid_from · valid_until · root_sig" shape=note]
-    amf   [label=".provenance-manifest — Manifest 2.0\ncourse_id · assignment_id · semester · issued_at\nfiles_under_review · collaboration · submission\nscope · policy   ← all of it covered by sig" shape=note]
+    amf   [label=".provenance-manifest — Manifest 2.0\ncourse_id · assignment_id · semester · issued_at\nfiles_under_review (exact · dir/ · *.suffix)\nignore · attachments · collaboration · submission\nscope · policy   ← all of it covered by sig" shape=note]
     averify [label="walk the chain\nroot → cert → manifest\nformat_version must be 2.0\nBEFORE any of it" shape=diamond fillcolor="#1c1712" fontsize=9
              height=1.35 width=2.4]
     pol   [label="capture policy — signed, so a professor can\nturn capture DOWN and a student cannot turn it OFF\nselection_change · focus_change · terminal ·\nheartbeat_interval_ms. EVERYTHING else is floor:\nthe schema has no key that could disable it."
