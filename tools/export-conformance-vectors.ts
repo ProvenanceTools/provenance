@@ -50,6 +50,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as ed from '@noble/ed25519';
 import { sha512, sha256 } from '@noble/hashes/sha2.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
@@ -288,6 +289,36 @@ const COURSE_ID = 'berkeley-cs61b';
 /** The "other" course, for cross-course forgery and unlinkability vectors. */
 const OTHER_COURSE_ID = 'berkeley-cs61c';
 
+/**
+ * The three course-signed path-scope lists used by every 2.0 manifest vector.
+ *
+ * `ignore` and `attachments` are REQUIRED at 2.0 (path-scope design spec §3): a
+ * 2.0 manifest missing either fails `parseManifestValue`, and both are inside
+ * the course-signed payload so a professor can narrow scope and a student
+ * cannot widen it.
+ *
+ * The values deliberately exercise all THREE entry forms in each list, because
+ * this file is how the Kotlin and Lua ports learn the grammar:
+ *
+ *   - `dir/`      — a directory prefix, matched with a plain `startsWith`.
+ *   - `name.ext`  — an exact workspace-relative path, matched with `===`.
+ *   - `*.ext`     — a single LEADING star, matched with `endsWith` at any depth.
+ *
+ * There is no `**`, no mid-path star, and `?[]{}`, `..` and absolute paths are
+ * refused outright — see `validateScopeEntry`.
+ *
+ * The overlaps are intentional and pin the §3.4 precedence chain
+ * (excluded > ignored > attachment > reviewed > unscoped):
+ *
+ *   - `src/Scratch.java` is under the reviewed `src/` prefix AND matches the
+ *     reviewed `*.java` suffix, yet `ignore` wins — it is invisible.
+ *   - `logs/run.log` is not under `src/`, but `attachments` seals and hashes it
+ *     without ever capturing an event for it.
+ */
+const V2_TRACK = ['src/', 'README.md', '*.java'];
+const V2_IGNORE = ['target/', 'src/Scratch.java', '*.class'];
+const V2_ATTACHMENTS = ['logs/', 'design.pdf', '*.log'];
+
 /** The `policy` block used by every 2.0 manifest vector. */
 const V2_POLICY = {
   capture: {
@@ -505,7 +536,7 @@ async function buildCourseCertVectors(): Promise<unknown> {
  * breaks) and the `course_id_mismatch` case (both signatures verify and the
  * manifest is still a forgery).
  */
-async function buildManifestV2Vectors(): Promise<unknown> {
+export async function buildManifestV2Vectors(): Promise<unknown> {
   const rootPubkeyHex = await pub(ROOT_PRIV);
   const coursePubkeyHex = await pub(COURSE_PRIV);
   const cert = await makeCert();
@@ -520,7 +551,9 @@ async function buildManifestV2Vectors(): Promise<unknown> {
       assignment_id: 'proj2',
       semester: 'fa26',
       issued_at: '2026-09-08T00:00:00Z',
-      files_under_review: ['src/Main.java'],
+      files_under_review: V2_TRACK,
+      ignore: V2_IGNORE,
+      attachments: V2_ATTACHMENTS,
       collaboration: 'solo',
       submission: 'bundle',
       scope: 'directory',
@@ -529,6 +562,25 @@ async function buildManifestV2Vectors(): Promise<unknown> {
       ...overrides,
     };
     return { ...unsigned, sig: await signManifest(unsigned, coursePriv) };
+  };
+
+  /**
+   * The exact bytes the COURSE key signs, derived from the manifest itself.
+   *
+   * Deliberately NOT a hand-copied literal. It used to be one, and when path
+   * scope made `ignore` and `attachments` required, the literal was not updated
+   * — so this file emitted a 2.0 manifest that log-core's own parser rejected,
+   * carrying a `sig` over a payload log-core could no longer produce. Deriving
+   * it makes the next required-field addition impossible to get wrong here, and
+   * `conformance-vectors-manifest-v2.test.ts` proves the derivation matches what
+   * `signManifest`/`verifyManifest` actually use.
+   *
+   * `sig` and `course_cert` are the two excluded keys: the course does not sign
+   * its own signature, and it does not sign its own certificate.
+   */
+  const v2CanonicalJson = (manifest: Manifest): string => {
+    const { sig: _sig, course_cert: _cert, ...payload } = manifest;
+    return canonicalize(payload);
   };
 
   const valid = await makeManifest();
@@ -590,6 +642,11 @@ async function buildManifestV2Vectors(): Promise<unknown> {
     collaboration: 'group',
     submission: 'git',
     scope: 'repo',
+    // Path scope makes the downgrade strictly worse: `ignore` is unsigned at
+    // 1.x too, so the same stapling that turns capture down also names the one
+    // directory the student wants no evidence for.
+    ignore: ['src/'],
+    attachments: [],
     policy: {
       capture: {
         selection_change: false,
@@ -642,21 +699,102 @@ async function buildManifestV2Vectors(): Promise<unknown> {
         'signed; note the absence of both sig and course_cert. Every key is a fixed ASCII ' +
         'identifier — never a course id, path, or other user-derived string promoted to a ' +
         'key — because a bytewise-sorting Lua JCS and a UTF-16-sorting JS/Kotlin JCS agree ' +
-        'only for ASCII. files_under_review is the only array in the signed payload.',
+        'only for ASCII. The signed payload carries THREE arrays — files_under_review, ' +
+        'ignore and attachments — and JCS leaves array element order alone, so a port that ' +
+        'helpfully sorts any of them produces different bytes and a dead signature.',
       manifest: valid,
-      canonical_json: canonicalize({
-        format_version: '2.0',
-        course_id: COURSE_ID,
-        assignment_id: 'proj2',
-        semester: 'fa26',
-        issued_at: '2026-09-08T00:00:00Z',
-        files_under_review: ['src/Main.java'],
-        collaboration: 'solo',
-        submission: 'bundle',
-        scope: 'directory',
-        policy: V2_POLICY,
-      }),
+      canonical_json: v2CanonicalJson(valid),
     },
+
+    scope_note:
+      'Path scope (design spec §3). `ignore` and `attachments` are REQUIRED at 2.0 and sit ' +
+      'INSIDE the course-signed payload, alongside files_under_review — a professor can ' +
+      'narrow scope, a student cannot widen it. A 2.0 manifest missing either MUST be ' +
+      'rejected (see scope_rejects); an absent key silently canonicalizing out of the ' +
+      'payload would make "the chain verified" stop implying "the course signed a scope". ' +
+      'Three entry forms and no more: an exact workspace-relative path, a "dir/" prefix ' +
+      '(startsWith), and a single LEADING "*" suffix (endsWith, at any depth). No "**", no ' +
+      'mid-path star, and ?[]{} / ".." / absolute paths are refused at parse time. Matching ' +
+      'is BYTE-EXACT: no separator normalization, no "." resolution, no case folding. ' +
+      'Precedence is excluded > ignored > attachment > reviewed > unscoped, first match ' +
+      'wins, and .provenance/ + .git/ (prefixes) and .provenance-manifest / ' +
+      'provenance-manifest (exact) are hard-excluded whatever the manifest says. ' +
+      'tools/path-scope-vectors.json pins the matcher itself, case by case.',
+
+    scope_lists: {
+      note:
+        'The three lists carried by valid_2_0, called out separately so a port can see which ' +
+        'form is which. src/Scratch.java is matched by the reviewed "src/" prefix AND by the ' +
+        'reviewed "*.java" suffix, and is still IGNORED — ignore outranks files_under_review. ' +
+        'An ignored path produces no events at all, exculpatory ones included.',
+      files_under_review: V2_TRACK,
+      ignore: V2_IGNORE,
+      attachments: V2_ATTACHMENTS,
+      entry_forms: {
+        directory_prefix: 'src/',
+        exact_path: 'README.md',
+        suffix: '*.java',
+      },
+    },
+
+    scope_rejects: [
+      await (async () => {
+        const missingIgnore = { ...valid };
+        delete missingIgnore.ignore;
+        return {
+          name: 'missing_ignore',
+          note:
+            'MANDATORY. A 2.0 manifest with no `ignore` key MUST NOT parse. The 2.0 key set is ' +
+            'fixed precisely so a port never has to reproduce a "which optional keys were ' +
+            'present" rule when canonicalizing.',
+          manifest_json: JSON.stringify(missingIgnore),
+          expected: { parses: parseManifest(JSON.stringify(missingIgnore)).ok },
+        };
+      })(),
+      await (async () => {
+        const missingAttachments = { ...valid };
+        delete missingAttachments.attachments;
+        return {
+          name: 'missing_attachments',
+          note: 'MANDATORY. Same rule as missing_ignore, for the other required list.',
+          manifest_json: JSON.stringify(missingAttachments),
+          expected: { parses: parseManifest(JSON.stringify(missingAttachments)).ok },
+        };
+      })(),
+      await (async () => {
+        const badEntry = await makeManifest({ ignore: ['build/**/*.class'] });
+        return {
+          name: 'ignore_entry_is_a_glob',
+          note:
+            'MANDATORY. "**" and mid-path stars are not the grammar. A malformed entry rejects ' +
+            'the WHOLE manifest at parse time — a staff error must be caught before a class ' +
+            'installs it, not diagnosed weeks later as "the recorder watched nothing".',
+          manifest_json: JSON.stringify(badEntry),
+          expected: { parses: parseManifest(JSON.stringify(badEntry)).ok },
+        };
+      })(),
+      await (async () => {
+        const escaping = await makeManifest({ attachments: ['../other-course/'] });
+        return {
+          name: 'attachment_escapes_the_assignment',
+          note:
+            'A ".." segment is refused: entries are relative to the folder holding the ' +
+            'manifest, and an attachment list that can climb out of it would seal arbitrary ' +
+            'files off the student’s disk into the bundle.',
+          manifest_json: JSON.stringify(escaping),
+          expected: { parses: parseManifest(JSON.stringify(escaping)).ok },
+        };
+      })(),
+      await (async () => {
+        const notAList = { ...valid, ignore: 'target/' };
+        return {
+          name: 'ignore_is_not_an_array',
+          note: 'A single string is not a one-element list. Rejected, never coerced.',
+          manifest_json: JSON.stringify(notAList),
+          expected: { parses: parseManifest(JSON.stringify(notAList)).ok },
+        };
+      })(),
+    ],
 
     unknown_keys_ignored: await (async () => {
       const withUnknown = { ...valid, some_future_field: 'ignored', another_one: [1, 2] };
@@ -733,7 +871,7 @@ async function buildManifestV2Vectors(): Promise<unknown> {
       ),
       await chainCase(
         'downgrade_1x_with_stapled_cert',
-        'MANDATORY. Step 0. Needs no private key: a genuinely-signed 1.x manifest, plus the course’s real certificate copied out of any 2.0 manifest, plus a course_id chosen to satisfy step 3, plus an INVENTED policy that turns capture off. verifyCourseCert passes, verifyManifest passes, and course_id matches — every signature is genuine. Only the format_version gate refuses it. An implementation that walks steps 1-4 without checking the version hands students an off switch.',
+        'MANDATORY. Step 0. Needs no private key: a genuinely-signed 1.x manifest, plus the course’s real certificate copied out of any 2.0 manifest, plus a course_id chosen to satisfy step 3, plus an INVENTED policy that turns capture off AND an INVENTED ignore list that hides src/ outright. verifyCourseCert passes, verifyManifest passes, and course_id matches — every signature is genuine. Only the format_version gate refuses it. An implementation that walks steps 1-4 without checking the version hands students an off switch.',
         downgradeAttack,
       ),
     ],
@@ -3017,7 +3155,21 @@ async function main(): Promise<void> {
   console.log(`Wrote conformance vectors to ${outDir}`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+/**
+ * Run only when this file is the process entry point.
+ *
+ * `conformance-vectors-manifest-v2.test.ts` imports the builders above to assert
+ * that what they emit is accepted by log-core's own parser and verifier. Without
+ * this guard that import would execute `main()`, which reads `process.argv`,
+ * finds vitest's flags instead of `--out`, and calls `process.exit(1)`.
+ */
+const isEntryPoint =
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (isEntryPoint) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
