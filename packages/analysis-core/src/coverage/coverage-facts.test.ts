@@ -1324,15 +1324,16 @@ describe('file scope coverage evaluates the signed 2.0 scope rules (tier 1)', ()
     ]);
   });
 
-  it('merges EVERY session manifest, so a rule-bearing sibling cannot be hidden', async () => {
+  it("takes `track` from the VERIFIED binding, so a sibling's rules never engage tier 1", async () => {
     // A bundle can carry different manifests per session — a course re-issuing
     // a corrected manifest mid-assignment is the ordinary way to get one — and
     // `resolveBundleCapturePolicy` / `bundleCollaboration` already assume that.
-    // Picking ONE binding with `.find()` meant that if it landed on the
-    // exact-only manifest, `hasRuleEntries` came out false, tier 1 engaged on a
-    // scope it should have declined, and a path from the OTHER manifest
-    // resolved to 'watched' — the accusatory answer — for a session that never
-    // watched it.
+    // But `track` is the one list that can only make the answer MORE accusatory:
+    // a rule entry in it sets `hasRuleEntries` and can resolve a path to
+    // 'reviewed', which is what makes `wasFileWatched` say 'watched'. So `track`
+    // is read from the walked manifest ALONE (the first 2.0 binding), while
+    // `ignore` and `attachments` — which can only move a path away from
+    // 'reviewed' — stay unioned across every binding.
     const keys = await buildTrustChainKeys();
     const exactOnly = await buildManifest2({ keys, filesUnderReview: ['hw1.py'] });
     const ruleBearing = await buildManifest2({ keys, filesUnderReview: ['src/'] });
@@ -1345,20 +1346,108 @@ describe('file scope coverage evaluates the signed 2.0 scope rules (tier 1)', ()
         { ...sessionStart2(ruleBearing), file_scope: { watched: [], complete: false } },
       ],
     });
-    // Stamped directly. `verifyBundleTrustChain` verifies only the FIRST 2.0
-    // manifest and then requires every session to report that manifest's `sig`,
-    // so a bundle whose sessions carry genuinely different manifests can only
-    // reach a verified stamp through a tampered log — which check 2 and check 3
-    // both catch on their own. This test is about what the MERGE does once the
-    // gate is open, and the answer has to be the same either way: a sibling
-    // binding may never steer tier 1 toward the accusatory answer.
+    // Stamped directly rather than earned through `establishBundleTrust`. That
+    // is a faithful stand-in for a state the system genuinely produces, and NOT
+    // for the reason an earlier version of this comment gave: it claimed checks
+    // 2 and 3 catch a bundle whose sessions carry genuinely different manifests
+    // on their own. They do not. The check-2 binding loop compares each
+    // session's SELF-DECLARED `manifest_sig` against the walked manifest's
+    // `sig` and never compares a sibling `binding.manifest.sig` to it, so a
+    // session embedding a different manifest while copying the real
+    // `manifest_sig` passes manifest_sig, session_binding and chain_integrity
+    // intact — see the forged-sibling test below, which earns the stamp for
+    // real. This test is about what the MERGE does once the gate is open.
     bundle.capturePolicyTrust = 'verified';
 
     const facts = coverageFacts(bundle, index);
-    // The merged scope carries `src/`, so `hasRuleEntries` is true, session 1's
-    // `complete: true` is the stale signature tier 1 refuses, and the honest
-    // answer is 'unknown' rather than the rules-derived 'watched'.
-    expect(facts.fileScope.files[0]!.watched).toBe('unknown');
+    // The sibling's `src/` is not in the resolved `track`, so `hasRuleEntries`
+    // is false, tier 1 engages on the walked manifest's exact-only scope, and
+    // `src/Solver.java` is simply outside it. The binding invariant, stated
+    // separately because it is the one that matters: never the accusatory answer.
+    expect(facts.fileScope.files[0]!.watched).not.toBe('watched');
+    expect(facts.fileScope.files[0]!.watched).toBe('not_watched');
+    expect(facts.fileScope.files[0]!.notWatchedReason).toBe('out_of_scope');
+  });
+
+  it('refuses a forged sibling binding that reaches a VERIFIED trust chain', async () => {
+    // The probe that disproved "a forged sibling can only ever suppress".
+    //
+    // `verifyBundleTrustChain` walks `withV2[0].manifest` and then requires
+    // every session's `session.start.data.manifest_sig` to equal that
+    // manifest's `sig`. It never compares a sibling `binding.manifest.sig` to
+    // it. So a second session can embed a COMPLETELY different manifest —
+    // garbage `sig`, garbage `course_cert.root_sig` — and still land the whole
+    // bundle on `kind: 'verified'` just by declaring the real manifest's sig.
+    //
+    // Both sessions report `complete: false`, so nothing suppresses tier 1.
+    // Before the fix the union put the forged `src/` into `track`,
+    // `resolvePathRole` returned 'reviewed', and `wasFileWatched` returned
+    // 'watched' — the strongest and most accusatory of its three answers, about
+    // a file the real manifest never put under review. R2: a forged artifact
+    // must never be able to manufacture a finding.
+    const keys = await buildTrustChainKeys();
+    const real = await buildManifest2({ keys, filesUnderReview: ['hw1.py'] });
+    const other = await buildManifest2({ keys, filesUnderReview: ['src/'] });
+    const garbage = 'ab'.repeat(64);
+    const forged = {
+      ...other,
+      sig: garbage,
+      course_cert: { ...other.course_cert, root_sig: garbage },
+    };
+
+    const { bundle, index } = await fileScopeScope({
+      files: ['src/Solver.java'],
+      sessionStarts: [
+        { ...sessionStart2(real), file_scope: { watched: [], complete: false } },
+        // Copies the real `manifest_sig` while embedding the forged manifest.
+        {
+          ...sessionStart2(forged),
+          manifest_sig: real.sig,
+          file_scope: { watched: [], complete: false },
+        },
+      ],
+    });
+
+    // The gap this test documents: the chain verifies anyway.
+    const chain = await establishBundleTrust(bundle, keys.rootPubkeyHex);
+    expect(chain.kind).toBe('verified');
+
+    const facts = coverageFacts(bundle, index);
+    expect(facts.fileScope.files[0]!.watched).not.toBe('watched');
+    expect(facts.fileScope.files[0]!.watched).toBe('not_watched');
+    expect(facts.fileScope.files[0]!.notWatchedReason).toBe('out_of_scope');
+  });
+
+  it('still unions a sibling `ignore`, which can only ever suppress', async () => {
+    // The other half of the asymmetry. A forged sibling adding to `ignore`
+    // moves the path AWAY from 'reviewed' (precedence: ignored > attachment >
+    // reviewed > unscoped), so honouring it can only make the answer less
+    // accusatory — the same direction `resolveBundleCapturePolicy`'s AND errs
+    // in. That is why the union stays for `ignore`/`attachments`.
+    const keys = await buildTrustChainKeys();
+    const real = await buildManifest2({ keys, filesUnderReview: ['src/'] });
+    const sibling = await buildManifest2({
+      keys,
+      filesUnderReview: ['src/'],
+      ignore: ['*.java'],
+    });
+    const { bundle, index } = await fileScopeScope({
+      files: ['src/Solver.java'],
+      sessionStarts: [
+        { ...sessionStart2(real), file_scope: { watched: [], complete: false } },
+        {
+          ...sessionStart2(sibling),
+          manifest_sig: real.sig,
+          file_scope: { watched: [], complete: false },
+        },
+      ],
+    });
+    const chain = await establishBundleTrust(bundle, keys.rootPubkeyHex);
+    expect(chain.kind).toBe('verified');
+
+    const facts = coverageFacts(bundle, index);
+    expect(facts.fileScope.files[0]!.watched).toBe('not_watched');
+    expect(facts.fileScope.files[0]!.notWatchedReason).toBe('ignored_by_assignment');
   });
 
   it('takes the STRICTEST role across manifests: one manifest ignoring beats another tracking', async () => {
@@ -1379,7 +1468,8 @@ describe('file scope coverage evaluates the signed 2.0 scope rules (tier 1)', ()
         { ...sessionStart2(ignores), file_scope: { watched: [], complete: false } },
       ],
     });
-    // See the note in the test above on why the stamp is set directly.
+    // See the note on the stamp in "takes `track` from the VERIFIED binding"
+    // above for why this is set directly rather than earned.
     bundle.capturePolicyTrust = 'verified';
 
     const facts = coverageFacts(bundle, index);

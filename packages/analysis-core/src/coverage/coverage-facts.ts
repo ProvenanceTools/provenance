@@ -719,7 +719,7 @@ export type FileScopeCoverage = {
  * back to `undefined` degrades tier 1 straight to tier 2, the answer this
  * behaved with before path scope existed.
  *
- * ## Every binding, strictest wins — not the first one found
+ * ## `ignore`/`attachments` from EVERY binding; `track` from the VERIFIED one
  *
  * One bundle can carry DIFFERENT manifests per session; the whole reason
  * `readSessionManifests` returns a list is that a course may re-issue a
@@ -728,46 +728,61 @@ export type FileScopeCoverage = {
  * exactly that: `resolveBundleCapturePolicy` ANDs across every binding, and
  * `bundleCollaboration` takes the stricter of the values it sees.
  *
- * Picking ONE binding — which a `.find()` did — was unsound in the direction
- * that matters. If it landed on an exact-only manifest while another session's
- * was rule-bearing, `wasFileWatched`'s `hasRuleEntries` came out false, tier 1
- * engaged on a scope it should have declined, and a path drawn from the OTHER
- * manifest resolved to `'watched'` — the strongest of the three answers,
- * "absence of events means the events did not happen" — for a session that
- * never watched it.
+ * The two directions are NOT symmetric, so they are merged differently.
  *
- * The merge is the UNION of all three lists, and union IS strictest-wins here
- * because `resolvePathRole`'s precedence runs ignored > attachment > reviewed >
- * unscoped: a path any manifest ignores resolves `'ignored'` however many
- * others track it, and the merged `track` carries every rule entry any binding
- * contributed, so `hasRuleEntries` can no longer be hidden by a sibling. The
- * effect on the answer is always toward the exculpatory side — `'not_watched'`
- * is a fact about course configuration, `'watched'` is what an argument gets
- * built on — which is the same direction `resolveBundleCapturePolicy`'s AND
- * errs in.
+ * `ignore` and `attachments` are unioned across every 2.0 binding, because
+ * `resolvePathRole`'s precedence runs ignored > attachment > reviewed >
+ * unscoped: adding an entry to either list can only ever move a path AWAY from
+ * `'reviewed'`, which can only ever move `wasFileWatched` away from
+ * `'watched'`. A sibling binding — including a forged one — can therefore only
+ * SUPPRESS an answer through these two lists, never manufacture one. That is
+ * the same direction `resolveBundleCapturePolicy`'s AND errs in, and it is what
+ * makes the union safe here.
+ *
+ * `track` is taken from the VERIFIED binding ALONE — the first 2.0 binding,
+ * which is the single manifest `verifyBundleTrustChain` actually walks
+ * (`withV2[0]` in `manifest/bundle-manifest.ts`). Unioning it was unsound in
+ * the one direction that matters. Adding a rule entry to `track` sets
+ * `wasFileWatched`'s `hasRuleEntries`, which ENGAGES tier 1, which can resolve
+ * a path to `'reviewed'` and hand back `'watched'` — the strongest of the three
+ * answers, "absence of events means the events did not happen". A bundle can
+ * reach a `'verified'` stamp while carrying a sibling binding whose OWN
+ * manifest is arbitrary: the check-2 binding loop compares each session's
+ * self-declared `manifest_sig` against the walked manifest's `sig` and never
+ * compares a sibling `binding.manifest.sig` to it, so a session that copies the
+ * real `manifest_sig` while embedding a different manifest passes checks 2 and
+ * 3 intact. Union would have let that sibling's `track` manufacture the
+ * accusatory answer; taking `track` from the walked manifest alone makes it
+ * inert in that direction while the defensive union above still applies.
+ *
+ * (Requiring every 2.0 binding's own `manifest.sig` to match the walked one is
+ * the more principled fix, and is tracked as a follow-up. It would make a
+ * genuinely multi-manifest bundle fail closed, which is a behaviour change of
+ * its own.)
  *
  * Sorted so the merged scope is deterministic across bundle orderings.
  */
 function resolvedScopeFor(bundle: Bundle): ResolvedScope | undefined {
   if (bundleCapturePolicyTrust(bundle) !== 'verified') return undefined;
 
-  const track = new Set<string>();
   const ignore = new Set<string>();
   const attachments = new Set<string>();
-  let sawManifest = false;
+  // The walked manifest's `track`, captured from the FIRST 2.0 binding and
+  // never widened afterwards. `null` until one is seen, which also answers
+  // "was there any 2.0 manifest at all" — an empty `track` is a real answer.
+  let verifiedTrack: readonly string[] | null = null;
 
   for (const binding of readSessionManifests(bundle)) {
     if (!isManifest2Binding(binding)) continue;
-    sawManifest = true;
     const scope = scopeFromManifest(binding.manifest);
-    for (const entry of scope.track) track.add(entry);
+    if (verifiedTrack === null) verifiedTrack = scope.track;
     for (const entry of scope.ignore) ignore.add(entry);
     for (const entry of scope.attachments) attachments.add(entry);
   }
 
-  if (!sawManifest) return undefined;
+  if (verifiedTrack === null) return undefined;
   return {
-    track: [...track].sort(),
+    track: [...new Set(verifiedTrack)].sort(),
     ignore: [...ignore].sort(),
     attachments: [...attachments].sort(),
   };
