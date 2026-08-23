@@ -100,17 +100,47 @@ export function watcherPatternFor(entry: string): string {
 }
 
 /**
- * The workspace-relative, forward-slash path for a watcher URI.
+ * The workspace-relative, forward-slash path for a watcher URI, or `null` when
+ * the URI does not sit under `assignmentRoot` at all.
  *
  * Forward slashes always: the whole protocol — `doc.*` payload paths,
  * `files_under_review`, the matcher — is forward-slash, and a Windows recorder
  * emitting backslashes would join against nothing.
+ *
+ * ## The case-insensitive fallback
+ *
+ * VS Code does not promise that `uri.fsPath` and the string a
+ * `WorkspaceFolder` was opened with agree on CASE. On Windows the drive letter
+ * routinely diverges (`C:\Users\...` vs `c:\Users\...`), and macOS is
+ * case-insensitive on disk, so the same directory reaches us under two
+ * spellings. The prefix test is therefore retried case-insensitively before
+ * giving up — the slice still uses the ORIGINAL bytes, so the returned path
+ * keeps whatever spelling the filesystem handed us, which is the spelling the
+ * `doc.*` handlers use.
+ *
+ * ## Why `null`, and never the absolute path
+ *
+ * This used to return the FULL ABSOLUTE PATH when the prefix did not match.
+ * That is worse than useless in both directions. Usually the absolute path
+ * resolves to `'unscoped'` and the `fs.external_change` emit is suppressed
+ * entirely — silent loss of external-change detection, the one signal that
+ * catches a file edited outside the editor. Occasionally it is worse than
+ * silent: an absolute path still ENDS with `.java`, so a `*.java` suffix rule
+ * matches it, and the recorder emits an event whose `path` is an absolute
+ * location on the student's machine that joins against nothing downstream.
+ *
+ * `null` says the one true thing — this URI is not under the assignment root,
+ * so there is no workspace-relative path to report — and each handler returns
+ * on it. A watcher built from `RelativePattern(assignmentRoot, …)` should never
+ * deliver one, so this is a guard, not a code path with expected traffic.
  */
-function relativePathOf(assignmentRoot: string, uri: vscode.Uri): string {
-  const root = assignmentRoot.endsWith('/') ? assignmentRoot : `${assignmentRoot}/`;
+export function relativePathOf(assignmentRoot: string, uri: { fsPath: string }): string | null {
   const full = uri.fsPath.split('\\').join('/');
-  const normalizedRoot = root.split('\\').join('/');
-  return full.startsWith(normalizedRoot) ? full.slice(normalizedRoot.length) : full;
+  const normalizedRoot = assignmentRoot.split('\\').join('/');
+  const root = normalizedRoot.endsWith('/') ? normalizedRoot : `${normalizedRoot}/`;
+  if (full.startsWith(root)) return full.slice(root.length);
+  if (full.toLowerCase().startsWith(root.toLowerCase())) return full.slice(root.length);
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +173,7 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
 
     const handleChange = (uri: vscode.Uri) => {
       const relativePath = relativePathOf(assignmentRoot, uri);
+      if (relativePath === null) return;
       if (resolvePathRole(relativePath, scope) !== 'reviewed') return;
 
       // Check whether this change is too close to a recent editor touch — a
@@ -216,6 +247,7 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
 
     const handleCreate = (uri: vscode.Uri) => {
       const relativePath = relativePathOf(assignmentRoot, uri);
+      if (relativePath === null) return;
       if (resolvePathRole(relativePath, scope) !== 'reviewed') return;
 
       // A file appeared on disk where one wasn't before. This is the path
@@ -277,6 +309,7 @@ export function startFsWatcher(deps: FsWatcherDeps): vscode.Disposable {
 
     const handleDelete = (uri: vscode.Uri) => {
       const relativePath = relativePathOf(assignmentRoot, uri);
+      if (relativePath === null) return;
       if (resolvePathRole(relativePath, scope) !== 'reviewed') return;
 
       const expected = registry.get(relativePath);

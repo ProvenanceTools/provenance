@@ -72,11 +72,11 @@ vi.mock('vscode', () => {
 // Imports after vi.mock
 // ---------------------------------------------------------------------------
 
-import { startFsWatcher, watcherPatternFor } from './fs-watcher.js';
+import { startFsWatcher, watcherPatternFor, relativePathOf } from './fs-watcher.js';
 import type { FsExternalChangeData } from './fs-watcher.js';
 import { ExpectedContentRegistry } from '../state/expected-content-registry.js';
 import { ExplanationTagger } from '../events/explanation-tags.js';
-import { sha256Hex } from '@provenance/log-core';
+import { sha256Hex, matchesScopeEntry } from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -819,5 +819,56 @@ describe('watcherPatternFor', () => {
 
   it('leaves an exact path alone', () => {
     expect(watcherPatternFor('Makefile')).toBe('Makefile');
+  });
+});
+
+describe('relativePathOf', () => {
+  it('strips the assignment root and normalises separators', () => {
+    expect(relativePathOf('/ws', { fsPath: '/ws/src/Main.java' })).toBe('src/Main.java');
+    expect(relativePathOf('/ws/', { fsPath: '/ws/src/Main.java' })).toBe('src/Main.java');
+    expect(relativePathOf('C:\\ws', { fsPath: 'C:\\ws\\src\\Main.java' })).toBe('src/Main.java');
+  });
+
+  it('tolerates a case divergence in the root prefix (the Windows drive letter)', () => {
+    // VS Code does not promise that `uri.fsPath` and the string the workspace
+    // folder was opened with agree on CASE — on Windows the drive letter
+    // routinely diverges. When they did not, this used to return the FULL
+    // ABSOLUTE PATH, which resolves to 'unscoped' and silently suppressed the
+    // fs.external_change emit, losing external-change detection for the whole
+    // session.
+    expect(relativePathOf('C:\\ws', { fsPath: 'c:\\ws\\src\\Main.java' })).toBe('src/Main.java');
+    expect(relativePathOf('/Users/A/ws', { fsPath: '/users/a/ws/Main.java' })).toBe('Main.java');
+  });
+
+  it('returns null — never the absolute path — for a URI outside the root', () => {
+    // Returning the absolute path was worse than useless. `/elsewhere/X.java`
+    // still ENDS with `.java`, so a `*.java` suffix rule MATCHES it, and the
+    // recorder would emit an event whose `path` is an absolute location on the
+    // student machine that joins against nothing downstream.
+    expect(matchesScopeEntry('/elsewhere/X.java', '*.java')).toBe(true);
+    expect(relativePathOf('/ws', { fsPath: '/elsewhere/X.java' })).toBeNull();
+  });
+
+  it('suppresses the emit for a URI outside the assignment root', async () => {
+    capturedWatchers.length = 0;
+    const registry = makeRegistry(['*.java']);
+    registry.getOrCreate('X.java', 'old');
+    const emit = vi.fn();
+
+    startFsWatcher({
+      assignmentRoot: '/workspace',
+      scope: { track: ['*.java'], ignore: [], attachments: [] },
+      registry,
+      emit,
+      getLastDocChangeAt: () => -Infinity,
+      getLastSaveAt: () => -Infinity,
+      getNow: () => 10000,
+      readFile: vi.fn().mockResolvedValue('new'),
+    });
+
+    getWatchers()[0]?.changeHandler?.({ fsPath: '/elsewhere/X.java' });
+
+    await flushPromises();
+    expect(emit).not.toHaveBeenCalled();
   });
 });
