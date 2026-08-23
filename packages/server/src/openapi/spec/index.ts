@@ -56,7 +56,11 @@ export const openApiSpec = {
       'Rate limits: see PRD §7.6. Headers X-RateLimit-Remaining and X-RateLimit-Reset are set',
       'on every response from a rate-limited route.',
     ].join('\n'),
-    version: '3.0.0',
+    // 3.1.0: `verdict` on the submitted-files response gained 'attachment'
+    // (path scope). A widened enum breaks a strict client that switch/matches
+    // exhaustively, and `docs/api-quickstart.md` invites exactly those clients,
+    // so the widening gets a version signal rather than arriving unannounced.
+    version: '3.1.0',
     contact: {
       name: 'Provenance Academic Integrity',
     },
