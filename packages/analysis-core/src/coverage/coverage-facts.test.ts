@@ -15,7 +15,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { sha256Hex } from '@provenance/log-core';
-import type { PeerObservedPayload } from '@provenance/log-core';
+import type { Manifest, PeerObservedPayload } from '@provenance/log-core';
 import { buildIndex } from '../index/build-index.js';
 import { loadBundle } from '../loader/parse-bundle.js';
 import { buildTestBundle } from '../test-support/build-test-bundle.js';
@@ -1389,10 +1389,19 @@ describe('file scope coverage evaluates the signed 2.0 scope rules (tier 1)', ()
     const real = await buildManifest2({ keys, filesUnderReview: ['hw1.py'] });
     const other = await buildManifest2({ keys, filesUnderReview: ['src/'] });
     const garbage = 'ab'.repeat(64);
-    const forged = {
+    // `course_cert` is OPTIONAL on `Manifest` — a 1.x manifest carries none —
+    // so it is narrowed before being spread. Spreading a possibly-undefined
+    // value would make every property of the result optional, which
+    // `exactOptionalPropertyTypes` refuses, and the forgery has to be as
+    // well-typed as a production manifest for the test to mean anything: the
+    // claim is that a REALISTIC forged sibling gets through, not that a
+    // half-built object does.
+    const realCert = other.course_cert;
+    if (realCert === undefined) throw new Error('buildManifest2 always mints a course_cert');
+    const forged: Manifest = {
       ...other,
       sig: garbage,
-      course_cert: { ...other.course_cert, root_sig: garbage },
+      course_cert: { ...realCert, root_sig: garbage },
     };
 
     const { bundle, index } = await fileScopeScope({
