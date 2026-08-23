@@ -381,6 +381,38 @@ describe('attachments are never compared against reconstruction (R2)', () => {
     expect(check.detail).not.toMatch(/logs\/run\.log/);
   });
 
+  it('says WHY it skipped when every file is an attachment, rather than blaming plumbing', () => {
+    // R1. The fallback sentence names three causes — chain broken, missing, or
+    // no recorded state — and for an attachment-only file set NONE of them is
+    // true: the chain is fine, the files are present, and there is no event
+    // history by COURSE POLICY. A skip reported as a plumbing failure is a
+    // misattributed one, and this check's output is read in proceedings.
+    const bundle = makeBundle({
+      submissionFiles: [
+        {
+          path: 'logs/run.log',
+          status: 'present',
+          sha256: 'ab'.repeat(32),
+          hashOk: true,
+          role: 'attachment',
+        },
+        {
+          path: 'logs/other.log',
+          status: 'present',
+          sha256: 'cd'.repeat(32),
+          hashOk: true,
+          role: 'attachment',
+        },
+      ],
+      events: [],
+    });
+    const check = verifySubmittedCode(bundle, { chainIntact: true });
+    expect(check.status).toBe('skipped');
+    expect(check.detail).toMatch(/attachments/);
+    expect(check.detail).toMatch(/course policy, not a fact about the student/);
+    expect(check.detail).not.toMatch(/chain broken/);
+  });
+
   it('still reports real tampering on an attachment whose bytes disagree with the manifest sha', () => {
     // Real, detectable bundle tampering — present bytes that do not hash to
     // their own signed manifest sha256 — needs no event provenance to catch,

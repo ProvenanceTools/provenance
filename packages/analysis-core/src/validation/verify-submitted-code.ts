@@ -432,6 +432,13 @@ export function verifySubmittedCode(
     // states is a substantive fact a grader needs — it says the contributors
     // diverged and the submission is plausibly a merge nobody observed.
     const unresolved = verdicts.filter((v) => v.verdict === 'unknown');
+    // Attachments are the third way to get here, and none of the three reasons
+    // the fallback sentence names is true of them: the chain is fine, the files
+    // are present, and there is no recorded state BY COURSE POLICY rather than
+    // by any failure. Reporting a plumbing failure for a bundle whose file set
+    // is attachments is a misattributed skip reason, and R1 requires the check
+    // say why it could not evaluate rather than imply something went wrong.
+    const attachments = verdicts.filter((v) => v.verdict === 'attachment');
     return {
       id: 'submitted_code_match',
       label: 'Submitted code matches recorded final state',
@@ -441,7 +448,9 @@ export function verifySubmittedCode(
           ? `No submitted file could be checked: ${unresolved
               .map((v) => `${v.path} (${v.detail})`)
               .join(' | ')}`
-          : 'No submitted file could be checked (chain broken, missing, or no recorded state).',
+          : attachments.length > 0
+            ? `No submitted file could be checked: all ${attachments.length} file(s) in this bundle are attachments. The assignment manifest lists them, so they are sealed and hashed but never captured, and no event history exists to compare them against. That is course policy, not a fact about the student.`
+            : 'No submitted file could be checked (chain broken, missing, or no recorded state).',
     };
   }
   return {
