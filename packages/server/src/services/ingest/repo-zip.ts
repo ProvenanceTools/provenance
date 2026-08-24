@@ -46,11 +46,11 @@
 
 import JSZip from 'jszip';
 import {
-  discoverRepoScopes,
   resolveRepoScopes,
   type IngestScopeConfigResolver,
   type UnusableScope,
 } from './gradescope/repo-scopes.js';
+import { discoverRepoScopes } from '@provenance/analysis-core/scopes/discover-scopes.js';
 import { zipBundleEntries } from '@provenance/analysis-core/scopes/select-entries.js';
 import type { IngestLocalPathSkipped } from './local-path.js';
 

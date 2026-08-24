@@ -24,11 +24,11 @@ import yauzl from 'yauzl';
 import { parseSubmissionMetadata, type GradescopeSubmitter } from './parse-metadata.js';
 import type { BundleEntry } from '@provenance/analysis-core/scopes/select-entries.js';
 import {
-  discoverRepoScopes,
   resolveRepoScopes,
   DEFAULT_INGEST_SCOPE,
   type IngestScopeConfigResolver,
 } from './repo-scopes.js';
+import { discoverRepoScopes } from '@provenance/analysis-core/scopes/discover-scopes.js';
 
 const METADATA_FILENAME = 'submission_metadata.yml';
 

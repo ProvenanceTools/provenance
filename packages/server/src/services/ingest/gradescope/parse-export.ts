@@ -30,11 +30,11 @@ import JSZip from 'jszip';
 import { parseSubmissionMetadata, type GradescopeSubmitter } from './parse-metadata.js';
 import { zipBundleEntries } from '@provenance/analysis-core/scopes/select-entries.js';
 import {
-  discoverRepoScopes,
   resolveRepoScopes,
   DEFAULT_INGEST_SCOPE,
   type IngestScopeConfigResolver,
 } from './repo-scopes.js';
+import { discoverRepoScopes } from '@provenance/analysis-core/scopes/discover-scopes.js';
 
 // ---------------------------------------------------------------------------
 // Types

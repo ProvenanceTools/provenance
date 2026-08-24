@@ -1,63 +1,35 @@
 /**
- * Git-repo scope adapter (program architecture §1 and §6).
+ * Git-repo scope POLICY (program architecture §1 and §6).
  *
- * Today's ingest assumes one flat bundle per submission folder: a Gradescope
- * "Download Submissions" export unzips each sealed bundle into
- * `submission_<id>/`, and `build-bundle-zip.ts` normalizes exactly one
- * `.provenance/` prefix back to the flat shape the loader requires.
+ * This file is one half of a pair. Scope DISCOVERY — "what sealed scopes does
+ * this submission tree contain?" — now lives in
+ * `@provenance/analysis-core/scopes/discover-scopes.js`, because the analyzer's
+ * `/local` route needs the same answer in the browser and re-spelling it there
+ * would let ingest and the analyzer drift about what a submission even is.
+ * Discovery is pure bytes-in/bytes-out and has no configuration in it.
  *
- * CS 61B / 61C do not work that way. Students push a git repo and Gradescope
- * clones the WHOLE repository, so one submission tree can contain SEVERAL
- * assignment directories, each with its own `.provenance/`:
+ * What stays here is the half that is bound to this server: which of the
+ * discovered scopes actually become submissions. That decision reads
+ * `assignments.ingest_scope` (a Drizzle jsonb column) or a per-request override
+ * carried by `packages/shared`'s API contract, so it cannot be isomorphic and
+ * has no business in `analysis-core`.
  *
- *     proj2/.provenance/…   proj2/Gitlet.java
- *     lab5/.provenance/…    lab5/Lab5.java
- *     README.md
+ * Scope RESOLUTION (§6) is separate from discovery and deliberately so: a
+ * discovered scope is already self-identifying — both `.provenance-manifest`
+ * and the sealed `manifest.json` carry `assignment_id` and `semester` — so
+ * ingest does not need to be told where to look, only what to accept. The
+ * default (`self_identifying`) accepts every sealed scope; declaring a
+ * submission TYPE narrows that, both to settle what self-identification cannot
+ * (two directories claiming the same id, a stale vendored copy) and to assert
+ * that a whole batch has one shape, so a submission of the wrong shape fails
+ * loudly instead of ingesting as something it is not. See `IngestScopeConfig`
+ * and `resolveRepoScopes`.
  *
- * This module walks such a tree, finds every `.provenance/` at any depth, and
- * synthesizes one flat bundle per *scope*. Each scope's bundle carries that
- * scope's own directory-relative paths, so `proj2/`'s bundle contains
- * `Gitlet.java` — matching its own manifest's `submission_files` — and nothing
- * from `lab5/` or the repo root.
- *
- * Two invariants make this safe to drop under the existing pipeline:
- *
- *  1. **Selection is not duplicated.** Every scope's entries come from
- *     `selectBundleEntries` (build-bundle-zip.ts) applied to that scope's
- *     sub-tree, so the whitelist, the macOS-junk rules, and — critically — the
- *     entry ORDER are the same code. Entry order fixes the archive's byte
- *     layout and therefore its sha256, which is the ingest dedup key.
- *
- *  2. **The flat case is a special case of the general one.** A submission
- *     folder with a single root `.provenance/` yields exactly one scope at `''`
- *     whose entries are byte-identical to what `selectBundleEntries` returned
- *     before fan-out existed. The Gradescope path is unchanged.
- *
- * Scope RESOLUTION (§6) is separate and deliberately so: a discovered scope is
- * already self-identifying — both `.provenance-manifest` and the sealed
- * `manifest.json` carry `assignment_id` and `semester` — so ingest does not need
- * to be told where to look, only what to accept. The default (`self_identifying`)
- * accepts every sealed scope; declaring a submission TYPE narrows that, both to
- * settle what self-identification cannot (two directories claiming the same id,
- * a stale vendored copy) and to assert that a whole batch has one shape, so a
- * submission of the wrong shape fails loudly instead of ingesting as something
- * it is not. See `IngestScopeConfig` and `resolveRepoScopes`.
- *
- * Pure: bytes in, bytes out. No DB, no storage, no clock.
+ * Pure: scopes in, scopes out. No DB, no storage, no clock — the config is
+ * handed in as a resolver rather than read from here.
  */
 
-import { parseRollingManifestFilename } from '@provenance/log-core';
-import {
-  selectBundleEntries,
-  type BundleEntry,
-} from '@provenance/analysis-core/scopes/select-entries.js';
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const PROVENANCE_DIR = '.provenance/';
-const MANIFEST_JSON = 'manifest.json';
+import type { RepoScope } from '@provenance/analysis-core/scopes/discover-scopes.js';
 
 // ---------------------------------------------------------------------------
 // Scope-resolution config (assignments.ingest_scope)
@@ -156,21 +128,6 @@ export type IngestScopeConfigResolver = (assignmentId: string | null) => IngestS
 // Types
 // ---------------------------------------------------------------------------
 
-/** One assignment scope discovered in a submission tree. */
-export interface RepoScope {
-  /**
-   * The scope's directory within the submission tree: `''` for the tree root,
-   * otherwise a prefix ending in `/` (e.g. `proj2/`, `src/proj2/`).
-   */
-  scopePath: string;
-  /** Flat bundle-root entries, in the exact order they must be zipped. */
-  entries: BundleEntry[];
-  /** `assignment_id` declared by this scope's manifest, if readable. */
-  declaredAssignmentId: string | null;
-  /** `semester` declared by this scope's manifest, if readable. */
-  declaredSemester: string | null;
-}
-
 /**
  * A scope that exists but will not become a submission.
  *
@@ -194,16 +151,18 @@ export interface RepoScope {
  *   a repo with no root scope, or a `repo_scoped` batch whose `path_glob`
  *   selected nothing at all. It fails the SUBMISSION, not the batch — see
  *   `resolveRepoScopes`.
+ *
+ * All four reasons are still reported through this one type at the wire
+ * boundary (`GradescopeSkippedEntrySchema`), which is why the union did not
+ * narrow when discovery moved out. Only the FIRST of them is something
+ * discovery can observe; `analysis-core` therefore exports the one-reason
+ * `DiscoveredScopeIssue`, which is structurally assignable to this, so
+ * `discovered.unusable` flows into these lists with no conversion.
  */
 export interface UnusableScope {
   scopePath: string;
   reason: 'no_seal' | 'scope_excluded' | 'ambiguous_scope' | 'submission_type_mismatch';
 }
-
-export type DiscoverRepoScopesResult =
-  | { ok: true; scopes: RepoScope[]; unusable: UnusableScope[] }
-  /** No `.provenance/` anywhere and no root `manifest.json` — not a bundle tree. */
-  | { ok: false; reason: 'no_manifest' };
 
 export interface ResolveRepoScopesResult {
   accepted: RepoScope[];
@@ -213,70 +172,6 @@ export interface ResolveRepoScopesResult {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** macOS archive noise; mirrors build-bundle-zip's own rule. */
-function isJunkPath(relPath: string): boolean {
-  if (relPath.includes('__MACOSX/')) return true;
-  return relPath.split('/').some((seg) => seg === '.DS_Store' || seg.startsWith('._'));
-}
-
-/**
- * The directory prefix of the `.provenance/` segment in `relPath`, or null when
- * the path does not sit under one. `'.provenance/x'` → `''`;
- * `'proj2/.provenance/x'` → `'proj2/'`. Only the OUTERMOST occurrence counts.
- */
-function provenanceScopePrefix(relPath: string): string | null {
-  if (relPath.startsWith(PROVENANCE_DIR)) return '';
-  const idx = relPath.indexOf(`/${PROVENANCE_DIR}`);
-  return idx === -1 ? null : relPath.slice(0, idx + 1);
-}
-
-/** Best-effort read of the manifest's self-identifying fields. */
-function declaredIdentity(manifestBytes: Uint8Array): {
-  assignmentId: string | null;
-  semester: string | null;
-} {
-  try {
-    const parsed = JSON.parse(new TextDecoder().decode(manifestBytes)) as Record<string, unknown>;
-    return {
-      assignmentId: typeof parsed['assignment_id'] === 'string' ? parsed['assignment_id'] : null,
-      semester: typeof parsed['semester'] === 'string' ? parsed['semester'] : null,
-    };
-  } catch {
-    // Malformed manifest — the parse phase surfaces invalid_manifest later.
-    return { assignmentId: null, semester: null };
-  }
-}
-
-/**
- * The scope's self-declared identity, from whichever seal shape it carries.
- *
- * A classic scope declares it once, in `manifest.json`. A ROLLING-sealed scope
- * (program spec §8) has no `manifest.json` at all — its identity lives in every
- * `manifest-<session_id>.json`, each of which declares the same
- * `assignment_id` / `semester` in a well-formed bundle. The lowest session id
- * wins, which both keeps the result deterministic and matches
- * `synthesizeRollingUnionManifest`'s "first seal supplies the scalars" rule on
- * the read side. Seals that disagree are real evidence, and the read side
- * reports them as a `divergent_scope` defect — reconciling them here would hide
- * exactly the thing an integrity tool exists to notice.
- */
-function scopeIdentity(entries: readonly BundleEntry[]): {
-  assignmentId: string | null;
-  semester: string | null;
-} {
-  const classic = entries.find((e) => e.name === MANIFEST_JSON);
-  if (classic !== undefined) return declaredIdentity(classic.data);
-
-  const rolling = entries
-    .filter((e) => parseRollingManifestFilename(e.name)?.part === 'json')
-    .sort((a, b) => (a.name < b.name ? -1 : 1));
-  for (const entry of rolling) {
-    const identity = declaredIdentity(entry.data);
-    if (identity.assignmentId !== null) return identity;
-  }
-  return { assignmentId: null, semester: null };
-}
 
 /**
  * Translate a path glob to an anchored RegExp. Supports `**` (any characters,
@@ -314,85 +209,6 @@ function scopeMatchesGlob(scopePath: string, glob: string): boolean {
   const re = globToRegExp(glob);
   if (re.test(scopePath)) return true;
   return scopePath.endsWith('/') && re.test(scopePath.slice(0, -1));
-}
-
-// ---------------------------------------------------------------------------
-// discoverRepoScopes
-// ---------------------------------------------------------------------------
-
-/**
- * Walk a submission tree and synthesize one flat bundle per assignment scope.
- *
- * @param files Map of tree-relative path → file bytes for ONE submission tree
- *              (a Gradescope submission folder, or a cloned repo). Directory
- *              entries must already be excluded.
- *
- * Scopes are returned in lexicographic order of `scopePath`, so the fan-out is
- * deterministic for a given tree.
- */
-export function discoverRepoScopes(files: Map<string, Uint8Array>): DiscoverRepoScopesResult {
-  // -------------------------------------------------------------------------
-  // Step 1: find every scope prefix.
-  // -------------------------------------------------------------------------
-  const prefixes = new Set<string>();
-  for (const rel of files.keys()) {
-    if (rel.length === 0 || isJunkPath(rel)) continue;
-    const prefix = provenanceScopePrefix(rel);
-    if (prefix !== null) prefixes.add(prefix);
-  }
-
-  // The pre-git layout: Gradescope also produced folders with the provenance
-  // files sitting flat at the folder root (no `.provenance/` at all). That is
-  // only ever the tree root, so recognize it only there.
-  if (!prefixes.has('') && files.has(MANIFEST_JSON)) prefixes.add('');
-
-  if (prefixes.size === 0) {
-    return { ok: false, reason: 'no_manifest' };
-  }
-
-  const ordered = Array.from(prefixes).sort();
-
-  // -------------------------------------------------------------------------
-  // Step 2: build each scope from its own sub-tree.
-  // -------------------------------------------------------------------------
-  const scopes: RepoScope[] = [];
-  const unusable: UnusableScope[] = [];
-
-  for (const prefix of ordered) {
-    // Everything under this scope EXCEPT another scope's `.provenance/` dir —
-    // a nested scope owns its provenance files, never the enclosing one. Its
-    // source files are left visible: only the scope's own manifest decides
-    // which of them are part of this bundle (selectBundleEntries whitelists on
-    // `submission_files`).
-    const sub = new Map<string, Uint8Array>();
-    for (const [rel, bytes] of files) {
-      if (!rel.startsWith(prefix)) continue;
-      const owner = provenanceScopePrefix(rel);
-      if (owner !== null && owner !== prefix) continue;
-      const scopeRel = rel.slice(prefix.length);
-      if (scopeRel.length === 0) continue;
-      sub.set(scopeRel, bytes);
-    }
-
-    const selected = selectBundleEntries(sub);
-    if (!selected.ok) {
-      // A `.provenance/` carrying neither a classic `manifest.json` nor any
-      // rolling `manifest-<session_id>.json`: nothing seals it at all.
-      unusable.push({ scopePath: prefix, reason: 'no_seal' });
-      continue;
-    }
-
-    const identity = scopeIdentity(selected.entries);
-
-    scopes.push({
-      scopePath: prefix,
-      entries: selected.entries,
-      declaredAssignmentId: identity.assignmentId,
-      declaredSemester: identity.semester,
-    });
-  }
-
-  return { ok: true, scopes, unusable };
 }
 
 // ---------------------------------------------------------------------------

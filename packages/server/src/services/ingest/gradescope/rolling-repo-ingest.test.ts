@@ -28,7 +28,7 @@ import { runAndStoreHeuristics } from '../../heuristics/run-per-submission.js';
 import { computeAndStoreStats } from '../stats.js';
 import { stripBundleSourceFiles } from '../strip-bundle.js';
 import { flags, per_file_stats, submissions } from '../../../db/schema.js';
-import { discoverRepoScopes } from './repo-scopes.js';
+import { discoverRepoScopes } from '@provenance/analysis-core/scopes/discover-scopes.js';
 import { zipBundleEntries } from '@provenance/analysis-core/scopes/select-entries.js';
 import type { DrizzleDb } from '../../../db/client.js';
 
