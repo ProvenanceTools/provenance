@@ -72,7 +72,15 @@ export const nodes: Record<string, ArchNode> = {
       'A flat sealed bundle is never rebuilt. Its staged bytes — and therefore its dedup key — are unchanged by construction, not by assertion.',
     links: [
       {
-        label: 'repo-scopes.ts',
+        label: 'discover-scopes.ts (analysis-core)',
+        href: `${GH}/packages/analysis-core/src/scopes/discover-scopes.ts`,
+      },
+      {
+        label: 'select-entries.ts (analysis-core)',
+        href: `${GH}/packages/analysis-core/src/scopes/select-entries.ts`,
+      },
+      {
+        label: 'repo-scopes.ts (policy)',
         href: `${GH}/packages/server/src/services/ingest/gradescope/repo-scopes.ts`,
       },
       { label: 'repo-zip.ts', href: `${GH}/packages/server/src/services/ingest/repo-zip.ts` },
@@ -101,8 +109,8 @@ export const nodes: Record<string, ArchNode> = {
     links: [
       { label: 'local-path.ts', href: `${GH}/packages/server/src/services/ingest/local-path.ts` },
       {
-        label: 'repo-scopes.ts',
-        href: `${GH}/packages/server/src/services/ingest/gradescope/repo-scopes.ts`,
+        label: 'discover-scopes.ts (analysis-core)',
+        href: `${GH}/packages/analysis-core/src/scopes/discover-scopes.ts`,
       },
       { label: 'repo-zip.ts', href: `${GH}/packages/server/src/services/ingest/repo-zip.ts` },
       { label: 'job-control.ts', href: `${GH}/packages/server/src/services/ingest/job-control.ts` },

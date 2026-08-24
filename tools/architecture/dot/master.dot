@@ -73,7 +73,7 @@ digraph master {
     push  [label="git push — the SECOND way work leaves the machine\nThere is no submit moment: .provenance/ IS the submission,\nno seal step ever runs, and the ROLLING seal is its only seal.\nPer-session filenames keep a shared directory add-only\nand therefore merge-conflict-free."
            fillcolor="#0e2422" color="#17bfae" fontsize=9]
 
-    local [label="/local offline mode\nthe same analysis-core runs in the\nbrowser — no server, nothing uploaded"
+    local [label="/local offline mode\nthe same analysis-core runs in the\nbrowser — no server, nothing uploaded\na monorepo zip offers a scope choice"
            fillcolor="#0d2416" color="#3fbf62" style="filled,rounded,dashed" fontsize=9.5]
   }
 

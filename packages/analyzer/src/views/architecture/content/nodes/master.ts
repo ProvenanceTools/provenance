@@ -134,8 +134,8 @@ export const nodes: Record<string, ArchNode> = {
         href: `${GH}/packages/server/src/services/ingest/gradescope/parse-export.ts`,
       },
       {
-        label: 'build-bundle-zip.ts',
-        href: `${GH}/packages/server/src/services/ingest/gradescope/build-bundle-zip.ts`,
+        label: 'select-entries.ts (analysis-core)',
+        href: `${GH}/packages/analysis-core/src/scopes/select-entries.ts`,
       },
     ],
   },
@@ -168,9 +168,17 @@ export const nodes: Record<string, ArchNode> = {
   },
   local: {
     title: '/local · offline mode',
-    body: 'The /local routes load a bundle from a dropped .zip and run the identical analysis-core build the server runs (the same loader, the same eight checks, the same eighteen heuristics) entirely inside the browser tab. Nothing is uploaded, no submission row is created, and the analysis leaves no trace anywhere. It is what makes a single bundle reviewable without provisioning any infrastructure at all.\n\nIt is nonetheless staff-gated: the /local subtree sits behind the same login and staff check as the rest of the app. Offline analysis is a deployment property, not an authorization one, and a page that renders a student’s source and flags should not be reachable by anyone with the URL.\n\nOne surface exists only here, and its absence server-side is a known gap rather than a design. Drop two or more bundles and /local/compare gains a "Not cross-compared" register: each group of bundles the same-scope exclusion withheld from comparison, how many comparisons that cost, and the proof that established the group — the observed commit node keys, the shared session keys, or both, since a lineage carries whichever of the two fired. Neutral coverage styling, no severity and no score — it is a fact about the recording, never a finding about anyone — and it renders nothing at all when nothing was excluded, so a solo cohort does not grow an empty frame implying something was hidden. The server-backed cross-flags view has no channel for it because nothing persists the exclusions, which would need a column or a table; a grader on the server path therefore sees the suppression take effect without the explanation of it, which is the weaker half of what S20 asks for.',
+    body: 'The /local routes load a bundle from a dropped .zip and run the identical analysis-core build the server runs (the same loader, the same eight checks, the same eighteen heuristics) entirely inside the browser tab. Nothing is uploaded, no submission row is created, and the analysis leaves no trace anywhere. It is what makes a single bundle reviewable without provisioning any infrastructure at all.\n\nIt is nonetheless staff-gated: the /local subtree sits behind the same login and staff check as the rest of the app. Offline analysis is a deployment property, not an authorization one, and a page that renders a student’s source and flags should not be reachable by anyone with the URL.\n\nOne surface exists only here, and its absence server-side is a known gap rather than a design. Drop two or more bundles and /local/compare gains a "Not cross-compared" register: each group of bundles the same-scope exclusion withheld from comparison, how many comparisons that cost, and the proof that established the group — the observed commit node keys, the shared session keys, or both, since a lineage carries whichever of the two fired. Neutral coverage styling, no severity and no score — it is a fact about the recording, never a finding about anyone — and it renders nothing at all when nothing was excluded, so a solo cohort does not grow an empty frame implying something was hidden. The server-backed cross-flags view has no channel for it because nothing persists the exclusions, which would need a column or a table; a grader on the server path therefore sees the suppression take effect without the explanation of it, which is the weaker half of what S20 asks for.\n\nA dropped file is no longer assumed to be a sealed bundle. The load runs in two phases: the archive is first tested for repo shape by the SAME name-only predicate ingest uses — it is a repo iff some non-junk entry sits under a .provenance/ directory — and a flat sealed bundle fails that test and goes straight to the unchanged loader, so every pre-existing workflow, including dropping several bundles for cross-flags, is untouched. A repo-shaped archive is walked by the same discoverRepoScopes ingest calls, and if it holds more than one sealed scope the staff member is asked which recordings to analyze; the chosen ones are rebuilt into flat bundle zips by the same entry selection, in the same entry order, and handed to that same loader. A repo holding exactly one recording is not asked about, because there is no question. That the discovery code is shared rather than reimplemented is the point: /local exists partly so staff can see what ingest did with a repo, and two spellings of "what is a scope" would let the two disagree.\n\nThe per-scope event counts in the picker are NDJSON line counts, not parsed events — discovery has already inflated the bytes, so counting newlines is a linear scan, whereas a real count would mean fully parsing every scope to label the one about to be picked. They are rendered with a leading tilde for that reason.',
     links: [
       { label: 'LocalShell.tsx', href: `${GH}/packages/analyzer/src/views/local/LocalShell.tsx` },
+      {
+        label: 'inspect-dropped-files.ts',
+        href: `${GH}/packages/analyzer/src/lib/inspect-dropped-files.ts`,
+      },
+      {
+        label: 'ScopePicker.tsx',
+        href: `${GH}/packages/analyzer/src/views/load/ScopePicker.tsx`,
+      },
       { label: 'analysis-core', href: `${GH}/packages/analysis-core/src/index.ts` },
     ],
   },
