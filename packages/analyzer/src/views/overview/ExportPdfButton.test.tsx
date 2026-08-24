@@ -70,6 +70,10 @@ function defaultEmptyValue(): BundleContextValue {
     partialLoadErrors: [],
     loadBundleFile: async () => {},
     loadBundleFiles: async () => {},
+    pendingScopes: null,
+    beginLoad: async () => {},
+    chooseScopes: async () => {},
+    cancelChoice: () => {},
     clearBundle: () => {},
   };
 }
@@ -95,6 +99,10 @@ function loadedValue(): BundleContextValue {
     partialLoadErrors: [],
     loadBundleFile: async () => {},
     loadBundleFiles: async () => {},
+    pendingScopes: null,
+    beginLoad: async () => {},
+    chooseScopes: async () => {},
+    cancelChoice: () => {},
     clearBundle: () => {},
   };
 }

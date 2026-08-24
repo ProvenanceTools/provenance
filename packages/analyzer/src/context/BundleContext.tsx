@@ -52,12 +52,39 @@ import type { CrossFlag } from '@provenance/analysis-core/heuristics/cross/types
 import { runCrossAnalysis } from '@provenance/analysis-core/heuristics/cross/run-cross-heuristics.js';
 import { extractCrossFeatures } from '@provenance/analysis-core/heuristics/cross/features.js';
 import type { SameScopeExclusion } from '@provenance/analysis-core/coverage/cross-scope.js';
+import {
+  inspectDroppedFiles,
+  candidateToFile,
+  type ScopeCandidate,
+} from '../lib/inspect-dropped-files.js';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 export type LoadingStage = 'unzip' | 'index' | 'validate' | 'heuristics' | null;
+
+/**
+ * The choice a monorepo drop puts to the user.
+ *
+ * A dropped file that is a flat sealed bundle, or a repo holding exactly one
+ * sealed scope, never lands here — there is nothing to ask. Only a file holding
+ * more than one scope (or none that can be selected) produces a group.
+ */
+export interface PendingScopeChoice {
+  /** Files that need no choice; loaded as-is once the choice is confirmed. */
+  passthrough: File[];
+  /** One entry per repo-shaped file that holds more than one scope. */
+  groups: Array<{ stem: string; candidates: ScopeCandidate[] }>;
+}
+
+/**
+ * Namespaces a scope path by the file it came from, so two dropped repos that
+ * both contain `proj2/` cannot select each other's scope.
+ */
+export function scopeSelectionKey(stem: string, scopePath: string): string {
+  return `${stem} ${scopePath}`;
+}
 
 export type BundleContextValue = {
   /** All loaded bundles. Empty when idle/error. */
@@ -103,7 +130,7 @@ export type BundleContextValue = {
    */
   crossScopeExclusions: SameScopeExclusion[];
 
-  status: 'idle' | 'loading' | 'loaded' | 'error';
+  status: 'idle' | 'loading' | 'choosing' | 'loaded' | 'error';
   loadingStage: LoadingStage;
   /** The loader error, set when status === 'error'. */
   loadError: LoaderError | SessionParseError | null;
@@ -113,10 +140,23 @@ export type BundleContextValue = {
    */
   partialLoadErrors: BlobLoadError[];
 
+  /** The outstanding scope choice; non-null exactly when status === 'choosing'. */
+  pendingScopes: PendingScopeChoice | null;
+
   /** Load a single bundle file (append, not replace). */
   loadBundleFile(file: File): Promise<void>;
   /** Load multiple bundle files at once (fan-out, append). */
   loadBundleFiles(files: File[]): Promise<void>;
+  /**
+   * Phase A of the drop: inspect the files for repo shape, then either load
+   * straight through (the pre-existing behaviour for every flat bundle) or
+   * enter 'choosing' so the user can pick which recordings to analyze.
+   */
+  beginLoad(files: File[]): Promise<void>;
+  /** Confirm a pending choice, loading the selected scopes plus any passthrough. */
+  chooseScopes(selectionKeys: string[]): Promise<void>;
+  /** Abandon a pending choice without loading anything. */
+  cancelChoice(): void;
   /** Reset state back to idle. */
   clearBundle(): void;
 };
@@ -161,6 +201,7 @@ export function BundleProvider({ children }: { children: ReactNode }) {
   const [loadingStage, setLoadingStage] = useState<LoadingStage>(null);
   const [loadError, setLoadError] = useState<LoaderError | SessionParseError | null>(null);
   const [partialLoadErrors, setPartialLoadErrors] = useState<BlobLoadError[]>([]);
+  const [pendingScopes, setPendingScopes] = useState<PendingScopeChoice | null>(null);
 
   // ---------------------------------------------------------------------------
   // loadBundleFile — single file, append
@@ -332,6 +373,85 @@ export function BundleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // ---------------------------------------------------------------------------
+  // beginLoad — Phase A of the drop (scope inspection), then Phase B
+  //
+  // `loadBundleFiles` is deliberately NOT modified: it is the pipeline every
+  // existing caller and test relies on, and the picker needs a decision from
+  // the user in the middle of a load, which a single promise cannot express.
+  // So the inspection sits in front of it and hands it ordinary Files.
+  // ---------------------------------------------------------------------------
+
+  const beginLoad = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+      setStatus('loading');
+      setLoadError(null);
+      setPartialLoadErrors([]);
+      setLoadingStage('unzip');
+
+      const inspected = await inspectDroppedFiles(files);
+      const groups: PendingScopeChoice['groups'] = [];
+      const direct: File[] = [];
+
+      for (const item of inspected) {
+        if (item.candidates === null) {
+          direct.push(item.file);
+          continue;
+        }
+        const stem = item.file.name.endsWith('.zip') ? item.file.name.slice(0, -4) : item.file.name;
+        const selectable = item.candidates.filter((c) => c.selectable);
+        if (selectable.length === 1) {
+          // Exactly one recording in this repo: there is no question to ask.
+          direct.push(await candidateToFile(stem, selectable[0]!));
+        } else {
+          groups.push({ stem, candidates: item.candidates });
+        }
+      }
+
+      if (groups.length === 0) {
+        await loadBundleFiles(direct);
+        return;
+      }
+      setPendingScopes({ passthrough: direct, groups });
+      setStatus('choosing');
+      setLoadingStage(null);
+    },
+    [loadBundleFiles],
+  );
+
+  // ---------------------------------------------------------------------------
+  // chooseScopes / cancelChoice — resolving a pending choice
+  // ---------------------------------------------------------------------------
+
+  const chooseScopes = useCallback(
+    async (selectionKeys: string[]) => {
+      const pending = pendingScopes;
+      if (pending === null) return;
+      setPendingScopes(null);
+      const chosen: File[] = [...pending.passthrough];
+      for (const group of pending.groups) {
+        for (const c of group.candidates) {
+          if (c.selectable && selectionKeys.includes(scopeSelectionKey(group.stem, c.scopePath))) {
+            chosen.push(await candidateToFile(group.stem, c));
+          }
+        }
+      }
+      if (chosen.length === 0) {
+        setStatus('idle');
+        return;
+      }
+      await loadBundleFiles(chosen);
+    },
+    [pendingScopes, loadBundleFiles],
+  );
+
+  const cancelChoice = useCallback(() => {
+    setPendingScopes(null);
+    setStatus('idle');
+    setLoadingStage(null);
+  }, []);
+
+  // ---------------------------------------------------------------------------
   // clearBundle — reset all state
   // ---------------------------------------------------------------------------
 
@@ -343,6 +463,7 @@ export function BundleProvider({ children }: { children: ReactNode }) {
     setFlagsByBundle(new Map());
     setCrossFlags([]);
     setCrossScopeExclusions([]);
+    setPendingScopes(null);
     setStatus('idle');
     setLoadingStage(null);
     setLoadError(null);
@@ -417,8 +538,12 @@ export function BundleProvider({ children }: { children: ReactNode }) {
       loadingStage,
       loadError,
       partialLoadErrors,
+      pendingScopes,
       loadBundleFile,
       loadBundleFiles,
+      beginLoad,
+      chooseScopes,
+      cancelChoice,
       clearBundle,
     }),
     [
@@ -437,8 +562,12 @@ export function BundleProvider({ children }: { children: ReactNode }) {
       loadingStage,
       loadError,
       partialLoadErrors,
+      pendingScopes,
       loadBundleFile,
       loadBundleFiles,
+      beginLoad,
+      chooseScopes,
+      cancelChoice,
       clearBundle,
     ],
   );

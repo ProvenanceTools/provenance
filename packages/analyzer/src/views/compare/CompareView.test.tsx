@@ -294,6 +294,10 @@ function makeStubContext(
     partialLoadErrors: [],
     loadBundleFile: vi.fn(),
     loadBundleFiles: vi.fn(),
+    pendingScopes: null,
+    beginLoad: async () => {},
+    chooseScopes: async () => {},
+    cancelChoice: () => {},
     clearBundle: vi.fn(),
   };
 }
