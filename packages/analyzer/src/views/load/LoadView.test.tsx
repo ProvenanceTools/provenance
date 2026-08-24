@@ -134,6 +134,29 @@ describe('LoadView', () => {
     });
   });
 
+  it('loads a flat bundle with no scope picker', async () => {
+    // The path every existing user takes. Phase A must recognise a flat sealed
+    // bundle as not repo-shaped and hand it straight to the unchanged loader.
+    const { blob } = await buildTestBundle({ sessions: [{ eventCount: 2 }] });
+    const file = new File([blob], 'bundle.zip', { type: 'application/zip' });
+
+    renderLoadView();
+
+    act(() => {
+      fireEvent.drop(screen.getByTestId('drop-zone'), {
+        dataTransfer: { files: [file] as unknown as FileList },
+      });
+    });
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('overview-reached')).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+    expect(screen.queryByTestId('scope-picker')).not.toBeInTheDocument();
+  });
+
   it('shows ErrorPanel on an invalid file drop', async () => {
     const file = new File(['not a zip'], 'bad.zip', { type: 'application/zip' });
 

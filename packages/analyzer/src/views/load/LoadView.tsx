@@ -16,11 +16,12 @@ import { useNavigate } from 'react-router-dom';
 import { useBundle } from '../../context/BundleContext.js';
 import { LoadingPanel } from './LoadingPanel.js';
 import { ErrorPanel } from './ErrorPanel.js';
+import { ScopePicker } from './ScopePicker.js';
 import { Card, CardContent } from '../../components/ui/card.js';
 import { Button } from '../../components/ui/button.js';
 
 export function LoadView() {
-  const { status, loadingStage, loadError, loadBundleFiles, clearBundle } = useBundle();
+  const { status, loadingStage, loadError, pendingScopes, beginLoad, clearBundle } = useBundle();
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -37,13 +38,17 @@ export function LoadView() {
   // File handling — accepts one or more files
   // ---------------------------------------------------------------------------
 
+  // beginLoad, not loadBundleFiles: a dropped file may be a repo holding
+  // several recordings, and that question has to be asked before the loader
+  // runs. For a flat sealed bundle beginLoad forwards straight through, so
+  // this path is unchanged for every existing workflow.
   const handleFiles = useCallback(
     (files: File[]) => {
       if (files.length > 0) {
-        void loadBundleFiles(files);
+        void beginLoad(files);
       }
     },
-    [loadBundleFiles],
+    [beginLoad],
   );
 
   // ---------------------------------------------------------------------------
@@ -104,6 +109,14 @@ export function LoadView() {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-background">
         <LoadingPanel stage={loadingStage} />
+      </div>
+    );
+  }
+
+  if (status === 'choosing' && pendingScopes !== null) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background p-8">
+        <ScopePicker />
       </div>
     );
   }
