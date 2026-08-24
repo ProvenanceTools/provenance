@@ -3,7 +3,7 @@ import {
   buildBundleZipFromFiles,
   selectBundleEntries,
   type BundleEntry,
-} from './build-bundle-zip.js';
+} from '@provenance/analysis-core/scopes/select-entries.js';
 import { createRebuildPool } from './rebuild-pool.js';
 
 const enc = new TextEncoder();

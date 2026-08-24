@@ -34,7 +34,7 @@ import { loadBundle } from '@provenance/analysis-core/loader/parse-bundle.js';
 import { runValidation } from '@provenance/analysis-core/validation/run-validation.js';
 import { expandRepoZip } from './repo-zip.js';
 import { openLocalExport, type StreamedSubmission } from './gradescope/stream-export.js';
-import { zipBundleEntries } from './gradescope/build-bundle-zip.js';
+import { zipBundleEntries } from '@provenance/analysis-core/scopes/select-entries.js';
 import {
   DEFAULT_INGEST_SCOPE,
   type IngestScopeConfig,

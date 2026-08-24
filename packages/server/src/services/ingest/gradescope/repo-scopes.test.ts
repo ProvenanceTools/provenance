@@ -16,7 +16,10 @@ import { describe, it, expect } from 'vitest';
 import JSZip from 'jszip';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { loadBundle } from '@provenance/analysis-core/loader/parse-bundle.js';
-import { selectBundleEntries, zipBundleEntries } from './build-bundle-zip.js';
+import {
+  selectBundleEntries,
+  zipBundleEntries,
+} from '@provenance/analysis-core/scopes/select-entries.js';
 import {
   discoverRepoScopes,
   resolveRepoScopes,

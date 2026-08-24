@@ -26,7 +26,7 @@
  */
 
 import { Worker } from 'node:worker_threads';
-import type { BundleEntry } from './build-bundle-zip.js';
+import type { BundleEntry } from '@provenance/analysis-core/scopes/select-entries.js';
 
 // The worker body. Plain JS (no TS, no project imports). One request → one
 // response; the parent serializes requests per worker (one in flight at a time).

@@ -14,7 +14,7 @@
  *
  * This module closes that hole without becoming a second implementation of
  * anything. Discovery, scope resolution, entry selection, entry ORDER and the
- * ZIP rebuild are all `repo-scopes.ts` / `build-bundle-zip.ts` — the same code,
+ * ZIP rebuild are all `repo-scopes.ts` / `analysis-core/scopes/select-entries.ts` — the same code,
  * called with the same arguments, in the same order as `stream-export.ts` calls
  * it. What lives here is only the adapter: JSZip archive in, per-scope bundle
  * ZIPs plus skip reasons out.
@@ -51,7 +51,7 @@ import {
   type IngestScopeConfigResolver,
   type UnusableScope,
 } from './gradescope/repo-scopes.js';
-import { zipBundleEntries } from './gradescope/build-bundle-zip.js';
+import { zipBundleEntries } from '@provenance/analysis-core/scopes/select-entries.js';
 import type { IngestLocalPathSkipped } from './local-path.js';
 
 const PROVENANCE_DIR = '.provenance/';

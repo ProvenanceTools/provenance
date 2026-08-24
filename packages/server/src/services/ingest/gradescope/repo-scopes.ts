@@ -47,7 +47,10 @@
  */
 
 import { parseRollingManifestFilename } from '@provenance/log-core';
-import { selectBundleEntries, type BundleEntry } from './build-bundle-zip.js';
+import {
+  selectBundleEntries,
+  type BundleEntry,
+} from '@provenance/analysis-core/scopes/select-entries.js';
 
 // ---------------------------------------------------------------------------
 // Constants

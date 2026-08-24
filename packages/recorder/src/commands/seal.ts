@@ -879,7 +879,7 @@ export async function sealBundle(deps: SealDeps): Promise<SealResult> {
     // covered by no signature, and the bundle's contents are a CLOSED SET, so
     // packing it would reach `loader/unzip.ts` as `unexpected_file` and kill the
     // whole bundle. The git submission path drops it for the same reason, in
-    // `server/services/ingest/gradescope/build-bundle-zip.ts`.
+    // `analysis-core/scopes/select-entries.ts`.
     if (filename === PROVENANCE_GITATTRIBUTES_FILENAME) {
       continue;
     }

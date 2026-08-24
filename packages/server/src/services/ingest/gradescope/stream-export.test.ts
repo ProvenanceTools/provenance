@@ -14,7 +14,7 @@ import path from 'node:path';
 import JSZip from 'jszip';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { openLocalExport, type StreamedSubmission } from './stream-export.js';
-import { zipBundleEntries } from './build-bundle-zip.js';
+import { zipBundleEntries } from '@provenance/analysis-core/scopes/select-entries.js';
 import { DEFAULT_INGEST_SCOPE, type IngestScopeConfig } from './repo-scopes.js';
 
 const PROVENANCE_FILE = /^(manifest\.json|manifest\.sig|session-.*\.slog(\.meta)?)$/;

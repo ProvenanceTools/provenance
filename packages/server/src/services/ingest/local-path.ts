@@ -40,7 +40,10 @@ import { upsertRosterFromSubmitters } from './gradescope/upsert-roster.js';
 import { openLocalExport, type StreamedSkipReason } from './gradescope/stream-export.js';
 import { loadIngestScopeConfigs, scopeConfigResolver } from './gradescope/scope-config.js';
 import type { IngestScopeConfig } from './gradescope/repo-scopes.js';
-import { zipBundleEntries, type BundleEntry } from './gradescope/build-bundle-zip.js';
+import {
+  zipBundleEntries,
+  type BundleEntry,
+} from '@provenance/analysis-core/scopes/select-entries.js';
 import { createRebuildPool, type RebuildPool } from './gradescope/rebuild-pool.js';
 import { getBoss, JOB_KINDS } from '../../jobs/pg-boss.js';
 import type { StorageClient } from '../storage/client.js';

@@ -7,11 +7,25 @@
 
 import { describe, it, expect } from 'vitest';
 import JSZip from 'jszip';
-import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
-import { loadBundle } from '@provenance/analysis-core/loader/parse-bundle.js';
-import { buildBundleZipForFolder, buildBundleZipFromFiles } from './build-bundle-zip.js';
+import { buildTestBundle } from '../test-support/build-test-bundle.js';
+import { loadBundle } from '../loader/parse-bundle.js';
+import { buildBundleZipForFolder, buildBundleZipFromFiles } from './select-entries.js';
 
 const PROVENANCE_FILE = /^(manifest\.json|manifest\.sig|session-.*\.slog(\.meta)?)$/;
+
+/**
+ * UTF-8 fixture bytes in THIS realm.
+ *
+ * analysis-core's suite runs under jsdom (JSZip needs FileReader), and jsdom's
+ * `TextEncoder` returns a Uint8Array from the jsdom VM context. JSZip type-tests
+ * its input with `instanceof Uint8Array`, which is false across realms, so a
+ * bare `new TextEncoder().encode(...)` fixture is rejected as unreadable data.
+ * `Uint8Array.from` copies into the test realm. Bytes are identical either way —
+ * this is a test-fixture concern only, not a property of the code under test.
+ */
+function utf8(text: string): Uint8Array {
+  return Uint8Array.from(new TextEncoder().encode(text));
+}
 
 /**
  * Lay a flat bundle ZIP's entries into an outer export folder.
@@ -59,7 +73,7 @@ describe('buildBundleZipForFolder', () => {
     outer.file(`${prefix}.DS_Store`, new Uint8Array([0]));
     outer.file(`__MACOSX/${prefix}._manifest.json`, new Uint8Array([0]));
     outer.file(`${prefix}.provenance/._session-x.slog`, new Uint8Array([0]));
-    outer.file(`${prefix}notes.txt`, new TextEncoder().encode('not in manifest'));
+    outer.file(`${prefix}notes.txt`, utf8('not in manifest'));
 
     const built = await buildBundleZipForFolder(outer, prefix);
     expect(built.ok).toBe(true);
@@ -102,7 +116,7 @@ describe('buildBundleZipForFolder', () => {
   it('returns no_manifest when the folder has no manifest.json', async () => {
     const outer = new JSZip();
     const prefix = 'export/submission_empty/';
-    outer.file(`${prefix}hw10.sql`, new TextEncoder().encode('SELECT 1;\n'));
+    outer.file(`${prefix}hw10.sql`, utf8('SELECT 1;\n'));
     outer.file(`${prefix}.DS_Store`, new Uint8Array([0]));
 
     const built = await buildBundleZipForFolder(outer, prefix);
@@ -150,9 +164,7 @@ describe('buildBundleZipFromFiles', () => {
   });
 
   it('returns no_manifest when the map has no manifest.json', async () => {
-    const files = new Map<string, Uint8Array>([
-      ['hw10.sql', new TextEncoder().encode('SELECT 1;\n')],
-    ]);
+    const files = new Map<string, Uint8Array>([['hw10.sql', utf8('SELECT 1;\n')]]);
     const built = await buildBundleZipFromFiles(files);
     expect(built.ok).toBe(false);
     if (built.ok) return;

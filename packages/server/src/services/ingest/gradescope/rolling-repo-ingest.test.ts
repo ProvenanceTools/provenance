@@ -29,7 +29,7 @@ import { computeAndStoreStats } from '../stats.js';
 import { stripBundleSourceFiles } from '../strip-bundle.js';
 import { flags, per_file_stats, submissions } from '../../../db/schema.js';
 import { discoverRepoScopes } from './repo-scopes.js';
-import { zipBundleEntries } from './build-bundle-zip.js';
+import { zipBundleEntries } from '@provenance/analysis-core/scopes/select-entries.js';
 import type { DrizzleDb } from '../../../db/client.js';
 
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });

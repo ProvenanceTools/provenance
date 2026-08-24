@@ -11,7 +11,7 @@
  *
  * This is the entry point of the Gradescope ingest path: it locates and parses
  * the metadata, rebuilds a flat bundle ZIP from each submission folder
- * (build-bundle-zip.ts), and returns:
+ * (analysis-core/scopes/select-entries.ts), and returns:
  *   - `rosterSubmitters`: every submitter across the whole export, deduped by
  *     sid (the roster upsert source — analyzer PRD §8.4 / §9.2),
  *   - `bundles`: one entry per ASSIGNMENT SCOPE of each submission folder,
@@ -28,7 +28,7 @@
 
 import JSZip from 'jszip';
 import { parseSubmissionMetadata, type GradescopeSubmitter } from './parse-metadata.js';
-import { zipBundleEntries } from './build-bundle-zip.js';
+import { zipBundleEntries } from '@provenance/analysis-core/scopes/select-entries.js';
 import {
   discoverRepoScopes,
   resolveRepoScopes,

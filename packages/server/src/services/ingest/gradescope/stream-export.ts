@@ -15,14 +15,14 @@
  *      flat bundle via `buildBundleZipFromFiles`, yields it, and releases it
  *      before moving to the next folder.
  *
- * The shared selection/whitelist logic lives in `build-bundle-zip.ts`; metadata
+ * The shared selection/whitelist logic lives in `analysis-core/scopes/select-entries.ts`; metadata
  * parsing in `parse-metadata.ts`. This module only adds the on-disk, bounded-
  * memory outer read.
  */
 
 import yauzl from 'yauzl';
 import { parseSubmissionMetadata, type GradescopeSubmitter } from './parse-metadata.js';
-import type { BundleEntry } from './build-bundle-zip.js';
+import type { BundleEntry } from '@provenance/analysis-core/scopes/select-entries.js';
 import {
   discoverRepoScopes,
   resolveRepoScopes,
