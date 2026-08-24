@@ -42,6 +42,7 @@ This is most of the feature. The server side is **already built and needs no beh
     (`routes/ingest.ts:1353`)
 
   Query form: `?scope_mode=repo_scoped&scope_path_glob=proj2/**&scope_on_multiple=ingest_all`
+
 - `ingestLocalPath` already takes `ingestScopeOverride` (`local-path.ts:109`).
 - `IngestJobStatusResponse.skipped` already carries `GradescopeSkippedEntry[] | null`
   (`shared/src/api-schemas.ts:621`), so excluded scopes are already reportable to a client.
@@ -54,7 +55,7 @@ this is non-obvious enough to be worth recording.
 
 `resolveRepoScopes`'s path-glob pass looks up config **per scope, keyed by that scope's own
 declared `assignment_id`** (`repo-scopes.ts:498-500`). Setting `proj2`'s persisted config to
-`repo_scoped, proj2/**` therefore excludes nothing: `lab5/` resolves to *lab5's* config, which
+`repo_scoped, proj2/**` therefore excludes nothing: `lab5/` resolves to _lab5's_ config, which
 is the `self_identifying` default, and is accepted anyway. Excluding the other nine would mean
 setting a deliberately-non-matching glob on every other assignment in the semester.
 
@@ -68,13 +69,13 @@ not to route this through the persisted default.
 
 ## 3. Decisions
 
-| # | Decision | Rationale |
-|---|---|---|
-| D1 | `/local` shows a **scope picker**, not a glob dry-run tool and not auto-fan-out | Solves the stated problem with the least surface; `/local` needs discovery, not policy |
-| D2 | provgate sends **`path_glob` on the wire**, derived from the assignment id | Zero server change; `repo_scoped` already does exactly this |
-| D3 | provgate keys config on a **per-`(class, gs_assignment)` mapping row** | Unmapped assignments send no override ⇒ existing classes provably unaffected |
-| D4 | Move **discovery** to `analysis-core`; **policy stays in the server** | `/local` needs `discoverRepoScopes`, not `IngestScopeConfig`; keeps the API-contract vocabulary server-side |
-| D5 | No new `IngestScopeConfig` mode | An `assignment_pinned` mode (select by signed manifest's declared id, robust to renames) was considered and rejected as unnecessary given D2/D3 |
+| #   | Decision                                                                        | Rationale                                                                                                                                       |
+| --- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | `/local` shows a **scope picker**, not a glob dry-run tool and not auto-fan-out | Solves the stated problem with the least surface; `/local` needs discovery, not policy                                                          |
+| D2  | provgate sends **`path_glob` on the wire**, derived from the assignment id      | Zero server change; `repo_scoped` already does exactly this                                                                                     |
+| D3  | provgate keys config on a **per-`(class, gs_assignment)` mapping row**          | Unmapped assignments send no override ⇒ existing classes provably unaffected                                                                    |
+| D4  | Move **discovery** to `analysis-core`; **policy stays in the server**           | `/local` needs `discoverRepoScopes`, not `IngestScopeConfig`; keeps the API-contract vocabulary server-side                                     |
+| D5  | No new `IngestScopeConfig` mode                                                 | An `assignment_pinned` mode (select by signed manifest's declared id, robust to renames) was considered and rejected as unnecessary given D2/D3 |
 
 D5 is worth revisiting if courses turn out to move or rename assignment directories between
 semesters — pinning by declared `assignment_id` is more robust than a path glob, at the cost of
@@ -106,7 +107,7 @@ The importers of `repo-scopes.ts` split into two groups wanting different things
 exports map; no new export entries needed.
 
 Blast radius: 10 non-test import sites for `repo-scopes`, 5 for `build-bundle-zip`, most of them
-`import type`. `packages/shared` only *mentions* `repo-scopes` in a docstring — no import — so
+`import type`. `packages/shared` only _mentions_ `repo-scopes` in a docstring — no import — so
 shared stays zod-only.
 
 **Type split.** `UnusableScope.reason` currently mixes one discovery reason (`no_seal`) with
@@ -225,10 +226,10 @@ it reads as "300 submissions, 300 scope_excluded, 0 ingested".
 expansion**, so no single derived glob matches both a root-level and a nested assignment
 directory:
 
-| glob | regex | `proj2/` | `projects/proj2/` |
-|---|---|---|---|
-| `proj2/**` | `^proj2/.*$` | ✅ | ❌ |
-| `**/proj2/**` | `^.*/proj2/.*$` | ❌ (no leading slash) | ✅ |
+| glob          | regex           | `proj2/`              | `projects/proj2/` |
+| ------------- | --------------- | --------------------- | ----------------- |
+| `proj2/**`    | `^proj2/.*$`    | ✅                    | ❌                |
+| `**/proj2/**` | `^.*/proj2/.*$` | ❌ (no leading slash) | ✅                |
 
 61B/61C put assignments at the repo root, so deriving `{id}/**` is correct for the target
 courses. The nullable `path_glob` column exists precisely so a course with a nested layout can
@@ -254,7 +255,7 @@ Edit the relevant `tools/architecture/dot/*.dot`, run
 ## 5. Testing
 
 - **Package move:** existing `repo-scopes.test.ts` / `build-bundle-zip.test.ts` move with their
-  modules and must pass unchanged. That they pass unchanged *is* the assertion that the move is
+  modules and must pass unchanged. That they pass unchanged _is_ the assertion that the move is
   behavior-preserving. Add an `analysis-core` isomorphism check (the ESLint
   `no-restricted-imports` rule already covers `node:*`/`fs`/`path`; the suite must run in the
   jsdom environment).

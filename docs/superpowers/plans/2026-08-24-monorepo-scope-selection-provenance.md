@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let staff drop a monorepo repo zip on the analyzer's `/local` route and pick which assignment recording to analyze, by moving scope *discovery* out of the server and into `analysis-core` where the browser can reach it.
+**Goal:** Let staff drop a monorepo repo zip on the analyzer's `/local` route and pick which assignment recording to analyze, by moving scope _discovery_ out of the server and into `analysis-core` where the browser can reach it.
 
-**Architecture:** Scope discovery (`discoverRepoScopes`, `selectBundleEntries`, `zipBundleEntries`) is pure and isomorphic but currently lives in `packages/server`. Move it to `packages/analysis-core/src/scopes/`, leaving ingest *policy* (`IngestScopeConfig`, `resolveRepoScopes`) in the server. Then `/local` gains a two-phase load: inspect dropped files for repo shape, show a picker when a file holds more than one sealed scope, rebuild the chosen scopes into flat bundle zips, and hand them to the existing unmodified load pipeline.
+**Architecture:** Scope discovery (`discoverRepoScopes`, `selectBundleEntries`, `zipBundleEntries`) is pure and isomorphic but currently lives in `packages/server`. Move it to `packages/analysis-core/src/scopes/`, leaving ingest _policy_ (`IngestScopeConfig`, `resolveRepoScopes`) in the server. Then `/local` gains a two-phase load: inspect dropped files for repo shape, show a picker when a file holds more than one sealed scope, rebuild the chosen scopes into flat bundle zips, and hand them to the existing unmodified load pipeline.
 
 **Tech Stack:** TypeScript (strict, `exactOptionalPropertyTypes`), npm workspaces, Vitest (jsdom), React 19 + React Testing Library, JSZip, Graphviz (dev-time, for `/architecture`).
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **No server behavior change.** The only server edits in this plan are import paths and the type split. If you find yourself changing what the ingest pipeline *does*, stop — that is out of scope.
+- **No server behavior change.** The only server edits in this plan are import paths and the type split. If you find yourself changing what the ingest pipeline _does_, stop — that is out of scope.
 - **`analysis-core` must stay isomorphic.** An ESLint `no-restricted-imports` rule rejects `vscode`, `node:*`, `fs`, `path`, `worker_threads`, `crypto` in `packages/analysis-core/**/*.ts`. The moved code already complies (it imports only `jszip` and `@provenance/log-core`, both already `analysis-core` dependencies). Do not add imports that break this.
 - **`analysis-core` tests run under jsdom** (`environment: 'jsdom'`, `globals: true`). JSZip reads a `Blob` via `FileReader`, which only exists under jsdom.
 - **Consumers import `analysis-core` by package name, never by reaching into `src/`.** The `exports` map has a `./*.js` wildcard, so `@provenance/analysis-core/scopes/discover-scopes.js` resolves with no `package.json` change.
@@ -31,6 +31,7 @@
 ## File Structure
 
 **Created:**
+
 - `packages/analysis-core/src/scopes/select-entries.ts` — bundle-entry whitelist + zip rebuild (moved from server `build-bundle-zip.ts`)
 - `packages/analysis-core/src/scopes/select-entries.test.ts` — moved with it
 - `packages/analysis-core/src/scopes/discover-scopes.ts` — walk a tree, find every sealed `.provenance/` scope (moved from server `repo-scopes.ts`)
@@ -41,9 +42,11 @@
 - `packages/analyzer/src/views/load/ScopePicker.test.tsx`
 
 **Deleted:**
+
 - `packages/server/src/services/ingest/gradescope/build-bundle-zip.ts` (+ its test — both move)
 
 **Modified:**
+
 - `packages/server/src/services/ingest/gradescope/repo-scopes.ts` — shrinks to the policy half
 - `packages/server/src/services/ingest/gradescope/repo-scopes.test.ts` — policy tests stay, discovery tests move
 - 10 server import sites (see Task 2 Step 5)
@@ -57,11 +60,13 @@
 ### Task 1: Move `build-bundle-zip.ts` to `analysis-core/scopes/select-entries.ts`
 
 **Files:**
+
 - Create: `packages/analysis-core/src/scopes/select-entries.ts`, `packages/analysis-core/src/scopes/select-entries.test.ts`
 - Delete: `packages/server/src/services/ingest/gradescope/build-bundle-zip.ts`, `build-bundle-zip.test.ts`
 - Modify: 5 server import sites
 
 **Interfaces:**
+
 - Consumes: `parseRollingManifestFilename` from `@provenance/log-core` (unchanged).
 - Produces, from `@provenance/analysis-core/scopes/select-entries.js`, all identical to today:
   - `interface BundleEntry { name: string; data: Uint8Array }`
@@ -100,19 +105,20 @@ Expected: PASS, same assertions as before the move. If anything fails, the move 
 
 Replace the relative import with the package import in each:
 
-| File | Old specifier | New specifier |
-|---|---|---|
-| `services/ingest/repo-zip.ts` | `./gradescope/build-bundle-zip.js` | `@provenance/analysis-core/scopes/select-entries.js` |
-| `services/ingest/local-path.ts` | `./gradescope/build-bundle-zip.js` | `@provenance/analysis-core/scopes/select-entries.js` |
-| `services/ingest/gradescope/parse-export.ts` | `./build-bundle-zip.js` | `@provenance/analysis-core/scopes/select-entries.js` |
-| `services/ingest/gradescope/rebuild-pool.ts` | `./build-bundle-zip.js` | `@provenance/analysis-core/scopes/select-entries.js` |
-| `services/ingest/gradescope/stream-export.ts` | `./build-bundle-zip.js` | `@provenance/analysis-core/scopes/select-entries.js` |
+| File                                          | Old specifier                      | New specifier                                        |
+| --------------------------------------------- | ---------------------------------- | ---------------------------------------------------- |
+| `services/ingest/repo-zip.ts`                 | `./gradescope/build-bundle-zip.js` | `@provenance/analysis-core/scopes/select-entries.js` |
+| `services/ingest/local-path.ts`               | `./gradescope/build-bundle-zip.js` | `@provenance/analysis-core/scopes/select-entries.js` |
+| `services/ingest/gradescope/parse-export.ts`  | `./build-bundle-zip.js`            | `@provenance/analysis-core/scopes/select-entries.js` |
+| `services/ingest/gradescope/rebuild-pool.ts`  | `./build-bundle-zip.js`            | `@provenance/analysis-core/scopes/select-entries.js` |
+| `services/ingest/gradescope/stream-export.ts` | `./build-bundle-zip.js`            | `@provenance/analysis-core/scopes/select-entries.js` |
 
 Also update the test files that import it (`rebuild-pool.test.ts`, `repo-zip.test.ts`, `stream-export.test.ts`, `repo-scopes.test.ts`) the same way. Keep the imported symbol lists exactly as they are.
 
 - [ ] **Step 5: Typecheck, lint, and run both touched workspaces**
 
 Run:
+
 ```bash
 npm run typecheck
 npm run lint
@@ -134,11 +140,13 @@ git commit --no-gpg-sign -m "refactor(analysis-core): move bundle-entry selectio
 ### Task 2: Move scope discovery to `analysis-core/scopes/discover-scopes.ts`
 
 **Files:**
+
 - Create: `packages/analysis-core/src/scopes/discover-scopes.ts`, `packages/analysis-core/src/scopes/discover-scopes.test.ts`
 - Modify: `packages/server/src/services/ingest/gradescope/repo-scopes.ts` (shrinks), `repo-scopes.test.ts` (discovery cases move out)
 - Modify: `services/ingest/repo-zip.ts`, `gradescope/parse-export.ts`, `gradescope/stream-export.ts`
 
 **Interfaces:**
+
 - Consumes: `BundleEntry`, `selectBundleEntries` (Task 1).
 - Produces, from `@provenance/analysis-core/scopes/discover-scopes.js`:
 
@@ -220,6 +228,7 @@ In `services/ingest/repo-zip.ts`, `gradescope/parse-export.ts` and `gradescope/s
 - [ ] **Step 6: Full gate**
 
 Run:
+
 ```bash
 npm run typecheck
 npm run lint
@@ -241,9 +250,11 @@ git commit --no-gpg-sign -m "refactor(analysis-core): move scope discovery out o
 ### Task 3: `inspectDroppedFiles` — Phase A of the `/local` load
 
 **Files:**
+
 - Create: `packages/analyzer/src/lib/inspect-dropped-files.ts`, `packages/analyzer/src/lib/inspect-dropped-files.test.ts`
 
 **Interfaces:**
+
 - Consumes: `discoverRepoScopes`, `isJunkPath`, `provenanceScopePrefix` (Task 2); `zipBundleEntries`, `BundleEntry` (Task 1).
 - Produces:
 
@@ -543,10 +554,12 @@ git commit --no-gpg-sign -m "feat(analyzer): inspect dropped files for monorepo 
 ### Task 4: `BundleContext` gains a `'choosing'` phase
 
 **Files:**
+
 - Modify: `packages/analyzer/src/context/BundleContext.tsx`
 - Test: Create `packages/analyzer/src/context/BundleContext.choosing.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `inspectDroppedFiles`, `candidateToFile`, `ScopeCandidate` (Task 3).
 - Produces, added to `BundleContextValue`:
 
@@ -636,79 +649,77 @@ export function scopeSelectionKey(stem: string, scopePath: string): string {
 **Do not modify `loadBundleFiles`.** Add a new callback that becomes what `LoadView` calls:
 
 ```ts
-  const beginLoad = useCallback(
-    async (files: File[]) => {
-      if (files.length === 0) return;
-      setStatus('loading');
-      setLoadError(null);
-      setPartialLoadErrors([]);
-      setLoadingStage('unzip');
+const beginLoad = useCallback(
+  async (files: File[]) => {
+    if (files.length === 0) return;
+    setStatus('loading');
+    setLoadError(null);
+    setPartialLoadErrors([]);
+    setLoadingStage('unzip');
 
-      const inspected = await inspectDroppedFiles(files);
-      const groups: PendingScopeChoice['groups'] = [];
-      const direct: File[] = [];
+    const inspected = await inspectDroppedFiles(files);
+    const groups: PendingScopeChoice['groups'] = [];
+    const direct: File[] = [];
 
-      for (const item of inspected) {
-        if (item.candidates === null) {
-          direct.push(item.file);
-          continue;
-        }
-        const stem = item.file.name.endsWith('.zip')
-          ? item.file.name.slice(0, -4)
-          : item.file.name;
-        const selectable = item.candidates.filter((c) => c.selectable);
-        if (selectable.length === 1) {
-          // Exactly one recording in this repo: there is no question to ask.
-          direct.push(await candidateToFile(stem, selectable[0]!));
-        } else {
-          groups.push({ stem, candidates: item.candidates });
-        }
+    for (const item of inspected) {
+      if (item.candidates === null) {
+        direct.push(item.file);
+        continue;
       }
-
-      if (groups.length === 0) {
-        await loadBundleFiles(direct);
-        return;
+      const stem = item.file.name.endsWith('.zip') ? item.file.name.slice(0, -4) : item.file.name;
+      const selectable = item.candidates.filter((c) => c.selectable);
+      if (selectable.length === 1) {
+        // Exactly one recording in this repo: there is no question to ask.
+        direct.push(await candidateToFile(stem, selectable[0]!));
+      } else {
+        groups.push({ stem, candidates: item.candidates });
       }
-      setPendingScopes({ passthrough: direct, groups });
-      setStatus('choosing');
-      setLoadingStage(null);
-    },
-    [loadBundleFiles],
-  );
+    }
+
+    if (groups.length === 0) {
+      await loadBundleFiles(direct);
+      return;
+    }
+    setPendingScopes({ passthrough: direct, groups });
+    setStatus('choosing');
+    setLoadingStage(null);
+  },
+  [loadBundleFiles],
+);
 ```
 
-A repo where every `.provenance/` is unsealed has zero selectable scopes and therefore lands in `groups` with nothing pickable — the picker then shows *why*, which beats a bare loader error.
+A repo where every `.provenance/` is unsealed has zero selectable scopes and therefore lands in `groups` with nothing pickable — the picker then shows _why_, which beats a bare loader error.
 
 - [ ] **Step 5: Add `chooseScopes` and `cancelChoice`**
 
 ```ts
-  const chooseScopes = useCallback(
-    async (selectionKeys: string[]) => {
-      const pending = pendingScopes;
-      if (pending === null) return;
-      setPendingScopes(null);
-      const chosen: File[] = [...pending.passthrough];
-      for (const group of pending.groups) {
-        for (const c of group.candidates) {
-          if (c.selectable && selectionKeys.includes(scopeSelectionKey(group.stem, c.scopePath))) {
-            chosen.push(await candidateToFile(group.stem, c));
-          }
+const chooseScopes = useCallback(
+  async (selectionKeys: string[]) => {
+    const pending = pendingScopes;
+    if (pending === null) return;
+    setPendingScopes(null);
+    const chosen: File[] = [...pending.passthrough];
+    for (const group of pending.groups) {
+      for (const c of group.candidates) {
+        if (c.selectable && selectionKeys.includes(scopeSelectionKey(group.stem, c.scopePath))) {
+          chosen.push(await candidateToFile(group.stem, c));
         }
       }
-      if (chosen.length === 0) {
-        setStatus('idle');
-        return;
-      }
-      await loadBundleFiles(chosen);
-    },
-    [pendingScopes, loadBundleFiles],
-  );
+    }
+    if (chosen.length === 0) {
+      setStatus('idle');
+      return;
+    }
+    await loadBundleFiles(chosen);
+  },
+  [pendingScopes, loadBundleFiles],
+);
 
-  const cancelChoice = useCallback(() => {
-    setPendingScopes(null);
-    setStatus('idle');
-    setLoadingStage(null);
-  }, []);
+const cancelChoice = useCallback(() => {
+  setPendingScopes(null);
+  setStatus('idle');
+  setLoadingStage(null);
+}, []);
 ```
 
 - [ ] **Step 6: Wire into the context value and `clearBundle`**
@@ -733,10 +744,12 @@ git commit --no-gpg-sign -m "feat(analyzer): add a scope-choice phase to the /lo
 ### Task 5: The picker UI
 
 **Files:**
+
 - Create: `packages/analyzer/src/views/load/ScopePicker.tsx`, `packages/analyzer/src/views/load/ScopePicker.test.tsx`
 - Modify: `packages/analyzer/src/views/load/LoadView.tsx`, `packages/analyzer/src/views/load/LoadView.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `PendingScopeChoice`, `scopeSelectionKey`, `beginLoad`, `chooseScopes`, `cancelChoice` (Task 4).
 - Produces: `export function ScopePicker()` — reads everything from `useBundle()`, takes no props.
 
@@ -745,11 +758,21 @@ git commit --no-gpg-sign -m "feat(analyzer): add a scope-choice phase to the /lo
 Create `packages/analyzer/src/views/load/ScopePicker.test.tsx`. Drive it through `LoadView` with a two-scope fixture so the provider state is real — do not add a props-based escape hatch that production never uses. Cover:
 
 ```tsx
-it('lists every candidate with its assignment id and session count', async () => { /* ... */ });
-it('disables the confirm button until something is selected', async () => { /* ... */ });
-it('renders an unsealed scope as disabled with a not-sealed reason', async () => { /* ... */ });
-it('allows selecting more than one scope', async () => { /* ... */ });
-it('calls cancelChoice when dismissed', async () => { /* ... */ });
+it('lists every candidate with its assignment id and session count', async () => {
+  /* ... */
+});
+it('disables the confirm button until something is selected', async () => {
+  /* ... */
+});
+it('renders an unsealed scope as disabled with a not-sealed reason', async () => {
+  /* ... */
+});
+it('allows selecting more than one scope', async () => {
+  /* ... */
+});
+it('calls cancelChoice when dismissed', async () => {
+  /* ... */
+});
 ```
 
 Add to `LoadView.test.tsx` a **regression test** that the existing path is untouched:
@@ -808,6 +831,7 @@ git commit --no-gpg-sign -m "feat(analyzer): scope picker for monorepo zips drop
 ### Task 6: `/architecture`
 
 **Files:**
+
 - Modify: `tools/architecture/dot/master.dot` (the `local` node label, around line 76)
 - Modify: `packages/analyzer/src/views/architecture/content/nodes/master.ts` (`local` node), `packages/analyzer/src/views/architecture/content/nodes/ingest.ts` (`scope` node links)
 
