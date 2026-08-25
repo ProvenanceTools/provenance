@@ -46,6 +46,9 @@ services:
       dockerfile: deploy/Dockerfile
       args:
         GIT_SHA: ${GIT_SHA:-unknown}
+        # Vite inlines VITE_* at BUILD time, so this cannot come from env_file
+        # like the rest -- it has to be a build arg. Public key; see Dockerfile.
+        VITE_ROOT_PUBLIC_KEY_HEX: ${PROVENANCE_ROOT_PUBLIC_KEY_HEX:-}
     image: provenance-server:latest
     command: ['--mode=api']
     env_file: .env

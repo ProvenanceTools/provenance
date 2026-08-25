@@ -13,6 +13,20 @@ RUN npm ci
 RUN npm run build --workspace=packages/log-core
 RUN npm run build --workspace=packages/shared
 RUN npm run build --workspace=packages/analysis-core
+# The Manifest 2.0 ROOT public key, baked into the browser bundle at build time
+# (packages/analyzer/src/lib/root-key.ts reads it from import.meta.env). This is
+# the PUBLIC half of a signature key -- shipping it in a client bundle is
+# intended, not a leak. It is what lets the standalone /local route walk a trust
+# chain (root -> course_cert -> manifest -> session) with no server involved.
+#
+# It must be an ARG, not an env_file entry: Vite inlines VITE_* at BUILD time, so
+# setting it at runtime in compose does nothing. The server's own runtime copy is
+# the separate PROVENANCE_ROOT_PUBLIC_KEY_HEX, read from .env.
+#
+# Empty is a supported state: /local then reports validation check 2 as `skipped`
+# for a 2.0 bundle rather than guessing, and 1.0/1.1 bundles never consult it.
+ARG VITE_ROOT_PUBLIC_KEY_HEX=
+ENV VITE_ROOT_PUBLIC_KEY_HEX=$VITE_ROOT_PUBLIC_KEY_HEX
 # Build analyzer SPA (produces packages/analyzer/dist)
 RUN npm run build --workspace=packages/analyzer
 # Build server bundle (produces packages/server/dist/index.js)
