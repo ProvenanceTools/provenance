@@ -59,6 +59,46 @@ export function toneIsFinding(tone: ContributorTone): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Tone → presentation
+// ---------------------------------------------------------------------------
+
+/**
+ * Visual treatment per contributor tone.
+ *
+ * The two `unverifiable` tones get visibly different chrome, which is the whole
+ * reason {@link ContributorTone} has four values. `identity_not_checked` is
+ * slate — the same neutral family as `unattributed`, because neither is a
+ * finding — while `identity_check_failed` is amber, because it is one.
+ *
+ * This started life private to `BranchedFileView.tsx`. It moved here — the
+ * module that already owns `ContributorTone` and the rule that a tone's
+ * WORDING must not be restated in two places — because the split-replay-lanes
+ * grid (`ReplayLanes.tsx`) needs the exact same badge chrome for a lane
+ * header's tone badge, and copying the four-entry table would be exactly the
+ * "two facts sharing one look" failure mode this module's own header warns
+ * about. One table, every importer. `BranchedFileView.tsx` and `ReplayLanes.tsx`
+ * both import this rather than defining their own.
+ */
+export const TONE_CHROME: Record<ContributorTone, { badge: string; label: string }> = {
+  attributed: {
+    badge: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+    label: 'Verified identity',
+  },
+  unattributed: {
+    badge: 'bg-slate-500/10 text-slate-300 border-slate-500/30',
+    label: 'No identity recorded',
+  },
+  identity_not_checked: {
+    badge: 'bg-slate-500/10 text-slate-300 border-slate-500/30',
+    label: 'Identity not checked',
+  },
+  identity_check_failed: {
+    badge: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
+    label: 'Identity did not verify',
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Labels
 // ---------------------------------------------------------------------------
 

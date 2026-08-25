@@ -34,45 +34,29 @@
  * This is a refusal surface, so it deliberately does NOT use the Monaco editor
  * the determinate path uses. Rendering a branch in the same chrome as the real
  * replay is exactly how a reader comes away believing they saw the file.
+ *
+ * ## One component, two containers
+ *
+ * Split replay lanes (`ReplayLanes.tsx`, design
+ * `docs/superpowers/specs/2026-08-24-split-replay-lanes-design.md` §4) needs
+ * this exact refusal surface inside a lane cell, not just full-pane. Rather
+ * than a second implementation of this JSX — which is exactly how the
+ * `concurrent`/`unknown` copy or a `data-testid` would eventually drift
+ * between the two call sites — the entire body below is
+ * {@link AmbiguousFilePanel}, and `BranchedFileView` is a one-line wrapper
+ * around it. `ReplayLanes` renders `AmbiguousFilePanel` directly inside its
+ * own cell chrome; this file's full-pane container renders it unchanged. Every
+ * `data-testid` below therefore means the same thing and sits in the same DOM
+ * position under BOTH containers — there is no full-pane-only wrapper element
+ * here to make that untrue.
  */
 
 import type { AmbiguousReconstruction } from './engine-core.js';
 import {
   describeAmbiguityKind,
   labelSessionContributor,
-  type ContributorTone,
+  TONE_CHROME,
 } from './contributor-labels.js';
-
-// ---------------------------------------------------------------------------
-// Tone → presentation
-// ---------------------------------------------------------------------------
-
-/**
- * Visual treatment per contributor tone.
- *
- * The two `unverifiable` tones get visibly different chrome, which is the whole
- * reason {@link ContributorTone} has four values. `identity_not_checked` is
- * slate — the same neutral family as `unattributed`, because neither is a
- * finding — while `identity_check_failed` is amber, because it is one.
- */
-const TONE_CHROME: Record<ContributorTone, { badge: string; label: string }> = {
-  attributed: {
-    badge: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
-    label: 'Verified identity',
-  },
-  unattributed: {
-    badge: 'bg-slate-500/10 text-slate-300 border-slate-500/30',
-    label: 'No identity recorded',
-  },
-  identity_not_checked: {
-    badge: 'bg-slate-500/10 text-slate-300 border-slate-500/30',
-    label: 'Identity not checked',
-  },
-  identity_check_failed: {
-    badge: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
-    label: 'Identity did not verify',
-  },
-};
 
 // ---------------------------------------------------------------------------
 // Component
@@ -84,7 +68,13 @@ export type BranchedFileViewProps = {
   ambiguity: AmbiguousReconstruction;
 };
 
-export function BranchedFileView({ filePath, ambiguity }: BranchedFileViewProps) {
+/**
+ * The refusal content itself — see the module header, "One component, two
+ * containers". `BranchedFileView` below is the full-pane container; a
+ * `concurrent`/`unknown` lane cell in `ReplayLanes.tsx` is the other. Both
+ * render this, unmodified, with no props beyond {@link BranchedFileViewProps}.
+ */
+export function AmbiguousFilePanel({ filePath, ambiguity }: BranchedFileViewProps) {
   const copy = describeAmbiguityKind(ambiguity.kind, filePath);
 
   // -------------------------------------------------------------------------
@@ -217,4 +207,15 @@ export function BranchedFileView({ filePath, ambiguity }: BranchedFileViewProps)
       </div>
     </div>
   );
+}
+
+/**
+ * The full-pane container. Everything it renders is {@link AmbiguousFilePanel}
+ * — see the module header. This wrapper exists only so the full-pane call
+ * site (`ReplayView.tsx`) keeps importing a stable, descriptively-named
+ * component, and so `BranchedFileView.test.tsx` keeps testing this file's
+ * default export path without needing to know the panel was extracted.
+ */
+export function BranchedFileView(props: BranchedFileViewProps) {
+  return <AmbiguousFilePanel {...props} />;
 }
