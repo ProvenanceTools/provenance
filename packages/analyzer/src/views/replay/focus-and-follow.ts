@@ -9,6 +9,15 @@
  * Both functions are pure (no side effects, no React) and operate on a session's
  * chronologically-ordered events plus the playhead `currentGlobalIdx`.
  *
+ * `currentEditedFile` also takes an optional `sessionIds` filter, added for the
+ * split-lanes feature (`docs/superpowers/specs/2026-08-24-split-replay-lanes-design.md`
+ * §4): "the file a CONTRIBUTOR is in" is the same predicate as "the file the
+ * playhead is in", restricted to that contributor's sessions. Rather than a
+ * second file-bearing-event predicate in `contributor-active-file.ts`, that
+ * module delegates here — see its header for why. The optional third parameter
+ * is additive: every existing call site and test passes two arguments and sees
+ * byte-identical behavior.
+ *
  * Recorder PRD §4.4 (focus.change), §4.2 (doc events).
  */
 
@@ -51,14 +60,22 @@ export function currentFocusAwaySpan(
  * Returns null when no such event has occurred yet.
  *
  * `events` must be chronologically ordered (ascending `globalIdx`).
+ *
+ * `sessionIds`, when passed, restricts the predicate to events whose
+ * `sessionId` is in the set — "the file THIS CONTRIBUTOR is in", for the
+ * split-lanes grid (`contributor-active-file.ts`). Omitted (the default), this
+ * is exactly today's whole-stream "the file being edited" and every existing
+ * caller/test is unaffected.
  */
 export function currentEditedFile(
   events: readonly IndexedEvent[],
   currentGlobalIdx: number,
+  sessionIds?: ReadonlySet<string>,
 ): string | null {
   let file: string | null = null;
   for (const e of events) {
     if (e.globalIdx > currentGlobalIdx) break;
+    if (sessionIds !== undefined && !sessionIds.has(e.sessionId)) continue;
     if (e.file != null && FILE_EVENT_KINDS.has(e.kind)) {
       file = e.file;
     }
