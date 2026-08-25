@@ -34,20 +34,31 @@
  * check, which is the one thing `contributor-palette.ts`'s header explicitly
  * rules out. Hue never carries a verdict; tone never carries an identity.
  *
- * ## Promotion is local, unordered-preserving state — not a second sort
+ * ## Promotion SWAPS a lane; it never widens the grid
  *
- * `buildLaneLayout` lanes strictly the first `maxCodeLanes` of the contributor
- * array it is given (Phase 1, by design — lane order is never activity-
- * ranked). Promoting a rail contributor must not become a second ranking
- * either, so promotion is implemented as a REORDER, not a new cap-selection
- * rule: the contributors already laned keep their front position, promoted
- * rail members are spliced in immediately after them (in their own original
- * relative order), the rest of the rail keeps its original order after that,
- * and `maxCodeLanes` is widened by exactly the number promoted so nobody who
- * was already laned gets bumped back to the rail. `lane-groups.ts` itself is
- * untouched — every ordering guarantee it already tests for a plain array
- * still holds, because promotion only changes what array this component
- * builds before calling it.
+ * The cap on code lanes (`maxCodeLanes`, default 3) is a layout constraint,
+ * not a politeness rule — two Monaco panes are already tight at a laptop
+ * width, and the design's own decision table caps code lanes at three "the
+ * rest are ribbon-only rails that can be promoted, demoting another." So
+ * `maxCodeLanes` is FIXED across every render, promotion included: it is
+ * never widened by however many contributors have been promoted. What
+ * changes on a promotion is the ORDER `buildLaneLayout` sees — promoted keys
+ * move to the front (most-recently-promoted first), everyone else keeps their
+ * original stable relative order behind them — and `buildLaneLayout` lanes
+ * strictly the first `maxCodeLanes` of THAT order, exactly as Phase 1 left
+ * it. The practical effect: the clicked contributor is guaranteed a lane, and
+ * whoever that displaces (the contributor who now falls past position
+ * `maxCodeLanes`) goes back to the rail — never off screen entirely, since
+ * `buildLaneLayout` still partitions every contributor into a cell or a rail
+ * key. `lane-groups.ts` itself is untouched; promotion only changes what
+ * array this component builds before calling it.
+ *
+ * The promoted list itself is capped at `maxCodeLanes` and kept
+ * most-recent-first: `[key, ...prev.filter((k) => k !== key)].slice(0,
+ * maxCodeLanes)`. Promoting a `maxCodeLanes + 1`-th distinct contributor
+ * therefore evicts the LEAST-recently-promoted one from the promoted list —
+ * not an arbitrary one — which sends that contributor back into the "stable
+ * order" tail rather than keeping it pinned to the front forever.
  *
  * Promoted keys live in local `useState`, not the URL. Design §11 defers
  * URL persistence explicitly: a shared link always shows the first three
@@ -146,39 +157,40 @@ export function ReplayLanes({
     return map;
   }, [contributors]);
 
-  // Promotion state — see the module header, "Promotion is local,
-  // order-preserving state". Never persisted to the URL in v1 (design §11).
-  const [promotedKeys, setPromotedKeys] = useState<ReadonlySet<string>>(() => new Set());
+  // Promotion state — most-recent-first, capped at `maxCodeLanes`. See the
+  // module header, "Promotion SWAPS a lane; it never widens the grid". Never
+  // persisted to the URL in v1 (design §11).
+  const [promoted, setPromoted] = useState<readonly string[]>(() => []);
 
   const layout = useMemo(() => {
-    const laneCount = Math.max(0, Math.min(maxCodeLanes, contributors.length));
-    const alreadyLaned = contributors.slice(0, laneCount);
-    const rail = contributors.slice(laneCount);
-    const promoted = rail.filter((c) => promotedKeys.has(c.key));
-    const stillRail = rail.filter((c) => !promotedKeys.has(c.key));
+    const promotedSet = new Set(promoted);
+    // Promoted contributors, most-recently-promoted first — this is the
+    // "front of the line" that guarantees the clicked contributor a lane.
+    const promotedContributors = promoted
+      .map((key) => contributorsByKey.get(key))
+      .filter((c): c is Contributor => c !== undefined);
+    // Everyone else, in their ORIGINAL stable order — never re-sorted by
+    // promotion, per design §3 ("Lane order ... Never re-sorted by activity").
+    const remaining = contributors.filter((c) => !promotedSet.has(c.key));
+    const effectiveOrder = [...promotedContributors, ...remaining];
 
-    // Reorder so the already-laned prefix and the promoted members keep their
-    // OWN relative order, then widen the cap by exactly how many were
-    // promoted. `buildLaneLayout` is otherwise called exactly as Phase 1 left
+    // `maxCodeLanes` is passed through UNCHANGED — the cap never widens.
+    // `buildLaneLayout` itself is otherwise called exactly as Phase 1 left
     // it — no signature change, no new behaviour inside it.
-    const reordered = [...alreadyLaned, ...promoted, ...stillRail];
-    return buildLaneLayout(
-      reordered,
-      activeFileByContributor,
-      fileAmbiguity,
-      laneCount + promoted.length,
-    );
-  }, [contributors, activeFileByContributor, fileAmbiguity, maxCodeLanes, promotedKeys]);
+    return buildLaneLayout(effectiveOrder, activeFileByContributor, fileAmbiguity, maxCodeLanes);
+  }, [
+    contributors,
+    contributorsByKey,
+    activeFileByContributor,
+    fileAmbiguity,
+    maxCodeLanes,
+    promoted,
+  ]);
 
   const laneColumnCount = contributors.length - layout.railKeys.length;
 
   function promote(key: string): void {
-    setPromotedKeys((prev) => {
-      if (prev.has(key)) return prev;
-      const next = new Set(prev);
-      next.add(key);
-      return next;
-    });
+    setPromoted((prev) => [key, ...prev.filter((k) => k !== key)].slice(0, maxCodeLanes));
   }
 
   function ownsCaret(cell: LaneCell): boolean {

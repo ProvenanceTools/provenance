@@ -63,11 +63,11 @@ describe('a submission with one contributor, or none at all', () => {
 describe('a submission with more than one contributor', () => {
   const twoContributors = stamp([attributedContributor('alice'), attributedContributor('bob')]);
 
-  it('renders the control and shows the lane count in the label', () => {
+  it('renders the control with the exact "Split lanes · N" label', () => {
     render(<SplitLanesToggle contributors={twoContributors} enabled={true} onToggle={vi.fn()} />);
     const toggle = screen.getByTestId('split-lanes-toggle');
     expect(toggle).toBeInTheDocument();
-    expect(toggle.textContent).toMatch(/2/);
+    expect(toggle.textContent).toBe('Split lanes · 2');
   });
 
   it('reflects the enabled state via aria-checked and data-enabled', () => {

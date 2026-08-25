@@ -338,26 +338,73 @@ describe('five contributors, over the default cap of three', () => {
     expect(screen.getAllByTestId(/^replay-lane-chip-/)).toHaveLength(5);
   });
 
-  it('promoting a rail contributor moves them into a code lane without hiding anyone', () => {
+  it('promoting a rail contributor swaps them into a code lane, displacing the last-laned one — total lanes stay 3', () => {
     renderFive();
     fireEvent.click(screen.getByTestId(`replay-rail-promote-${keyOf('dave')}`));
 
-    // dave now has his own lane; erin is still on the rail; nobody already
-    // laned (alice/bob/carol) got bumped off.
-    expect(screen.getAllByTestId('replay-lane')).toHaveLength(4);
-    expect(screen.queryByTestId(`replay-rail-${keyOf('dave')}`)).toBeNull();
-    expect(screen.getByTestId(`replay-rail-${keyOf('erin')}`)).toBeInTheDocument();
+    // dave now has his own lane. The cap never widens: the lane count stays
+    // exactly 3, so someone had to give up their slot — the design's own
+    // wording is "promoted, demoting another", not "and everyone keeps theirs".
+    expect(screen.getAllByTestId('replay-lane')).toHaveLength(3);
+    expect(screen.getByTestId('replay-lanes-grid').style.gridTemplateColumns).toBe(
+      'repeat(3, minmax(0, 1fr))',
+    );
 
     const daveLane = screen
       .getAllByTestId('replay-lane')
       .find((el) => el.dataset['contributorKeys'] === keyOf('dave'));
     expect(daveLane).toBeDefined();
     expect(daveLane?.dataset['kind']).toBe('single');
+    expect(screen.queryByTestId(`replay-rail-${keyOf('dave')}`)).toBeNull();
 
-    // The grid widens to fit the newly-promoted lane.
-    expect(screen.getByTestId('replay-lanes-grid').style.gridTemplateColumns).toBe(
-      'repeat(4, minmax(0, 1fr))',
-    );
+    // carol — the third-in-order contributor, and so the one bumped when dave
+    // took a front slot — is displaced back onto the rail. She is NOT hidden:
+    // her rail chip is still on screen, which is the invariant that matters
+    // (design: "the rest are ribbon-only rails that can be promoted, demoting
+    // another" — demoted, never disappeared).
+    const carolRail = screen.getByTestId(`replay-rail-${keyOf('carol')}`);
+    expect(carolRail).toBeInTheDocument();
+    expect(
+      screen
+        .getByTestId(`replay-lane-chip-${keyOf('carol')}`)
+        .closest('[data-testid^="replay-rail-"]'),
+    ).not.toBeNull();
+
+    // alice and bob, who were never promoted and never displaced, keep their
+    // original lanes.
+    const lanedKeys = screen
+      .getAllByTestId('replay-lane')
+      .map((el) => el.dataset['contributorKeys']);
+    expect(lanedKeys.sort()).toEqual([keyOf('alice'), keyOf('bob'), keyOf('dave')].sort());
+
+    // erin, who was never promoted and never laned, is still on the rail too
+    // — nobody vanished.
+    expect(screen.getByTestId(`replay-rail-${keyOf('erin')}`)).toBeInTheDocument();
+  });
+
+  it('promoting a fourth distinct contributor evicts the least-recently-promoted one, not an arbitrary one', () => {
+    renderFive();
+    // Promote dave, then erin, then carol — the promoted list is now full at
+    // maxCodeLanes (3): [carol, erin, dave], most-recent first.
+    fireEvent.click(screen.getByTestId(`replay-rail-promote-${keyOf('dave')}`));
+    fireEvent.click(screen.getByTestId(`replay-rail-promote-${keyOf('erin')}`));
+    fireEvent.click(screen.getByTestId(`replay-rail-promote-${keyOf('carol')}`));
+
+    // Promoting bob — a fourth DISTINCT contributor — must evict dave, the
+    // least-recently-promoted of the three (promoted first, never re-promoted
+    // since), not carol or erin, who were promoted more recently.
+    fireEvent.click(screen.getByTestId(`replay-rail-promote-${keyOf('bob')}`));
+
+    expect(screen.getAllByTestId('replay-lane')).toHaveLength(3);
+    const lanedKeys = screen
+      .getAllByTestId('replay-lane')
+      .map((el) => el.dataset['contributorKeys']);
+    expect(lanedKeys.sort()).toEqual([keyOf('bob'), keyOf('carol'), keyOf('erin')].sort());
+
+    // dave — despite having been promoted earlier — is back on the rail.
+    expect(screen.getByTestId(`replay-rail-${keyOf('dave')}`)).toBeInTheDocument();
+    // alice, never promoted, is also still on the rail.
+    expect(screen.getByTestId(`replay-rail-${keyOf('alice')}`)).toBeInTheDocument();
   });
 
   // -------------------------------------------------------------------------

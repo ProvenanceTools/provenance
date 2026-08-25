@@ -214,7 +214,11 @@ export function AmbiguousFilePanel({ filePath, ambiguity }: BranchedFileViewProp
  * — see the module header. This wrapper exists only so the full-pane call
  * site (`ReplayView.tsx`) keeps importing a stable, descriptively-named
  * component, and so `BranchedFileView.test.tsx` keeps testing this file's
- * default export path without needing to know the panel was extracted.
+ * default export path without needing to know the panel was extracted. The
+ * one-line body is deliberate, not a leftover to "clean up" later: collapsing
+ * it away would either break `ReplayView.tsx`'s import or reintroduce a
+ * second copy of this refusal surface, which is the exact duplication this
+ * whole file exists to avoid.
  */
 export function BranchedFileView(props: BranchedFileViewProps) {
   return <AmbiguousFilePanel {...props} />;

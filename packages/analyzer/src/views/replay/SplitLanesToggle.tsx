@@ -55,7 +55,7 @@ export function SplitLanesToggle({ contributors, enabled, onToggle }: SplitLanes
       onClick={() => onToggle(!enabled)}
       className="shrink-0 rounded-md border px-2 py-1 text-xs text-foreground hover:bg-muted focus:outline-none focus:ring-2 focus:ring-ring"
     >
-      {enabled ? `Split — ${laneCount} lanes` : `Split into ${laneCount} lanes`}
+      {`Split lanes · ${laneCount}`}
     </button>
   );
 }
