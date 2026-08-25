@@ -723,8 +723,9 @@ describe('focus-away overlay, scoped to the lane that owns the playhead (defect 
 // header comment).
 //
 // The fix: `laneFocusAway` (`ReplayView.tsx`) filters `currentFocusAwaySpan`
-// to the OWNING contributor's own session IDs. The single-pane path is
-// deliberately untouched — see the comment at that render site.
+// to the OWNING contributor's own session IDs. The single-pane path has the
+// same fix, filtered to just the session the playhead is currently inside
+// (`focusAway`, same file) — see the tests below this one.
 // ---------------------------------------------------------------------------
 
 describe("focus-away overlay must not leak across contributors' lanes", () => {
@@ -785,6 +786,76 @@ describe("focus-away overlay must not leak across contributors' lanes", () => {
     renderAt(lastIdx);
     await screen.findByTestId('replay-lanes');
     expect(screen.queryByTestId('focus-away-overlay')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Single-pane counterpart to defect 1's follow-up: the same misattribution,
+// one step less direct. Without lanes, the overlay names no one on screen —
+// but a grader still reads it as being about the work in view, which can be a
+// DIFFERENT contributor's session entirely if the scan is unfiltered.
+//
+// Fix: `focusAway` (`ReplayView.tsx`) filters `currentFocusAwaySpan` to just
+// the session the playhead is currently inside (`state.sessionId`), not the
+// whole bundle.
+// ---------------------------------------------------------------------------
+
+describe('single-pane focus-away overlay, scoped to the session under the playhead', () => {
+  it('shows no overlay while the playhead sits in a session that never went away, and shows it once the playhead enters the session that reported focus-away', async () => {
+    // bob first (chronologically earlier) and reports focus-away; alice
+    // second (chronologically LAST) and never does. This ordering matters:
+    // an unfiltered scan asks "what is the most recent focus.change AT OR
+    // BEFORE the playhead", so the bug only shows up when the evidence
+    // (bob's focus-lost) sits chronologically before the playhead position
+    // being tested (alice's event) — exactly the shape of a real multi-
+    // contributor bundle where one partner tabs away earlier and the other
+    // keeps working.
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'bob' },
+        text: 'BOB_LINE',
+        file: 'bob.py',
+        focusAwayReason: 'window',
+      },
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE', file: 'alice.py' },
+    ]);
+
+    const scope = reconstructionScopeFor(bundle, index);
+    const firstSession = [...index.bySessionId.keys()][0]!;
+    const aliceEventIdx = index.ordered.find(
+      (e) => e.kind === 'doc.change' && e.file === 'alice.py',
+    )!.globalIdx;
+    const bobFocusLostIdx = index.ordered.find((e) => e.kind === 'focus.change')!.globalIdx;
+
+    function renderAt(eventIdx: number) {
+      return render(
+        <MemoryRouter initialEntries={[`/local/replay/${firstSession}?event=${eventIdx}&split=0`]}>
+          <ReplayInner
+            sessionId={firstSession}
+            index={index}
+            flags={[]}
+            sourceFilename="test.zip"
+            showHeader={false}
+            scope={scope}
+            contributors={bundle.contributors ?? null}
+          />
+        </MemoryRouter>,
+      );
+    }
+
+    // Playhead inside alice's session: bob reported focus-away, but that
+    // evidence is bob's, not alice's — no overlay.
+    const first = renderAt(aliceEventIdx);
+    await screen.findByTestId('monaco-editor');
+    expect(screen.queryByTestId('replay-lanes')).toBeNull(); // single pane, as requested
+    expect(screen.queryByTestId('focus-away-overlay')).toBeNull();
+    first.unmount();
+
+    // Playhead moves onto bob's own focus-lost event, inside his own session:
+    // the overlay now correctly shows.
+    renderAt(bobFocusLostIdx);
+    await screen.findByTestId('focus-away-overlay');
+    expect(screen.getByTestId('focus-away-overlay')).toBeInTheDocument();
   });
 });
 

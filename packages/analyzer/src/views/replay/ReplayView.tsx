@@ -179,8 +179,10 @@ function ReplayHeader({ sourceFilename }: ReplayHeaderProps) {
 // overlay, not whose evidence that overlay is allowed to show. The
 // `focusAway` prop passed in here is `laneFocusAway` (`ReplayInner`) —
 // `currentFocusAwaySpan` FILTERED to the owning contributor's own session
-// IDs, not the unfiltered whole-bundle scan the single pane still uses. Pass
-// the unfiltered value here by mistake and a lane would show ownsCaret's
+// IDs. (The single pane uses the narrower `focusAway`, filtered to just the
+// one session the playhead is currently inside — see that value's header for
+// why lanes filter by contributor while single-pane filters by session.) Pass
+// an unfiltered value here by mistake and a lane would show ownsCaret's
 // contributor drawn accurately, but be washed red by a DIFFERENT
 // contributor's `focus.change` — a false accusation with a name attached to
 // it, which is strictly worse than the un-attributed wash this component
@@ -539,20 +541,17 @@ export function ReplayInner({
   // ---------------------------------------------------------------------------
 
   // Whether the student is focused away from the window at the current
-  // playhead, scanning the WHOLE bundle unfiltered — i.e. driven by whichever
-  // contributor's `focus.change` happens to be most recent, not necessarily
-  // the one whose session currently owns the playhead.
-  //
-  // This stays unfiltered ON PURPOSE, for the single-pane path only (see the
-  // single-pane render site below). It is a known, pre-existing inaccuracy —
-  // not the one this file fixes — and deliberately not touched here: changing
-  // what the overlay means for every existing single-pane submission is a
-  // product decision to make separately, not one to ride along inside the
-  // split-lanes work. `laneFocusAway` below is the lane-mode fix; this value
-  // is now used ONLY by the single-pane fallback.
+  // playhead, scoped to the session the playhead is CURRENTLY INSIDE
+  // (`state.sessionId`). The away-state belongs to the session that reported
+  // it, not to the bundle as a whole — unfiltered, a multi-contributor
+  // submission viewed without lanes could show one contributor's
+  // `focus.change` overlaid on the playhead sitting in a different
+  // contributor's session, which a grader reads as being about the work on
+  // screen. `laneFocusAway` below is the same fix, scoped to a whole
+  // contributor's sessions instead of just the one under the playhead.
   const focusAway = useMemo(
-    () => currentFocusAwaySpan(bundleEvents, state.currentGlobalIdx),
-    [bundleEvents, state.currentGlobalIdx],
+    () => currentFocusAwaySpan(bundleEvents, state.currentGlobalIdx, new Set([state.sessionId])),
+    [bundleEvents, state.currentGlobalIdx, state.sessionId],
   );
 
   // Lane mode's corrected version of the same fact, filtered to the
@@ -968,18 +967,9 @@ export function ReplayInner({
               `LanePane`, scoped to whichever lane owns the playhead's caret (see the
               `LanePane` header comment above).
 
-              This single-pane `focusAway` is still the UNFILTERED, whole-bundle scan
-              (`currentFocusAwaySpan(bundleEvents, ...)` with no session filter) — the
-              same inaccuracy lane mode had before it was scoped to `laneFocusAway`
-              above: a solo pane can be washed by evidence from a session other than
-              the one the playhead is currently in. That is a real bug, but it is NOT
-              fixed here, on purpose: the single pane has no per-contributor identity
-              on screen to misattribute TO (there is only ever one pane, unlabelled),
-              so the failure mode is imprecise rather than a false accusation against
-              a named person. Changing what this overlay means for every existing
-              single-pane submission is a product decision to make deliberately and
-              separately — not one that should ride along inside the split-lanes
-              fix. Known and deferred; not an oversight. */}
+              `focusAway` above is filtered to the session the playhead is currently
+              inside — the away-state belongs to the session that reported it, not to
+              the bundle as a whole. */}
           {!showLaneGrid && focusAway !== null && <FocusAwayOverlay reason={focusAway.reason} />}
         </div>
 

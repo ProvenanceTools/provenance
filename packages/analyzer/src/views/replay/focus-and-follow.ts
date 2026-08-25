@@ -22,9 +22,10 @@
  *
  * `currentFocusAwaySpan`'s filter exists to fix a real misattribution, not
  * just for symmetry: unfiltered, the "most recent focus.change across the
- * WHOLE bundle" is one contributor's evidence bleeding into another's lane.
- * See that function's header for the full story and why the single-pane call
- * site deliberately still passes no filter.
+ * WHOLE bundle" is one contributor's evidence bleeding into another's lane —
+ * or, in single-pane view, into whichever session the playhead currently
+ * happens to sit in. See that function's header for the full story and how
+ * each call site scopes the filter.
  *
  * Recorder PRD §4.4 (focus.change), §4.2 (doc events).
  */
@@ -64,20 +65,22 @@ export type FocusAwayState = { reason: string | null } | null;
  * session event lists from the EventIndex are.
  *
  * `sessionIds`, when passed, restricts the scan to events whose `sessionId` is
- * in the set — "was THIS CONTRIBUTOR focused away", for a split-lane's overlay.
- * Omitted (the default), this scans the whole bundle unfiltered, which is
- * exactly today's behavior: the single-pane call site passes no filter and
- * must not change (see that call site for why).
+ * in the set — "was THIS CONTRIBUTOR focused away", for a split-lane's
+ * overlay, or "was THIS SESSION focused away", for the single-pane overlay
+ * (scoped to just the session the playhead is currently inside). Omitted
+ * (the default), this scans the whole bundle unfiltered — no remaining call
+ * site does this; every caller now filters.
  *
  * The filter matters more here than it does for `currentEditedFile`: an
  * unfiltered scan doesn't just answer a slightly-too-broad question, it can
  * name the WRONG PERSON. In lane mode the overlay is drawn inside one
- * contributor's lane with their identity in the header right above it — if
- * the away state came from a DIFFERENT contributor's `focus.change`, that
- * lane accuses someone the evidence never implicated, which is the exact
- * false-attribution failure this feature exists to prevent (see
- * `ContributorSelect.tsx`'s header comment). A per-contributor lane must only
- * ever be driven by that contributor's own sessions.
+ * contributor's lane with their identity in the header right above it, and in
+ * single-pane mode a grader reads the overlay as being about the work
+ * currently on screen — if the away state came from a DIFFERENT contributor's
+ * `focus.change`, that reads as an accusation the evidence never implicated
+ * them in, which is the exact false-attribution failure this feature exists
+ * to prevent (see `ContributorSelect.tsx`'s header comment). The overlay must
+ * only ever be driven by the session(s) it is actually being shown against.
  */
 export function currentFocusAwaySpan(
   events: readonly IndexedEvent[],
