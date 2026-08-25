@@ -446,12 +446,15 @@ describe('compose-manifest.mjs ↔ composeSignedManifest byte identity', () => {
     expect(written.assignment_id).toBe(FORM_BASE.assignment_id);
   });
 
-  it('--help exits 0 and mentions standalone usage', () => {
+  it('--help exits 0 and mentions CI must check out this repo', () => {
     const result = execFileSync(process.execPath, [SCRIPT, '--help'], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
     });
     expect(result).toContain('compose-manifest.mjs');
     expect(result).toContain('--files-under-review');
+    expect(result).toContain('--ignore');
+    expect(result).toContain('--attachments');
+    expect(result).toMatch(/Check out this provenance repo/i);
   });
 });

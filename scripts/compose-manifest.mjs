@@ -2,17 +2,74 @@
 /**
  * Headless CLI for the full Manifest 2.0 (or 1.0) generation + signing pipeline.
  *
- * Standalone script — the command-line counterpart of the analyzer's
- * `/compose/manifest` page. Accepts every field that page exposes, builds the
- * unsigned payload, signs with the course key, staples the `course_cert` (at
- * 2.0), self-verifies the trust chain, and writes the result.
+ * The command-line counterpart of the analyzer's `/compose/manifest` page.
+ * Accepts every field that page exposes, builds the unsigned payload, signs
+ * with the course key, staples the `course_cert` (at 2.0), self-verifies the
+ * trust chain, and writes the result.
  *
  * Unlike `tools/sign-manifest.ts`, which signs an already-authored JSON file,
  * this script GENERATES the manifest from flags (or a `--config` JSON) so a
  * publishing CI pipeline never has to hand-write the unsigned shape.
  *
- * Requires a built `@provenance/log-core` (`npm run build`). Run from the repo
- * root so the workspace package resolves.
+ * ---------------------------------------------------------------------------
+ * CI / EXTERNAL PIPELINES — THIS IS NOT A DROP-IN SINGLE FILE
+ * ---------------------------------------------------------------------------
+ *
+ * This script cannot be copied alone into another repo's CI. It imports
+ * `@provenance/log-core` from this monorepo's workspace, so a job that wants
+ * to run it MUST check out THIS repository (ProvenanceTools/provenance),
+ * install, and build first. Typical shape:
+ *
+ *   # 1. Check out the provenance repo (pin a ref/tag in real CI)
+ *   git clone https://github.com/ProvenanceTools/provenance.git
+ *   cd provenance
+ *   git checkout <tag-or-sha>          # pin for reproducibility
+ *
+ *   # 2. Install + build so @provenance/log-core resolves
+ *   npm ci
+ *   npm run build --workspace=packages/log-core
+ *   # (or: npm run build)
+ *
+ *   # 3. Provide course key material via secrets / secure files, then compose
+ *   export PROVENANCE_COURSE_KEYPAIR_PATH=/secure/course-keypair.json
+ *   export PROVENANCE_COURSE_CERT_PATH=/secure/course-cert.json
+ *   export PROVENANCE_ROOT_PUBLIC_KEY_HEX=<64-hex root public key>
+ *
+ *   node scripts/compose-manifest.mjs \
+ *     --out /path/to/assignment-starter/.provenance-manifest \
+ *     --config /path/to/assignment.json \
+ *     # …or pass every field as flags (see below)
+ *
+ * Keys stay outside the checkout (CI secrets / mounted secure volume). The
+ * script only reads them at sign time; it never embeds the root or course
+ * private key into the manifest.
+ *
+ * ---------------------------------------------------------------------------
+ * FIELD COVERAGE (same set as /compose/manifest)
+ * ---------------------------------------------------------------------------
+ *
+ * There is no separate "exclude" field — the manifest name is `ignore`
+ * (paths the recorder will not capture at all). Everything else the browser
+ * composer exposes is here:
+ *
+ *   format                 --format 1.0|2.0              (default: 2.0)
+ *   assignment_id          --assignment-id               required
+ *   semester               --semester                    required
+ *   issued_at              --issued-at                   default: now, UTC, whole seconds
+ *   files_under_review     --files-under-review          required (comma/newline list)
+ *   course_id              --course-id                   required at 2.0
+ *   collaboration          --collaboration solo|group    (default: solo)
+ *   submission             --submission bundle|git       (default: bundle)
+ *   scope                  --scope directory|repo        (default: directory)
+ *   ignore                 --ignore                      "exclude" list; default empty
+ *   attachments            --attachments                 default empty
+ *   policy.selection_change  --no-selection-change / --capture-selection-change
+ *   policy.focus_change      --no-focus-change / --capture-focus-change
+ *   policy.terminal          --no-terminal / --capture-terminal
+ *   policy.heartbeat_interval_ms  --heartbeat-interval-ms  (default: 30000)
+ *
+ * Plus signing inputs (not signed fields): --course-keypair, --course-cert,
+ * --root-pubkey (or the PROVENANCE_* env vars above).
  *
  * USAGE (2.0 — default)
  *   node scripts/compose-manifest.mjs \
@@ -25,7 +82,7 @@
  *     [--collaboration solo|group]                (default: solo)
  *     [--submission bundle|git]                   (default: bundle)
  *     [--scope directory|repo]                    (default: directory)
- *     [--ignore '*.class,target/']                (default: empty)
+ *     [--ignore '*.class,target/']                (default: empty; this is the exclude list)
  *     [--attachments 'logs/,*.log']               (default: empty)
  *     [--no-selection-change] [--no-focus-change] [--no-terminal]
  *     [--heartbeat-interval-ms 30000]             (default: 30000)
@@ -556,12 +613,15 @@ const USAGE = `Usage: node scripts/compose-manifest.mjs \\
   [--course-keypair <path>] [--course-cert <path>] [--root-pubkey <hex>] \\
   [--config <json>] [--preview]
 
-Standalone headless counterpart of the analyzer's /compose/manifest page.
-Pass every field as a flag, or put them in --config JSON (flags override).
+Headless counterpart of the analyzer's /compose/manifest page. Covers every
+composer field (ignore = the exclude list; attachments; policy; etc.).
+Pass fields as flags, or put them in --config JSON (flags override).
 At format 2.0 (default) --course-id, a course keypair, and a course certificate
 are required. --preview prints the unsigned payload and exits without signing.
 
-Requires \`npm run build\` (for @provenance/log-core). Run from the repo root.
+CI: this is NOT a drop-in single file. Check out this provenance repo, run
+\`npm ci\` + \`npm run build --workspace=packages/log-core\`, then invoke this
+script from the repo root. See the file header comment for a full recipe.
 
 npm run compose:manifest -- …`;
 
