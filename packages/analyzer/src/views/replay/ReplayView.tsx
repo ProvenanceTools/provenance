@@ -351,18 +351,29 @@ export function ReplayInner({
 
   // Split contributor lanes (design §3 "Default state", §7 "Wiring").
   //
-  // Read the same way `skipIdle` is — off the URL, once, at mount — but with a
-  // DEFAULT that depends on the submission rather than a fixed one: absent
-  // means on for a bundle with more than one contributor and off for everything
-  // else. That is the on-by-default behaviour change the design accepts
-  // knowingly (§3, last paragraph); the `'0'` / `'1'` arms mean an explicit
-  // choice always wins over it, in both directions.
-  const [split, setSplit] = useState<boolean>(() => {
-    const param = searchParams.get('split');
-    if (param === '0') return false;
-    if (param === '1') return true;
-    return contributors !== null && contributors.contributors.length > 1;
-  });
+  // DERIVED on every render, deliberately NOT `useState` — do not "make it
+  // consistent" with `skipIdle` above. The difference is where the default
+  // comes from: `skipIdle`'s is a constant, so a lazy initializer that runs
+  // once at mount can never go stale. `split`'s default is derived from DATA —
+  // `contributors`, a prop — and `/local` changes that prop on an
+  // already-mounted view when the bundle selector switches submissions. A
+  // captured default would then describe a bundle the reader has left: switch
+  // from a solo submission to a two-contributor one and lanes would stay off
+  // with nothing on screen explaining why, short of a reload.
+  //
+  // So the URL is the single source of truth and the fallback is recomputed
+  // from current props: `'0'`/`'1'` mean an explicit human choice, which always
+  // wins in both directions, and absence means "on for more than one
+  // contributor" — the on-by-default behaviour change design §3 accepts
+  // knowingly. `handleSplitToggle` only writes the param; there is no setter
+  // and nothing to keep in sync.
+  const splitParam = searchParams.get('split');
+  const split =
+    splitParam === '0'
+      ? false
+      : splitParam === '1'
+        ? true
+        : contributors !== null && contributors.contributors.length > 1;
 
   const engine = useReplayEngine(index, { skipIdle, scope });
   const { state, fileStates, files, seams, fileAmbiguity, play, pause, step, seek } = engine;
@@ -717,7 +728,9 @@ export function ReplayInner({
 
   /**
    * Toggling lanes writes an EXPLICIT `?split=0` or `?split=1` — never clears
-   * the param, in either direction.
+   * the param, in either direction. Writing the param IS the state change:
+   * `split` above is derived from it on every render, so there is no local
+   * copy to set and no way for the two to disagree.
    *
    * Design §3: on-by-default is a behaviour change to links already shared, and
    * the mitigation is that any link produced AFTER a human touches this control
@@ -734,7 +747,6 @@ export function ReplayInner({
    */
   const handleSplitToggle = useCallback(
     (next: boolean) => {
-      setSplit(next);
       setSearchParams(
         (prev) => {
           const params = new URLSearchParams(prev);

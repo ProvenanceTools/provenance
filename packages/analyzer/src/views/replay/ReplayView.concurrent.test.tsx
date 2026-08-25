@@ -616,3 +616,79 @@ describe('a solo bundle asked for lanes explicitly', () => {
     expect(screen.getByTestId('file-tabs')).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// The split default must track the bundle ACTUALLY ON SCREEN
+//
+// `/local` renders `ReplayInner` with `selectedBundle?.contributors`, and the
+// bundle selector can change that prop on an already-mounted view. A default
+// captured once at mount would then describe a bundle the reader has left —
+// switch from a solo submission to a two-contributor one and lanes would stay
+// off with nothing on screen explaining why.
+//
+// Both tests below RERENDER the same mounted component rather than mounting
+// twice. That distinction is the whole point: two separate mounts pass whether
+// the default is derived per render or captured once, and so would prove
+// nothing.
+// ---------------------------------------------------------------------------
+
+describe('the split default, when the contributors prop changes under a mounted view', () => {
+  /** The `/local` element tree, parameterised by which bundle is selected. */
+  function localView(selected: { bundle: Bundle; index: EventIndex }) {
+    const firstSession = [...selected.index.bySessionId.keys()][0]!;
+    const lastIdx = selected.index.ordered.length - 1;
+    return (
+      <MemoryRouter initialEntries={[`/local/replay/${firstSession}?event=${lastIdx}`]}>
+        <ReplayInner
+          sessionId={firstSession}
+          index={selected.index}
+          flags={[]}
+          sourceFilename="test.zip"
+          showHeader={false}
+          scope={reconstructionScopeFor(selected.bundle, selected.index)}
+          contributors={selected.bundle.contributors ?? null}
+        />
+      </MemoryRouter>
+    );
+  }
+
+  it('turns lanes ON when a solo bundle is swapped for a two-contributor one', async () => {
+    const solo = await buildScope([{ who: { studentRef: 'alice' }, text: 'ALICE_LINE' }]);
+    const group = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE', file: 'alice.py' },
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE', file: 'bob.py' },
+    ]);
+
+    const { rerender } = render(localView(solo));
+
+    await screen.findByTestId('monaco-editor');
+    expect(screen.queryByTestId('replay-lanes')).toBeNull();
+    expect(screen.queryByTestId('split-lanes-toggle')).toBeNull();
+
+    rerender(localView(group));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-lanes')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('split-lanes-toggle').getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('turns lanes OFF again when the view goes back to a solo bundle', async () => {
+    const solo = await buildScope([{ who: { studentRef: 'alice' }, text: 'ALICE_LINE' }]);
+    const group = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE', file: 'alice.py' },
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE', file: 'bob.py' },
+    ]);
+
+    const { rerender } = render(localView(group));
+    await screen.findByTestId('replay-lanes');
+
+    rerender(localView(solo));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('replay-lanes')).toBeNull();
+    });
+    expect(screen.queryByTestId('split-lanes-toggle')).toBeNull();
+    expect(screen.getByTestId('file-tabs')).toBeInTheDocument();
+  });
+});
