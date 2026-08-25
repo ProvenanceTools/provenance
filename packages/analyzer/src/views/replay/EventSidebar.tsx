@@ -13,6 +13,21 @@
  *     the user's manual scroll (only re-scroll if the current event has moved).
  *   - Each row highlights when it matches `currentGlobalIdx`.
  *
+ * Contributor marker (opt-in, lane mode only — split-replay-lanes design §4/§7,
+ * `docs/superpowers/specs/2026-08-24-split-replay-lanes-design.md`): pass
+ * `contributorHueBySession` to paint a subdued left-edge colour bar on each
+ * row, in that event's SESSION's lane hue — the same `contributor-palette.ts`
+ * mapping `ReplayLanes`' header dot and `ContributorRibbons`' rows already
+ * use, so one event reads the same colour everywhere it appears. This sidebar
+ * still renders the WHOLE bundle's single interleaved stream (unlike the full
+ * timeline's `EventList`, which also carries a session chip — see that
+ * component's header for why this one doesn't); the marker exists because two
+ * lanes on screen give a scrolled-away-from-the-seam row no other way to say
+ * which lane it belongs to. Strictly opt-in and additive: the prop is omitted
+ * outside lane mode (single-pane and solo submissions), and omitting it
+ * renders byte-identical to before. A session absent from the map — no
+ * contributor entry — gets no marker, never a default or fallback colour.
+ *
  * PRD ref: §7.2 (scrolling sidebar event log).
  */
 
@@ -100,6 +115,13 @@ interface SidebarRowProps {
   isCurrent: boolean;
   onSeek: (globalIdx: number) => void;
   style: React.CSSProperties;
+  /**
+   * This row's contributor lane hue, or undefined for "no marker" — either
+   * lane mode is off, or this event's session has no contributor entry. See
+   * `EventSidebar`'s header for why absence must never fall back to a
+   * default colour.
+   */
+  contributorHue?: string | undefined;
 }
 
 function terminalSummary(event: IndexedEvent): { text: string; title: string } | null {
@@ -112,7 +134,7 @@ function terminalSummary(event: IndexedEvent): { text: string; title: string } |
   return { text, title: command };
 }
 
-function SidebarRow({ event, isCurrent, onSeek, style }: SidebarRowProps) {
+function SidebarRow({ event, isCurrent, onSeek, style, contributorHue }: SidebarRowProps) {
   const filePart = event.file ? (event.file.split('/').pop() ?? event.file) : '';
   const term = terminalSummary(event);
 
@@ -136,6 +158,20 @@ function SidebarRow({ event, isCurrent, onSeek, style }: SidebarRowProps) {
       data-global-idx={event.globalIdx}
       aria-current={isCurrent ? 'step' : undefined}
     >
+      {/* Contributor lane marker — quiet left-edge colour bar, lane mode only.
+          Absolutely positioned inside this row (itself `position: absolute`,
+          so it's a containing block) rather than laid out in flow: it must
+          never add width/height to the row, which the virtualizer sizes on
+          (ROW_HEIGHT / SEAM_ROW_HEIGHT). Decorative only — aria-hidden. */}
+      {contributorHue !== undefined && (
+        <span
+          aria-hidden="true"
+          data-testid={`sidebar-row-contributor-${event.globalIdx}`}
+          className="pointer-events-none absolute inset-y-0 left-0 w-[3px]"
+          style={{ backgroundColor: contributorHue }}
+        />
+      )}
+
       {/* seq */}
       <span className="w-10 shrink-0 font-mono text-muted-foreground">#{event.seq}</span>
 
@@ -232,6 +268,13 @@ interface EventSidebarProps {
    * flag — file content demonstrably changed while the recorder was off.
    */
   flaggedSeamIdxs?: ReadonlySet<number>;
+  /**
+   * sessionId → lane hue, for the opt-in contributor marker (see this file's
+   * header). Only ever passed in lane mode; a session with no entry here
+   * renders no marker. Omitted entirely, no row gets a marker and the
+   * rendered DOM is exactly what it was before this prop existed.
+   */
+  contributorHueBySession?: ReadonlyMap<string, string> | undefined;
 }
 
 export function EventSidebar({
@@ -240,6 +283,7 @@ export function EventSidebar({
   onSeek,
   seams = [],
   flaggedSeamIdxs,
+  contributorHueBySession,
 }: EventSidebarProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -339,6 +383,7 @@ export function EventSidebar({
                   isCurrent={row.event.globalIdx === currentGlobalIdx}
                   onSeek={handleSeek}
                   style={style}
+                  contributorHue={contributorHueBySession?.get(row.event.sessionId)}
                 />
               );
             })}

@@ -479,6 +479,24 @@ export function ReplayInner({
     [laneMode, index, contributorBySession],
   );
 
+  // sessionId → lane hue, for EventSidebar's opt-in contributor marker: two
+  // lanes on screen give a row no way to say which lane it belongs to once
+  // scrolled past the last seam divider (design §4/§7). Built off the same
+  // `contributorBySession` + `palette` join every other lane-hue consumer
+  // (ReplayLanes' header dot, ContributorRibbons' rows) uses, so a marker's
+  // colour always matches that event's colour everywhere else it appears.
+  // Undefined outside lane mode — `EventSidebar` renders no markers at all
+  // when this prop is omitted, matching the single-pane path exactly.
+  const contributorHueBySession = useMemo(() => {
+    if (!laneMode || contributorBySession === null || palette === null) return undefined;
+    const map = new Map<string, string>();
+    for (const [sessionId, sc] of contributorBySession) {
+      const hue = palette.get(sc.contributorKey);
+      if (hue !== undefined) map.set(sessionId, hue.hue);
+    }
+    return map;
+  }, [laneMode, contributorBySession, palette]);
+
   const activeFileTimelines = useMemo(() => {
     if (!laneMode || contributors === null) return null;
     const sessionIdsByContributor = new Map<string, ReadonlySet<string>>(
@@ -981,6 +999,7 @@ export function ReplayInner({
             events={bundleEvents}
             currentGlobalIdx={state.currentGlobalIdx}
             onSeek={seek}
+            contributorHueBySession={contributorHueBySession}
           />
         </div>
       </div>
