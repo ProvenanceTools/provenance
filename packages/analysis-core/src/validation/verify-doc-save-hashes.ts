@@ -12,10 +12,31 @@
  *    running string. We seed the string from the doc.open event's inlined
  *    `content` field when present (recorder v1.1+ ships up to 64 KB of
  *    initial content inside the payload). When `content` is absent — pre-
- *    v1.1 bundles, files that exceeded the 64 KB inline cap and got
- *    `truncated: true`, or files that never received a doc.open — we cannot
- *    reconstruct from scratch and mark the file as indeterminate until the
- *    next anchor.
+ *    v1.1 bundles, or files that exceeded the 64 KB inline cap and got
+ *    `truncated: true` — we cannot reconstruct from scratch and mark the file
+ *    as indeterminate until the next anchor.
+ *  - A file this session never opened at all starts from `''`. That ASSUMPTION
+ *    — the file did not exist, or was empty, before this session's first edit
+ *    to it — is the only baseline available, and it is sound for a
+ *    single-session bundle: the recorder emits doc.open for every recordable
+ *    document, including the ones already open when the session starts, so a
+ *    file with edits but no open is a file that came into existence here.
+ *
+ *    It is NOT sound once another session in the same bundle has touched the
+ *    same path. A shared-repo group submission carries one session per partner,
+ *    and a partner who edits a file that the OTHER partner's session had
+ *    already filled would be measured against an empty baseline — so the save's
+ *    honest whole-file sha256 could never match, and the check would report a
+ *    hash mismatch against a submission with nothing wrong with it. The bundle
+ *    itself contradicts the empty-file assumption there, so we drop it: a path
+ *    carried by more than one session is indeterminate in any session that
+ *    never observed its baseline (see `pathsSeenByMultipleSessions`). This is
+ *    an absence of evidence, reported as such, not a finding against anyone.
+ *
+ *    Detection is untouched wherever a baseline WAS observed: a session that
+ *    opened the file is reconstructed and compared exactly as before, in
+ *    single- and multi-session bundles alike, and a tampered save hash there
+ *    still fails.
  *  - For paste events with inline content (content field present), we apply
  *    the paste to the current tracked state by inserting the content at the
  *    target range.
@@ -119,6 +140,13 @@ type FileState = {
   /** True if a large paste (over the inline cap, no inline content) was seen since the
    *  last verified save. Content reconstruction is unreliable past this point. */
   indeterminate: boolean;
+  /**
+   * True while this session has never observed a baseline for the file (no
+   * doc.open) AND another session in the bundle also touched the path, so the
+   * "started empty" assumption is contradicted by the bundle. Distinguishes
+   * that reason from the other indeterminate reasons when phrasing the verdict.
+   */
+  baselineUnobserved: boolean;
   /** True if a fs.external_change was seen since the last save. */
   externalChangeSinceSave: boolean;
 };
@@ -165,22 +193,71 @@ type SaveFailure = {
   detail: string;
 };
 
+/** Event kinds whose payloads carry a `path` this check models content for. */
+const CONTENT_BEARING_KINDS = new Set([
+  'doc.open',
+  'doc.change',
+  'paste',
+  'doc.save',
+  'fs.external_change',
+]);
+
+/**
+ * Paths that more than one session in the bundle touches.
+ *
+ * For these, a session that never observed the file's baseline cannot assume it
+ * started empty — another session was working on the same file, and on a
+ * shared-repo group submission that is the normal, honest case rather than a
+ * suspicious one. See the module header.
+ *
+ * Deliberately keyed on the SESSION rather than the contributor: two sessions of
+ * the same student have the same problem as two partners, and the check has no
+ * need to resolve identity to know that its empty-file assumption is contradicted.
+ */
+function pathsSeenByMultipleSessions(bundle: Bundle): ReadonlySet<string> {
+  const sessionsByPath = new Map<string, Set<string>>();
+  for (const session of bundle.sessions) {
+    for (const event of session.events) {
+      if (!CONTENT_BEARING_KINDS.has(event.kind)) continue;
+      const path = (event.data as { path?: unknown } | null)?.path;
+      if (typeof path !== 'string') continue;
+      let seen = sessionsByPath.get(path);
+      if (seen === undefined) {
+        seen = new Set();
+        sessionsByPath.set(path, seen);
+      }
+      seen.add(session.sessionId);
+    }
+  }
+
+  const shared = new Set<string>();
+  for (const [path, sessions] of sessionsByPath) {
+    if (sessions.size > 1) shared.add(path);
+  }
+  return shared;
+}
+
 /**
  * Scan all events in one session for doc.save hash consistency.
  */
 function checkSession(
   sessionId: string,
   events: readonly HashedEnvelope[],
+  sharedPaths: ReadonlySet<string>,
 ): { failures: SaveFailure[]; indeterminates: SaveFailure[] } {
   const fileStates = new Map<string, FileState>();
 
   function getOrCreate(path: string): FileState {
     let state = fileStates.get(path);
     if (!state) {
+      // A path another session also touched has no defensible empty baseline
+      // here until a doc.open in THIS session supplies one.
+      const unobserved = sharedPaths.has(path);
       state = {
         content: '',
         lineStarts: [0],
-        indeterminate: false,
+        indeterminate: unobserved,
+        baselineUnobserved: unobserved,
         externalChangeSinceSave: false,
       };
       fileStates.set(path, state);
@@ -203,6 +280,11 @@ function checkSession(
         // mark the file as indeterminate.
         const data = event.data as { path: string; sha256: string; content?: string };
         const state = getOrCreate(data.path);
+        // Either way, this session DID observe the file being opened, so the
+        // "never saw a baseline" reason stops applying. A contentless open
+        // (pre-v1.1, or over the inline cap) stays indeterminate — but for the
+        // cap reason, which is the more specific one to report.
+        state.baselineUnobserved = false;
         if (typeof data.content === 'string') {
           state.content = data.content;
           state.lineStarts = computeLineStarts(data.content);
@@ -278,10 +360,14 @@ function checkSession(
             seq: event.seq,
             path: data.path,
             reason: 'indeterminate',
-            detail:
-              `Save at seq ${event.seq} (${data.path}): reconstruction not possible — ` +
-              `file was opened with unknown content or contained a large paste (over the recorder's inline cap, 64 KB in v1.1.2+). ` +
-              `Relying on doc.save sha256 alone.`,
+            detail: state.baselineUnobserved
+              ? `Save at seq ${event.seq} (${data.path}): not checked — this session never ` +
+                `observed the file's starting content, and another session in this bundle also ` +
+                `worked on it, so there is no baseline to reconstruct from. Relying on doc.save ` +
+                `sha256 alone.`
+              : `Save at seq ${event.seq} (${data.path}): reconstruction not possible — ` +
+                `file was opened with unknown content or contained a large paste (over the recorder's inline cap, 64 KB in v1.1.2+). ` +
+                `Relying on doc.save sha256 alone.`,
           });
           // Can't recover content from sha256 — stay indeterminate.
           break;
@@ -319,9 +405,14 @@ function checkSession(
 export function verifyDocSaveHashes(bundle: Bundle): ValidationCheck {
   const allFailures: SaveFailure[] = [];
   const allIndeterminates: SaveFailure[] = [];
+  const sharedPaths = pathsSeenByMultipleSessions(bundle);
 
   for (const session of bundle.sessions) {
-    const { failures, indeterminates } = checkSession(session.sessionId, session.events);
+    const { failures, indeterminates } = checkSession(
+      session.sessionId,
+      session.events,
+      sharedPaths,
+    );
     allFailures.push(...failures);
     allIndeterminates.push(...indeterminates);
   }
@@ -344,7 +435,9 @@ export function verifyDocSaveHashes(bundle: Bundle): ValidationCheck {
       status: 'pass',
       detail:
         `${allIndeterminates.length} save(s) could not be reconstructed (file opened with unknown ` +
-        `content or paste exceeded the recorder's inline cap, 64 KB in v1.1.2+); relying on doc.save sha256 alone for those.`,
+        `content, paste exceeded the recorder's inline cap, 64 KB in v1.1.2+, or the file was ` +
+        `shared with another session that established content this one never observed); relying ` +
+        `on doc.save sha256 alone for those.`,
     };
   }
 

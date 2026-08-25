@@ -344,4 +344,212 @@ describe('verifyDocSaveHashes', () => {
     expect(check.status).toBe('fail');
     expect(check.detail).toMatch(/does not match/i);
   });
+
+  // -------------------------------------------------------------------------
+  // Two contributors sharing one file (git-repo group submission)
+  // -------------------------------------------------------------------------
+
+  const SHARED = '/repo/util.py';
+  const ALICE_TEXT = 'def alice():\n    return 1\n';
+  const BOB_TEXT = 'def bob():\n    return 2\n';
+  /** Line on which an append lands after ALICE_TEXT (which ends in a newline). */
+  const APPEND_LINE = ALICE_TEXT.split('\n').length - 1;
+
+  const insertAt = (line: number, text: string) => ({
+    path: SHARED,
+    deltas: [
+      {
+        range: { start: { line, character: 0 }, end: { line, character: 0 } },
+        text,
+      },
+    ],
+    source: 'typed',
+  });
+
+  /** Alice creates the shared file and saves it. Always seeded by her doc.open. */
+  const aliceSession = () => ({
+    events: [
+      {
+        kind: 'doc.open',
+        data: { path: SHARED, sha256: sha256Hex(''), line_count: 1, content: '' },
+      },
+      { kind: 'doc.change', data: insertAt(0, ALICE_TEXT) },
+      { kind: 'doc.save', data: { path: SHARED, sha256: sha256Hex(ALICE_TEXT) } },
+    ],
+  });
+
+  it('does not accuse a partner who edits a shared file their session never opened', async () => {
+    // Regression for a FALSE ACCUSATION. Bob appends to a file Alice already
+    // filled, and records the honest whole-file sha256 of what is on disk. His
+    // own session never observed the file's starting content, so reconstructing
+    // from an empty baseline yields the sha of his append alone — which can
+    // never equal the real one. Before the fix this reported a hash mismatch,
+    // i.e. tampering, against a submission with nothing wrong with it.
+    const { blob } = await buildTestBundle({
+      sessions: [
+        aliceSession(),
+        {
+          events: [
+            { kind: 'doc.change', data: insertAt(APPEND_LINE, BOB_TEXT) },
+            {
+              kind: 'doc.save',
+              data: { path: SHARED, sha256: sha256Hex(ALICE_TEXT + BOB_TEXT) },
+            },
+          ],
+        },
+      ],
+    });
+    const result = await loadBundle(blob, 'group.zip');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const check = verifyDocSaveHashes(result.value);
+    expect(check.status).toBe('pass');
+    // The verdict must read as an absence of evidence, never as a finding.
+    expect(check.detail).toMatch(/could not be reconstructed/i);
+    expect(check.detail).not.toMatch(/does not match|mismatch/i);
+    expect(check.supportingSeqs).toBeUndefined();
+  });
+
+  it('still fails a tampered save in the session that DID observe the baseline', async () => {
+    // The shared-path allowance must not blanket-disable the check: Alice
+    // opened the file, so her save is fully reconstructable and a doctored
+    // hash on it is still a hard failure even though Bob shares the path.
+    const alice = aliceSession();
+    const tamperedAlice = {
+      events: [
+        alice.events[0]!,
+        alice.events[1]!,
+        { kind: 'doc.save', data: { path: SHARED, sha256: 'f'.repeat(64) } },
+      ],
+    };
+
+    const { blob } = await buildTestBundle({
+      sessions: [
+        tamperedAlice,
+        {
+          events: [
+            { kind: 'doc.change', data: insertAt(APPEND_LINE, BOB_TEXT) },
+            {
+              kind: 'doc.save',
+              data: { path: SHARED, sha256: sha256Hex(ALICE_TEXT + BOB_TEXT) },
+            },
+          ],
+        },
+      ],
+    });
+    const result = await loadBundle(blob, 'group.zip');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const check = verifyDocSaveHashes(result.value);
+    expect(check.status).toBe('fail');
+    expect(check.detail).toMatch(/does not match/i);
+  });
+
+  it('still fails a tampered save on a shared file the partner DID open', async () => {
+    // The realistic recorder shape: every recorder emits doc.open for a file it
+    // is about to edit, including files already open when the session starts.
+    // Bob therefore has a baseline read from disk, so his save is checked in
+    // full and a doctored hash on it still fails.
+    const { blob } = await buildTestBundle({
+      sessions: [
+        aliceSession(),
+        {
+          events: [
+            {
+              kind: 'doc.open',
+              data: {
+                path: SHARED,
+                sha256: sha256Hex(ALICE_TEXT),
+                line_count: APPEND_LINE + 1,
+                content: ALICE_TEXT,
+              },
+            },
+            { kind: 'doc.change', data: insertAt(APPEND_LINE, BOB_TEXT) },
+            { kind: 'doc.save', data: { path: SHARED, sha256: 'e'.repeat(64) } },
+          ],
+        },
+      ],
+    });
+    const result = await loadBundle(blob, 'group.zip');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const check = verifyDocSaveHashes(result.value);
+    expect(check.status).toBe('fail');
+    expect(check.detail).toMatch(/does not match/i);
+  });
+
+  it('verifies an honest save in full when the partner DID open the shared file', async () => {
+    const { blob } = await buildTestBundle({
+      sessions: [
+        aliceSession(),
+        {
+          events: [
+            {
+              kind: 'doc.open',
+              data: {
+                path: SHARED,
+                sha256: sha256Hex(ALICE_TEXT),
+                line_count: APPEND_LINE + 1,
+                content: ALICE_TEXT,
+              },
+            },
+            { kind: 'doc.change', data: insertAt(APPEND_LINE, BOB_TEXT) },
+            {
+              kind: 'doc.save',
+              data: { path: SHARED, sha256: sha256Hex(ALICE_TEXT + BOB_TEXT) },
+            },
+          ],
+        },
+      ],
+    });
+    const result = await loadBundle(blob, 'group.zip');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const check = verifyDocSaveHashes(result.value);
+    expect(check.status).toBe('pass');
+    // Fully reconstructed — no "could not be reconstructed" caveat at all.
+    expect(check.detail).toBeUndefined();
+  });
+
+  it('reports the inline-cap reason, not the shared-file one, for a contentless open', async () => {
+    // A doc.open over the recorder's inline cap carries no content, so the save
+    // is indeterminate for the cap reason. The path also being shared must not
+    // relabel it: the session did observe the open, so "never saw a baseline"
+    // is the wrong explanation and the more specific reason wins.
+    const { blob } = await buildTestBundle({
+      sessions: [
+        aliceSession(),
+        {
+          events: [
+            {
+              kind: 'doc.open',
+              data: {
+                path: SHARED,
+                sha256: sha256Hex(ALICE_TEXT),
+                line_count: APPEND_LINE + 1,
+                truncated: true,
+              },
+            },
+            { kind: 'doc.change', data: insertAt(APPEND_LINE, BOB_TEXT) },
+            {
+              kind: 'doc.save',
+              data: { path: SHARED, sha256: sha256Hex(ALICE_TEXT + BOB_TEXT) },
+            },
+          ],
+        },
+      ],
+    });
+    const result = await loadBundle(blob, 'group.zip');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const check = verifyDocSaveHashes(result.value);
+    expect(check.status).toBe('pass');
+    expect(check.detail).toMatch(/inline cap/i);
+    expect(check.detail).not.toMatch(/does not match|mismatch/i);
+  });
 });
