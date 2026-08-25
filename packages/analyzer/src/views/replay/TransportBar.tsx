@@ -22,15 +22,23 @@
  *   §5). When omitted or empty, this component's render is byte-for-byte what
  *   it was before those props existed — that is a hard requirement, not a
  *   preference, because every caller that doesn't yet pass ribbons (and every
- *   existing test) must see no difference. `ContributorRibbons` is rendered as
- *   a plain in-flow block placed AFTER the `Slider` inside the same
- *   `relative flex-1` wrapper the seam ticks already use. That wrapper isn't a
- *   flex container itself, so the ribbons block simply stacks below the
- *   slider in normal document flow and — critically — inherits that wrapper's
- *   exact width, which is what makes its index-space geometry
- *   (`left% = startGlobalIdx / sliderMax * 100`) line up with the seam ticks
- *   without any extra measurement or a second source of truth for the track's
- *   width. The seam ticks and their positioning math are untouched.
+ *   existing test) must see no difference.
+ *
+ *   The seam ticks are `absolute top-1/2 -translate-y-1/2` inside their
+ *   nearest `position: relative` ancestor — that ancestor's HEIGHT is what
+ *   `top-1/2` centres against, so that div must stay sized to the slider
+ *   alone. `track` (the `Slider` plus the seam ticks) is therefore built once
+ *   and mounted by two different wrappers below: with no ribbons, `track`
+ *   sits in exactly today's `<div className="relative flex-1">` — untouched.
+ *   With ribbons, `track` gets its OWN `relative` box (sized only by the
+ *   slider) nested inside a `flex-1` column, and `ContributorRibbons` is a
+ *   SIBLING of that box, not a child of it — so the ticks' positioning
+ *   context never includes the ribbons' height, and the ribbons block still
+ *   shares the slider's exact width via the shared `flex-1` column. (An
+ *   earlier revision mounted the ribbons block as an in-flow child of the
+ *   ticks' own `relative flex-1` div; that grew the div's height and the
+ *   ticks slid off the track onto the first ribbon row — see the regression
+ *   test in `TransportBar.ribbons.test.tsx`.)
  */
 
 import { useCallback, useRef } from 'react';
@@ -185,32 +193,51 @@ export function TransportBar({
           <TooltipContent>Step forward (+1 event)</TooltipContent>
         </Tooltip>
 
-        {/* Scrub slider, with a tick per session boundary */}
-        <div className="relative flex-1">
-          <Slider
-            min={0}
-            max={sliderMax}
-            step={1}
-            value={[sliderValue]}
-            onValueChange={handleSliderChange}
-            disabled={eventCount === 0}
-            aria-label="Scrub timeline"
-          />
-          {sliderMax > 0 &&
-            seams.map((seam) => (
-              <span
-                key={seam.atGlobalIdx}
-                aria-hidden="true"
-                className="pointer-events-none absolute top-1/2 h-3 w-px -translate-y-1/2 bg-amber-500/70"
-                style={{ left: `${(seam.atGlobalIdx / sliderMax) * 100}%` }}
-                data-testid={`seam-tick-${seam.atGlobalIdx}`}
-                title={`Session boundary — ${formatGap(seam.realGapMs)} offline`}
+        {/* Scrub slider, with a tick per session boundary. `track` is shared
+            by both wrappers below so the slider + seam ticks are defined
+            once — see the header comment's "Contributor ribbons" for why the
+            two wrappers exist at all (the ticks' positioning context must
+            never include the ribbons' height). */}
+        {(() => {
+          const track = (
+            <>
+              <Slider
+                min={0}
+                max={sliderMax}
+                step={1}
+                value={[sliderValue]}
+                onValueChange={handleSliderChange}
+                disabled={eventCount === 0}
+                aria-label="Scrub timeline"
               />
-            ))}
-          {ribbons !== undefined && ribbons.length > 0 && (
-            <ContributorRibbons rows={ribbons} overlaps={overlaps ?? []} sliderMax={sliderMax} />
-          )}
-        </div>
+              {sliderMax > 0 &&
+                seams.map((seam) => (
+                  <span
+                    key={seam.atGlobalIdx}
+                    aria-hidden="true"
+                    className="pointer-events-none absolute top-1/2 h-3 w-px -translate-y-1/2 bg-amber-500/70"
+                    style={{ left: `${(seam.atGlobalIdx / sliderMax) * 100}%` }}
+                    data-testid={`seam-tick-${seam.atGlobalIdx}`}
+                    title={`Session boundary — ${formatGap(seam.realGapMs)} offline`}
+                  />
+                ))}
+            </>
+          );
+
+          if (ribbons !== undefined && ribbons.length > 0) {
+            return (
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <div className="relative w-full">{track}</div>
+                <ContributorRibbons
+                  rows={ribbons}
+                  overlaps={overlaps ?? []}
+                  sliderMax={sliderMax}
+                />
+              </div>
+            );
+          }
+          return <div className="relative flex-1">{track}</div>;
+        })()}
 
         {/* Event label */}
         <span className="text-xs text-muted-foreground tabular-nums min-w-[80px] text-right">
