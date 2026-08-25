@@ -50,8 +50,9 @@ tests extend `ReplayView.concurrent.test.tsx`'s existing `buildScope` fixture; o
 
 ## Phase 5 — architecture page + close-out
 
-Prose in `content/nodes/readpath.ts` (`r_replay`) and `master.dot`'s `drill` label. No new dot node,
-so no `build_diagrams.py` run and `nodes.coverage.test.ts` stays green. Then full analyzer suite,
+Prose in `content/nodes/readpath.ts` (`r_replay`) only. No `.dot` edit — a label change would need an
+SVG regeneration to stay in sync, and the `drill` label's tab list is unaffected by lane mode. No new
+dot node, so no `build_diagrams.py` run and `nodes.coverage.test.ts` stays green. Then full analyzer suite,
 `typecheck`, `lint`, prettier on the two docs.
 
 ## Standing rules for every phase

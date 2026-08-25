@@ -174,10 +174,14 @@ current chrome. The existing `data-testid`s — `replay-ambiguous`, `replay-bran
 
 ## 10. Architecture page
 
-Prose-only. `tools/architecture/dot/readpath.dot`'s `r_replay` node body
-(`content/nodes/readpath.ts:42-49`) and `master.dot`'s `drill` label gain a sentence about the lane
-mode. No new dot node, so no `<title>` changes, so `build_diagrams.py` does not need to run and
-`nodes.coverage.test.ts` stays green.
+Prose-only, and confined to the node **detail** in `content/nodes/readpath.ts` (`r_replay`).
+
+`master.dot`'s `drill` label is deliberately **not** touched. Label text is baked into the
+committed `.svg` at generation time, so editing a label without running `build_diagrams.py` leaves
+the source and the rendered diagram silently disagreeing — and `nodes.coverage.test.ts` would not
+catch it, since it only checks that node `<title>`s have matching detail entries. The label lists
+the drill-in tab names, which lane mode does not change: replay is still a tab. No new dot node, no
+`<title>` change, no Graphviz run, and the coverage test stays green.
 
 ## 11. Open, deliberately deferred
 
