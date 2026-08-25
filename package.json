@@ -17,7 +17,8 @@
     "keygen:course": "node --experimental-strip-types tools/generate-course-keypair.ts",
     "mint:course-cert": "node --experimental-strip-types tools/mint-course-cert.ts",
     "mint:institution-cert": "node --experimental-strip-types tools/mint-institution-cert.ts",
-    "sign:manifest": "node --experimental-strip-types tools/sign-manifest.ts"
+    "sign:manifest": "node --experimental-strip-types tools/sign-manifest.ts",
+    "compose:manifest": "node scripts/compose-manifest.mjs"
   },
   "devDependencies": {
     "eslint": "^9.0.0",
