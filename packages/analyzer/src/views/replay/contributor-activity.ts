@@ -69,6 +69,44 @@
 import type { IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import type { SessionContributor } from '@provenance/analysis-core/identity/types.js';
 
+/**
+ * The wall-gap threshold the REPLAY RIBBONS use to shade a run as idle: two
+ * minutes.
+ *
+ * ## This number is presentational, and must stay that way
+ *
+ * All it decides is whether a slice of one contributor's ribbon renders in the
+ * translucent `soft` variant of their hue instead of the solid one. It makes no
+ * claim, produces no flag, and appears in no export. Nothing downstream reads
+ * it. `buildContributorActivity` deliberately takes `idleGapMs` as an argument
+ * rather than importing this constant, so a caller that wants a different
+ * shading (or a test that wants a deterministic one) never has to move it.
+ *
+ * ## Why two minutes, and why it must NOT be "aligned" with a heuristic
+ *
+ * Two neighbouring numbers exist in this codebase and this one is deliberately
+ * neither of them:
+ *
+ *  - `engine-core.ts`'s `MAX_IDLE_GAP_MS` (5s) is a PLAYBACK PACING cap — the
+ *    longest pause `skipIdle` will actually play through. At 5s the ribbon
+ *    would be stippled with idle slivers for every ordinary pause to read a
+ *    line, which says nothing.
+ *  - `analysis-core/heuristics/config.ts`'s `idleGapMs` (10min) is a FINDING
+ *    threshold — the pause length that, followed by the right kind of save,
+ *    contributes to a flag against a student. Reusing it here would quietly
+ *    make a ribbon's shading legible as "this is the flagged kind of gap",
+ *    which is exactly the misreading `contributor-palette.ts`'s hue rules exist
+ *    to prevent, and would also couple a cosmetic choice to a tuned product
+ *    threshold so that changing either one silently changes the other.
+ *
+ * Two minutes sits between them on purpose: comfortably past ordinary
+ * think-time and mid-line pauses (seconds to tens of seconds), short enough
+ * that a genuine step-away shows up as a visible break in the ribbon. If it
+ * ever looks wrong, change it here on presentational grounds alone — do not
+ * reach for a heuristic's number to justify it.
+ */
+export const RIBBON_IDLE_GAP_MS = 120_000;
+
 export type ActivityRun = {
   readonly contributorKey: string;
   readonly startGlobalIdx: number;

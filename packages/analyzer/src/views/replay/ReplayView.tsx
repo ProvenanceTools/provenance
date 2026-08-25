@@ -24,6 +24,11 @@
  *   ?event=:globalIdx  — current position (written back on change, debounced ~100ms).
  *   ?speed=:n          — playback speed (written back on state change).
  *   ?skipIdle=0|1      — idle-gap compression. Defaults ON; only `0` opts out.
+ *   ?split=0|1         — split contributor lanes. Absent defaults ON for a
+ *                        multi-contributor bundle and OFF otherwise, and is
+ *                        written back ONLY when a human touches the toggle —
+ *                        see `handleSplitToggle` for why it is not mirrored on
+ *                        every write-back the way `skipIdle` is.
  *
  *   On mount: parse params → seek(event).
  *   On state change: debounced write-back.
@@ -36,15 +41,24 @@ import { ChevronLeft } from 'lucide-react';
 import type { editor as MonacoEditorNS } from 'monaco-editor';
 import type * as MonacoType from 'monaco-editor';
 import { useBundle } from '../../context/BundleContext.js';
-import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
+import type { EventIndex, IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import type { Flag } from '@provenance/analysis-core/heuristics/types.js';
 import { reconstructionScopeFor } from '@provenance/analysis-core/index/reconstruct-segments.js';
 import type { ReconstructionScope } from '@provenance/analysis-core/index/reconstruct-segments.js';
 import type { BundleContributors } from '@provenance/analysis-core/identity/types.js';
+import type { FileReplayState } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
 import { useReplayEngine } from './useReplayEngine.js';
 import { FileTabs } from './FileTabs.js';
 import { SessionSelect } from './SessionSelect.js';
 import { ContributorSelect } from './ContributorSelect.js';
+import { SplitLanesToggle } from './SplitLanesToggle.js';
+import { ReplayLanes } from './ReplayLanes.js';
+import type { LaneCell } from './lane-groups.js';
+import { buildContributorPalette } from './contributor-palette.js';
+import { buildContributorActivity, RIBBON_IDLE_GAP_MS } from './contributor-activity.js';
+import { activeFilesAt, buildActiveFileTimelines } from './contributor-active-file.js';
+import { labelContributor } from './contributor-labels.js';
+import type { RibbonRow } from './ContributorRibbons.js';
 import { BranchedFileView } from './BranchedFileView.js';
 import { MonacoMount, languageFromPath } from './MonacoMount.js';
 import { TransportBar } from './TransportBar.js';
@@ -124,6 +138,95 @@ function ReplayHeader({ sourceFilename }: ReplayHeaderProps) {
         {sourceFilename}
       </span>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// LanePane — the content pane inside one split lane.
+//
+// This is `ReplayLanes`' `renderPane`, factored out as a real component for one
+// reason that is not stylistic: EACH LANE NEEDS ITS OWN EDITOR HANDLE. The
+// single-pane path keeps `monacoEditor` in `ReplayInner` state because there is
+// exactly one editor; with three lanes mounting three editors, one shared
+// `useState` would end up holding whichever mounted last and
+// `GutterDecorations` would then paint one lane's provenance onto another
+// lane's file. Owning the handle here makes the pairing structural rather than
+// a thing to remember.
+//
+// Deliberately NOT mounted here, and each for a stated reason:
+//
+//  - `LineHoverProvider` registers a hover provider with the monaco NAMESPACE,
+//    keyed by language, not with one editor. Three lanes on three .py files
+//    would register three providers each answering for a different file, and
+//    Monaco would show all three on any hover. The single pane keeps its hover
+//    exactly as it is; lanes go without rather than showing a hover that may
+//    describe a different lane's line.
+//  - `ColorLegend` is one absolutely-positioned overlay for the code area. It
+//    is mounted ONCE by the lane container, not per lane — it explains the
+//    gutter colours, which are the same colours in every lane.
+//  - `FocusAwayOverlay` stays a property of the whole code area, as today: it
+//    is driven by the playhead's own focus state, which belongs to one session,
+//    so drawing it over a lane whose contributor is not that session would
+//    claim that contributor had tabbed away.
+//
+// The caret (`CursorMarker`) and the viewport-follow (`FollowCursor`) render
+// only when `ownsCaret` — design §7: "a stale caret drawn in another lane would
+// imply live presence at a position that contributor left."
+// ---------------------------------------------------------------------------
+
+type LanePaneProps = {
+  readonly filePath: string;
+  readonly fileState: FileReplayState | null;
+  readonly ownsCaret: boolean;
+  readonly events: readonly IndexedEvent[];
+  readonly currentGlobalIdx: number;
+};
+
+function LanePane({ filePath, fileState, ownsCaret, events, currentGlobalIdx }: LanePaneProps) {
+  const [editor, setEditor] = useState<MonacoEditorNS.IStandaloneCodeEditor | null>(null);
+
+  const handleMount = useCallback((ed: MonacoEditorNS.IStandaloneCodeEditor) => {
+    setEditor(ed);
+  }, []);
+
+  const content = fileState?.content ?? '';
+
+  // Both scans are gated on `ownsCaret`, so at most ONE lane pays for them per
+  // frame — the same single scan the one-pane path already does.
+  const selection = useMemo(
+    () => (ownsCaret ? currentSelection(events, currentGlobalIdx, filePath) : null),
+    [ownsCaret, events, currentGlobalIdx, filePath],
+  );
+  const heldByExternalChange = useMemo(
+    () => (ownsCaret ? currentExternalChange(events, currentGlobalIdx, filePath) : null),
+    [ownsCaret, events, currentGlobalIdx, filePath],
+  );
+  const externalChangeFocus = useMemo(
+    () => externalChangePosition(fileState, heldByExternalChange),
+    [fileState, heldByExternalChange],
+  );
+
+  return (
+    <>
+      <MonacoMount
+        content={content}
+        filePath={filePath}
+        className="h-full w-full"
+        onMount={handleMount}
+      />
+      <GutterDecorations editor={editor} fileState={fileState} />
+      {ownsCaret && (
+        <>
+          <CursorMarker editor={editor} selection={selection} />
+          <FollowCursor
+            editor={editor}
+            selection={selection}
+            externalChange={externalChangeFocus}
+            content={content}
+          />
+        </>
+      )}
+    </>
   );
 }
 
@@ -246,6 +349,21 @@ export function ReplayInner({
   // opts out; any other value (or none) leaves it on.
   const [skipIdle, setSkipIdle] = useState<boolean>(() => searchParams.get('skipIdle') !== '0');
 
+  // Split contributor lanes (design §3 "Default state", §7 "Wiring").
+  //
+  // Read the same way `skipIdle` is — off the URL, once, at mount — but with a
+  // DEFAULT that depends on the submission rather than a fixed one: absent
+  // means on for a bundle with more than one contributor and off for everything
+  // else. That is the on-by-default behaviour change the design accepts
+  // knowingly (§3, last paragraph); the `'0'` / `'1'` arms mean an explicit
+  // choice always wins over it, in both directions.
+  const [split, setSplit] = useState<boolean>(() => {
+    const param = searchParams.get('split');
+    if (param === '0') return false;
+    if (param === '1') return true;
+    return contributors !== null && contributors.contributors.length > 1;
+  });
+
   const engine = useReplayEngine(index, { skipIdle, scope });
   const { state, fileStates, files, seams, fileAmbiguity, play, pause, step, seek } = engine;
 
@@ -273,6 +391,89 @@ export function ReplayInner({
   // session: the sidebar, jump targets, focus-away spans, and edited-file
   // tracking all span the full submission.
   const bundleEvents = useMemo(() => index?.ordered ?? [], [index]);
+
+  // ---------------------------------------------------------------------------
+  // Split lanes — derived inputs.
+  //
+  // Everything below is gated on `laneMode` and yields `null` when lanes are
+  // off, so an opted-out session and every solo submission pay one boolean and
+  // nothing else. That is design §7's hard requirement read as a COST statement
+  // as well as a markup one: a feature nobody asked for must not walk the event
+  // stream on their behalf.
+  //
+  // The memo dependency lists are the load-bearing part here:
+  //
+  //  - `activity` depends on the INDEX and the session→contributor map, and
+  //    pointedly NOT on the playhead. Activity runs are a property of the whole
+  //    stream; recomputing them per frame would make playback O(events) per
+  //    tick — quadratic over a playthrough — for a ribbon that never changes.
+  //  - `activeFileTimelines` is likewise per-stream, built once.
+  //  - `activeFileByContributor` is the ONE thing that legitimately moves with
+  //    the playhead, and it is a binary search per contributor over the
+  //    precomputed change points, not a scan (see `contributor-active-file.ts`).
+  // ---------------------------------------------------------------------------
+
+  const laneMode = split && contributors !== null && contributors.contributors.length > 1;
+
+  const palette = useMemo(
+    () => (contributors === null ? null : buildContributorPalette(contributors.contributors)),
+    [contributors],
+  );
+
+  // Prefer the SCOPE's map — it is the one reconstruction itself reasoned with,
+  // so ribbons and panes can never disagree about who owns a session. The stamp
+  // is the fallback for a caller that supplied contributors but no scope.
+  const contributorBySession = scope?.contributorBySession ?? contributors?.bySession ?? null;
+
+  const activity = useMemo(
+    () =>
+      !laneMode || contributorBySession === null
+        ? null
+        : buildContributorActivity(index.ordered, contributorBySession, {
+            idleGapMs: RIBBON_IDLE_GAP_MS,
+          }),
+    [laneMode, index, contributorBySession],
+  );
+
+  const activeFileTimelines = useMemo(() => {
+    if (!laneMode || contributors === null) return null;
+    const sessionIdsByContributor = new Map<string, ReadonlySet<string>>(
+      contributors.contributors.map((c) => [c.key, new Set(c.sessionIds)]),
+    );
+    return buildActiveFileTimelines(index.ordered, sessionIdsByContributor);
+  }, [laneMode, index, contributors]);
+
+  const activeFileByContributor = useMemo(
+    () =>
+      activeFileTimelines === null
+        ? null
+        : activeFilesAt(activeFileTimelines, state.currentGlobalIdx),
+    [activeFileTimelines, state.currentGlobalIdx],
+  );
+
+  // Who owns the caret: the contributor whose session the playhead is inside.
+  const activeContributorKey = laneMode
+    ? (contributors?.bySession.get(state.sessionId)?.contributorKey ?? null)
+    : null;
+
+  // One ribbon row per contributor, in `BundleContributors.contributors` order
+  // — the same order the lanes use, so a row and a lane line up.
+  const ribbons = useMemo<readonly RibbonRow[] | undefined>(() => {
+    if (activity === null || palette === null || contributors === null) return undefined;
+    return contributors.contributors.flatMap((c) => {
+      const hue = palette.get(c.key);
+      if (hue === undefined) return [];
+      return [
+        {
+          key: c.key,
+          label: labelContributor(c).short,
+          hue: hue.hue,
+          soft: hue.soft,
+          runs: activity.runs.get(c.key) ?? [],
+        },
+      ];
+    });
+  }, [activity, palette, contributors]);
 
   // ---------------------------------------------------------------------------
   // Focus-away overlay + auto-follow the edited file.
@@ -514,6 +715,38 @@ export function ReplayInner({
     [pause, seek],
   );
 
+  /**
+   * Toggling lanes writes an EXPLICIT `?split=0` or `?split=1` — never clears
+   * the param, in either direction.
+   *
+   * Design §3: on-by-default is a behaviour change to links already shared, and
+   * the mitigation is that any link produced AFTER a human touches this control
+   * pins its own mode instead of inheriting a default that may change again.
+   * Clearing the param on "off" would defeat that for exactly the reader who
+   * opted out.
+   *
+   * And it is written HERE rather than in the debounced write-back below, which
+   * is where `skipIdle` is mirrored. That asymmetry is deliberate: the
+   * write-back runs on every playhead move, so mirroring `split` there would
+   * stamp `?split=0` into the URL of every solo submission that never had a
+   * toggle to press — a way for an untouched, unaffected session to notice this
+   * feature exists, which §7 forbids.
+   */
+  const handleSplitToggle = useCallback(
+    (next: boolean) => {
+      setSplit(next);
+      setSearchParams(
+        (prev) => {
+          const params = new URLSearchParams(prev);
+          params.set('split', next ? '1' : '0');
+          return params;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
   return (
     <div className="flex flex-col h-full" data-testid="replay-view">
       {/* Back button + bundle name — only shown in the /local route. */}
@@ -530,24 +763,67 @@ export function ReplayInner({
           currentSessionId={state.sessionId}
           onSeek={handleJumpSeek}
         />
+        <SplitLanesToggle
+          contributors={contributors}
+          enabled={split}
+          onToggle={handleSplitToggle}
+        />
         <SessionSelect index={index} currentSessionId={state.sessionId} onSeek={handleJumpSeek} />
-        <div className="min-w-0 flex-1">
-          <FileTabs
-            files={files}
-            activeFile={resolvedFile}
-            onFileChange={setActiveFile}
-            index={index}
-            currentGlobalIdx={state.currentGlobalIdx}
-            currentSessionId={state.sessionId}
-          />
-        </div>
+        {/* In lane mode each lane names its own file, so the GLOBAL file tabs
+            would be a second, contradictory answer to "which file am I looking
+            at" — and picking a tab could only ever apply to one lane. Design §7
+            replaces them along with the single Monaco pane. */}
+        {!laneMode && (
+          <div className="min-w-0 flex-1">
+            <FileTabs
+              files={files}
+              activeFile={resolvedFile}
+              onFileChange={setActiveFile}
+              index={index}
+              currentGlobalIdx={state.currentGlobalIdx}
+              currentSessionId={state.sessionId}
+            />
+          </div>
+        )}
       </div>
 
       {/* Main area: Monaco (70%) + EventSidebar (30%) */}
       <div className="flex flex-1 min-h-0">
         {/* Monaco editor — 70% width */}
         <div className="relative flex-1 min-w-0" style={{ flex: '0 0 70%' }}>
-          {resolvedFile !== null && ambiguity !== undefined ? (
+          {laneMode &&
+          contributors !== null &&
+          activeFileByContributor !== null &&
+          palette !== null ? (
+            /*
+             * Split lanes (design §4). The grid REPLACES the single pane; it
+             * never sits beside it. `renderPane` is the only place Monaco is
+             * mounted, so `ReplayLanes` itself stays layout + chrome.
+             */
+            <>
+              <ReplayLanes
+                contributors={contributors.contributors}
+                activeFileByContributor={activeFileByContributor}
+                fileAmbiguity={fileAmbiguity}
+                palette={palette}
+                activeContributorKey={activeContributorKey}
+                renderPane={({ cell, ownsCaret }: { cell: LaneCell; ownsCaret: boolean }) =>
+                  cell.filePath === null ? null : (
+                    <LanePane
+                      filePath={cell.filePath}
+                      fileState={fileStates.get(cell.filePath) ?? null}
+                      ownsCaret={ownsCaret}
+                      events={bundleEvents}
+                      currentGlobalIdx={state.currentGlobalIdx}
+                    />
+                  )
+                }
+              />
+              {/* One legend for the whole code area — the gutter colours it
+                  explains are the same in every lane. */}
+              <ColorLegend />
+            </>
+          ) : resolvedFile !== null && ambiguity !== undefined ? (
             /*
              * Spec §6 Rule 4: replay never linearizes concurrency. It shows the
              * branches side by side or refuses with an explanation — it does not
@@ -621,6 +897,9 @@ export function ReplayInner({
               seams={seams}
               state={state}
               events={bundleEvents}
+              {...(laneMode && ribbons !== undefined
+                ? { ribbons, overlaps: activity?.overlaps ?? [] }
+                : {})}
               onPlay={handlePlay}
               onPause={pause}
               onStep={step}

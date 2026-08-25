@@ -27,6 +27,21 @@ import type { FocusChangePayload } from '@provenance/log-core';
 /** File-bearing event kinds that indicate where the student is working. */
 const FILE_EVENT_KINDS = new Set(['doc.change', 'paste', 'doc.save', 'doc.open']);
 
+/**
+ * Does this event name the file the student is working in?
+ *
+ * Exported so `contributor-active-file.ts` can precompute a per-contributor
+ * file-change timeline in ONE pass and binary-search it at the playhead,
+ * instead of re-scanning the whole stream per contributor per frame. Exporting
+ * the predicate rather than copying the kind list is the point: a file-bearing
+ * kind added to `FILE_EVENT_KINDS` and not to a parallel list elsewhere would
+ * make the lane grid and the single-pane auto-follow disagree about where a
+ * contributor is, with no test positioned to notice.
+ */
+export function isFileBearingEvent(e: IndexedEvent): e is IndexedEvent & { file: string } {
+  return e.file != null && FILE_EVENT_KINDS.has(e.kind);
+}
+
 /** Active "focused away" state at the playhead, or null when focused (or before any event). */
 export type FocusAwayState = { reason: string | null } | null;
 
@@ -76,7 +91,7 @@ export function currentEditedFile(
   for (const e of events) {
     if (e.globalIdx > currentGlobalIdx) break;
     if (sessionIds !== undefined && !sessionIds.has(e.sessionId)) continue;
-    if (e.file != null && FILE_EVENT_KINDS.has(e.kind)) {
+    if (isFileBearingEvent(e)) {
       file = e.file;
     }
   }

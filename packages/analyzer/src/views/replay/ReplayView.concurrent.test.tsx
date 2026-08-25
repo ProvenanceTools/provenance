@@ -13,8 +13,8 @@
 
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import {
   buildIndex,
   buildIndexFromEventRows,
@@ -84,11 +84,11 @@ async function keys(): Promise<IdentityTestKeys> {
   return cachedKeys;
 }
 
-function typed(text: string) {
+function typed(text: string, file: string = FILE) {
   return {
     kind: 'doc.change',
     data: {
-      path: FILE,
+      path: file,
       deltas: [
         { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, text },
       ],
@@ -105,9 +105,14 @@ function typed(text: string) {
  * chains give the relation nothing to order these two by — which is the honest
  * answer for two partners on branches that never met, and is precisely the
  * `concurrent` case.
+ *
+ * `file` is optional and defaults to the shared {@link FILE} — pass it to put
+ * two partners in DIFFERENT files, which is the determinate side of the lane
+ * grid (§4: two contributors, two files, two ordinary lanes) rather than the
+ * refusal side. Same fixture, same cached keypairs; only the path moves.
  */
 async function buildScope(
-  specs: Array<{ who: { studentRef: string } | 'anonymous'; text: string }>,
+  specs: Array<{ who: { studentRef: string } | 'anonymous'; text: string; file?: string }>,
 ): Promise<{ bundle: Bundle; index: EventIndex }> {
   const k = await keys();
   const sessions = [];
@@ -115,7 +120,7 @@ async function buildScope(
     const spec = specs[i]!;
     const sk = await seededKeypair(0xa0 + i);
     sessions.push({
-      events: [typed(spec.text)],
+      events: [typed(spec.text, spec.file ?? FILE)],
       sessionStart: {
         session_pubkey: sk.pubkeyHex,
         ...(spec.who === 'anonymous'
@@ -141,11 +146,12 @@ async function buildScope(
  * Render the way the `/local` route does: a parsed bundle in hand, so the scope
  * and the stamp come straight off it.
  */
-function renderReplay(bundle: Bundle | null, index: EventIndex) {
+function renderReplay(bundle: Bundle | null, index: EventIndex, extraSearch = '') {
   return renderWith(
     index,
     bundle === null ? null : reconstructionScopeFor(bundle, index),
     bundle?.contributors ?? null,
+    extraSearch,
   );
 }
 
@@ -191,15 +197,22 @@ function renderServerBackedReplay(bundle: Bundle, index: EventIndex) {
   return renderWith(serverIndex, scope, contributors);
 }
 
+/** Renders the router's current query string so the split tests can read it. */
+function LocationProbe() {
+  const location = useLocation();
+  return <span data-testid="location-probe">{location.search}</span>;
+}
+
 function renderWith(
   index: EventIndex,
   scope: ReconstructionScope | null,
   contributors: BundleContributors | null,
+  extraSearch = '',
 ) {
   const firstSession = [...index.bySessionId.keys()][0]!;
   const lastIdx = index.ordered.length - 1;
   return render(
-    <MemoryRouter initialEntries={[`/local/replay/${firstSession}?event=${lastIdx}`]}>
+    <MemoryRouter initialEntries={[`/local/replay/${firstSession}?event=${lastIdx}${extraSearch}`]}>
       <ReplayInner
         sessionId={firstSession}
         index={index}
@@ -209,6 +222,7 @@ function renderWith(
         scope={scope}
         contributors={contributors}
       />
+      <LocationProbe />
     </MemoryRouter>,
   );
 }
@@ -411,5 +425,194 @@ describe('two unattributed sessions', () => {
     const editor = await screen.findByTestId('monaco-editor');
     expect(editor).toBeInTheDocument();
     expect(screen.queryByTestId('replay-branches')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Split lanes, wired into ReplayInner (design §7)
+//
+// Everything above this line was written before lanes existed and still holds
+// with them ON by default, which is the point: lanes ADD a contributor to the
+// view and never remove one, so the refusal, the branch labels and the
+// no-interleaving guarantee are the same facts in a lane cell as they were
+// full-pane.
+// ---------------------------------------------------------------------------
+
+describe('split lanes', () => {
+  it('are on by default for a two-contributor bundle', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE' },
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE' },
+    ]);
+
+    renderReplay(bundle, index);
+
+    expect(await screen.findByTestId('replay-lanes')).toBeInTheDocument();
+    // The toggle is present and reads as on, so the default is legible and
+    // reversible rather than a silent mode.
+    const toggle = screen.getByTestId('split-lanes-toggle');
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(toggle.getAttribute('data-lane-count')).toBe('2');
+  });
+
+  it('renders the concurrent refusal INSIDE a lane cell, not as the full pane', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE' },
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE' },
+    ]);
+
+    renderReplay(bundle, index);
+
+    const pane = await screen.findByTestId('replay-ambiguous');
+    const lane = pane.closest('[data-testid="replay-lane"]');
+    expect(lane).not.toBeNull();
+    // Both partners are in the same file, so §4 groups them into ONE cell
+    // spanning both columns — not two cells each restating the refusal.
+    expect(lane?.getAttribute('data-kind')).toBe('concurrent');
+    expect(lane?.getAttribute('data-span')).toBe('2');
+    expect(screen.getAllByTestId('replay-lane')).toHaveLength(1);
+
+    // The refusal's own testids keep their meaning inside the cell.
+    const names = screen.getAllByTestId('replay-branch-contributor').map((e) => e.textContent);
+    expect(names.sort()).toEqual(['alice', 'bob']);
+  });
+
+  it('gives two partners in two different files two ordinary lanes', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE', file: 'alice.py' },
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE', file: 'bob.py' },
+    ]);
+
+    renderReplay(bundle, index);
+
+    await screen.findByTestId('replay-lanes');
+    const lanes = screen.getAllByTestId('replay-lane');
+    expect(lanes).toHaveLength(2);
+    expect(lanes.map((l) => l.getAttribute('data-kind'))).toEqual(['single', 'single']);
+    // Each lane names its own file and mounts its own editor.
+    expect(
+      screen
+        .getAllByTestId('replay-lane-file')
+        .map((e) => e.textContent)
+        .sort(),
+    ).toEqual(['alice.py', 'bob.py']);
+    expect(screen.getAllByTestId('monaco-editor')).toHaveLength(2);
+  });
+
+  it('puts contributor ribbons in the transport, one row per partner', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE' },
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE' },
+    ]);
+
+    renderReplay(bundle, index);
+
+    const ribbons = await screen.findByTestId('contributor-ribbons');
+    expect(ribbons.querySelectorAll('[data-testid^="ribbon-row-"]')).toHaveLength(2);
+    // Ribbons live inside the transport, not somewhere of their own.
+    expect(ribbons.closest('[data-testid="transport-bar"]')).not.toBeNull();
+  });
+
+  it('shows no ribbons when lanes are off', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE' },
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE' },
+    ]);
+
+    renderReplay(bundle, index, '&split=0');
+
+    await screen.findByTestId('replay-ambiguous');
+    expect(screen.queryByTestId('contributor-ribbons')).toBeNull();
+  });
+
+  /**
+   * Design §7's hard requirement, on the surface it is easiest to break: with
+   * `?split=0` the pane is the one this file's first three tests describe —
+   * a full-pane refusal, the global file tabs, no grid.
+   *
+   * The toggle itself DOES stay visible here, and must: a two-contributor
+   * submission that opted out is the only place a reader can opt back IN, and
+   * `SplitLanesToggle` hides itself entirely for the solo case (covered below),
+   * which is the case §7's "must not notice this feature exists" is about.
+   */
+  it('?split=0 restores today’s single-pane markup', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE' },
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE' },
+    ]);
+
+    renderReplay(bundle, index, '&split=0');
+
+    const pane = await screen.findByTestId('replay-ambiguous');
+    expect(pane.closest('[data-testid="replay-lane"]')).toBeNull();
+    expect(screen.queryByTestId('replay-lanes')).toBeNull();
+    // The global file tabs are back — in lane mode each lane names its own file.
+    expect(screen.getByTestId('file-tabs')).toBeInTheDocument();
+    expect(screen.getByTestId('split-lanes-toggle').getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('writes an EXPLICIT ?split=0 when a human turns lanes off', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE' },
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE' },
+    ]);
+
+    renderReplay(bundle, index);
+
+    // Default-on, and the URL says nothing yet — a link shared before this
+    // change inherits the new default rather than being rewritten by it.
+    await screen.findByTestId('replay-lanes');
+    expect(screen.getByTestId('location-probe').textContent ?? '').not.toContain('split=');
+
+    fireEvent.click(screen.getByTestId('split-lanes-toggle'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe').textContent ?? '').toContain('split=0');
+    });
+    expect(screen.queryByTestId('replay-lanes')).toBeNull();
+  });
+
+  it('writes an EXPLICIT ?split=1 when a human turns them back on', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE' },
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE' },
+    ]);
+
+    renderReplay(bundle, index, '&split=0');
+
+    const toggle = await screen.findByTestId('split-lanes-toggle');
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe').textContent ?? '').toContain('split=1');
+    });
+    expect(screen.getByTestId('replay-lanes')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The solo gate, again — this time against an explicit opt-IN
+// ---------------------------------------------------------------------------
+
+describe('a solo bundle asked for lanes explicitly', () => {
+  /**
+   * `?split=1` is a URL anyone can type or copy from a group submission. A solo
+   * submission has nothing to split into lanes, so it must render exactly as it
+   * always has — and, per §7, must not be able to tell this feature exists at
+   * all: no grid, no ribbons, and no toggle offering something meaningless.
+   */
+  it('still renders no lanes, no ribbons and no toggle', async () => {
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE' },
+    ]);
+
+    renderReplay(bundle, index, '&split=1');
+
+    const editor = await screen.findByTestId('monaco-editor');
+    expect(editor.getAttribute('data-value')).toContain('ALICE_LINE');
+    expect(screen.queryByTestId('replay-lanes')).toBeNull();
+    expect(screen.queryByTestId('contributor-ribbons')).toBeNull();
+    expect(screen.queryByTestId('split-lanes-toggle')).toBeNull();
+    expect(screen.getByTestId('file-tabs')).toBeInTheDocument();
   });
 });
