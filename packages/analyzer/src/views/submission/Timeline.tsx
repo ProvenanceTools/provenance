@@ -17,6 +17,8 @@ import { useCallback } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import type { IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import { useFullEventIndex } from '../../data/useFullEventIndex.js';
+import { useServerScope } from '../../data/useServerScope.js';
+import { useSubmissionData } from '../../data/SubmissionDataProvider.js';
 import { TimelineInner } from '../timeline/TimelineInner.js';
 import { StatusRegion } from '../../components/a11y/StatusRegion.js';
 import { ErrorRegion } from '../../components/a11y/ErrorRegion.js';
@@ -25,6 +27,13 @@ export function Timeline() {
   const { submissionId = '' } = useParams<{ submissionId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const indexQuery = useFullEventIndex(submissionId);
+  const summaryQuery = useSubmissionData().useSummary();
+
+  // The SAME scope the Replay tab builds, from the same two inputs. Without it
+  // this tab ordered events by `globalIdx`, which is wall-derived and across two
+  // machines can contradict proven happens-before — and it drew no break markers
+  // where the order shown is not evidence.
+  const serverScope = useServerScope(indexQuery.data ?? null, summaryQuery.data);
 
   // The Replay tab reads ?session= and ?event=; hand it both so it opens at
   // exactly this moment rather than at the session's first event.
@@ -80,6 +89,12 @@ export function Timeline() {
       );
     }
 
-    return <TimelineInner index={index} onJumpToReplay={handleJumpToReplay} />;
+    return (
+      <TimelineInner
+        index={index}
+        onJumpToReplay={handleJumpToReplay}
+        scope={serverScope?.scope ?? null}
+      />
+    );
   }
 }

@@ -35,6 +35,7 @@ import {
   roster_entries,
   assignments,
   submissions,
+  submission_contributors,
   flags,
 } from '../../../db/schema.js';
 import type { DrizzleDb } from '../../../db/client.js';
@@ -1144,6 +1145,28 @@ describe('computeDryRunDiff', () => {
         candidateConfig.per_flag['large_paste']!.enabled = false;
         candidateConfig.per_flag['extension_hash_mismatch']!.enabled = false;
 
+        // A partner who co-submitted this work. The mover row reports a SCOPE
+        // score, so naming only `student` (the submitter of record, which an
+        // ingest race used to pick) charges the whole swing to one of them.
+        const [partner] = await db
+          .insert(roster_entries)
+          .values({
+            semester_id: semester.id,
+            sid: 'stu003',
+            display_name: 'Carol',
+          })
+          .returning();
+        for (const person of [student!, partner!]) {
+          await db.insert(submission_contributors).values({
+            submission_id: submission!.id,
+            semester_id: semester.id,
+            contributor_key: `roster:${person.id}`,
+            kind: 'roster',
+            roster_entry_id: person.id,
+            is_submitter: true,
+          });
+        }
+
         const result = await computeDryRunDiff(db, semester.id, candidateConfig, 2);
 
         expect(result.diff.submissions_with_tier_change).toBe(1);
@@ -1152,6 +1175,9 @@ describe('computeDryRunDiff', () => {
         expect(result.diff.top_movers[0]!.new_tier).toBe('info');
         expect(result.diff.top_movers[0]!.old_score).toBe(3);
         expect(result.diff.top_movers[0]!.new_score).toBe(0);
+        expect(
+          result.diff.top_movers[0]!.contributors.map((c) => c.student!.display_name).sort(),
+        ).toEqual(['Bob', 'Carol']);
       });
     });
   });
@@ -1630,11 +1656,11 @@ describe('computeDryRunDiff — protected mode masks top_movers student identity
         expect(protectedResult.diff.top_movers).toHaveLength(1);
         const mover = protectedResult.diff.top_movers[0]!;
         // Must match Student N pattern (protected_index = 7).
-        expect(mover.student.display_name).toBe('Student 7');
-        expect(mover.student.sid).toBe('S7');
+        expect(mover.student!.display_name).toBe('Student 7');
+        expect(mover.student!.sid).toBe('S7');
         // Real values must NOT appear.
-        expect(mover.student.display_name).not.toBe('Real Student Name');
-        expect(mover.student.sid).not.toBe('real_sid_001');
+        expect(mover.student!.display_name).not.toBe('Real Student Name');
+        expect(mover.student!.sid).not.toBe('real_sid_001');
 
         // Non-protected mode: real values must appear.
         const realResult = await computeDryRunDiff(
@@ -1647,8 +1673,8 @@ describe('computeDryRunDiff — protected mode masks top_movers student identity
 
         expect(realResult.diff.top_movers).toHaveLength(1);
         const realMover = realResult.diff.top_movers[0]!;
-        expect(realMover.student.display_name).toBe('Real Student Name');
-        expect(realMover.student.sid).toBe('real_sid_001');
+        expect(realMover.student!.display_name).toBe('Real Student Name');
+        expect(realMover.student!.sid).toBe('real_sid_001');
 
         void submission;
       });
@@ -1754,10 +1780,10 @@ describe('computeDryRunDiff — protected mode masks top_movers student identity
             diff: { top_movers: { student: { display_name: string; sid: string } }[] };
           };
           expect(body.diff.top_movers).toHaveLength(1);
-          expect(body.diff.top_movers[0]!.student.display_name).toMatch(/^Student \d+$/);
-          expect(body.diff.top_movers[0]!.student.sid).toMatch(/^S/);
-          expect(body.diff.top_movers[0]!.student.display_name).not.toBe('HTTP Real Name');
-          expect(body.diff.top_movers[0]!.student.sid).not.toBe('http_real_sid');
+          expect(body.diff.top_movers[0]!.student!.display_name).toMatch(/^Student \d+$/);
+          expect(body.diff.top_movers[0]!.student!.sid).toMatch(/^S/);
+          expect(body.diff.top_movers[0]!.student!.display_name).not.toBe('HTTP Real Name');
+          expect(body.diff.top_movers[0]!.student!.sid).not.toBe('http_real_sid');
 
           void submission;
         } finally {

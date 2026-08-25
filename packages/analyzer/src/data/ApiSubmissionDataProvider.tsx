@@ -85,17 +85,42 @@ const ValidationCheckSchema = z.object({
 const ValidationResultsSchema = z.object({
   overall: z.enum(['pass', 'warn', 'fail']),
   checks: z.array(ValidationCheckSchema),
+  /**
+   * When the server computed these results — i.e. ingest time, because
+   * validation runs once and every read serves the stored row. The server has
+   * always sent it (validation.ts) and OpenAPI has always marked it required;
+   * this schema simply dropped it, so the UI had no way to tell a grader how old
+   * the verdict was. Optional here only so a pre-`validated_at` row cannot fail
+   * the whole parse.
+   */
+  validated_at: z.string().optional(),
 });
 
 const FileListResponseSchema = z.object({
   files: z.array(PerFileStatsSchema),
 });
 
+/**
+ * The server's warn-level envelope: `{ warning: { code, message, details? } }`.
+ *
+ * This schema declared `warning: z.string()`, which no response has ever
+ * matched — a `FILE_RECONSTRUCTION_TAINTED` response failed the parse outright
+ * rather than surfacing the warning it carries. The three codes now travelling
+ * this field (TAINTED, CONCURRENT, UNKNOWN) each mean the content is not the
+ * file, so a client that cannot read them is a client that renders an empty
+ * editor with no explanation.
+ */
+const ServerWarningSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  details: z.record(z.string(), z.unknown()).optional(),
+});
+
 const FileContentResponseSchema = z.object({
   content: z.string(),
   at_seq: z.number().int(),
   computed_at_ms: z.number(),
-  warning: z.string().optional(),
+  warning: ServerWarningSchema.optional(),
 });
 
 const ProvenanceRunSchema = z.object({
@@ -239,12 +264,26 @@ function createApiSubmissionDataProvider(submissionId: string): SubmissionDataPr
       const qs = atSeq !== undefined ? `?at_seq=${atSeq}` : '';
       return useQuery({
         queryKey: ['submission', submissionId, 'file-content', path, atSeq],
-        queryFn: () =>
-          apiFetch(
+        queryFn: async (): Promise<FileContentResult> => {
+          const res = await apiFetch(
             `/submissions/${submissionId}/files/${encodedPath}/content${qs}`,
             undefined,
             FileContentResponseSchema,
-          ),
+          );
+          // Flatten the server's warn envelope onto the provider contract, which
+          // both implementations share: a bare code plus the prose. The prose is
+          // analysis-core's own sentence, passed through untouched — re-wording
+          // it here is how one surface ends up saying two edits raced when we
+          // simply cannot see.
+          return {
+            content: res.content,
+            at_seq: res.at_seq,
+            computed_at_ms: res.computed_at_ms,
+            ...(res.warning === undefined
+              ? {}
+              : { warning: res.warning.code, warning_detail: res.warning.message }),
+          };
+        },
         staleTime: 5 * 60 * 1000,
         retry: noRetryOn401,
         enabled: submissionId !== '' && path !== '',

@@ -29,6 +29,7 @@ import {
   DropdownMenuTrigger,
 } from './ui/dropdown-menu.js';
 import type { BlobLoadError } from '@provenance/analysis-core/loader/parse-bundle.js';
+import type { DroppedArtifact } from '@provenance/analysis-core/loader/types.js';
 
 // ---------------------------------------------------------------------------
 // PartialLoadErrorBanner — shown in header when some files failed to load.
@@ -102,6 +103,57 @@ function PartialLoadErrorBanner({ errors, onDismiss }: PartialLoadErrorBannerPro
 }
 
 // ---------------------------------------------------------------------------
+// IncompleteRecordingBanner — artifacts the loader could not analyse.
+//
+// The reporting half of the read-side orphan guard. `analysis-core`'s loader no
+// longer fails a whole submission over a leftover `.slog.meta`, a zero-byte
+// `.slog`, a quarantined `.corrupt-*` log or an orphaned rolling seal — it drops
+// them and records them on `bundle.droppedArtifacts`. That is only the right
+// trade if the drop is VISIBLE: a silent exclusion is worse than the hard error
+// it replaced, because nobody can tell that anything was left out.
+//
+// Deliberately worded and coloured as an INCOMPLETE RECORDING, not a finding.
+// These artifacts are the ordinary residue of a crash on the git path, where no
+// seal step runs to filter them, and a grader must not read them as tampering.
+// Nothing here is a Flag and nothing here fails a check.
+// ---------------------------------------------------------------------------
+
+interface IncompleteRecordingBannerProps {
+  artifacts: readonly DroppedArtifact[];
+  onDismiss: () => void;
+}
+
+function IncompleteRecordingBanner({ artifacts, onDismiss }: IncompleteRecordingBannerProps) {
+  if (artifacts.length === 0) return null;
+  return (
+    <div
+      data-testid="incomplete-recording-banner"
+      role="status"
+      className="flex items-start gap-2 rounded border border-slate-400 bg-slate-50 px-4 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
+    >
+      <span className="flex-1">
+        <strong>
+          Incomplete recording: {artifacts.length} file{artifacts.length > 1 ? 's' : ''} in this
+          submission could not be analysed.
+        </strong>{' '}
+        The sessions shown below were analysed in full. This is not an integrity finding — it
+        usually means a session ended abruptly and the recorder left an artifact behind.{' '}
+        {artifacts.map((a) => a.filename).join(', ')}
+      </span>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Dismiss incomplete recording notice"
+        data-testid="incomplete-recording-dismiss"
+        className="ml-2 shrink-0 text-slate-700 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
+      >
+        <X className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Header
 // ---------------------------------------------------------------------------
 
@@ -115,6 +167,7 @@ export function Header() {
     partialLoadErrors,
   } = useBundle();
   const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [droppedDismissed, setDroppedDismissed] = useState(false);
   const navigate = useNavigate();
   const loadMoreInputRef = useRef<HTMLInputElement>(null);
 
@@ -135,6 +188,7 @@ export function Header() {
       if (files.length > 0) {
         // Un-dismiss so any new partial errors become visible.
         setBannerDismissed(false);
+        setDroppedDismissed(false);
         void loadBundleFiles(files);
       }
       // Reset so the same file(s) can be re-selected if needed.
@@ -150,6 +204,11 @@ export function Header() {
 
   const selectedBundle = bundles.find((b) => b.id === selectedBundleId) ?? bundles[0]!;
   const showBanner = partialLoadErrors.length > 0 && !bannerDismissed;
+  // Scoped to the SELECTED bundle: a dropped artifact belongs to one submission,
+  // and attributing it to whichever bundle happens to be on screen would be a
+  // way of implying something about a student who did nothing.
+  const droppedArtifacts = selectedBundle.droppedArtifacts;
+  const showDropped = droppedArtifacts.length > 0 && !droppedDismissed;
 
   return (
     <header data-testid="header" className="sticky top-0 z-10 flex flex-col border-b bg-background">
@@ -158,6 +217,14 @@ export function Header() {
           <PartialLoadErrorBanner
             errors={partialLoadErrors}
             onDismiss={() => setBannerDismissed(true)}
+          />
+        </div>
+      )}
+      {showDropped && (
+        <div className="px-6 pt-2">
+          <IncompleteRecordingBanner
+            artifacts={droppedArtifacts}
+            onDismiss={() => setDroppedDismissed(true)}
           />
         </div>
       )}

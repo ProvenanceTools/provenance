@@ -29,6 +29,14 @@
  * inline content) and external changes clear the reconstruction, so we skip
  * tainted reconstructions (empty content).
  *
+ * Tier 3.1: characters a git merge delivered from a provably different verified
+ * contributor's recorded work are not counted as written in the window either.
+ * Opening the starter, running `git pull` in the terminal and saving is an
+ * ordinary ten-second sequence, and it fired here at HIGH severity on the
+ * honest puller. Discounting only those characters leaves a student who really
+ * did produce 500+ chars in under 30 seconds firing exactly as before; always 0
+ * for a solo bundle. See `merged-in-content.ts`.
+ *
  * Severity: high. Confidence: 0.8.
  */
 
@@ -36,7 +44,9 @@ import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
-import { reconstructFileWithProvenance } from '../index/reconstruct-file-provenance.js';
+import { establishedReplayState } from './reconstruction-gate.js';
+import { externalChangeClassificationFor } from '../index/classify-external-changes.js';
+import { charsWrittenAfter } from './merged-in-content.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -50,7 +60,7 @@ function flagId(seqKey: string, idx: number): string {
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
   const { anomalySeconds, minChars } = config.timeToFirstSaveAnomaly;
   const anomalyMs = anomalySeconds * 1000;
 
@@ -61,6 +71,9 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
   // in the same session after the open.
   const openEvents = index.byKind.get('doc.open') ?? [];
   const saveEvents = index.byKind.get('doc.save') ?? [];
+
+  // Tier 3.1. Empty for a solo bundle — the pass does not run there.
+  const { gitMergeIn } = externalChangeClassificationFor(bundle, index);
 
   // Build a lookup: filePath → ordered list of {t, globalIdx, sessionId} for saves.
   type SaveEntry = { t: number; globalIdx: number; sessionId: string; seq: number };
@@ -105,7 +118,11 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
     // Check content size at the save point. upToGlobalIdx = firstSave.globalIdx + 1
     // (include the save event so hashBySaveSeq is populated, but content is the same
     // as just before the save — doc.save doesn't change content).
-    const state = reconstructFileWithProvenance(index, filePath, firstSave.globalIdx + 1);
+    // Tier 2.2: `null` when two contributors' edits are unordered at this cut.
+    // This heuristic counts per-character provenance, so an unestablished state
+    // fabricates the count as well as the content.
+    const state = establishedReplayState(index, bundle, filePath, firstSave.globalIdx + 1);
+    if (state === null) continue;
 
     // Skip tainted (empty) reconstructions — cannot reliably count chars.
     if (state.content.length === 0) continue;
@@ -118,10 +135,11 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
     // instead measures total file size, which flags any quick save of a large
     // existing file — reopening a 15k-char file, typing a newline, and saving
     // 9s later is not evidence of anything.
-    let newChars = 0;
-    for (let i = 0; i < state.provenance.length; i++) {
-      if (state.provenance[i]! > openEvent.globalIdx) newChars++;
-    }
+    //
+    // Tier 3.1: a `git pull` inside the window writes characters that the
+    // student did not, so merged-in content is excluded on the same footing as
+    // content that predates the open.
+    const newChars = charsWrittenAfter(state, openEvent.globalIdx, gitMergeIn);
     if (newChars <= minChars) continue;
 
     const openSeqKey = `${openEvent.sessionId}:${openEvent.seq}`;

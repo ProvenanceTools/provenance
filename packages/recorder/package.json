@@ -29,6 +29,22 @@
       {
         "command": "provenance.prepareSubmissionBundle",
         "title": "Provenance: Prepare Submission Bundle"
+      },
+      {
+        "command": "provenance.showEnrollmentKey",
+        "title": "Provenance: Show My Enrollment Key"
+      },
+      {
+        "command": "provenance.importEnrollmentToken",
+        "title": "Provenance: Import Enrollment Token"
+      },
+      {
+        "command": "provenance.exportIdentitySecret",
+        "title": "Provenance: Back Up Student Identity Secret"
+      },
+      {
+        "command": "provenance.importIdentitySecret",
+        "title": "Provenance: Restore Student Identity Secret"
       }
     ]
   },
@@ -41,7 +57,7 @@
     "build:integration": "tsc -p tsconfig.integration.json",
     "test:integration": "npm run build && npm run build:integration && node ./dist-integration/test/integration/runTest.js",
     "bench": "vitest run --reporter=verbose --config vitest.bench.config.ts",
-    "build:prod": "node --experimental-strip-types ../../tools/embed-course-key.ts && npm run bundle && npm run package && git -C ../.. checkout packages/recorder/src/activation/course-public-key.ts"
+    "build:prod": "node --experimental-strip-types ../../tools/embed-root-key.ts && npm run bundle && npm run package && git -C ../.. checkout packages/recorder/src/activation/root-public-key.ts packages/recorder/src/activation/legacy-course-public-key.ts"
   },
   "dependencies": {
     "@noble/ciphers": "^2.2.0",

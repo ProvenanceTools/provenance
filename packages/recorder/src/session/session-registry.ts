@@ -23,12 +23,26 @@ import {
   generateSessionKeypair,
   encryptSessionPrivkey,
   signCheckpoint,
+  scopeFromManifest,
 } from '@provenance/log-core';
-import type { HashedEnvelope, Clock, Manifest } from '@provenance/log-core';
+import type {
+  HashedEnvelope,
+  Clock,
+  GitCaptureCapability,
+  Manifest,
+  SessionIdentity,
+  WitnessCaptureCapability,
+} from '@provenance/log-core';
 import { buildRecorderContext } from './recorder-context.js';
+import { buildSessionIdentity } from '../identity/session-identity.js';
+import type { IdentityOutcome } from '../identity/session-identity.js';
+import { ROOT_PUBLIC_KEY_HEX } from '../activation/course-keys.js';
+import type { SecretStore } from '../identity/secret-store.js';
 import { createSessionHost } from './session-host.js';
 import { SessionWriter } from '../io/session-writer.js';
 import { MetaWriter } from '../io/meta-writer.js';
+import { writeRollingSeal } from '../io/rolling-seal-writer.js';
+import { ensureProvenanceGitAttributes } from '../io/git-attributes-writer.js';
 import { startHeartbeat } from '../events/heartbeat.js';
 import { startClockWatcher } from '../events/clock-watcher.js';
 import { startDocWiring } from '../wiring/doc-wiring.js';
@@ -40,12 +54,15 @@ import { ExpectedContentRegistry } from '../state/expected-content-registry.js';
 import { startTerminalWiring } from '../wiring/terminal-wiring.js';
 import { startExtensionSnapshot } from '../wiring/extension-snapshot.js';
 import { startExtensionActivation } from '../wiring/extension-activation.js';
-import { startGitWiring } from '../wiring/git-wiring.js';
+import { probeGitCapture, startGitWiring } from '../wiring/git-wiring.js';
+import { startPeerWatcher } from '../wiring/peer-watcher.js';
+import type { PeerWatcher, ProvenanceDirWatcher } from '../wiring/peer-watcher.js';
 import { recoverPreviousSession } from '../startup/chain-recovery.js';
 import { computeExtensionHash } from '../commands/extension-hash.js';
 import { DiskFullHandler } from '../failure/disk-full-handler.js';
 import { makeAssignmentRelativePath } from './assignment-relative-path.js';
 import { resolveOwnerRoot } from './session-router.js';
+import { resolveVerifiedCapturePolicy } from '../activation/manifest-loader.js';
 import type { LargeInsertCounter } from '../wiring/doc-wiring.js';
 
 // ---------------------------------------------------------------------------
@@ -73,6 +90,21 @@ export type ActiveSession = {
   metaWriter: MetaWriter;
   sessionHost: ReturnType<typeof createSessionHost>;
   sessionKeypair: { privateKey: Uint8Array; publicKeyHex: string };
+  /**
+   * This session's expected-content registry. `seal` reads
+   * `expectedContentRegistry.capHit()` to populate `SealDeps.scopeCapped` — the
+   * registry, not the seal command, is what knows whether its cap ever refused
+   * an in-scope path this session.
+   */
+  expectedContentRegistry: ExpectedContentRegistry;
+  /**
+   * Whether this session could claim an identity, and if not, why.
+   *
+   * `undefined` means identity was never attempted (no `secrets` supplied) — NOT
+   * that the student is un-enrolled. `activation/enroll-nudge.ts` consumes this
+   * to decide the status bar wording and whether to offer the enrollment page.
+   */
+  identityOutcome: IdentityOutcome | undefined;
   /** All VS Code subscriptions this session owns (doc-wiring, fs-watcher, heartbeat, etc). Disposed by dispose(). */
   ownDisposables: vscode.Disposable[];
   /** Most recent checkpoint write chain. dispose() awaits this so the final checkpoint isn't lost. */
@@ -98,11 +130,64 @@ export type StartSessionDeps = {
    */
   isOwnedByThisRoot?: (fsPath: string) => boolean;
   /**
+   * Ownership filter for a git REPOSITORY ROOT, used only by the git wiring.
+   *
+   * Separate from {@link isOwnedByThisRoot} because the two questions are not the
+   * same one: a file is owned by the assignment root that CONTAINS it, whereas a
+   * repository root normally CONTAINS the assignment root. Reusing the file
+   * predicate here dropped every `git.event` on nested-assignment layouts (spec
+   * §3 S14(a)). Callers pass `isRepoOwnedByRoot` from `session-router.ts`.
+   *
+   * Defaults to {@link isOwnedByThisRoot} so existing callers and tests that only
+   * supply the file predicate keep their current behaviour.
+   */
+  isRepoOwnedByThisRoot?: (repoRootFsPath: string) => boolean;
+  /**
    * Mount a status bar item for THIS session. Defaults to a no-op — extension.ts
    * mounts one global status bar, not one per session (plan decision 5).
    */
   createStatusBar?: (disposables: vscode.Disposable[]) => vscode.StatusBarItem;
+  /**
+   * `ExtensionContext.secrets`, holding the student master secret and their
+   * per-course enrollment tokens (program spec §5a). Omitted means no `identity`
+   * is emitted and the session records exactly as it does today — which is also
+   * what every pre-S2 test caller gets.
+   */
+  secrets?: SecretStore;
+  /**
+   * Create the ONE `.provenance/` directory watcher this session uses for peer
+   * witnessing, or throw if it cannot be created.
+   *
+   * Whether this succeeds IS `session.start.witness_capture` (collaboration spec
+   * §5.6 item 3), so it is called before the first entry is chained and its
+   * result is handed on to `startPeerWatcher` — one watcher, one answer, no way
+   * for the report and the wiring to disagree.
+   *
+   * Defaults to the production `vscode.workspace.createFileSystemWatcher`.
+   * Overridden by tests, which have no extension host.
+   */
+  createProvenanceDirWatcher?: (provenanceDir: string) => ProvenanceDirWatcher;
 };
+
+/**
+ * The production `.provenance/` watcher — one `FileSystemWatcher` on the
+ * directory, matching `*.slog` only.
+ *
+ * Read-only by construction: the returned handle exposes three subscriptions
+ * and `dispose`, and nothing that could rename, rewrite or delete a foreign
+ * file (peer-witnessing writer contract rule 5; decision-log bug 2).
+ */
+function createProvenanceDirWatcher(provenanceDir: string): ProvenanceDirWatcher {
+  const w = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(provenanceDir, '*.slog'),
+  );
+  return {
+    onDidCreate: (h) => w.onDidCreate((uri) => h(uri.fsPath)),
+    onDidChange: (h) => w.onDidChange((uri) => h(uri.fsPath)),
+    onDidDelete: (h) => w.onDidDelete((uri) => h(uri.fsPath)),
+    dispose: () => w.dispose(),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Production heartbeat deps
@@ -134,6 +219,7 @@ export function defaultHeartbeatDeps(): HeartbeatVscodeDeps {
 export async function startSession(deps: StartSessionDeps): Promise<ActiveSession> {
   const { assignmentRoot, manifest, extension, vscodeVersion, platform, clock } = deps;
   const isOwnedByThisRoot = deps.isOwnedByThisRoot ?? (() => true);
+  const isRepoOwnedByThisRoot = deps.isRepoOwnedByThisRoot ?? isOwnedByThisRoot;
   const ownDisposables: vscode.Disposable[] = [];
 
   // Optional per-session status bar. extension.ts mounts a single global status
@@ -146,8 +232,104 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   const provenanceDir = deps.provenanceDirOverride ?? path.join(assignmentRoot, '.provenance');
   await fsPromises.mkdir(provenanceDir, { recursive: true });
 
-  // Step 3b: Chain recovery — inspect the provenanceDir for a previous session.
+  // Step 3a-bis: stop git rewriting the bytes we are about to sign.
+  //
+  // Every file in this directory is covered by a signature over its exact
+  // sha256, and a `.slog` is newline-delimited JSON that nothing marks as
+  // binary — so git's end-of-line filters will happily widen every LF to CRLF
+  // on checkout. The git submission path has no seal step to re-hash the result,
+  // so the analyzer sees a log that does not match its signed digest and reports
+  // it at the highest severity it has, against a student who did nothing.
+  //
+  // Prevention has to be here because it is the only place the bytes can still
+  // be protected rather than reconstructed: the reader can undo the LF→CRLF
+  // direction after the fact, but not the reverse, and not a mixed file. See
+  // `log-core/git-attributes.ts`.
+  //
+  // Never overwrites, never throws, and its failure is not the session's
+  // failure — `.provenance/` is shared with partners and a read-only checkout
+  // must still record.
+  await ensureProvenanceGitAttributes(provenanceDir);
+
+  // Step 3b: Resolve the course's capture policy from the ALREADY-VERIFIED
+  // manifest (program spec §4). Resolved exactly once, here, and passed down as
+  // plain booleans: nothing on the event path may re-parse or re-verify anything,
+  // because `doc.change` fires per keystroke.
+  //
+  // A 1.x manifest, or a 2.0 manifest whose course specified nothing, resolves to
+  // DEFAULT_CAPTURE_POLICY — everything on, 30s heartbeat — i.e. exactly today's
+  // behaviour. resolveVerifiedCapturePolicy gates on the format version itself, so
+  // a `policy` block stapled onto a 1.x manifest (where it is NOT signed) can never
+  // be honoured.
+  const capturePolicy = resolveVerifiedCapturePolicy(manifest);
+
+  // Step 3c: Generate the session keypair.
+  const keypair = await generateSessionKeypair();
+
+  // Step 3c-bis: Build the S2 identity block (program spec §5a step 5).
+  //
+  // Runs AFTER the session keypair exists, because the student's per-course key
+  // countersigns exactly that public key. Never blocks: `buildSessionIdentity`
+  // returns `skipped` for every failure — not enrolled, no keyring, a lapsed
+  // cert, a token from another machine — and the session records without an
+  // `identity`. It also refuses to hand back a block that does not verify against
+  // this manifest's root-verified `course_cert`, so nothing unverifiable can enter
+  // the hash chain.
+  //
+  // `secrets` is optional so the many existing test callers (and any caller
+  // without an ExtensionContext) keep working; absent means "never enrolled".
+  //
+  // The outcome is KEPT, not just logged. It is the only place that knows whether
+  // this student is enrolled, and `activation/enroll-nudge.ts` reads it to decide
+  // the status bar wording and whether to point them at the enrollment page. It
+  // stays `undefined` when no `secrets` were supplied, which is "we never asked",
+  // distinct from "we asked and they are not enrolled" — a caller that did not
+  // wire identity must not make the student think they failed to enrol.
+  let identity: SessionIdentity | undefined;
+  let identityOutcome: IdentityOutcome | undefined;
+  if (deps.secrets !== undefined) {
+    const outcome = await buildSessionIdentity({
+      manifest,
+      sessionPubkeyHex: keypair.publicKeyHex,
+      // The window checks are judged against the session's own start instant, never
+      // wall-clock now, so an archived bundle still reads correctly years later.
+      sessionStartedAt: clock.wall(),
+      secrets: deps.secrets,
+      // The 2.1 trust anchor. The stored `institution_cert` is root-verified
+      // against this before it is used as an anchor — unlike 2.0, whose anchor
+      // is the manifest's already-verified `course_cert`.
+      rootPubkeyHex: ROOT_PUBLIC_KEY_HEX,
+    });
+    identityOutcome = outcome;
+    if (outcome.kind === 'emitted') {
+      identity = outcome.identity;
+      // Out-of-window is reported, never enforced (program spec §4) — surface it
+      // so the student can renew, but record either way.
+      if (!outcome.verified.token_window.in_window) {
+        console.warn(
+          `[provenance] enrollment token out of window (${outcome.verified.token_window.reason}); recording anyway.`,
+        );
+      }
+    } else {
+      console.warn(`[provenance] no session identity emitted: ${outcome.reason.kind}`);
+    }
+  }
+
+  // Step 3c-ter: Chain recovery — inspect the provenanceDir for a previous session.
   // PRD §4.8: on extension crash → set prev_session_id. On corrupt log → quarantine.
+  //
+  // ORDERING: this used to run at step 3b, before the keypair and the identity
+  // existed. It now runs AFTER step 3c-bis because it needs this session's
+  // `student_ref` to tell our own `.slog` files from a partner's in a shared,
+  // committed `.provenance/` (git-collaboration spec §3 S9/S19/S22, Tier 0.1+0.2).
+  // Nothing between 3a and here depends on the recovery result, and `prevSessionId`
+  // is not consumed until step 3d, so the move is behaviour-preserving apart from
+  // the ownership gate itself.
+  //
+  // `ownStudentRef` is null whenever `buildSessionIdentity` did not emit — not
+  // enrolled, no keyring, lapsed cert. That is the common case today and it is
+  // handled explicitly inside `recoverPreviousSession`; it must never throw or
+  // block recording.
   const recovery = await recoverPreviousSession({
     provenanceDir,
     readSlogFile: async (p) => {
@@ -169,15 +351,62 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
       }
     },
     now: () => new Date(),
+    ownStudentRef: identity?.enrollment.student_ref ?? null,
   });
 
   // Determine prev_session_id from recovery result.
   // Only set for dangling sessions (crashes) — not for cleanly ended sessions.
+  // The session it names is now guaranteed to be one of THIS contributor's, so
+  // the back-pointer is a real intra-contributor chain link rather than "whoever
+  // wrote last by wall clock" (program spec §7 mechanism 1).
   const prevSessionId: string | null =
     recovery.kind === 'previous_session_dangling' ? recovery.prevSessionId : null;
 
-  // Step 3c: Generate the session keypair.
-  const keypair = await generateSessionKeypair();
+  // Step 3c-quater: THE CAPABILITY REPORTS (collaboration spec §5.6).
+  //
+  // Both must be known BEFORE `session.start` is built, because that is the
+  // entry that carries them, and it is the first entry in the chain. They say
+  // "I could not", never "I was told not to" — neither is policy-gated, and
+  // neither is ever a finding. `undefined` OMITS the field, which is a legal,
+  // permanent, blameless answer.
+
+  // Item 2 — git. A side-effect-free probe that asks `resolveGitApi` the same
+  // question `startGitWiring` asks at step 16, through the same function, so
+  // the report cannot drift from what the wiring actually does. Cheap and
+  // idempotent: `getAPI(1)` is a getter on another extension's exports.
+  let gitCapture: GitCaptureCapability | undefined;
+  try {
+    gitCapture = probeGitCapture({
+      getGitExtension: () => vscode.extensions.getExtension('vscode.git'),
+      isRepoOwnedByThisRoot,
+    });
+  } catch (e) {
+    // Probing must never cost a session. Omitting the report costs context.
+    console.warn('[provenance] git capture probe failed; omitting the report:', e);
+  }
+
+  // Item 3 — `.provenance/` witnessing. The capability IS the artifact: the
+  // watcher the peer-witnessing wiring will use is created HERE, once, and
+  // whether it could be created is the answer. Probing by creating a second,
+  // throwaway watcher would let the report and the wiring disagree.
+  //
+  // Creating it early costs nothing and loses nothing: the peer watcher does not
+  // SUBSCRIBE until step 16b, and a foreign file that appears before that
+  // subscription is missed today exactly as it would be missed now. This session
+  // owns the watcher — it goes into `ownDisposables` — so the peer watcher is
+  // handed a non-disposing view of it and only owns its own subscriptions.
+  let provenanceDirWatcher: ProvenanceDirWatcher | undefined;
+  try {
+    provenanceDirWatcher = deps.createProvenanceDirWatcher
+      ? deps.createProvenanceDirWatcher(provenanceDir)
+      : createProvenanceDirWatcher(provenanceDir);
+    ownDisposables.push(provenanceDirWatcher);
+  } catch (e) {
+    // A watcher that cannot be created costs witnessing, never recording.
+    console.warn('[provenance] could not watch .provenance/ for peer witnessing:', e);
+  }
+  const witnessCapture: WitnessCaptureCapability =
+    provenanceDirWatcher !== undefined ? 'available' : 'unavailable';
 
   // Step 3d: Build recorder context (generates sessionId, machineId, etc.).
   const recorderContext = buildRecorderContext({
@@ -187,6 +416,9 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     vscodeVersion,
     platform,
     sessionPubkeyHex: keypair.publicKeyHex,
+    ...(identity !== undefined ? { identity } : {}),
+    ...(gitCapture !== undefined ? { gitCapture } : {}),
+    witnessCapture,
   });
 
   // Step 4: Open a SessionWriter (.provenance/ dir already created in Step 3a).
@@ -237,6 +469,162 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     encryptedPrivkey,
   });
 
+  // Step 4c-pre: Resolve the course's path scope, and construct this session's
+  // expected-content registry. Moved here (ahead of step 11, where doc-wiring
+  // and fs-watcher also need it) because the rolling seal below closes over it
+  // too, and its first rewrite happens at step 6c — well before step 11 runs.
+  // Computed once so the rolling seal, the classic seal, doc-wiring, and
+  // fs-watcher all resolve the SAME scope and share the SAME registry instance
+  // for this session; two different registries would let `capHit()` disagree
+  // with what the recorder actually refused.
+  const scope = scopeFromManifest(manifest);
+  const expectedContentRegistry = new ExpectedContentRegistry(scope);
+
+  // Step 4c: The ROLLING SEAL (program spec §8). A git-submitted assignment has
+  // no seal step, so the recorder rewrites this session's own
+  // `.provenance/manifest-<session_id>.json` + `.sig` on every checkpoint —
+  // whatever gets committed is then always a valid seal of that moment. See
+  // io/rolling-seal-writer.ts.
+  //
+  // GATED on the course's signed submission mode, and gated to FAIL OPEN.
+  //
+  // `submission` is part of the 2.0 signed payload, so it is trustworthy: at
+  // 1.x, `parseManifestValue` returns early and the object it hands back has no
+  // `submission` at all, which means `'bundle'` can only ever come from a
+  // manifest the course actually signed. Nothing unsigned can turn the seal off.
+  //
+  // The asymmetry is deliberate. Rolling where it is not needed costs two extra
+  // files in `.provenance/`, and the classic manifest still wins as
+  // `bundle.manifest` so nothing about a bundle-submitted course's analysis
+  // changes. NOT rolling where it IS needed costs an `unsealed_session` defect
+  // on every session, which fails check 1 — a false accusation against a student
+  // whose course simply has not migrated to a 2.0 manifest yet. Between "a
+  // couple of redundant files" and "an integrity finding against innocent work",
+  // only one of those is acceptable, so the seal is suppressed only when the
+  // course has signed a statement that it submits bundles.
+  const rollingSealEnabled = manifest.submission !== 'bundle';
+  //
+  // `extension_hash` is resolved lazily and exactly once. computeExtensionHash
+  // walks the whole dist/ tree, so doing it per checkpoint would be pathological;
+  // doing it eagerly here would add directory-walk latency to activation, which
+  // is the one moment the recorder must not be slow. The first checkpoint is 100
+  // entries away, long after activation has finished.
+  const extensionDistPath =
+    deps.extensionDistPath ??
+    (typeof extension.extensionPath === 'string'
+      ? path.join(extension.extensionPath, 'dist')
+      : undefined);
+  let extensionHashOnce: Promise<string> | undefined;
+  const getExtensionHashOnce = (): Promise<string> => {
+    extensionHashOnce ??= computeExtensionHash(extensionDistPath ?? '');
+    return extensionHashOnce;
+  };
+
+  /**
+   * Serializes every rolling-seal rewrite — the one at session start, the one
+   * per checkpoint, and the final one in dispose(). Two concurrent rewrites
+   * would interleave their `.json` and `.sig` renames and could leave a
+   * mismatched pair on disk, which is the one thing the atomic write exists to
+   * prevent. dispose() awaits this chain so the last seal is never lost.
+   */
+  let rollingSealChain: Promise<void> = Promise.resolve();
+
+  /**
+   * The checkpoint-triggered roll's time floor (task 13, fix round 1).
+   *
+   * `CHECKPOINT_INTERVAL` (100 entries) is an EVENT-count bound, not a time
+   * bound — 100 events can be a few seconds of fast typing or several minutes
+   * of thinking. A course scoped with a broad suffix rule (e.g. `track:
+   * ["*.js"]`) against a workspace with a large, non-hard-excluded directory
+   * present on disk (a checked-out `node_modules/`) walks and re-hashes every
+   * matching file on every roll — measured at ~4.2s for one such workspace —
+   * which at a 100-event cadence could mean a multi-MB signed manifest being
+   * atomically rewritten into a git working tree every 10-20s of active
+   * typing. 60s between checkpoint-triggered rolls is ample staleness for a
+   * background artifact whose worst case (data loss window) is already bounded
+   * by the SAME 100-event gap this floor sits behind, and it does not touch
+   * `isHardExcluded` or invent a cache — it only widens an already-unbounded
+   * time gap between rolls.
+   *
+   * Deliberately NOT applied to the session-start roll (step 6c) or the
+   * `dispose()` final roll — see `rewriteRollingSeal`'s `force`/`final`
+   * bypass below.
+   */
+  const ROLLING_SEAL_MIN_INTERVAL_MS = 60_000;
+  /** Monotonic time (`clock.now()`) of the last roll actually performed, or `null` before the first. */
+  let lastRollAt: number | null = null;
+
+  /**
+   * Rewrite the rolling seal. Never throws and never rejects: a seal failure
+   * must not abort the checkpoint that carries it, and must never stop
+   * recording. Recording is more important than sealing.
+   *
+   * `final` marks the seal as the LAST this session will get, which promotes the
+   * reader from prefix to whole-file semantics. ONLY dispose() may pass it, and
+   * only after session.end has been emitted, the writer flushed and the pending
+   * checkpoint drained — see the call site. Every other roll leaves it off,
+   * because the log is still growing and claiming otherwise would make the
+   * student's next keystroke look like an append past a finished seal.
+   *
+   * `force` bypasses the `ROLLING_SEAL_MIN_INTERVAL_MS` time floor. Only the
+   * session-start caller (step 6c) passes it — that first roll is what a
+   * short, checkpoint-free session relies on for coverage at all, so it must
+   * never be skipped. `final: true` bypasses the floor too, unconditionally:
+   * the last seal this session will ever get must always be written, however
+   * recently the previous one landed. The checkpoint call site (below, inside
+   * `onEntry`) passes neither, so it alone is subject to the floor.
+   */
+  function rewriteRollingSeal(opts?: { final?: boolean; force?: boolean }): Promise<void> {
+    if (!rollingSealEnabled) return Promise.resolve();
+    const isFinal = opts?.final === true;
+    const bypassFloor = isFinal || opts?.force === true;
+    if (
+      !bypassFloor &&
+      lastRollAt !== null &&
+      clock.now() - lastRollAt < ROLLING_SEAL_MIN_INTERVAL_MS
+    ) {
+      // Too soon since the last roll. The on-disk seal is still a valid (if
+      // slightly stale) PREFIX seal — never treated as whole-file by a reader,
+      // since only a `final: true` seal makes that claim — and the next
+      // checkpoint, or dispose()'s unconditional final roll, will catch up.
+      return Promise.resolve();
+    }
+    lastRollAt = clock.now();
+    rollingSealChain = rollingSealChain.then(() => rollingSealOnce(isFinal));
+    return rollingSealChain;
+  }
+
+  async function rollingSealOnce(isFinal: boolean): Promise<void> {
+    try {
+      const result = await writeRollingSeal({
+        provenanceDir,
+        sessionId: recorderContext.session_id,
+        prevSessionId,
+        slogPath,
+        assignmentRoot,
+        assignmentId: manifest.assignment_id,
+        semester: manifest.semester,
+        scope,
+        scopeCapped: expectedContentRegistry.capHit(),
+        sessionPrivkey: keypair.privateKey,
+        extensionHash: await getExtensionHashOnce(),
+        ...(isFinal ? { final: true } : {}),
+      });
+      if (result.kind === 'error') {
+        // Degrade exactly like every other non-fatal write problem: surface it
+        // and carry on. Deliberately NOT routed into DiskFullHandler — that
+        // switches the session to a critical-events-only ring buffer, and
+        // throwing away the student's event stream because a seal could not be
+        // rewritten would trade the recording for the receipt.
+        console.error('[provenance] rolling seal write error:', result.message);
+      }
+    } catch (e) {
+      // Defensive: writeRollingSeal is documented not to throw, and the only
+      // other await here is the memoized extension hash.
+      console.error('[provenance] rolling seal unexpected error:', e);
+    }
+  }
+
   // Step 5: Create the session host.
   // Hook checkpoints: every CHECKPOINT_INTERVAL entries, sign + write.
   // Fire-and-forget on the append path; tracked via pendingCheckpoint so dispose()
@@ -245,9 +633,20 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   let entryCountSinceLastCheckpoint = 0;
   let pendingCheckpoint: Promise<void> = Promise.resolve();
 
+  /**
+   * PEER WITNESSING (program spec §7 mechanism 2). Forward reference: the
+   * watcher needs `sessionHost.emit`, which does not exist until the host below
+   * is constructed, while the checkpoint hook that DRAINS it lives inside that
+   * construction. It is created at step 16b and is guaranteed to exist long
+   * before the first checkpoint, which is 100 entries away.
+   */
+  let peerWatcher: PeerWatcher | undefined = undefined;
+
   const sessionHost = createSessionHost({
     sessionId: recorderContext.session_id,
     clock,
+    // The single choke point for policy-gated event kinds — see session-host.ts.
+    capturePolicy,
     onEntry: (entry: HashedEnvelope) => {
       // Route through disk-full handler.
       // If degraded: critical entries go to the ring; non-critical are dropped.
@@ -268,7 +667,25 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
           .then((cp) => metaWriter.appendCheckpoint(cp))
           .catch((e: unknown) => {
             console.error('[provenance] checkpoint sign/write error:', e);
-          });
+          })
+          // Peer witnessing drains on the checkpoint cadence (writer contract
+          // rule 3) — BEFORE the rolling seal, so the observations it emits are
+          // in the `.slog` that the seal about to be written commits to. The
+          // watcher's callbacks did no I/O; all of it happens here, off the
+          // event path. drain() never rejects.
+          .then(() => peerWatcher?.drain())
+          // The rolling seal runs AFTER the checkpoint has landed in the .meta,
+          // so `meta_sha256` covers it, and after the .catch above so a failed
+          // checkpoint still gets the best seal available. rewriteRollingSeal
+          // never rejects, so it cannot poison the chain dispose() awaits.
+          //
+          // No `force`/`final` here: this is the ONE call site subject to
+          // `ROLLING_SEAL_MIN_INTERVAL_MS` — a checkpoint fired less than 60s
+          // after the last actual roll is a no-op, since the walk-and-hash
+          // cost that motivates the floor runs at THIS cadence, not the
+          // session-start or dispose() rolls (see `rewriteRollingSeal`'s
+          // docstring).
+          .then(() => rewriteRollingSeal());
       }
     },
   });
@@ -286,10 +703,35 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     });
   }
 
+  // Step 6c: Seal immediately, before the first checkpoint is anywhere near due.
+  //
+  // Checkpoints land every 100 entries, so a session that records only
+  // session.start would never reach one — and in a git-submitted repo that
+  // session's `.slog` would be committed with no seal covering it at all
+  // (`unsealed_session`). Sealing here means a session is sealed from its first
+  // instant and every later rewrite is an update, never the first write.
+  //
+  // AWAITED on purpose. Fire-and-forget would let a seal write outlive the
+  // startSession call that spawned it, landing in a `.provenance/` that the
+  // caller (or a test's teardown) has already torn down. The cost is one
+  // dist/ walk plus one ed25519 sign at activation, alongside the keypair
+  // generation and encrypted-privkey write already happening here.
+  //
+  // `force: true`: this is the FIRST roll, before `lastRollAt` has a baseline,
+  // so the time floor would never actually bite here regardless — but forcing
+  // it explicitly documents that this roll is unconditional, matching
+  // `rewriteRollingSeal`'s own contract, rather than relying on `lastRollAt`
+  // starting `null`.
+  await rewriteRollingSeal({ force: true });
+
   // Step 7: Start heartbeat (PRD §4.2: session.heartbeat every 30s).
   const hbDeps = deps.heartbeatDeps ?? defaultHeartbeatDeps();
   const heartbeat = startHeartbeat({
     ...hbDeps,
+    // policy.capture.heartbeat_interval_ms, already clamped to [5000, 120000] by
+    // resolveCapturePolicy. session.heartbeat is on the hard floor — only its
+    // cadence is tunable.
+    intervalMs: capturePolicy.heartbeat_interval_ms,
     getNow: () => clock.now(),
     // Wall-clock source for suspend/resume detection (PRD §4.2 addendum). Deliberately
     // Date.now(), not clock.now() — see heartbeat.ts for why this must be wall-clock.
@@ -327,7 +769,8 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   };
 
   // Step 11: Start doc-event wiring (PRD §4.2 + §4.3 paste detection).
-  const expectedContentRegistry = new ExpectedContentRegistry(manifest.files_under_review);
+  // `scope` and `expectedContentRegistry` were already constructed at step
+  // 4c-pre, ahead of the rolling seal's first rewrite at step 6c.
 
   // ExplanationTagger for formatter/git explanation of external changes.
   const explanationTagger = new ExplanationTagger({ getNow: () => clock.now() });
@@ -372,7 +815,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   // while VS Code unfocused" path). Must come after docWiring so getLastDocChangeAt works.
   const fsWatcher = startFsWatcher({
     assignmentRoot,
-    filesUnderReview: manifest.files_under_review,
+    scope,
     registry: expectedContentRegistry,
     emit: (data) => sessionHost.emit('fs.external_change', data),
     getLastDocChangeAt: (p) => docWiring.getLastDocChangeAt(p),
@@ -452,12 +895,75 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     emit: (d) => sessionHost.emit('git.event', d),
     getGitExtension: () => vscode.extensions.getExtension('vscode.git'),
     explanationTagger,
-    isOwnedByThisRoot,
+    isRepoOwnedByThisRoot,
+    // The `git.path` setting, as a backstop for finding the git binary the
+    // repository discriminator shells out to (writer correction 8). Supplied
+    // HERE rather than defaulted inside git-wiring.ts because `vscode` is a
+    // type-only import there — `tools/`'s seal conformance gate imports that
+    // module's built output outside any extension host, where a runtime
+    // `vscode` import cannot resolve. The primary hint, `api.git.path`, is read
+    // off the git API inside the wiring and needs nothing from here.
+    readConfiguredGitPath: () => vscode.workspace.getConfiguration('git').get<unknown>('path'),
   });
   ownDisposables.push(gitW);
 
-  // computeExtensionHash is referenced by the caller (extension.ts) at seal time, not here.
-  void computeExtensionHash;
+  // Step 16b: Peer witnessing (program spec §7 mechanism 2, collaboration spec
+  // §5.5). ONE FileSystemWatcher on `.provenance/` — not one per file, because a
+  // partner's `.slog` filename is a uuid minted on their machine and is not
+  // knowable in advance, and because only a directory watcher sees a file
+  // APPEAR, which is the case this exists for.
+  //
+  // Distinct from the `files_under_review` watchers in fs-watcher.ts: those
+  // watch the student's own source under the assignment root, this watches
+  // provenance artifacts. Nothing here ever writes, renames or deletes: the
+  // watcher is constructed with a read function and no write capability at all.
+  const peerW = startPeerWatcher({
+    provenanceDir,
+    // This session's own `.slog` and `.slog.meta`, by basename. A chain cannot
+    // corroborate itself, and the reader excluding a self-witness is not a
+    // licence for the writer to produce one.
+    isOwnFile: (basename) =>
+      basename === path.basename(slogPath) || basename === path.basename(metaPath),
+    emit: (data) => sessionHost.emit('peer.observed', data),
+    readFile: async (absPath) => {
+      try {
+        const bytes = await fsPromises.readFile(absPath);
+        return { ok: true, bytes };
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        return {
+          ok: false,
+          reason: code === 'ENOENT' || code === 'ENOTDIR' ? 'gone' : 'unreadable',
+        };
+      }
+    },
+    // The watcher was created at step 3c-quater, because whether it COULD be
+    // created is `session.start.witness_capture` and that has to be known before
+    // the first entry is chained. Handing back a non-disposing view: this
+    // session owns the watcher (it is in `ownDisposables`), the peer watcher
+    // owns only its own subscriptions.
+    //
+    // When creation failed there is nothing to hand back, and throwing is the
+    // signal `startPeerWatcher` already handles — it logs and carries on with no
+    // subscriptions, which is exactly the state `witness_capture: 'unavailable'`
+    // reported.
+    createWatcher: (): ProvenanceDirWatcher => {
+      if (provenanceDirWatcher === undefined) {
+        throw new Error('.provenance/ watcher unavailable');
+      }
+      const w = provenanceDirWatcher;
+      return {
+        onDidCreate: (h) => w.onDidCreate(h),
+        onDidChange: (h) => w.onDidChange(h),
+        onDidDelete: (h) => w.onDidDelete(h),
+        dispose: () => {
+          /* owned by the session, disposed through ownDisposables */
+        },
+      };
+    },
+  });
+  peerWatcher = peerW;
+  ownDisposables.push(peerW);
 
   /**
    * Tear down exactly this session: emit session.end, flush the writer, drain the
@@ -469,6 +975,16 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
    * VS Code disposes those first, matching the historical ordering.
    */
   async function dispose(): Promise<void> {
+    // Final peer-witness drain, BEFORE session.end so the observations land
+    // inside the session they belong to. Checkpoints fire every 100 entries, so
+    // a partner's log that arrived after the last one would otherwise never be
+    // witnessed by this session at all — and a `git pull` immediately before
+    // closing the editor is an ordinary thing to do. drain() never rejects.
+    try {
+      await peerWatcher?.drain();
+    } catch {
+      // Ignore — witnessing is best effort and never blocks shutdown.
+    }
     // Emit session.end event.
     try {
       sessionHost.emit('session.end', { reason: 'deactivate' });
@@ -496,6 +1012,36 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     } catch {
       // Ignore — best effort.
     }
+    // Final rolling-seal rewrite, last of the three file-touching steps so it
+    // covers the fully flushed `.slog` (session.end included) and the drained
+    // `.meta`. A session killed without dispose() — the editor crashing, the
+    // machine losing power — simply keeps whichever seal the last checkpoint
+    // left, which is the whole point of maintaining it continuously.
+    //
+    // Awaiting rewriteRollingSeal() also drains any checkpoint seal still in
+    // flight, since both share rollingSealChain.
+    //
+    // `final: true` is claimable HERE AND ONLY HERE, and only because of the
+    // three awaits above: session.end is emitted, the writer is flushed and
+    // closed, and the last checkpoint has landed in the `.meta`. Nothing can
+    // append to either file after this point, so the digests about to be signed
+    // are whole-file commitments rather than prefixes, and a reader is entitled
+    // to fail an append against them.
+    //
+    // The claim is made only on a path that actually reached here. Every way a
+    // session can die without a clean dispose — a crash, a power cut, a full
+    // disk, a read-only checkout, `.provenance/` removed by a `git checkout` —
+    // simply leaves the last non-final seal in place, which a reader treats as a
+    // prefix commitment with a reported unattested tail. That is a coverage gap,
+    // not a tamper finding, and it is why finality is claimed explicitly here
+    // rather than inferred by the reader from a trailing `session.end` entry:
+    // `session.end` lives in the log, and the log's completeness is the very
+    // thing in question.
+    try {
+      await rewriteRollingSeal({ final: true });
+    } catch {
+      // Ignore — best effort. rewriteRollingSeal does not reject anyway.
+    }
     // Dispose this session's own subscriptions in LIFO order.
     for (const d of [...ownDisposables].reverse()) {
       try {
@@ -518,6 +1064,8 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     metaWriter,
     sessionHost,
     sessionKeypair: { privateKey: keypair.privateKey, publicKeyHex: keypair.publicKeyHex },
+    expectedContentRegistry,
+    identityOutcome,
     ownDisposables,
     getPendingCheckpoint: () => pendingCheckpoint,
     dispose,

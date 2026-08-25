@@ -48,7 +48,7 @@ import { flags, submissions } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 import type { DrizzleDb } from '../../db/client.js';
 import { HEURISTIC_CONFIG_VERSION_V0 } from './default-config.js';
-import { getActiveConfig, DEFAULT_SERVER_CONFIG } from './config.js';
+import { getActiveConfig, DEFAULT_SERVER_CONFIG, resolvePerFlag } from './config.js';
 import { computeScore } from '../scoring/compute.js';
 import { thresholdsToV2Override } from '../scoring/recompute-submission.js';
 import { computeFlagCounts, computeTopFlags } from '../scoring/denorm.js';
@@ -156,8 +156,11 @@ export async function runAndStoreHeuristics(
   const scoreInputs: Array<{ severity: string; score_contribution: number }> = [];
 
   for (const flag of rawFlags) {
-    const perFlagEntry = serverConfig.per_flag[flag.heuristic];
-    const perFlagCfg: PerFlagConfig = perFlagEntry ?? { enabled: true, weight: 1.0 };
+    // resolvePerFlag is the single definition of what a missing entry means
+    // (enabled, weight 1.0). recompute-submission.ts calls the same function,
+    // so ingest and recompute cannot drift apart again — they did, and the
+    // divergence silently erased flags on recompute.
+    const perFlagCfg: PerFlagConfig = resolvePerFlag(serverConfig, flag.heuristic);
 
     // PRD §10.3: disabled heuristics contribute zero (and we do not store them).
     if (!perFlagCfg.enabled) {

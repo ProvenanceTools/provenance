@@ -121,4 +121,19 @@ describe('buildPastePayload', () => {
     expect(result.content).toBe('');
     expect(result.content_head).toBeUndefined();
   });
+
+  // --- the size cap is the ONLY thing that suppresses content ---------------
+
+  it('takes exactly one argument — there is no capture-policy knob for content', () => {
+    // The `inline_content` policy key was removed: `internal_move` reads paste
+    // content to DOWNGRADE a `large_paste` flag, so stripping it made the system
+    // more likely to falsely accuse a student who was relocating their own code.
+    // Pinning the arity means reintroducing a suppression parameter fails here.
+    expect(buildPastePayload).toHaveLength(1);
+  });
+
+  it('inlines content unconditionally below the cap', () => {
+    const text = 'def solve(): return 42';
+    expect(buildPastePayload(text).content).toBe(text);
+  });
 });

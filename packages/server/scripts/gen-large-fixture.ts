@@ -91,6 +91,14 @@ function parseArgs(argv: string[]): {
   return { students, events, out, seed };
 }
 
+/** Shape 32 hex chars into a v4-looking uuid. Deterministic, like everything here. */
+function uuidFromHex(hex32: string): string {
+  return (
+    `${hex32.slice(0, 8)}-${hex32.slice(8, 12)}-4${hex32.slice(13, 16)}-` +
+    `8${hex32.slice(17, 20)}-${hex32.slice(20, 32)}`
+  );
+}
+
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -207,8 +215,20 @@ async function buildBundleFiles(
   const rng = mulberry32(seed);
   const keypair = await generateSessionKeypair();
   // Deterministic-but-unique session id per student.
-  const sidHex = sha256Hex(`large-session:${student.sid}:${seed}`).slice(0, 32);
-  const sessionId = `${sidHex.slice(0, 8)}-${sidHex.slice(8, 12)}-4${sidHex.slice(13, 16)}-8${sidHex.slice(17, 20)}-${sidHex.slice(20, 32)}`;
+  const sessionId = uuidFromHex(sha256Hex(`large-session:${student.sid}:${seed}`).slice(0, 32));
+  // The uuid in the `.slog` FILENAME — a DIFFERENT value from the logical
+  // `session_id` above, exactly as production mints them (the writer names the
+  // file `session-${randomUUID()}.slog` in `session-registry.ts`, while the
+  // logical id is `recorderContext.session_id`).
+  //
+  // Spelling both with one value is not a simplification: it deletes a whole bug
+  // class from whatever this fixture is used to verify. A bundle in which the two
+  // ids were CONFUSED would be byte-identical to one handling them correctly, so
+  // nothing measured against it can reproduce an id-space crossing. That property
+  // is precisely what hid a maximum-severity false accusation
+  // (`log_bytes_match` firing on every honest git submission) from 972 tests.
+  // `analysis-core`'s `fakeLogFileUuid` encodes the same rule for unit fixtures.
+  const logFileUuid = uuidFromHex(sha256Hex(`large-logfile:${student.sid}:${seed}`).slice(0, 32));
   const machineId = sha256Hex(`large-machine:${student.sid}`);
   const path0 = `${ASSIGNMENT}.py`;
 
@@ -430,8 +450,9 @@ async function buildBundleFiles(
   return {
     'manifest.json': signed.canonicalJson,
     'manifest.sig': signed.signatureHex,
-    [`session-${sessionId}.slog`]: slogText,
-    [`session-${sessionId}.slog.meta`]: metaJson,
+    // Filenames take the FILE uuid; the manifest above takes the LOGICAL id.
+    [`session-${logFileUuid}.slog`]: slogText,
+    [`session-${logFileUuid}.slog.meta`]: metaJson,
     [path0]: content,
   };
 }

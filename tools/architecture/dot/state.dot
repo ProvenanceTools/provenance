@@ -12,8 +12,8 @@ digraph state {
   dormant [label="DORMANT\nextension loaded,\nnothing recorded"
            fillcolor="#15171d" color="#5d677d" fontcolor="#98a2b6"]
 
-  verify  [label="manifest\nverifies against the\nembedded course key?"
-           shape=diamond fillcolor="#1c1712" color="#F97316" fontsize=9 height=1.0 width=2.0]
+  verify  [label="manifest verifies?\n2.0: embedded ROOT key → course_cert\n→ manifest payload\n1.x: the grandfathered legacy course key"
+           shape=diamond fillcolor="#1c1712" color="#F97316" fontsize=9 height=1.35 width=2.6]
 
   recording [label="RECORDING\nsession keypair live\nevents appending"
              fillcolor="#241a0c" color="#F97316" penwidth=2.0]
@@ -27,16 +27,17 @@ digraph state {
   crashed [label="TERMINATED\ncrash, kill, or quit —\nno session.end written"
            fillcolor="#2a1216" color="#ff6b6b" style="filled,rounded,dashed"]
 
-  recover [label="RECOVERING\nread the log tail, find the last valid\nchain link, quarantine the remainder,\nand start a NEW log linked to it"
+  recover [label="RECOVERING\nread the log tail, find the last valid\nchain link, quarantine the remainder,\nand start a NEW log linked to it.\nOnly ever a log this recorder OWNS — decided\nby student_ref ALONE, never by the wall clock:\na damaged timestamp costs a file its ORDER,\nnever its author"
            fillcolor="#1e1830" color="#9d7bf5"]
 
-  sealed  [label="BUNDLE SEALED\nthe archived copy is immutable —\nbut this is NOT a terminal state:\nthe live session keeps appending"
+  sealed  [label="BUNDLE SEALED\nthe archived copy is immutable —\nbut this is NOT a terminal state:\nthe live session keeps appending.\nZIP SUBMISSION ONLY. A git-submitted\nassignment never enters this state at all:\nthere is no submit moment, so the seal moves\nonto the recording as a per-session\nROLLING seal, rewritten at every checkpoint."
            fillcolor="#0e2422" color="#17bfae" penwidth=2.0]
 
   start     -> dormant  [label="editor starts"]
   dormant   -> verify   [label="workspace opened"]
   verify    -> dormant  [label="no — stay silent,\nrecord nothing" color="#5d677d" style=dashed]
-  verify    -> recording[label="yes — session.start" color="#F97316"]
+  verify    -> recording[label="yes — session.start.\nThe §5.6 capability reports resolve FIRST:\nthe git probe and the .provenance/ watcher's\ncreation both happen before seq 0 is chained,\nwhile the wiring that consumes them starts after"
+                         color="#F97316"]
 
   recording -> suspended[label="machine sleeps" color="#5d677d" style=dashed]
   suspended -> recording[label="wake — the heartbeat emits\nsession.resumed when the gap is\n≥ 2× the interval. The gap has no\nintervening events, so it is NOT flagged"

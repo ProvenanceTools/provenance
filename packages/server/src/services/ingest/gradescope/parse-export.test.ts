@@ -134,7 +134,7 @@ describe('parseGradescopeExport', () => {
     if (!res.ok) return;
     expect(res.value.bundles).toHaveLength(0);
     expect(res.value.skipped).toEqual([
-      { folderKey: 'submission_single', submitters: [], reason: 'no_submitters' },
+      { folderKey: 'submission_single', scopePath: '', submitters: [], reason: 'no_submitters' },
     ]);
   });
 });

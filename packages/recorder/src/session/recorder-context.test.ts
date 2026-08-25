@@ -6,8 +6,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildRecorderContext } from './recorder-context.js';
-import type { Manifest } from '@provenance/log-core';
+import {
+  buildRecorderContext,
+  resolveFileScope,
+  FILE_SCOPE_MAX_ENTRIES,
+} from './recorder-context.js';
+import type { Manifest, SessionIdentity } from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -172,7 +176,7 @@ describe('buildRecorderContext', () => {
       vscodeVersion: '1.97.0',
       platform: 'darwin-arm64',
     });
-    expect(ctx.vscode.version).toBe('1.97.0');
+    expect(ctx.vscode?.version).toBe('1.97.0');
   });
 
   it('sets vscode.platform from the injected platform', () => {
@@ -183,7 +187,7 @@ describe('buildRecorderContext', () => {
       vscodeVersion: '1.97.0',
       platform: 'win32-x64',
     });
-    expect(ctx.vscode.platform).toBe('win32-x64');
+    expect(ctx.vscode?.platform).toBe('win32-x64');
   });
 
   it('sets recorder.version from extension.packageJSON.version', () => {
@@ -257,6 +261,266 @@ describe('buildRecorderContext', () => {
       vscodeVersion: '1.97.0',
       platform: 'darwin-arm64',
     });
-    expect(typeof ctx.vscode.commit).toBe('string');
+    expect(typeof ctx.vscode?.commit).toBe('string');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// session.start 2.0 (program spec §5)
+// ---------------------------------------------------------------------------
+
+const TEST_MANIFEST_V2: Manifest = {
+  format_version: '2.0',
+  assignment_id: 'proj2',
+  semester: 'fa26',
+  issued_at: '2026-09-08T00:00:00Z',
+  files_under_review: ['proj2.py'],
+  sig: 'b'.repeat(128),
+  course_id: 'berkeley-cs61b',
+  collaboration: 'solo',
+  submission: 'bundle',
+  scope: 'directory',
+  policy: { capture: { selection_change: false, heartbeat_interval_ms: 45_000 } },
+  course_cert: {
+    course_id: 'berkeley-cs61b',
+    course_pubkey: 'c'.repeat(64),
+    valid_from: '2026-08-20',
+    valid_until: '2027-01-15',
+    root_sig: 'd'.repeat(128),
+  },
+};
+
+function build(manifest: Manifest): ReturnType<typeof buildRecorderContext> {
+  return buildRecorderContext({
+    manifest,
+    prevSessionId: null,
+    extension: makeExtension({ version: '1.2.0', publisher: 'itsgeagle', name: 'recorder' }),
+    vscodeVersion: '1.97.0',
+    platform: 'darwin-arm64',
+  });
+}
+
+describe('buildRecorderContext — session.start 2.0', () => {
+  it('carries the FULL manifest, payload + sig + course_cert', () => {
+    const ctx = build(TEST_MANIFEST_V2);
+    // Not just equal-looking: the analyzer re-verifies root -> cert -> payload
+    // offline from exactly these bytes, so every signed field must survive.
+    expect(ctx.manifest).toEqual(TEST_MANIFEST_V2);
+    expect(ctx.manifest?.course_cert?.root_sig).toBe('d'.repeat(128));
+    expect(ctx.manifest?.policy).toEqual({
+      capture: { selection_change: false, heartbeat_interval_ms: 45_000 },
+    });
+  });
+
+  it('carries a 1.x manifest verbatim too, so check 2 works for legacy bundles', () => {
+    const ctx = build(TEST_MANIFEST);
+    expect(ctx.manifest).toEqual(TEST_MANIFEST);
+    expect(ctx.manifest?.course_cert).toBeUndefined();
+  });
+
+  it('emits the host block with editor "vscode"', () => {
+    const ctx = build(TEST_MANIFEST_V2);
+    expect(ctx.host).toEqual({
+      editor: 'vscode',
+      editor_version: '1.97.0',
+      // '' is permitted and expected: the VS Code extension API exposes no build id.
+      editor_build: '',
+      platform: 'darwin-arm64',
+    });
+  });
+
+  it('retains manifest_sig and the deprecated vscode block so 1.x readers still work', () => {
+    const ctx = build(TEST_MANIFEST_V2);
+    expect(ctx.manifest_sig).toBe(TEST_MANIFEST_V2.sig);
+    expect(ctx.vscode).toEqual({ version: '1.97.0', commit: '', platform: 'darwin-arm64' });
+  });
+
+  // NOTE — this assertion CHANGED MEANING in S2. It used to read "identity is
+  // never emitted, because enrollment does not exist yet". Now identity exists,
+  // and the rule it encodes is the real one: omitted when the student is not
+  // enrolled, present when they are. The omission half is still asserted, because
+  // it is the behaviour that keeps an unenrolled student recording.
+  it('omits identity entirely when the student is not enrolled', () => {
+    const ctx = build(TEST_MANIFEST_V2);
+    expect(ctx.identity).toBeUndefined();
+    // Absent, not present-and-undefined — see the emission-site comment.
+    expect(Object.hasOwn(ctx, 'identity')).toBe(false);
+  });
+
+  it('emits identity verbatim when the student IS enrolled', () => {
+    const identity: SessionIdentity = {
+      enrollment: {
+        format_version: '2.0',
+        student_ref: '11111111-2222-3333-4444-555555555555',
+        course_id: 'berkeley-cs61b',
+        student_pubkey: '1'.repeat(64),
+        issued_at: '2026-08-25T00:00:00Z',
+        expires_at: '2027-01-15',
+        enrollment_sig: '2'.repeat(128),
+      },
+      enrollment_cert: {
+        format_version: '2.0',
+        course_id: 'berkeley-cs61b',
+        enrollment_pubkey: '3'.repeat(64),
+        valid_from: '2026-08-20',
+        valid_until: '2027-01-15',
+        course_sig: '4'.repeat(128),
+      },
+      session_pubkey_sig: '5'.repeat(128),
+    };
+
+    const ctx = buildRecorderContext({
+      manifest: TEST_MANIFEST_V2,
+      prevSessionId: null,
+      extension: makeExtension({ version: '1.2.0', publisher: 'itsgeagle', name: 'recorder' }),
+      vscodeVersion: '1.97.0',
+      platform: 'darwin-arm64',
+      identity,
+    });
+
+    // Byte-exact passthrough: the analyzer re-walks the chain from these bytes,
+    // so nothing may be re-shaped, re-ordered into new keys, or dropped.
+    expect(ctx.identity).toEqual(identity);
+    expect(Object.keys(ctx.identity ?? {}).sort()).toEqual([
+      'enrollment',
+      'enrollment_cert',
+      'session_pubkey_sig',
+    ]);
+  });
+
+  it('still omits identity for a 1.x manifest even if one is supplied', () => {
+    // Belt and braces: session-identity.ts refuses to produce one without a
+    // course_cert, so this asserts the caller contract rather than a filter here.
+    const ctx = build(TEST_MANIFEST);
+    expect(ctx.identity).toBeUndefined();
+  });
+
+  it('keeps format_version at "1.0" — the 2.0 additions are purely additive', () => {
+    expect(build(TEST_MANIFEST_V2).format_version).toBe('1.0');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The three capability reports (collaboration spec §5.6)
+// ---------------------------------------------------------------------------
+
+describe('buildRecorderContext — the §5.6 capability reports', () => {
+  const base = {
+    manifest: TEST_MANIFEST,
+    prevSessionId: null,
+    extension: makeExtension({ version: '1.2.0', publisher: 'itsgeagle', name: 'recorder' }),
+    vscodeVersion: '1.100.0',
+    platform: 'darwin-arm64',
+  } as const;
+
+  it('OMITS git_capture and witness_capture when neither is supplied', () => {
+    // A caller that cannot establish a capability must produce a payload
+    // BYTE-IDENTICAL to the pre-§5.6 one, so an omitted key is the only legal
+    // spelling: `null` canonicalizes differently and chains to a different hash.
+    const ctx = buildRecorderContext({ ...base });
+    expect('git_capture' in ctx).toBe(false);
+    expect('witness_capture' in ctx).toBe(false);
+    expect(ctx.git_capture).toBeUndefined();
+    expect(ctx.witness_capture).toBeUndefined();
+  });
+
+  it('emits each capability value verbatim when supplied', () => {
+    for (const gitCapture of ['available', 'unavailable', 'not_owned'] as const) {
+      const ctx = buildRecorderContext({ ...base, gitCapture });
+      expect(ctx.git_capture).toBe(gitCapture);
+    }
+    for (const witnessCapture of ['available', 'unavailable'] as const) {
+      const ctx = buildRecorderContext({ ...base, witnessCapture });
+      expect(ctx.witness_capture).toBe(witnessCapture);
+    }
+  });
+
+  it('resolves file_scope from the manifest\u2019s files_under_review, complete', () => {
+    const ctx = buildRecorderContext({
+      ...base,
+      manifest: { ...TEST_MANIFEST, files_under_review: ['hw03.py', 'src/helpers.py'] },
+    });
+    expect(ctx.file_scope).toEqual({
+      watched: ['hw03.py', 'src/helpers.py'],
+      complete: true,
+    });
+  });
+
+  it('reports an EMPTY resolved set as complete, which is a real answer', () => {
+    // "The scope resolved to nothing" is a positive claim that explains every
+    // file's silence. It is not the same as saying nothing.
+    const ctx = buildRecorderContext({
+      ...base,
+      manifest: { ...TEST_MANIFEST, files_under_review: [] },
+    });
+    expect(ctx.file_scope).toEqual({ watched: [], complete: true });
+  });
+
+  it('caps a very large set and says so, so absence stays UNKNOWN rather than NOT WATCHED', () => {
+    const many = Array.from({ length: FILE_SCOPE_MAX_ENTRIES + 10 }, (_, i) => `f${String(i)}.py`);
+    const scope = resolveFileScope(many);
+    expect(scope?.complete).toBe(false);
+    expect(scope?.watched).toHaveLength(FILE_SCOPE_MAX_ENTRIES);
+    expect(scope?.watched[0]).toBe('f0.py');
+  });
+
+  it('does not cap at exactly the limit', () => {
+    const exact = Array.from({ length: FILE_SCOPE_MAX_ENTRIES }, (_, i) => `f${String(i)}.py`);
+    expect(resolveFileScope(exact)?.complete).toBe(true);
+  });
+
+  describe('resolveFileScope with rule entries', () => {
+    it('stays complete for an all-exact list', () => {
+      const scope = resolveFileScope(['Main.java', 'src/Board.java']);
+      expect(scope).toEqual({ watched: ['Main.java', 'src/Board.java'], complete: true });
+    });
+
+    it('reports incomplete and lists only the exact entries when a rule is present', () => {
+      // A rule cannot be enumerated, so absence from `watched` must no longer be
+      // readable as "not watched". `complete: false` is exactly that downgrade.
+      const scope = resolveFileScope(['src/', 'Main.java', '*.java']);
+      expect(scope).toEqual({ watched: ['Main.java'], complete: false });
+    });
+
+    it('reports incomplete with an empty list when every entry is a rule', () => {
+      expect(resolveFileScope(['src/'])).toEqual({ watched: [], complete: false });
+    });
+  });
+
+  it('OMITS file_scope rather than publishing a path the format forbids', () => {
+    // S14(b). A course manifest carrying an absolute path, a remote URL or a
+    // parent escape gets the field omitted — never an absolute path inside a
+    // signed log.
+    for (const bad of [
+      '/Users/student/cs61b/hw03.py',
+      'C:\\Users\\student\\hw03.py',
+      'https://github.com/someone/hw03.py',
+      '../other-course/hw03.py',
+    ]) {
+      const ctx = buildRecorderContext({
+        ...base,
+        manifest: { ...TEST_MANIFEST, files_under_review: ['hw03.py', bad] },
+      });
+      expect(ctx.file_scope).toBeUndefined();
+      expect('file_scope' in ctx).toBe(false);
+    }
+  });
+
+  it('copies the manifest list, so a later mutation cannot reach the chain', () => {
+    const files = ['hw03.py'];
+    const ctx = buildRecorderContext({
+      ...base,
+      manifest: { ...TEST_MANIFEST, files_under_review: files },
+    });
+    files.push('sneaky.py');
+    expect(ctx.file_scope?.watched).toEqual(['hw03.py']);
+  });
+
+  it('the three reports are independent — one may be present with the others absent', () => {
+    const ctx = buildRecorderContext({ ...base, gitCapture: 'not_owned' });
+    expect(ctx.git_capture).toBe('not_owned');
+    expect('witness_capture' in ctx).toBe(false);
+    // file_scope is always resolvable from a well-formed manifest.
+    expect(ctx.file_scope).toEqual({ watched: ['hw03.py'], complete: true });
   });
 });

@@ -46,41 +46,93 @@ export async function atomicWriteFile(
   contents: string | Uint8Array,
   _fs: AtomicWriteFs = fsPromises,
 ): Promise<void> {
-  const randomHex = randomBytes(8).toString('hex');
-  const tmpPath = `${targetPath}.${process.pid}.${randomHex}.tmp`;
+  await atomicWriteFilePair([{ targetPath, contents }], _fs);
+}
 
-  let fh: fsPromises.FileHandle | undefined;
-  try {
-    // Open with 'w' to create/truncate and get a FileHandle for fsync.
-    fh = await _fs.open(tmpPath, 'w');
-    // Narrow the union so TypeScript can pick the right FileHandle.write overload.
-    if (typeof contents === 'string') {
-      await fh.write(contents, null, 'utf8');
-    } else {
-      await fh.write(contents);
-    }
-    await fh.sync();
-    await fh.close();
-    fh = undefined; // Successfully closed; don't close again in finally.
+/**
+ * Atomically write a SET of files that must agree with one another.
+ *
+ * POSIX has no multi-file rename, so this cannot be a true transaction. What it
+ * does is stage every file (write + fsync) BEFORE renaming any of them, so the
+ * only work left between the renames is the renames themselves. That shrinks the
+ * window in which an observer can see a mixed old/new set from "one whole file
+ * write plus an fsync" down to a single syscall.
+ *
+ * That window matters for the rolling seal: `manifest-<id>.json` and
+ * `manifest-<id>.sig` are a signature over a payload, so a reader that catches a
+ * NEW json beside an OLD sig sees a seal that does not verify. The window cannot
+ * be closed entirely (see rolling-seal-writer.ts), only minimised.
+ *
+ * On any failure — staging or renaming — every temp file this call created is
+ * best-effort unlinked and the original error is re-thrown unmasked. Files
+ * already renamed are NOT rolled back: they are complete, valid, fsynced files,
+ * and un-renaming them could only replace good bytes with older ones.
+ */
+export async function atomicWriteFilePair(
+  files: ReadonlyArray<{ targetPath: string; contents: string | Uint8Array }>,
+  _fs: AtomicWriteFs = fsPromises,
+): Promise<void> {
+  const staged: Array<{ tmpPath: string; targetPath: string }> = [];
+  /** How many of `staged` have already been renamed onto their target. */
+  let committed = 0;
 
-    await _fs.rename(tmpPath, targetPath);
-  } catch (originalError) {
-    // Best-effort unlink of the temp file. Do not mask the original error.
-    try {
-      await _fs.unlink(tmpPath);
-    } catch {
-      // Silently ignore — the temp file may not exist (e.g., open() itself failed).
-    }
-
-    // Re-close the handle if close() above didn't happen (e.g., rename failed).
-    if (fh !== undefined) {
+  const cleanupUncommitted = async (): Promise<void> => {
+    for (const { tmpPath } of staged.slice(committed)) {
       try {
-        await fh.close();
+        await _fs.unlink(tmpPath);
       } catch {
-        // Silently ignore secondary close error.
+        // Silently ignore — the temp file may already be gone.
+      }
+    }
+  };
+
+  try {
+    // Phase 1 — stage. Every byte is on disk and fsynced before any rename runs.
+    for (const { targetPath, contents } of files) {
+      const randomHex = randomBytes(8).toString('hex');
+      const tmpPath = `${targetPath}.${process.pid}.${randomHex}.tmp`;
+
+      let fh: fsPromises.FileHandle | undefined;
+      try {
+        // Open with 'w' to create/truncate and get a FileHandle for fsync.
+        fh = await _fs.open(tmpPath, 'w');
+        // Narrow the union so TypeScript can pick the right FileHandle.write overload.
+        if (typeof contents === 'string') {
+          await fh.write(contents, null, 'utf8');
+        } else {
+          await fh.write(contents);
+        }
+        await fh.sync();
+        await fh.close();
+        fh = undefined; // Successfully closed; don't close again below.
+        staged.push({ tmpPath, targetPath });
+      } catch (e) {
+        // This temp file never made it into `staged`, so unlink it here.
+        try {
+          await _fs.unlink(tmpPath);
+        } catch {
+          // Silently ignore — open() itself may have failed.
+        }
+        if (fh !== undefined) {
+          try {
+            await fh.close();
+          } catch {
+            // Silently ignore secondary close error.
+          }
+        }
+        throw e;
       }
     }
 
+    // Phase 2 — commit. Back-to-back renames, no intervening I/O.
+    for (const { tmpPath, targetPath } of staged) {
+      await _fs.rename(tmpPath, targetPath);
+      committed++;
+    }
+  } catch (originalError) {
+    // Best-effort unlink of every temp file that was staged but never renamed.
+    // Never mask the original error.
+    await cleanupUncommitted();
     throw originalError;
   }
 }

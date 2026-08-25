@@ -120,6 +120,25 @@ describe('HomeView', () => {
     expect(screen.getByTestId('local-analysis-link')).toHaveAttribute('href', '/local/load');
   });
 
+  it('points a student at /enroll from the empty state', async () => {
+    // A student with no memberships lands here, and /enroll is the only thing
+    // they can do. Nothing else in the app links to it.
+    mswServer.use(meNoSemestersHandler());
+    renderHomeView();
+    await waitFor(() => {
+      expect(screen.getByTestId('enroll-link')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('enroll-link')).toHaveAttribute('href', '/enroll');
+  });
+
+  it('does NOT show the enrollment link once the user has a semester', async () => {
+    renderHomeView();
+    await waitFor(() => {
+      expect(screen.getByTestId('semester-list')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('enroll-link')).not.toBeInTheDocument();
+  });
+
   it('does NOT show the "Local analysis" link in the empty state', async () => {
     mswServer.use(meNoSemestersHandler());
     renderHomeView();

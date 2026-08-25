@@ -15,14 +15,20 @@
  *      flat bundle via `buildBundleZipFromFiles`, yields it, and releases it
  *      before moving to the next folder.
  *
- * The shared selection/whitelist logic lives in `build-bundle-zip.ts`; metadata
+ * The shared selection/whitelist logic lives in `analysis-core/scopes/select-entries.ts`; metadata
  * parsing in `parse-metadata.ts`. This module only adds the on-disk, bounded-
  * memory outer read.
  */
 
 import yauzl from 'yauzl';
 import { parseSubmissionMetadata, type GradescopeSubmitter } from './parse-metadata.js';
-import { selectBundleEntries, type BundleEntry } from './build-bundle-zip.js';
+import type { BundleEntry } from '@provenance/analysis-core/scopes/select-entries.js';
+import {
+  resolveRepoScopes,
+  DEFAULT_INGEST_SCOPE,
+  type IngestScopeConfigResolver,
+} from './repo-scopes.js';
+import { discoverRepoScopes } from '@provenance/analysis-core/scopes/discover-scopes.js';
 
 const METADATA_FILENAME = 'submission_metadata.yml';
 
@@ -30,25 +36,51 @@ const METADATA_FILENAME = 'submission_metadata.yml';
 // Types
 // ---------------------------------------------------------------------------
 
+/** Why one scope of a submission folder produced no bundle. */
+export type StreamedSkipReason =
+  | 'no_manifest'
+  | 'no_submitters'
+  | 'no_seal'
+  | 'scope_excluded'
+  | 'ambiguous_scope'
+  | 'submission_type_mismatch';
+
 /**
- * One submission, streamed: either the selected bundle entries (ready to zip)
- * or a skipped folder. The expensive ZIP serialization is intentionally NOT done
- * here — the caller offloads `zipBundleEntries` to a worker pool so rebuilds run
- * in parallel rather than serially on this generator's thread.
+ * One assignment scope of one submission, streamed: either the selected bundle
+ * entries (ready to zip) or a skip. The expensive ZIP serialization is
+ * intentionally NOT done here — the caller offloads `zipBundleEntries` to a
+ * worker pool so rebuilds run in parallel rather than serially on this
+ * generator's thread.
+ *
+ * A submission folder yields ONE item per discovered scope, so a git repo with
+ * `proj2/` and `lab5/` yields two bundles. A classic flat Gradescope folder has
+ * exactly one scope (`scopePath: ''`) and therefore yields exactly one item,
+ * unchanged from before fan-out existed.
  */
 export type StreamedSubmission =
   | {
       kind: 'bundle';
       folderKey: string;
+      /** `''` for the folder root, else the scope's directory prefix (`proj2/`). */
+      scopePath: string;
       submitters: GradescopeSubmitter[];
       entries: BundleEntry[];
     }
   | {
       kind: 'skipped';
       folderKey: string;
+      scopePath: string;
       submitters: GradescopeSubmitter[];
-      reason: 'no_manifest' | 'no_submitters';
+      reason: StreamedSkipReason;
     };
+
+export interface OpenLocalExportOptions {
+  /**
+   * Per-assignment scope-resolution config (§6), keyed by the scope's DECLARED
+   * `assignment_id`. Defaults to accepting every sealed scope.
+   */
+  scopeConfigFor?: IngestScopeConfigResolver;
+}
 
 export type OpenLocalExportResult =
   | { ok: false; error: 'not_a_zip' | 'missing_metadata' | 'invalid_metadata'; detail: string }
@@ -174,7 +206,11 @@ function dedupeSubmitters(all: GradescopeSubmitter[]): GradescopeSubmitter[] {
  * generator. The caller MUST iterate `submissions()` to completion (or stop and
  * call `close()`), then `close()` to release the file handle.
  */
-export async function openLocalExport(archivePath: string): Promise<OpenLocalExportResult> {
+export async function openLocalExport(
+  archivePath: string,
+  options: OpenLocalExportOptions = {},
+): Promise<OpenLocalExportResult> {
+  const scopeConfigFor = options.scopeConfigFor ?? (() => DEFAULT_INGEST_SCOPE);
   let zip: yauzl.ZipFile;
   try {
     zip = await openZip(archivePath);
@@ -244,35 +280,55 @@ export async function openLocalExport(archivePath: string): Promise<OpenLocalExp
         yield {
           kind: 'skipped',
           folderKey: sub.folderKey,
+          scopePath: '',
           submitters: [],
           reason: 'no_submitters',
         };
         continue;
       }
 
-      // Materialize ONLY this folder's bytes, build, yield, release.
+      // Materialize ONLY this folder's bytes, fan out, yield, release.
       const bucket = byFolder.get(sub.folderKey) ?? [];
       const files = new Map<string, Uint8Array>();
       for (const { rel, entry } of bucket) {
         files.set(rel, await readEntryBytes(zip, entry));
       }
 
-      const selected = selectBundleEntries(files);
-      if (!selected.ok) {
+      const discovered = discoverRepoScopes(files);
+      if (!discovered.ok) {
         yield {
           kind: 'skipped',
           folderKey: sub.folderKey,
+          scopePath: '',
           submitters: sub.submitters,
-          reason: selected.reason,
+          reason: discovered.reason,
         };
         continue;
       }
-      yield {
-        kind: 'bundle',
-        folderKey: sub.folderKey,
-        submitters: sub.submitters,
-        entries: selected.entries,
-      };
+
+      const resolved = resolveRepoScopes(discovered.scopes, scopeConfigFor);
+      for (const scope of resolved.accepted) {
+        yield {
+          kind: 'bundle',
+          folderKey: sub.folderKey,
+          scopePath: scope.scopePath,
+          submitters: sub.submitters,
+          entries: scope.entries,
+        };
+      }
+      // Scopes that exist but produce no submission are reported, never
+      // silently dropped — a `.provenance/` that nothing seals (neither a
+      // classic nor a rolling manifest), or one excluded by scope config,
+      // still needs to be visible in the job summary.
+      for (const unusable of [...discovered.unusable, ...resolved.rejected]) {
+        yield {
+          kind: 'skipped',
+          folderKey: sub.folderKey,
+          scopePath: unusable.scopePath,
+          submitters: sub.submitters,
+          reason: unusable.reason,
+        };
+      }
     }
   }
 

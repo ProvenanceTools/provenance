@@ -21,6 +21,10 @@ import {
 import type { DecorationRun } from '../views/replay/replay-decoration-utils.js';
 import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
 import type { IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
+import { soloReconstructionScope } from '@provenance/analysis-core/index/reconstruct-segments.js';
+import { buildObservedDag } from '@provenance/analysis-core/git/observed-dag.js';
+import { buildEventOrdering } from '@provenance/analysis-core/order/happens-before.js';
+import type { SessionContributor } from '@provenance/analysis-core/identity/types.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -205,7 +209,7 @@ describe('screenshotReplayAt', () => {
 
   it('returns a data URL string', async () => {
     const index = makeMinimalIndex('hw1.py', []);
-    const result = await screenshotReplayAt(index, 'hw1.py', 0);
+    const result = await screenshotReplayAt(soloReconstructionScope(index), 'hw1.py', 0);
     expect(typeof result).toBe('string');
     expect(result).toContain('data:image/png;base64,TESTDATA');
   });
@@ -213,7 +217,7 @@ describe('screenshotReplayAt', () => {
   it('appends and removes a div from the document body', async () => {
     const index = makeMinimalIndex('hw1.py', []);
     const bodyChildCountBefore = document.body.children.length;
-    await screenshotReplayAt(index, 'hw1.py', 0);
+    await screenshotReplayAt(soloReconstructionScope(index), 'hw1.py', 0);
     // The div should be removed after capture (cleanup in finally block).
     expect(document.body.children.length).toBe(bodyChildCountBefore);
   });
@@ -240,8 +244,88 @@ describe('screenshotReplayAt', () => {
       },
     ]);
     // Should not throw even if the index has minimal events.
-    const result = await screenshotReplayAt(index, 'hw1.py', 2);
+    const result = await screenshotReplayAt(soloReconstructionScope(index), 'hw1.py', 2);
     expect(typeof result).toBe('string');
+  });
+
+  /**
+   * The image is captioned with a file and an event number and embedded in a
+   * findings PDF that reaches an integrity panel. When there is no single file
+   * state, a screenshot of one branch is a photograph of a file that never
+   * existed. `null` is the only honest answer, and `findings-pdf` omits the
+   * image rather than substituting a guess.
+   */
+  it('returns null when reconstruction has no single truth', async () => {
+    // Two verified contributors editing one file, nothing ordering them: no
+    // session link and no git.event, so `≺` genuinely says concurrent.
+    const contributor = (sessionId: string, ref: string): SessionContributor => ({
+      kind: 'attributed',
+      sessionId,
+      contributorKey: `attributed:2.0:course:c1:${ref}`,
+      studentRef: ref,
+      identityVersion: '2.0',
+      scope: 'course',
+      scopeId: 'c1',
+      studentPubkey: 'pk',
+      certWindow: { in_window: true },
+      credentialWindow: { in_window: true },
+    });
+    const edit = (sessionId: string, seq: number, globalIdx: number): IndexedEvent => ({
+      sessionId,
+      seq,
+      globalIdx,
+      wall: `2026-01-01T00:00:0${globalIdx}.000Z`,
+      t: seq * 1000,
+      kind: 'doc.change',
+      payload: {
+        path: 'hw1.py',
+        source: 'typed',
+        deltas: [
+          {
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+            text: sessionId,
+          },
+        ],
+      },
+      file: 'hw1.py',
+    });
+    const events = [edit('sess-a', 1, 0), edit('sess-b', 1, 1)];
+    const index: EventIndex = {
+      bySeq: new Map(events.map((e) => [`${e.sessionId}:${e.seq}`, e])),
+      byKind: new Map(),
+      byFile: new Map([['hw1.py', events]]),
+      bySessionId: new Map([
+        ['sess-a', [events[0]!]],
+        ['sess-b', [events[1]!]],
+      ]),
+      ordered: events,
+    };
+    const contributorBySession = new Map<string, SessionContributor>([
+      ['sess-a', contributor('sess-a', 'alice')],
+      ['sess-b', contributor('sess-b', 'bob')],
+    ]);
+    // The events must be handed to the relation. An ordering built over empty
+    // sessions answers `'unknown'` for every ref — "we have no record" — which
+    // is a different fact from `'concurrent'`, and this test would then pass for
+    // the wrong reason.
+    const source = {
+      sessions: events.map((e) => ({
+        sessionId: e.sessionId,
+        events: [{ seq: e.seq, kind: e.kind, data: e.payload }],
+      })),
+    } as unknown as Parameters<typeof buildObservedDag>[0];
+    const concurrentScope = {
+      index,
+      contributorBySession,
+      ordering: buildEventOrdering({
+        source,
+        dag: buildObservedDag(source),
+        contributors: contributorBySession,
+      }),
+    };
+
+    const result = await screenshotReplayAt(concurrentScope, 'hw1.py', 5);
+    expect(result).toBeNull();
   });
 });
 

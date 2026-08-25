@@ -17,10 +17,15 @@ import { http, HttpResponse } from 'msw';
 import { mswServer } from '../../test-setup.js';
 import { TuningView } from './TuningView.js';
 import {
+  ALL_FLAG_IDS,
+  CROSS_SUBMISSION_HEURISTIC_IDS,
+} from '@provenance/analysis-core/heuristics/known-flag-ids.js';
+import {
   DEFAULT_COURSE_SLUG,
   DEFAULT_SEMESTER_ID,
   DEFAULT_SEMESTER_SLUG,
   defaultMembership,
+  makeSoloContributor,
   meWithMembershipsHandler,
 } from '../../test/msw-handlers.js';
 
@@ -68,6 +73,22 @@ const DEFAULT_ACTIVE_CONFIG = {
   is_active: true,
 };
 
+const MOVER_ALICE = {
+  id: '30000000-0000-0000-0000-000000000001',
+  sid: '3031234',
+  display_name: 'Alice',
+};
+const MOVER_BOB = {
+  id: '30000000-0000-0000-0000-000000000002',
+  sid: '3032345',
+  display_name: 'Bob',
+};
+const MOVER_NO_SCORE = {
+  score_total: 0,
+  score_max_severity: 'info' as const,
+  flag_counts: { info: 0, low: 0, medium: 0, high: 0 },
+};
+
 const DRY_RUN_DIFF = {
   candidate_version: 4,
   diff: {
@@ -76,6 +97,7 @@ const DRY_RUN_DIFF = {
       {
         submission_id: 'aa000000-0000-0000-0000-000000000001',
         student: { sid: '3031234', display_name: 'Alice' },
+        contributors: [makeSoloContributor(MOVER_ALICE, MOVER_NO_SCORE)],
         assignment: { assignment_id_str: 'hw1', label: 'Homework 1' },
         old_score: 3.0,
         new_score: 5.0,
@@ -183,6 +205,21 @@ describe('TuningView', () => {
     expect(screen.getByTestId('toggle-large_paste')).toBeInTheDocument();
   });
 
+  it('renders exactly one row per known flag id — the full ALL_FLAG_IDS set, no more, no less', async () => {
+    // Regression guard for the 2026-08 audit finding: TuningView used to
+    // hand-maintain its own id list, which silently drifted (it was missing
+    // `inter_session_external_change`). It now imports ALL_FLAG_IDS
+    // directly, so this asserts the render surface actually reflects that
+    // canonical list — not just that the import exists.
+    await renderAndWaitForLoad();
+    expect(ALL_FLAG_IDS).toHaveLength(29);
+    for (const id of ALL_FLAG_IDS) {
+      expect(screen.getByTestId(`slider-${id}`)).toBeInTheDocument();
+      expect(screen.getByTestId(`toggle-${id}`)).toBeInTheDocument();
+    }
+    expect(screen.getAllByRole('slider')).toHaveLength(ALL_FLAG_IDS.length);
+  });
+
   it('gives each weight slider and enable checkbox an accessible name', async () => {
     await renderAndWaitForLoad();
 
@@ -200,6 +237,78 @@ describe('TuningView', () => {
     for (const s of allSliders) {
       expect(s).toHaveAccessibleName();
     }
+  });
+
+  it('disables the weight slider for cross-submission heuristics and explains why, while keeping the toggle functional', async () => {
+    // editing_pattern_clone and paste_shared_across_students are cross-submission
+    // heuristics: cross_flags has no score_contribution/weight column and cross
+    // flags feed no score anywhere (only per-submission `flags` rows reach
+    // computeScore). The weight slider for these ids cannot do anything, so it
+    // must be disabled with a visible (non-color-only) explanation. The
+    // enable/disable toggle genuinely works server-side and must stay usable.
+    await renderAndWaitForLoad();
+
+    expect(CROSS_SUBMISSION_HEURISTIC_IDS.length).toBeGreaterThan(0);
+
+    for (const id of CROSS_SUBMISSION_HEURISTIC_IDS) {
+      const slider = screen.getByTestId(`slider-${id}`);
+      expect(slider).toBeDisabled();
+
+      // The explanation must be visible text, not just an attribute or color.
+      const note = screen.getByTestId(`weight-note-${id}`);
+      expect(note).toBeVisible();
+      expect(note).toHaveTextContent(/cross-submission flags are surfaced, not scored/i);
+
+      // The slider must be programmatically associated with the explanation.
+      expect(slider).toHaveAccessibleDescription(/cross-submission flags are surfaced/i);
+
+      // The toggle must remain fully functional.
+      const toggle = screen.getByTestId(`toggle-${id}`);
+      expect(toggle).not.toBeDisabled();
+      expect(toggle).toBeChecked();
+      fireEvent.click(toggle);
+      expect(toggle).not.toBeChecked();
+    }
+
+    // A regular per-submission heuristic must be unaffected.
+    expect(screen.getByTestId('slider-large_paste')).not.toBeDisabled();
+    expect(screen.queryByTestId('weight-note-large_paste')).not.toBeInTheDocument();
+  });
+
+  it('disables both the weight slider and enable toggle for paste_matches_known_source and explains why', async () => {
+    // paste_matches_known_source matches pastes against a course-supplied
+    // corpus (analysis-core/heuristics/config.ts: pasteMatchesKnownSource.corpus,
+    // default []). Nothing in packages/server/src or packages/analyzer/src
+    // populates that corpus — no upload path, no config plumbing, no storage —
+    // so the heuristic emits 0 flags in every deployed semester today. Unlike
+    // the cross-submission case, toggling `enabled` is ALSO inert here (0
+    // flags either way), so both controls must be disabled, not just weight.
+    // The row itself must still render — the flag stays a known, tunable id
+    // in the catalogue (ALL_FLAG_IDS/known-flag-ids.ts) for when a corpus
+    // feature ships; only the ability to set a no-op weight/toggle is removed.
+    await renderAndWaitForLoad();
+
+    const id = 'paste_matches_known_source';
+    expect(ALL_FLAG_IDS).toContain(id);
+
+    const slider = screen.getByTestId(`slider-${id}`);
+    expect(slider).toBeDisabled();
+
+    const toggle = screen.getByTestId(`toggle-${id}`);
+    expect(toggle).toBeDisabled();
+
+    const note = screen.getByTestId(`inert-note-${id}`);
+    expect(note).toBeVisible();
+    expect(note).toHaveTextContent(/no corpus source exists yet/i);
+
+    // Both disabled controls must be programmatically associated with the
+    // explanation, not just visually adjacent to it.
+    expect(slider).toHaveAccessibleDescription(/no corpus source exists yet/i);
+    expect(toggle).toHaveAccessibleDescription(/no corpus source exists yet/i);
+
+    // A regular per-submission heuristic must be unaffected.
+    expect(screen.getByTestId('toggle-large_paste')).not.toBeDisabled();
+    expect(screen.queryByTestId('inert-note-large_paste')).not.toBeInTheDocument();
   });
 
   it('slider change triggers dry-run after 300ms debounce', async () => {
@@ -233,6 +342,74 @@ describe('TuningView', () => {
       },
       { timeout: 2000 },
     );
+  }, 10000);
+
+  it('names every contributor of a group mover, not just the submitter of record', async () => {
+    // A mover row says "this score moves by N under the proposed weights", and
+    // the score belongs to the SCOPE. Naming only `student` charged the swing
+    // to one partner of a pair — and which partner that was had been decided by
+    // an ingest race.
+    //
+    // The override is registered BEFORE render because the view fires a dry run
+    // on load to draw the "before" histogram; MSW takes the last handler
+    // registered, so this one answers that first call.
+    setupHandlers();
+    mswServer.use(
+      http.put(`/api/v1/semesters/${DEFAULT_SEMESTER_ID}/heuristic-config`, async ({ request }) => {
+        const url = new URL(request.url);
+        if (url.searchParams.get('dryRun') !== 'true') return HttpResponse.json({});
+        return HttpResponse.json({
+          ...DRY_RUN_DIFF,
+          diff: {
+            ...DRY_RUN_DIFF.diff,
+            top_movers: [
+              {
+                ...DRY_RUN_DIFF.diff.top_movers[0],
+                contributors: [
+                  makeSoloContributor(MOVER_ALICE, MOVER_NO_SCORE),
+                  makeSoloContributor(MOVER_BOB, MOVER_NO_SCORE),
+                ],
+              },
+            ],
+          },
+        });
+      }),
+    );
+    renderTuningView();
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('top-movers')).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+    expect(screen.getByText('Alice, Bob')).toBeInTheDocument();
+  }, 10000);
+
+  it('falls back to the submitter of record for a response predating contributors', async () => {
+    setupHandlers();
+    mswServer.use(
+      http.put(`/api/v1/semesters/${DEFAULT_SEMESTER_ID}/heuristic-config`, async ({ request }) => {
+        const url = new URL(request.url);
+        if (url.searchParams.get('dryRun') !== 'true') return HttpResponse.json({});
+        return HttpResponse.json({
+          ...DRY_RUN_DIFF,
+          diff: {
+            ...DRY_RUN_DIFF.diff,
+            top_movers: [{ ...DRY_RUN_DIFF.diff.top_movers[0], contributors: [] }],
+          },
+        });
+      }),
+    );
+    renderTuningView();
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('top-movers')).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+    expect(screen.getByText('Alice')).toBeInTheDocument();
   }, 10000);
 
   it('slider change within 300ms does NOT trigger dry-run (debounce)', async () => {

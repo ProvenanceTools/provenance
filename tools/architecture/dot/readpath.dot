@@ -24,7 +24,7 @@ digraph readpath {
     fontcolor="#4b90f7" color="#16294a" penwidth=1.5 style=rounded
     bgcolor="#0a0f18" labeljust="l"
     node [fillcolor="#0d1c33" color="#4b90f7" fontsize=9.5]
-    pgq [label="SELECT\nsubmissions · flags · per_file_stats\nvalidation_results · cross_flags"]
+    pgq [label="SELECT\nsubmissions · flags · per_file_stats\nvalidation_results · cross_flags\ncross_flag_exclusions"]
     pg  [label="Postgres" shape=cylinder height=0.55]
   }
 
@@ -39,8 +39,10 @@ digraph readpath {
     blob  [label="Blob store\nthe stored bundle —\nprovenance-only, no source"
            shape=cylinder fillcolor="#0d1c33" color="#4b90f7" height=0.7]
     parse [label="unzip + parse every .slog"]
+    stamp [label="establishBundleTrust, then\nestablishBundleContributors\nstamps bundle.contributors IN PLACE —\ninside the cached region, so it costs\nonce per parse, never once per read"
+           fillcolor="#1e1830" color="#9d7bf5"]
     idx   [label="EventIndex\nordered access, per-session views"]
-    recon [label="reconstructFileWithProvenance\nreplays edits to rebuild file content,\ntagging every line typed / pasted / external"]
+    recon [label="reconstructFileSegmentedWithProvenance\nreplays edits to rebuild file content, tagging every\nline typed / pasted / external. Answers in THREE states:\ndeterminate · concurrent · unknown — the server route\nreturns FILE_RECONSTRUCTION_CONCURRENT / _UNKNOWN with an\nempty body rather than linearizing two clocks."]
     ret   [label="{ bundle, index }" shape=note]
   }
 
@@ -49,18 +51,20 @@ digraph readpath {
   pgq -> pg
   pg -> pgq [label="rows" color="#4b90f7" dir=back]
 
-  r_over   -> lsi [label="AND re-parses for\nthe session list" color="#e8559c" style=dashed]
+  r_over   -> lsi [label="AND re-parses for the session list\nand the assignment manifest —\nthe capture policy that was in force" color="#e8559c" style=dashed]
   r_time   -> lsi [color="#e8559c"]
   r_replay -> lsi [color="#e8559c"]
   r_recomp -> lsi [color="#e8559c"]
   r_src    -> fetch [label="own loadBundle + buildIndex —\nbypasses the LRU-cached index" color="#e8559c" style=dashed]
+  r_src    -> pgq [label="chain-integrity GATE read from the stored\nvalidation_results.check_3_status — the tab\nno longer re-derives it with a live runValidation,\nso both surfaces quote one answer" color="#e8559c"]
 
   lsi -> cache
   cache -> ret   [label="hit" color="#3fbf62"]
   cache -> fetch [label="miss" color="#4b90f7"]
   fetch -> blob
   blob -> parse [color="#4b90f7"]
-  parse -> idx
+  parse -> stamp [color="#9d7bf5"]
+  stamp -> idx [label="root key from the server's own\nconfig — unset ⇒ “cannot check”,\nnever a finding" color="#9d7bf5"]
   idx -> ret
   idx -> recon [label="/files/:path/content\n(reconstructFile)" style=dashed color="#3fbf62"]
   recon -> ret [style=dashed color="#3fbf62"]

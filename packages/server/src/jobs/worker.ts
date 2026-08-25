@@ -37,8 +37,10 @@ import { eq, and } from 'drizzle-orm';
 import type PgBoss from 'pg-boss';
 import { getBoss, stopBoss, JOB_KINDS } from './pg-boss.js';
 import { getLogger } from '../logging.js';
-import { getDb } from '../db/client.js';
+import { getDb, type DrizzleDb } from '../db/client.js';
 import { getConfig } from '../config/index.js';
+import { configuredValidationOptions } from '../config/root-key.js';
+import { checkPoolMargin } from '../config/pool-margin.js';
 import { ingest_files, ingest_jobs, semesters } from '../db/schema.js';
 import { createStorageClient, storageConfigFromEnv } from '../services/storage/client.js';
 import { ingestStagingKey } from '../services/storage/keys.js';
@@ -55,13 +57,18 @@ import {
 } from '../services/ingest/stage-upload-job.js';
 import { recordIngestJobTerminal } from '../api/middleware/metrics.js';
 import { timePhase, recordPhase, dumpProfile } from './ingest-profile.js';
-import { dedupFile } from '../services/ingest/dedup.js';
+import { dedupFile, dedupByGroup, attachCoSubmitter } from '../services/ingest/dedup.js';
 import { parseBundlePhase } from '../services/ingest/parse-bundle-phase.js';
-import { matchStudent, type MatchStudentResult } from '../services/ingest/match-student.js';
+import {
+  matchStudent,
+  resolveSubmitterFromFilename,
+  type MatchStudentResult,
+} from '../services/ingest/match-student.js';
 import { createSubmission } from '../services/ingest/create-submission.js';
 import { computeAndStoreStats } from '../services/ingest/stats.js';
 import { runAndStoreValidation } from '../services/ingest/validation.js';
 import { runAndStoreHeuristics } from '../services/heuristics/run-per-submission.js';
+import { finalizeContributors } from '../services/contributors/finalize.js';
 import { withTransaction } from '../db/client.js';
 import { isTransientDbError } from '../db/transient-error.js';
 import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
@@ -85,6 +92,37 @@ interface IngestFilePayload {
 }
 
 // ---------------------------------------------------------------------------
+// Supersede bookkeeping
+// ---------------------------------------------------------------------------
+
+/**
+ * Flip the `ingest_files` rows of newly superseded submissions.
+ *
+ * Best-effort status bookkeeping for the ingest job report, deliberately run
+ * OUTSIDE the transaction that produced `submissionIds`: these rows can belong
+ * to OTHER ingest jobs, and pulling them into the writer's transaction would
+ * add a cross-job lock ordering the pipeline does not otherwise have. Both
+ * producers are idempotent — a retry recomputes the same id set and this update
+ * sets the same value — so a crash between the two leaves a stale status, never
+ * a wrong submission.
+ *
+ * Two producers: `createSubmission` (a new version supersedes prior ones) and
+ * `attachCoSubmitter` (a submission moves lineage onto its canonical
+ * co-submitter and supersedes what was already there).
+ */
+async function markIngestFilesSuperseded(
+  db: DrizzleDb,
+  submissionIds: readonly string[],
+): Promise<void> {
+  for (const oldSubId of submissionIds) {
+    await db
+      .update(ingest_files)
+      .set({ status: 'superseded' })
+      .where(eq(ingest_files.submission_id, oldSubId));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // startWorker
 // ---------------------------------------------------------------------------
 
@@ -100,6 +138,31 @@ export async function startWorker(): Promise<() => Promise<void>> {
   const db = getDb();
   const cfg = getConfig();
   const storageClient = createStorageClient(storageConfigFromEnv(cfg));
+
+  // Startup-only, non-fatal: warn (never fail) when INGEST_CONCURRENCY +
+  // INGEST_STAGE_CONCURRENCY + RECOMPUTE_MAX_PARALLEL leaves too little of
+  // DATABASE_POOL_MAX for everything else that shares this process's pool —
+  // HTTP request handling (--mode=all), the other batchSize:1 pg-boss queues
+  // registered below, and the retention/purge crons. See config/pool-margin.ts.
+  const poolMargin = checkPoolMargin(cfg);
+  if (poolMargin.thin) {
+    logger.warn(
+      {
+        DATABASE_POOL_MAX: cfg.DATABASE_POOL_MAX,
+        INGEST_CONCURRENCY: cfg.INGEST_CONCURRENCY,
+        INGEST_STAGE_CONCURRENCY: cfg.INGEST_STAGE_CONCURRENCY,
+        RECOMPUTE_MAX_PARALLEL: cfg.RECOMPUTE_MAX_PARALLEL,
+        concurrencySum: poolMargin.concurrencySum,
+        margin: poolMargin.margin,
+        minMargin: poolMargin.minMargin,
+      },
+      'worker: DATABASE_POOL_MAX has thin headroom above INGEST_CONCURRENCY + ' +
+        'INGEST_STAGE_CONCURRENCY + RECOMPUTE_MAX_PARALLEL — HTTP request handling, the ' +
+        'other pg-boss queues, and the retention/purge crons all draw from the same pool. ' +
+        'Consider raising DATABASE_POOL_MAX or lowering a concurrency knob (see ' +
+        'docs/admin-guide.md §2.6).',
+    );
+  }
 
   // -------------------------------------------------------------------------
   // Ensure queues exist (pg-boss v10 requires explicit queue creation before
@@ -270,28 +333,94 @@ export async function startWorker(): Promise<() => Promise<void>> {
       }
 
       // -----------------------------------------------------------------------
-      // Phase 2: Dedup
+      // Phase 2: Dedup — per (semester, blob) for every path (D9).
       //
-      // Hinted (Gradescope) files dedup per (semester, student, blob); normal
-      // files dedup per (semester, blob). See dedupFile docs.
+      // The Gradescope path used to dedup per (semester, student, blob) so that
+      // each co-submitter of one group bundle got their own submission row.
+      // That fan-out is gone: identical bytes are the same artifact, so the
+      // duplicate is linked to the existing submission and the CO-SUBMITTER is
+      // attached to it as a contributor. The student is preserved — which is
+      // all the narrow dedup was protecting — without a second row and a second
+      // copy of the blob. See dedupFile docs.
       // -----------------------------------------------------------------------
       recordPhase('setup:db_lookups', performance.now() - handlerStart);
 
-      const dedupResult = await timePhase('dedup', () =>
-        dedupFile(db, semesterId, fileRow.blob_sha256, hintedStudentId ?? undefined),
-      );
+      // The DECLARED group is checked FIRST (migration 0033). A Gradescope
+      // group submission is one artifact belonging to N people, fanned out into
+      // N ingest_files rows; blob dedup collapses them only because
+      // `local-path.ts` gives every row identical bytes, which is a detail of
+      // that function rather than an invariant. Keying on the declaration means
+      // a byte divergence between two co-submitters can no longer split them
+      // into two submissions for the cross-heuristics to compare (S20).
+      //
+      // When both checks would fire they name the same submission; when only
+      // one does it is this one, because bytes can diverge and the declaration
+      // cannot. Falls through to the blob check for every non-Gradescope file,
+      // which is every file on the filename path.
+      const groupKeyForDedup = fileRow.source_group_key;
+      const dedupResult = await timePhase('dedup', async () => {
+        if (groupKeyForDedup !== null) {
+          const byGroup = await dedupByGroup(db, semesterId, groupKeyForDedup);
+          if (byGroup.isDuplicate) return byGroup;
+        }
+        return dedupFile(db, semesterId, fileRow.blob_sha256);
+      });
 
       if (dedupResult.isDuplicate) {
+        // WHO does this duplicate belong to?
+        //
+        // A hinted (Gradescope) file already knows: `match_sid` resolved above.
+        // A filename-path file does NOT — matching is phase 4, and phase 4 is
+        // three phases after this one, so `hintedStudentId` is null here for
+        // every non-Gradescope upload.
+        //
+        // Gating the attach on the hint therefore erased the second student of
+        // any byte-identical pair on the filename path: `status: 'duplicate'`,
+        // `matched_student_id: null`, and NO contributor row — the exact S20
+        // erasure `attachCoSubmitter` exists to prevent, reached without
+        // Gradescope being involved at all. It was masked only by timing: when
+        // the two files raced past phase 2 together the late-duplicate branch in
+        // phase 5 caught the loser instead, by which point phase 4 had run and
+        // `studentId` was known. Whether a student survived depended on how the
+        // batch interleaved.
+        //
+        // So resolve the submitter from the filename here too. It needs no
+        // bundle: the student half of the match is the regex `sid` capture plus
+        // the roster, and only the ASSIGNMENT half needs the manifest.
+        const duplicateStudentId =
+          hintedStudentId ??
+          (await timePhase('match_student', () =>
+            resolveSubmitterFromFilename(
+              semesterId,
+              filenameConvention,
+              fileRow.original_filename,
+              rosterResolver,
+            ),
+          ));
+
+        // A co-submitter joins the existing submission rather than being
+        // silently erased by the duplicate (census scenario S20). Idempotent.
+        if (duplicateStudentId !== null) {
+          const superseded = await timePhase('attach_co_submitter', () =>
+            attachCoSubmitter(db, dedupResult.existingSubmissionId, semesterId, duplicateStudentId),
+          );
+          await markIngestFilesSuperseded(db, superseded);
+        }
+
         await db
           .update(ingest_files)
           .set({
             status: 'duplicate',
             submission_id: dedupResult.existingSubmissionId,
+            matched_student_id: duplicateStudentId,
             resolved_at: new Date(),
           })
           .where(eq(ingest_files.id, ingestFileId));
 
-        logger.info({ ingestFileId }, 'ingest_file: duplicate detected');
+        logger.info(
+          { ingestFileId, attachedCoSubmitter: duplicateStudentId !== null },
+          'ingest_file: duplicate detected',
+        );
         await maybeEnqueueFinalize(boss, db, ingestJobId);
         return;
       }
@@ -377,7 +506,7 @@ export async function startWorker(): Promise<() => Promise<void>> {
       const recorderVersion = '';
       const formatVersion = bundle.manifest.format_version;
 
-      const submissionResult = await timePhase('create_submission', () =>
+      const createOutcome = await timePhase('create_submission', () =>
         createSubmission(
           { db, storageClient },
           {
@@ -390,9 +519,48 @@ export async function startWorker(): Promise<() => Promise<void>> {
             ingestJobId,
             recorderVersion,
             formatVersion,
+            sourceGroupKey: groupKeyForDedup,
           },
         ),
       );
+
+      // A LATE duplicate: a concurrent file in this same batch committed these
+      // exact bytes while we were between phase 2 and phase 5. Phase 2 cannot
+      // see it (separate transactions, `Promise.all` over the batch), so
+      // createSubmission re-checks under an advisory lock and reports it rather
+      // than creating a second submission for one artifact.
+      //
+      // Same handling as the phase-2 dedup hit: the artifact is not duplicated,
+      // and the co-submitter is attached to it so the person is not lost.
+      if (createOutcome.kind === 'duplicate') {
+        if (studentId !== null) {
+          const superseded = await timePhase('attach_co_submitter', () =>
+            attachCoSubmitter(db, createOutcome.existingSubmissionId, semesterId, studentId),
+          );
+          await markIngestFilesSuperseded(db, superseded);
+        }
+
+        await db
+          .update(ingest_files)
+          .set({
+            status: 'duplicate',
+            submission_id: createOutcome.existingSubmissionId,
+            matched_student_id: studentId,
+            matched_assignment_id: null,
+            filename_capture: filenameCapture,
+            resolved_at: new Date(),
+          })
+          .where(eq(ingest_files.id, ingestFileId));
+
+        logger.info(
+          { ingestFileId, attachedCoSubmitter: studentId !== null },
+          'ingest_file: late duplicate detected at create_submission',
+        );
+        await maybeEnqueueFinalize(boss, db, ingestJobId);
+        return;
+      }
+
+      const submissionResult = createOutcome;
       // Blob has been moved out of staging — past here a retry cannot re-parse.
       submissionCreated = true;
 
@@ -410,14 +578,9 @@ export async function startWorker(): Promise<() => Promise<void>> {
         // Update older submissions' ingest_files rows to 'superseded'.
         // Note: older ingest_files rows may be from a different ingest_job,
         // so we look them up by submission_id.
-        await timePhase('supersede', async () => {
-          for (const oldSubId of submissionResult.supersededIds) {
-            await db
-              .update(ingest_files)
-              .set({ status: 'superseded' })
-              .where(eq(ingest_files.submission_id, oldSubId));
-          }
-        });
+        await timePhase('supersede', () =>
+          markIngestFilesSuperseded(db, submissionResult.supersededIds),
+        );
       }
 
       // Lever B: build the chronological index ONCE and share it across the
@@ -439,7 +602,12 @@ export async function startWorker(): Promise<() => Promise<void>> {
             let validationReport;
             try {
               validationReport = await timePhase('run_validation', () =>
-                runAndStoreValidation(tx, submissionResult.submissionId, bundle),
+                runAndStoreValidation(
+                  tx,
+                  submissionResult.submissionId,
+                  bundle,
+                  configuredValidationOptions(),
+                ),
               );
             } catch (e) {
               const cause = e instanceof Error ? e.message : String(e);
@@ -459,6 +627,24 @@ export async function startWorker(): Promise<() => Promise<void>> {
             } catch (e) {
               const cause = e instanceof Error ? e.message : String(e);
               throw Object.assign(new Error(cause), { phase: 'run_heuristics' as const });
+            }
+            // Contributor stage (D9/D14). AFTER heuristics, deliberately — it
+            // stamps the bundle with `establishBundleContributors`, which
+            // several heuristics read, so stamping earlier would change which
+            // flags ingest produces. See services/contributors/finalize.ts.
+            try {
+              await timePhase('store_contributors', () =>
+                finalizeContributors(
+                  tx,
+                  submissionResult.submissionId,
+                  semesterId,
+                  bundle,
+                  studentId === null ? [] : [studentId],
+                ),
+              );
+            } catch (e) {
+              const cause = e instanceof Error ? e.message : String(e);
+              throw Object.assign(new Error(cause), { phase: 'store_contributors' as const });
             }
             await tx
               .update(ingest_files)

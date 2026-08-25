@@ -14,16 +14,17 @@ The full design lives in [`docs/prd.md`](docs/prd.md). Code conventions for work
 
 ## Packages
 
-Provenance is an npm workspace of five packages. Each builds on `log-core`; none of the
+Provenance is an npm workspace of six packages. Each builds on `log-core`; none of the
 top-level packages depend on each other's source.
 
-| Package                                  | What it is                                                                                                                                                                                                                                                                                                                                                                       |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`packages/log-core`](packages/log-core) | The log format shared by every other package: event types, JCS canonicalization, the hash chain, the validator, ndjson serialization, bundle and manifest shapes, and ed25519 manifest verification. Pure TypeScript with zero dependencies on VS Code, Node, or the DOM, so the same code runs in the extension, the browser, and the server.                                   |
-| [`packages/recorder`](packages/recorder) | The VS Code extension that records a tamper-evident `.provenance` log while a student works: all PRD §4 event types, three-signal paste detection, external-change detection, a per-session signing keypair, signed checkpoints, chain recovery, bundle sealing, and a disk-full degraded mode.                                                                                  |
-| [`packages/shared`](packages/shared)     | The Zod schemas that define the HTTP API contract, imported by both the server and the analyzer so the two stay in sync.                                                                                                                                                                                                                                                         |
-| [`packages/analyzer`](packages/analyzer) | The React/Vite single-page app course staff use to review submissions: Google OAuth login, semester switcher, a virtualized cohort list, per-submission drill-in (overview / timeline / replay / validation), a 25-flag heuristics tuning UI (per-flag weight + on/off), and cross-submission flags. A standalone `/local` route runs entirely in-browser from a dropped `.zip`. |
-| [`packages/server`](packages/server)     | The Node.js + Hono API server: PostgreSQL via Drizzle ORM, Google OAuth with sessions and API tokens, the ZIP ingest pipeline (parse → match → heuristics → cross-flags), a pg-boss job queue, an OpenAPI 3.1 spec with Redoc, Prometheus metrics, and retention/purge cron jobs. Object storage is S3-compatible (MinIO in dev).                                                |
+| Package                                            | What it is                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`packages/log-core`](packages/log-core)           | The log format shared by every other package: event types, JCS canonicalization, the hash chain, the validator, ndjson serialization, bundle and manifest shapes, and ed25519 manifest verification. Pure TypeScript with zero dependencies on VS Code, Node, or the DOM, so the same code runs in the extension, the browser, and the server.                                                                                     |
+| [`packages/recorder`](packages/recorder)           | The VS Code extension that records a tamper-evident `.provenance` log while a student works: all PRD §4 event types, three-signal paste detection, external-change detection, a per-session signing keypair, signed checkpoints, chain recovery, bundle sealing, and a disk-full degraded mode.                                                                                                                                    |
+| [`packages/shared`](packages/shared)               | The Zod schemas that define the HTTP API contract, imported by both the server and the analyzer so the two stay in sync.                                                                                                                                                                                                                                                                                                           |
+| [`packages/analysis-core`](packages/analysis-core) | The analysis engine shared by the analyzer and the server: the bundle loader (unzip + parse), the validation checks, the event index and file reconstruction, and the per-submission and cross-submission heuristics. Isomorphic — the same code runs in the browser and in Node — so it depends only on `log-core` plus `jszip`, `diff`, and `@noble/ed25519`.                                                                    |
+| [`packages/analyzer`](packages/analyzer)           | The React/Vite single-page app course staff use to review submissions: Google OAuth login, semester switcher, a virtualized cohort list, per-submission drill-in (overview / timeline / replay / validation / export / source — the Export tab is a v3.1 stub), a 29-flag heuristics tuning UI (per-flag weight + on/off), and cross-submission flags. A standalone `/local` route runs entirely in-browser from a dropped `.zip`. |
+| [`packages/server`](packages/server)               | The Node.js + Hono API server: PostgreSQL via Drizzle ORM, Google OAuth with sessions and API tokens, the ZIP ingest pipeline (parse → match → heuristics → cross-flags), a pg-boss job queue, an OpenAPI 3.1 spec with Redoc, Prometheus metrics, and retention/purge cron jobs. Object storage is S3-compatible (MinIO in dev).                                                                                                  |
 
 ## Quickstart — development environment
 
@@ -128,10 +129,12 @@ npm run dev --workspace=packages/analyzer
 
 Visit `http://localhost:5173`. Sign in with a Google account in `AUTH_ALLOWED_HOSTED_DOMAINS`.
 
-### Offline / local mode (no server required)
+### Offline / local mode (no server round-trip)
 
-Visit `http://localhost:5173/local/load` and drop a `.zip` bundle. No authentication
-is required, and it runs entirely in-browser — no data leaves your machine.
+Visit `http://localhost:5173/local/load` and drop a `.zip` bundle. It runs entirely
+in-browser on top of `analysis-core` — no bundle data leaves your machine. You still
+have to be **signed in as staff**: the route sits behind `RequireAuth` +
+`RequireStaff` like the rest of the app.
 
 ### Run the recorder extension
 
@@ -146,6 +149,7 @@ The student-facing description that ships with the VSIX lives at
 ### Documentation
 
 - [`docs/admin-guide.md`](docs/admin-guide.md) — hosting, Google OAuth setup, retention policy, backups, restore drill
+- [`docs/key-management.md`](docs/key-management.md) — every key in the system: who holds it, what it signs, setup, rotation
 - [`docs/api-quickstart.md`](docs/api-quickstart.md) — Python and curl examples for the v3 API
 - [`packages/server/README.md`](packages/server/README.md) — server-specific dev instructions
 
@@ -162,6 +166,7 @@ provenance/
 │   ├── log-core/              # shared event types, hash chain, format
 │   ├── recorder/              # VS Code extension
 │   ├── shared/                # Zod API schemas shared by server + analyzer
+│   ├── analysis-core/         # isomorphic analysis engine (loader, validation, heuristics)
 │   ├── analyzer/              # React/Vite SPA frontend
 │   └── server/                # Node.js + Hono API server
 ├── tools/                     # dev scripts (key generation, manifest signing)
@@ -181,7 +186,7 @@ provenance/
 
 | Command                                                  | What it does                                                                      |
 | -------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `npm run build`                                          | TypeScript build for both packages.                                               |
+| `npm run build`                                          | Build all six workspace packages.                                                 |
 | `npm run test`                                           | Vitest unit tests across all workspaces (~1200 total).                            |
 | `npm run typecheck`                                      | `tsc --noEmit` across the workspace.                                              |
 | `npm run lint`                                           | ESLint + Prettier check.                                                          |
@@ -191,63 +196,237 @@ provenance/
 
 ## Course staff: key & manifest workflow
 
-The recorder verifies every `.provenance-manifest` manifest against an ed25519 public key embedded in the extension. The keypair is generated **offline** on a secured machine; the private key never enters the repo.
+The recorder verifies every `.provenance-manifest` manifest through a two-level trust
+chain (Manifest 2.0; full design in
+[`docs/superpowers/specs/2026-08-18-multicourse-program-architecture.md`](docs/superpowers/specs/2026-08-18-multicourse-program-architecture.md) §2–§3):
 
-**Generate the course keypair** (once, on a secured machine):
-
-```sh
-node --experimental-strip-types tools/generate-course-keypair.ts /Volumes/SECURE/cs61a-fa26.json
+```
+  root keypair            (maintainer; offline; once, ever; NEVER signs a manifest)
+        │ signs
+        ▼
+  course_cert             { course_id, course_pubkey, valid_from, valid_until }
+        │ authorizes
+        ▼
+  course keypair          (course staff; signs .provenance-manifest files)
+        │ signs
+        ▼
+  .provenance-manifest
 ```
 
-The public key is printed to stdout (paste into a clipboard or pipe into the production build). The private key is written to the chosen path with mode `0600`. Back it up to physical media.
+The root key also certifies the deployment's **institution key**, which is what signs
+student credentials — a separate branch of the same chain, covered in step 3 below.
 
-**Author the unsigned `.provenance-manifest`** in the assignment starter folder. Drop this file at the workspace root the students will open:
+For the whole picture — every key, who holds it, what its compromise costs, and how
+rotation works — see [`docs/key-management.md`](docs/key-management.md).
+
+Every staff tool has an npm script, so nothing here needs a `node` invocation:
+
+| Script                          | Tool                               | What it does                                               |
+| ------------------------------- | ---------------------------------- | ---------------------------------------------------------- |
+| `npm run keygen:course`         | `tools/generate-course-keypair.ts` | Generate an ed25519 keypair (root, course, or institution) |
+| `npm run mint:course-cert`      | `tools/mint-course-cert.ts`        | Root-sign a `course_cert`                                  |
+| `npm run mint:institution-cert` | `tools/mint-institution-cert.ts`   | Root-sign an `institution_cert`                            |
+| `npm run sign:manifest`         | `tools/sign-manifest.ts`           | Sign a `.provenance-manifest`                              |
+
+Pass tool flags after `--` (e.g. `npm run mint:course-cert -- --course-id …`). Each
+script is a thin wrapper around `node --experimental-strip-types tools/<tool>.ts`,
+which still works if you prefer to invoke it directly.
+
+The recorder embeds only the **root** public key — one VSIX build serves every course.
+A course's authority comes entirely from its root-signed `course_cert`, which travels
+**inline** inside every manifest that course signs, not from anything baked into the
+extension. `format_version: "1.0"` manifests (no trust chain, no `course_cert`) remain
+permanently supported for archived submissions; everything below produces 2.0 unless
+you pass `--format 1.0`.
+
+**The root private key is the highest-value secret in this system.** It transitively
+authorizes every course, past and future. Generate it once, offline, on a secured
+machine, exactly like a course keypair below — never inside this repo, never emailed,
+never logged. A dev root keypair is checked into `.notes/dev-root-keypair.json`
+(git-excluded, deliberately public/insecure) purely so local development and the test
+fixtures under `test-workspace/` have something to sign against; it must never be used
+for a real deployment.
+
+### 1. Root keypair (once, ever, offline)
+
+There is no dedicated root-keypair-generation tool. Use the course-keypair generator:
+it emits a plain ed25519 keypair in exactly the shape a root key needs
+(`{ public_key_hex, private_key_hex }`). Run it once, on an air-gapped or otherwise
+hardened machine, and back up the private key to physical media.
+
+```sh
+npm run keygen:course -- /Volumes/SECURE/root-keypair.json
+```
+
+Positional path only — do **not** pass `--course-id` here; that mints a _course_
+certificate, which is a different artifact.
+
+### 2. Course keypair + certificate (per course, at onboarding)
+
+**Generate the course keypair** (once per course, on a secured machine):
+
+```sh
+npm run keygen:course -- /Volumes/SECURE/cs61a-fa26.json
+```
+
+The public key is printed to stdout. The private key is written to the chosen path
+with mode `0600`. Back it up to physical media.
+
+**Mint the course's certificate**, using the ROOT keypair (typically a separate step
+run by whoever holds the root key, not by course staff):
+
+```sh
+npm run mint:course-cert -- \
+  --course-id berkeley-cs61a --course-pubkey <64-hex-from-generate-step> \
+  --valid-from 2026-08-20 --valid-until 2027-01-15 \
+  --root-keypair /Volumes/SECURE/root-keypair.json \
+  --out /Volumes/SECURE/cs61a-fa26.cert.json
+```
+
+Keep the validity window short (one semester) — an offline recorder cannot learn about
+key revocation, so a short window is the only mitigation. The certificate is
+self-verified against the root public key before being written; a tool that hands out
+a certificate that fails its own check is worse than no tool.
+
+`npm run keygen:course` can also do both steps in one run — pass `--course-id`,
+`--valid-from`, `--valid-until` (and optionally `--root-keypair` / `--cert-out`)
+alongside the output path — whenever the same machine holds both keys.
+
+### 3. Institution keypair + certificate (once per deployment)
+
+Only needed if the deployment issues **student credentials** (identity
+`format_version` 2.1 — the `/enroll` page). Without it,
+`POST /api/v1/identity/credential` answers `503 no_institution_key` forever.
+
+There is one institution key per deployment, not one per course. Generate the keypair
+**on the server**, carry only its public half to the offline root machine, mint there,
+and bring the certificate back:
+
+```sh
+# on the API server
+npm run keygen:course -- /secure/institution-keypair.json     # positional path only
+
+# on the offline root machine, with the public key from above
+npm run mint:institution-cert -- \
+  --institution-id berkeley --institution-pubkey <64-hex-from-generate-step> \
+  --valid-from 2026-08-20 --valid-until 2027-08-19 \
+  --root-keypair /Volumes/SECURE/root-keypair.json \
+  --out /Volumes/SECURE/berkeley-institution.cert.json
+```
+
+Then set both halves in one environment variable on the server:
+
+```sh
+PROVENANCE_INSTITUTION_KEY='{"private_key_hex":"<64 hex>","cert":<the cert JSON>}'
+```
+
+The institution private key never leaves the server; the root private key never
+touches it. Full operator detail — rotation, blast radius, handling rules — is in
+[`docs/admin-guide.md`](docs/admin-guide.md) §10.6, "The institution signing key".
+
+### 4. Manifest signing (per assignment)
+
+**Author the unsigned `.provenance-manifest`** in the assignment starter folder. Drop
+this file at the workspace root the students will open:
 
 ```json
 {
   "assignment_id": "hw03",
   "semester": "fa26",
   "issued_at": "2026-09-15T00:00:00Z",
-  "files_under_review": ["hw03.py"]
+  "files_under_review": ["hw03.py"],
+  "course_id": "berkeley-cs61a",
+  "collaboration": "solo",
+  "submission": "bundle",
+  "scope": "directory",
+  "policy": {
+    "capture": {
+      "selection_change": true,
+      "focus_change": true,
+      "terminal": true,
+      "heartbeat_interval_ms": 30000
+    }
+  }
 }
 ```
 
-Field rules (enforced by `parseManifest` in `packages/log-core/src/manifest.ts`):
+Field rules (enforced by `parseManifest` / `parseManifestValue` in
+`packages/log-core/src/manifest.ts`):
 
 - `assignment_id` — non-empty string, unique per assignment. Rotating it per assignment is what prevents replay of an old session against a new assignment (PRD §6).
 - `semester` — non-empty string, e.g. `"fa26"`.
 - `issued_at` — non-empty ISO 8601 UTC timestamp.
 - `files_under_review` — array of workspace-relative paths. Only files in this list get the in-memory expected-content model used for external-change detection (PRD §4.5). Other files are still recorded for workspace context.
+- `course_id` — MUST equal the `course_id` inside the certificate you sign with, or the manifest will fail its own chain check (program spec §3 step 3).
+- `collaboration` / `submission` / `scope` — `"solo" | "group"`, `"bundle" | "git"`, `"directory" | "repo"`.
+- `policy.capture` — the professor-facing capture controls (program spec §4). A course can turn capture down; a student cannot turn it off, because this block is inside the course-signed payload. Omit keys you don't want to change from the default (everything on, 30s heartbeat).
 
-Omit the `sig` field; the signer adds it. (If you re-sign an already-signed manifest, the old `sig` is stripped first.)
+Omit `sig` and `course_cert`; the signer adds both. (If you re-sign an already-signed manifest, the old `sig`/`course_cert` are stripped first.)
 
-**Sign a per-assignment manifest** (every time a new assignment is released):
+**Sign it**:
 
 ```sh
 PROVENANCE_COURSE_KEYPAIR_PATH=/Volumes/SECURE/cs61a-fa26.json \
-  node --experimental-strip-types tools/sign-manifest.ts /path/to/assignment-starter/.provenance-manifest
+PROVENANCE_COURSE_CERT_PATH=/Volumes/SECURE/cs61a-fa26.cert.json \
+  npm run sign:manifest -- /path/to/assignment-starter/.provenance-manifest
 ```
 
-The script strips any existing signature, canonicalizes the remaining fields (via JCS), signs with the private key, and writes the updated `.provenance-manifest` back to disk.
+The tool signs with the course private key, staples the certificate inline, then
+**self-verifies the full trust chain** (`verifyManifestChain`, root → cert → manifest)
+before writing anything to disk — it refuses to write a manifest that would not
+itself verify. Pass `--format 1.0` to emit the legacy shape instead (no `course_id` /
+`collaboration` / `submission` / `scope` / `policy` / `course_cert` — just the four
+original fields), which log-core continues to support permanently.
 
-**Produce a production VSIX** with the course public key embedded:
+### Production VSIX (root key — one build serves every course)
 
 ```sh
-PROVENANCE_COURSE_PUBLIC_KEY_HEX=<64-hex-from-generate-step> \
+PROVENANCE_ROOT_PUBLIC_KEY_HEX=<the maintainer's root public key> \
   npm run build:prod --workspace packages/recorder
 ```
 
-`build:prod` embeds the production key, builds, packages a VSIX, then restores the source file so further local work uses the dev key. The script refuses to run if the env var is missing, malformed, or matches the dev key — so a misconfigured release can never silently ship a dev VSIX.
+`build:prod` embeds the **root** public key (via `tools/embed-root-key.ts`), builds,
+packages a VSIX, then restores the source file so further local work uses the dev key.
+Unlike the old per-course-key model, this is done **once per root-key rotation, not
+once per course** — a course's authority is entirely in its `course_cert`, which the
+VSIX never needs to know about ahead of time. The script refuses to run if the env var
+is missing, malformed, or matches the dev root key, so a misconfigured release can
+never silently ship a dev VSIX.
 
-**Refresh the analyzer's known-good extension-hash list** so the new VSIX won't trip `extension_hash_mismatch` when staff load real submissions:
+Optionally also set `PROVENANCE_LEGACY_COURSE_PUBLIC_KEY_HEX` (the grandfathered
+single course key from before the root-key hierarchy) if this build still needs to
+activate against Manifest 1.x files in the field:
 
 ```sh
-npm run update-hashes -- --keypair /Volumes/SECURE/cs61a-fa26.json
+PROVENANCE_ROOT_PUBLIC_KEY_HEX=<the maintainer's root public key> \
+PROVENANCE_LEGACY_COURSE_PUBLIC_KEY_HEX=<the old course public key> \
+  npm run build:prod --workspace packages/recorder
 ```
 
-This runs the same `build:prod` pipeline as above (you can re-use the same keypair JSON instead of exporting the env var by hand), then hashes the bundled `dist/` and appends the result to `packages/analysis-core/src/heuristics/config/known-good-extension-hashes.json`. The script computes the hash with the same algorithm the recorder uses at seal time, so any VSIX produced by the same run will validate cleanly. Without `--keypair` (and with no `PROVENANCE_COURSE_PUBLIC_KEY_HEX` env var) the script falls back to bundling with the dev key and prints a loud warning — that hash will never match a real release.
+It's optional and only needed while 1.x manifests are still in the field; omitting it
+produces a VSIX that will not activate on 1.x manifests (2.0 only). See
+`legacy-course-public-key.ts` for the removal condition once every course has
+re-issued as 2.0.
 
-Other modes: `--show` (print current list), `--no-build` (hash an already-bundled `dist/`), `--hash <hex>` / `--remove <hex>` (manual entries), `--clear`.
+**Refresh the analyzer's known-good extension-hash list** so a new VSIX won't trip
+`extension_hash_mismatch`:
+
+```sh
+npm run update-hashes -- --root-keypair /Volumes/SECURE/root-keypair.json
+```
+
+This reads `public_key_hex` from the root keypair JSON, runs the same `build:prod`
+pipeline as above, and adds the resulting VSIX's `extension_hash` to the allowlist.
+If `PROVENANCE_LEGACY_COURSE_PUBLIC_KEY_HEX` is set in the environment, it's passed
+through to the build the same way — but note that embedding the legacy key changes
+the built `dist/` and therefore the hash, so a build with it set produces a different
+hash than one without. The script always hashes whatever `dist/` the build it just
+ran actually produced, so the recorded hash is correct for that variant; to allowlist
+both a 1.x-compatible and a 2.0-only VSIX, run the script twice, once with the var
+set and once without.
+
+Other modes: `--show` (print current list), `--no-build` (hash an already-bundled
+`dist/`), `--hash <hex>` / `--remove <hex>` (manual entries), `--clear`, `--help`.
 
 See [`docs/recorder.md`](docs/recorder.md) for the full security model and what the recorder defends against.
 

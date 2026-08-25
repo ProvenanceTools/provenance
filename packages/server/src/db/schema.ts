@@ -259,6 +259,19 @@ export const roster_entries = pgTable(
       .notNull()
       .default(sql`'{}'`),
     protected_index: integer('protected_index'),
+    /**
+     * The global institution-scoped `students.student_ref` this roster row
+     * belongs to, or NULL when no 2.1 credential holder matches its email yet.
+     *
+     * The link lives HERE, on the roster side, so that deleting a roster row
+     * cannot destroy an identity an archived bundle still needs — see migration
+     * 0025. Many roster rows (one per semester a student appears in) point at
+     * one student, so two roster rows matching one SSO identity is the normal
+     * case, not the 2.0-era `roster_ambiguous` conflict.
+     */
+    student_ref: uuid('student_ref').references(() => students.student_ref, {
+      onDelete: 'set null',
+    }),
     created_at: timestamp('created_at', { withTimezone: true })
       .notNull()
       .default(sql`now()`),
@@ -270,6 +283,7 @@ export const roster_entries = pgTable(
     unique('roster_entries_semester_sid_key').on(t.semester_id, t.sid),
     index('roster_entries_semester_id_idx').on(t.semester_id),
     unique('roster_entries_semester_protected_index_key').on(t.semester_id, t.protected_index),
+    index('roster_entries_student_ref_idx').on(t.student_ref),
   ],
 );
 
@@ -359,6 +373,24 @@ export const assignments = pgTable(
     assignment_id_str: text('assignment_id_str').notNull(),
     label: text('label').notNull().default(''),
     sort_order: integer('sort_order').notNull().default(0),
+    // The assignment's DECLARED SUBMISSION TYPE and scope resolution (program
+    // architecture §6 / migrations 0023 + 0026). A cloned repo can contain
+    // several `.provenance/` directories; each one is self-identifying, so the
+    // default accepts every sealed scope wherever it sits. Declaring a type
+    // narrows that, and makes a submission of the wrong shape fail rather than
+    // ingest as something it is not.
+    //   { mode: 'self_identifying' | 'bundle_zip' | 'repo_whole' | 'repo_scoped',
+    //     path_glob?: string, on_multiple: 'error' | 'ingest_all' }
+    // 'repo_scoped' was spelled 'path' before migration 0026; the parser still
+    // accepts the old name, so an un-migrated row behaves identically.
+    // This is the persisted DEFAULT — an individual ingest request may override
+    // it wholesale (see FinalizeUploadRequestSchema / the scope_* query params).
+    // Read+written over the API via AssignmentSummary.ingest_scope and
+    // PATCH/POST /semesters/:id/assignments.
+    // Narrowed by parseIngestScopeConfig (services/ingest/gradescope/repo-scopes.ts).
+    ingest_scope: jsonb('ingest_scope')
+      .notNull()
+      .default(sql`'{"mode":"self_identifying","on_multiple":"ingest_all"}'::jsonb`),
     created_at: timestamp('created_at', { withTimezone: true })
       .notNull()
       .default(sql`now()`),
@@ -386,6 +418,27 @@ export const ingest_jobs = pgTable(
     summary: jsonb('summary')
       .notNull()
       .default(sql`'{}'`),
+    /**
+     * Scope-resolution skip reasons, in WIRE shape (migration 0028):
+     * `[{ folder_key, scope_path, reason }]`.
+     *
+     * A skipped scope never becomes an `ingest_files` row — it has no blob and
+     * no bytes — so it is invisible to `summary`, which is nothing but a count
+     * of `ingest_files` statuses. This column is the only record that it
+     * existed at all, and it is what lets the chunked-upload route report
+     * skips through `GET /ingest/jobs/:jobId` instead of dropping them.
+     *
+     * NULLABLE WITH NO DEFAULT, deliberately:
+     *   - `null` — UNKNOWN: resolution has not completed for this job (still
+     *     staging, aborted part-way, or the job predates migration 0028).
+     *   - `[]`   — KNOWN AND EMPTY: resolution completed and skipped nothing.
+     * A default of `'[]'` would collapse those two into one value, which is the
+     * exact ambiguity this column exists to remove.
+     *
+     * Written once, by REPLACEMENT, via `recordIngestJobSkipped`. Never touched
+     * by `finalizeIngestJob` / `cancelIngestJob` / `failIngestJob`.
+     */
+    skipped: jsonb('skipped'),
     // True once all ingest_files rows for this job have been staged (no more
     // will be added). The streaming local-path stager sets this false while it
     // streams and true when done; maybeEnqueueFinalize will not finalize a job
@@ -428,9 +481,78 @@ export const submissions = pgTable(
     assignment_id: uuid('assignment_id')
       .notNull()
       .references(() => assignments.id, { onDelete: 'restrict' }),
-    student_id: uuid('student_id')
+    /**
+     * The SUBMITTER of record — whoever the filename match or the Gradescope
+     * `match_sid` named. NULLABLE since migration 0029 (D9, parent spec §7): a
+     * submission belongs to a SET of people, recorded in
+     * {@link submission_contributors}, and there is not always one roster row
+     * that owns it.
+     *
+     * It is NOT the version lineage. See {@link submissions.version_owner_key} —
+     * keying the version sequence on a nullable column would have destroyed
+     * both the unique constraint (Postgres NULLs are distinct) and the
+     * `FOR UPDATE` supersede lock (`WHERE student_id = NULL` matches nothing),
+     * silently in both cases.
+     */
+    student_id: uuid('student_id').references(() => roster_entries.id, {
+      onDelete: 'restrict',
+    }),
+    /**
+     * Stable lineage identifier for a submission with NO single owning roster
+     * entry. NULL for every solo submission; required exactly when
+     * `student_id` is null. Never the empty string
+     * (`submissions_group_key_check`) — a blank key would merge every such
+     * group into ONE lineage and supersede unrelated pairs' submissions.
+     */
+    group_key: text('group_key'),
+    /**
+     * The upstream Gradescope `(folderKey, scopePath)` this submission was
+     * ingested from, as `<folderKey>/<scopePath>`. NULL on every other path.
+     *
+     * NOT the version lineage key. That is `group_key` above, which feeds the
+     * GENERATED `version_owner_key`; this one feeds nothing and means only
+     * "which upstream submission produced this artifact". Kept separate on
+     * purpose — see migration 0033.
+     *
+     * UNIQUE per semester where non-null (`submissions_source_group_key`), so
+     * one Gradescope (folder, scope) is one submission whatever the rebuilt
+     * bytes do. That is what stops a byte divergence between two co-submitters
+     * from silently splitting a partner pair into two cross-compared
+     * submissions.
+     */
+    source_group_key: text('source_group_key'),
+    /**
+     * The version LINEAGE — "whose repeated submissions supersede each other".
+     *
+     * GENERATED ALWAYS by Postgres, and NOT NULL:
+     *
+     *   student_id IS NOT NULL -> 'student:' || student_id
+     *   student_id IS NULL     -> 'group:'   || group_key
+     *   both NULL              -> NULL, which the NOT NULL rejects
+     *
+     * Generated, not application-written, on purpose. The version sequence and
+     * the `FOR UPDATE` supersede lock are keyed on THIS, not on the now-nullable
+     * `student_id` — see `version-owner-key.ts` for why a nullable column
+     * cannot carry a version sequence. A derived column cannot disagree with
+     * its row: Postgres refuses any attempt to write it. So the correspondence
+     * is not a convention, and not a CHECK that the wrong value could still
+     * satisfy.
+     *
+     * For every row predating migration 0029 the derived value is
+     * `'student:' || student_id`, so `submissions_version_key` partitions the
+     * existing table exactly as it did before.
+     *
+     * Drizzle omits generated columns from INSERT/UPDATE, which is why no
+     * insert site — production or test — had to change.
+     */
+    version_owner_key: text('version_owner_key')
       .notNull()
-      .references(() => roster_entries.id, { onDelete: 'restrict' }),
+      .generatedAlwaysAs(
+        sql`(CASE
+            WHEN student_id IS NOT NULL THEN 'student:' || student_id::text
+            ELSE 'group:' || group_key
+          END)`,
+      ),
     blob_object_key: text('blob_object_key').notNull(),
     blob_sha256: text('blob_sha256').notNull(),
     recorder_version: text('recorder_version').notNull().default(''),
@@ -485,13 +607,17 @@ export const submissions = pgTable(
       .default(sql`now()`),
   },
   (t) => [
+    // Migration 0029: keyed on version_owner_key, NOT student_id. The column
+    // is NOT NULL, so this partitions the whole table with no NULL-distinctness
+    // escape hatch — see the migration header.
     unique('submissions_version_key').on(
       t.semester_id,
       t.assignment_id,
-      t.student_id,
+      t.version_owner_key,
       t.version_index,
     ),
     index('submissions_student_idx').on(t.semester_id, t.student_id),
+    index('submissions_version_owner_idx').on(t.semester_id, t.assignment_id, t.version_owner_key),
     index('submissions_blob_sha_idx').on(t.semester_id, t.blob_sha256),
     check(
       'submissions_score_max_severity_check',
@@ -505,6 +631,20 @@ export const submissions = pgTable(
       'submissions_recompute_status_check',
       sql`${t.recompute_status} IN ('fresh','stale','recomputing','error')`,
     ),
+    // Migration 0029: a blank group key would merge every keyless group into
+    // one lineage. The rest of the version-uniqueness answer is the GENERATED
+    // `version_owner_key` above, not a CHECK.
+    check('submissions_group_key_check', sql`${t.group_key} IS NULL OR ${t.group_key} <> ''`),
+    check(
+      'submissions_source_group_key_check',
+      sql`${t.source_group_key} IS NULL OR ${t.source_group_key} <> ''`,
+    ),
+    // `submissions_source_group_key` — partial UNIQUE (semester_id,
+    // source_group_key) WHERE source_group_key IS NOT NULL — exists in
+    // migration 0033 and is deliberately NOT mirrored here: this builder cannot
+    // express the WHERE, and an unqualified uniqueIndex() would declare a
+    // different, stronger constraint than the database actually holds. A mirror
+    // that overstates an invariant is worse than one that omits it.
     // submissions_cohort_idx (partial) is SQL-only; defined in migration 0006
     // and replaced in 0014 to cover severity_rank.
   ],
@@ -544,12 +684,26 @@ export const ingest_files = pgTable(
      *
      * When non-null, the worker matches this file to the roster by this `sid`
      * directly — taken from `submission_metadata.yml` — instead of applying the
-     * semester's `filename_convention` regex, and dedups per
+     * semester's `filename_convention` regex. Null for the normal /ingest path
+     * (filename-regex match). See services/ingest/gradescope/.
+     *
+     * The previous wording here described the PRE-0029 fan-out — "dedups per
      * (semester, student, blob) so co-submitters of one group bundle each get
-     * their own submission. Null for the normal /ingest path (filename-regex
-     * match, blob-only dedup). See services/ingest/gradescope/.
+     * their own submission". D9 removed that: dedup is blob-scoped again and a
+     * co-submitter is ATTACHED to the existing submission rather than given a
+     * second row and a second copy of the blob. See `dedupFile`.
      */
     match_sid: text('match_sid'),
+    /**
+     * The Gradescope `(folderKey, scopePath)` this row was fanned out from.
+     *
+     * The DECLARED group: every `ingest_files` row sharing this value names one
+     * artifact and one set of co-submitters. Before migration 0033 the group
+     * existed only as a local variable in `local-path.ts` and was reconstructed
+     * afterwards by byte identity, which is a coincidence rather than an
+     * invariant. NULL on every non-Gradescope path.
+     */
+    source_group_key: text('source_group_key'),
     error: jsonb('error'),
     created_at: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -561,6 +715,10 @@ export const ingest_files = pgTable(
     index('ingest_files_job_idx').on(t.ingest_job_id),
     index('ingest_files_blob_sha256_idx').on(t.blob_sha256),
     // ingest_files_unmatched_idx (partial) is SQL-only; defined in migration 0006.
+    check(
+      'ingest_files_source_group_key_check',
+      sql`${t.source_group_key} IS NULL OR ${t.source_group_key} <> ''`,
+    ),
     check(
       'ingest_files_status_check',
       sql`${t.status} IN ('pending','matched','unmatched','duplicate','failed','superseded','discarded')`,
@@ -707,6 +865,21 @@ export const flags = pgTable(
       .notNull()
       .default(sql`'{}'`),
     session_id: text('session_id').notNull().default(''),
+    /**
+     * Which contributor this finding is charged to (migration 0029, D14).
+     *
+     * `''` means SCOPE-LEVEL — the finding belongs to the submission and to no
+     * one person. That is the default and the honest answer whenever a flag's
+     * supporting events span more than one contributor, or none: §6 Rule 2
+     * says a finding names a person only when the evidence is established FOR
+     * THAT PERSON. Every pre-0029 flag is scope-level, so nothing about an
+     * existing flag's reading or score changes.
+     *
+     * A KEY rather than an FK to `submission_contributors.id` on purpose — see
+     * the migration header. Matches `session_id`'s existing shape in this same
+     * table.
+     */
+    contributor_key: text('contributor_key').notNull().default(''),
     heuristic_config_version: integer('heuristic_config_version').notNull(),
     created_at: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -716,6 +889,118 @@ export const flags = pgTable(
     index('flags_sub_idx').on(t.submission_id),
     index('flags_sem_heur_idx').on(t.semester_id, t.heuristic_id),
     index('flags_sem_sev_idx').on(t.semester_id, t.severity),
+    index('flags_contributor_idx').on(t.submission_id, t.contributor_key),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// submission_contributors  (parent spec §7 / D9 / migration 0029)
+// ---------------------------------------------------------------------------
+
+/**
+ * Who a submission is attributable to — one row per PERSON, not per session
+ * and not per upload.
+ *
+ * This replaces the fan-out in which one group bundle became N `submissions`
+ * rows with N duplicated blobs. Two sources feed it and are reconciled onto one
+ * row per human:
+ *
+ *  - the ROSTER side (the filename match, or the Gradescope `match_sid`) —
+ *    named, but silent about who actually recorded;
+ *  - the BUNDLE side (`analysis-core`'s `establishBundleContributors`, grouping
+ *    sessions on the verified `student_ref`) — the only side that can attribute
+ *    a finding to a person.
+ *
+ * ## Which contributors are representable, and which are deliberately not
+ *
+ * Only contributors that can be NAMED or PROVEN DISTINCT: roster submitters,
+ * and bundle-side `attributed` contributors. A verified contributor with no row
+ * on this semester's roster is kept with `roster_entry_id` NULL — D13's
+ * `unattributed` presentation, an administrative gap and never an integrity
+ * signal.
+ *
+ * Bundle-side `unattributed` sessions (no identity block — the ordinary,
+ * blameless state) get NO row: `analysis-core` gives each a SINGLETON key
+ * exactly because two of them are neither provably one person nor provably two,
+ * so a row per session would turn a five-session solo bundle into five apparent
+ * contributors. Bundle-side `unverifiable` sessions get no row either — an
+ * unbacked claim is a finding, and promoting it here is how a forged identity
+ * block would launder work onto whoever it names.
+ *
+ * ## The invariant that matters
+ *
+ * `submission_contributors_person_key` — UNIQUE (submission_id, roster_entry_id)
+ * WHERE roster_entry_id IS NOT NULL — is SQL-only (Drizzle cannot express a
+ * partial unique index; see migration 0029). A co-submitter who also recorded
+ * arrives from both sources, and two rows for one human would both duplicate
+ * them in the contributor list and SPLIT THEIR SCORE across two apparent
+ * people. The index makes that unrepresentable.
+ */
+export const submission_contributors = pgTable(
+  'submission_contributors',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    submission_id: uuid('submission_id')
+      .notNull()
+      .references(() => submissions.id, { onDelete: 'cascade' }),
+    /** Denormalised so semester-scoped reads need not join back to submissions. */
+    semester_id: uuid('semester_id')
+      .notNull()
+      .references(() => semesters.id, { onDelete: 'cascade' }),
+    /**
+     * `analysis-core`'s `Contributor.key` verbatim for a bundle-side
+     * contributor, or `'roster:<roster_entry_id>'` for a submitter with no
+     * recorded sessions. Deliberately the SAME string the analysis engine
+     * groups on, so the server cannot grow a second notion of contributor
+     * identity that drifts from the one that produced it.
+     */
+    contributor_key: text('contributor_key').notNull(),
+    /** `'roster'` | `'attributed'`. See the type-level docs above. */
+    kind: text('kind').notNull(),
+    /** NULL when the contributor is not on THIS semester's roster (D13). */
+    roster_entry_id: uuid('roster_entry_id').references(() => roster_entries.id, {
+      onDelete: 'restrict',
+    }),
+    /** The verified attribution primitive. Opaque — never a name, SID or email. */
+    student_ref: text('student_ref'),
+    student_pubkey: text('student_pubkey'),
+    /** How much of the scope this person recorded. Always 0 for `'roster'`. */
+    session_count: integer('session_count').notNull().default(0),
+    first_seen: timestamp('first_seen', { withTimezone: true }),
+    last_seen: timestamp('last_seen', { withTimezone: true }),
+    /** True when the roster side named them, whichever source produced the row. */
+    is_submitter: boolean('is_submitter').notNull().default(false),
+    // D14: per-contributor scoring, alongside the per-scope roll-up that stays
+    // on `submissions`. With ONE contributor these equal the scope values —
+    // that is what keeps a solo submission's rollup byte-identical.
+    score_total: doublePrecision('score_total').notNull().default(0),
+    score_max_severity: text('score_max_severity').notNull().default('info'),
+    flag_counts: jsonb('flag_counts')
+      .notNull()
+      .default(sql`'{"info":0,"low":0,"medium":0,"high":0}'::jsonb`),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    unique('submission_contributors_key_unique').on(t.submission_id, t.contributor_key),
+    index('submission_contributors_roster_idx').on(t.semester_id, t.roster_entry_id),
+    index('submission_contributors_submission_idx').on(t.submission_id),
+    check('submission_contributors_kind_check', sql`${t.kind} IN ('roster','attributed')`),
+    check(
+      'submission_contributors_shape_check',
+      sql`(${t.kind} = 'roster' AND ${t.student_ref} IS NULL AND ${t.roster_entry_id} IS NOT NULL)
+          OR (${t.kind} = 'attributed' AND ${t.student_ref} IS NOT NULL)`,
+    ),
+    check(
+      'submission_contributors_severity_check',
+      sql`${t.score_max_severity} IN ('info','low','medium','high')`,
+    ),
+    check('submission_contributors_session_count_check', sql`${t.session_count} >= 0`),
+    // submission_contributors_person_key (partial unique) is SQL-only; see
+    // migration 0029.
   ],
 );
 
@@ -885,9 +1170,302 @@ export const cross_flag_participants = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// cross_flag_exclusions  (spec S20 / §6 Rule 3 / migration 0031)
+// ---------------------------------------------------------------------------
+
+/**
+ * The cross-scope exclusion register: one row per repository lineage whose
+ * members were NOT compared against each other.
+ *
+ * **Its own table, deliberately not a row in `cross_flags`.** An exclusion is a
+ * fact about the recording ("these archives are the same repository"), never a
+ * finding about a person — §6 Rule 3, and the header of
+ * `analysis-core/coverage/cross-scope.ts` says so in as many words. A sentinel
+ * `heuristic_id` in the findings table would have given it a severity, a
+ * confidence and a place in a score by association with its neighbours.
+ *
+ * It exists because a suppressed comparison nobody is told about is
+ * indistinguishable from one that came back clean. The browser `/local` route
+ * has always shown this; the server-backed cross-flags view showed the
+ * suppression with no explanation for it until this table landed.
+ *
+ * Semester-scoped and replaced wholesale on every `recompute_cross_flags` run,
+ * in the SAME transaction and under the same advisory lock as the `cross_flags`
+ * DELETE-then-INSERT — so the findings and the register are never a run apart.
+ *
+ * `submission_ids` is an array rather than a child table because the row IS the
+ * lineage group, not a pair, and there is nothing per-member to carry. The cost
+ * is that array elements cannot be foreign keys: a since-deleted submission
+ * would linger until the next cross run rewrites the register. Retention never
+ * deletes submission rows (`docs/admin-guide.md` §6), and the read path LEFT
+ * joins, so a missing one degrades to an id rather than dropping the member.
+ * The array is stored SORTED — the partition's own order is keyed on synthetic
+ * per-run bundle ids, and persisting that would break retry idempotency.
+ */
+export const cross_flag_exclusions = pgTable(
+  'cross_flag_exclusions',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    semester_id: uuid('semester_id')
+      .notNull()
+      .references(() => semesters.id, { onDelete: 'cascade' }),
+    reason: text('reason').notNull(),
+    submission_ids: uuid('submission_ids').array().notNull(),
+    shared_commits: text('shared_commits')
+      .array()
+      .notNull()
+      .default(sql`'{}'`),
+    // Migration 0032. Empty for a lineage proved by commits alone, which is
+    // every row 0031 wrote — so the default makes those rows read correctly
+    // with no backfill.
+    shared_sessions: text('shared_sessions')
+      .array()
+      .notNull()
+      .default(sql`'{}'`),
+    excluded_pair_count: integer('excluded_pair_count').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    // Both created in the SQL migration; mirrored here for query-builder hints.
+    index('cross_flag_exclusions_sem_idx').on(t.semester_id),
+    check(
+      'cross_flag_exclusions_reason_check',
+      sql`${t.reason} IN ('same_repository_lineage', 'shared_recording_scope')`,
+    ),
+    // A lineage is 2 or more submissions. A one-member "exclusion" excludes
+    // nothing and would render as a suppression that never happened.
+    check('cross_flag_exclusions_members_check', sql`array_length(${t.submission_ids}, 1) >= 2`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// student_refs / student_enrollments  (program spec §5a — S2 identity)
+// ---------------------------------------------------------------------------
+
+/**
+ * The opaque `student_ref` ↔ roster mapping. See migration 0024 for the full
+ * rationale; the load-bearing points are:
+ *
+ *  - `student_ref` is a random UUID, never derived from an SID or an email,
+ *    because it travels in `session.start.identity` where a project partner
+ *    can read it.
+ *  - it is keyed on (semester_id, sid), so a student enrolling from a second
+ *    machine — or re-added by a roster commit — gets the SAME ref back and
+ *    their sessions do not fragment into two apparent contributors.
+ *  - `roster_entry_id` is a nullable convenience pointer (ON DELETE SET NULL):
+ *    deleting a roster row must not destroy the mapping an archived bundle
+ *    still needs.
+ */
+export const student_refs = pgTable(
+  'student_refs',
+  {
+    student_ref: uuid('student_ref')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    semester_id: uuid('semester_id')
+      .notNull()
+      .references(() => semesters.id, { onDelete: 'cascade' }),
+    roster_entry_id: uuid('roster_entry_id').references(() => roster_entries.id, {
+      onDelete: 'set null',
+    }),
+    sid: text('sid').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    unique('student_refs_semester_id_sid_key').on(t.semester_id, t.sid),
+    index('student_refs_roster_entry_idx').on(t.roster_entry_id),
+  ],
+);
+
+/**
+ * Which student PUBLIC keys have been bound to a `student_ref`, and when.
+ *
+ * Public material only. `superseded_at` records that a newer key was minted
+ * for the same student; it is bookkeeping, not enforcement — an issued token
+ * stays valid until `expires_at` so that an archived bundle signed under a
+ * superseded key still verifies during an adjudication.
+ */
+export const student_enrollments = pgTable(
+  'student_enrollments',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    student_ref: uuid('student_ref')
+      .notNull()
+      .references(() => student_refs.student_ref, { onDelete: 'cascade' }),
+    /** ed25519 public key of the server-held enrollment key that signed the token. */
+    enrollment_pubkey: text('enrollment_pubkey').notNull(),
+    /** The student's per-course ed25519 PUBLIC key, 64 lowercase hex. */
+    student_pubkey: text('student_pubkey').notNull(),
+    issued_at: timestamp('issued_at', { withTimezone: true }).notNull(),
+    expires_at: timestamp('expires_at', { withTimezone: true }).notNull(),
+    issue_count: integer('issue_count').notNull().default(1),
+    superseded_at: timestamp('superseded_at', { withTimezone: true }),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    unique('student_enrollments_ref_pubkey_key').on(t.student_ref, t.student_pubkey),
+    index('student_enrollments_student_ref_idx').on(t.student_ref),
+    index('student_enrollments_enrollment_pubkey_idx').on(t.enrollment_pubkey),
+    check('student_enrollments_student_pubkey_check', sql`${t.student_pubkey} ~ '^[0-9a-f]{64}$'`),
+    check(
+      'student_enrollments_enrollment_pubkey_check',
+      sql`${t.enrollment_pubkey} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check('student_enrollments_issue_count_check', sql`${t.issue_count} > 0`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// students  (identity format_version 2.1 — institution-scoped identity)
+// ---------------------------------------------------------------------------
+
+/**
+ * One row per human, per institution: the global opaque `student_ref` and the
+ * single long-lived public key that 2.1 student credentials are issued over.
+ * See migration 0025 for the full rationale; the load-bearing points are:
+ *
+ *  - a row is allocatable with NO roster row in existence. That is the entire
+ *    point of the redesign: rosters are populated by the Gradescope ingest
+ *    path, which runs only AFTER a student submits, so requiring a roster match
+ *    to mint (2.0's `not_on_roster`) meant a student could not obtain an
+ *    identity before their first submission. Roster membership is a question
+ *    answered later, not a precondition of having an identity.
+ *  - keyed on (`institution_id`, `sso_subject`) — the Google `sub` claim, not
+ *    the email. `sub` is stable across an email change and has no case
+ *    ambiguity; keying on a mutable attribute is how one person acquires two
+ *    refs and their sessions split into two apparent contributors.
+ *  - `student_ref` is a random UUID, never derived from the SSO subject, an
+ *    SID, or an email, because it travels in `session.start.identity` where a
+ *    project partner can read it.
+ *  - the `issued_at` / `expires_at` / `issue_count` columns are bookkeeping,
+ *    never enforcement. The 2.1 chain verifies entirely from inside the bundle
+ *    and consults no server, so re-issuing overwrites them without orphaning
+ *    the credential already in a student's hands — it stays valid until its own
+ *    signed `expires_at`, which is what lets an archived bundle verify years on.
+ *
+ * This does NOT replace `student_refs`. That table holds the per-semester,
+ * course-scoped 2.0 refs and stays live forever so archived bundles keep
+ * resolving; there is no join key between the two (2.0 is keyed by roster SID,
+ * 2.1 by SSO subject) and no correct row-level migration between them.
+ */
+export const students = pgTable(
+  'students',
+  {
+    student_ref: uuid('student_ref')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    institution_id: text('institution_id').notNull(),
+    /** The Google `sub` claim — stable, authenticated, opaque. */
+    sso_subject: text('sso_subject').notNull(),
+    /** The authenticated email, kept only to link roster rows by (lower()ed). */
+    sso_email: text('sso_email').notNull(),
+    /** The student's single long-lived ed25519 PUBLIC key. NULL before first issue. */
+    student_pubkey: text('student_pubkey'),
+    issued_at: timestamp('issued_at', { withTimezone: true }),
+    expires_at: timestamp('expires_at', { withTimezone: true }),
+    issue_count: integer('issue_count').notNull().default(0),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+    updated_at: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    unique('students_institution_sso_subject_key').on(t.institution_id, t.sso_subject),
+    // students_institution_email_lower_idx is a functional index
+    // (institution_id, LOWER(sso_email)) defined in migration 0025; Drizzle
+    // cannot express functional indexes in the schema.
+    check(
+      'students_student_pubkey_check',
+      sql`${t.student_pubkey} IS NULL OR ${t.student_pubkey} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check('students_issue_count_check', sql`${t.issue_count} >= 0`),
+  ],
+);
+
+/**
+ * Every 2.1 credential this server has ever issued. APPEND-ONLY.
+ *
+ * See migration 0027 for the full rationale. The load-bearing points:
+ *
+ *  - MULTIPLE MACHINES PER STUDENT IS THE SUPPORTED FLOW. Each machine derives
+ *    its own master secret and therefore its own keypair, signs in with the
+ *    same account, and gets its own credential over the SAME `student_ref`. So
+ *    one student legitimately has MANY public keys, and one row per issuance is
+ *    the only shape that can say so.
+ *  - `students.student_pubkey` holds only the most recent key and is
+ *    overwritten on every re-enrolment. That is fine for verification (a
+ *    credential is a signed artifact and consults no server) and useless for
+ *    adjudication, which asks a question about history: "was this key ever
+ *    issued to this student?". This table is what answers it — see
+ *    `services/enrollment/credential-history.ts`.
+ *  - there is deliberately NO unique key on (student_ref, student_pubkey) and
+ *    no `issue_count`. Two issuances are two facts with different `issued_at`,
+ *    and collapsing them is a smaller version of the overwrite this exists to
+ *    stop.
+ *  - PUBLIC MATERIAL ONLY. Nothing here would forge anything if disclosed; the
+ *    student's private half never leaves their machine.
+ *  - AUDIT MATERIAL. Nothing prunes it, ever. `ON DELETE RESTRICT` makes a
+ *    hypothetical future `students` deletion fail loudly rather than silently
+ *    take the trail with it.
+ *
+ * This does NOT replace `student_enrollments`, which holds archived 2.0
+ * per-course enrollments keyed through `student_refs`. The two eras share no
+ * join key (2.0 by roster SID, 2.1 by SSO subject); migration 0025 recorded why
+ * merging them is incorrect and that reasoning is unchanged.
+ */
+export const student_credentials = pgTable(
+  'student_credentials',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    student_ref: uuid('student_ref')
+      .notNull()
+      .references(() => students.student_ref, { onDelete: 'restrict' }),
+    /** Denormalised from `students`; it is inside the signed credential payload. */
+    institution_id: text('institution_id').notNull(),
+    /** The student's ed25519 PUBLIC key, 64 lowercase hex. One per machine. */
+    student_pubkey: text('student_pubkey').notNull(),
+    /** Copied from the SIGNED credential, so the row says what the artifact says. */
+    issued_at: timestamp('issued_at', { withTimezone: true }).notNull(),
+    expires_at: timestamp('expires_at', { withTimezone: true }).notNull(),
+    created_at: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    // THE adjudication index: "was this key ever issued to this student?".
+    index('student_credentials_ref_pubkey_idx').on(t.student_ref, t.student_pubkey),
+    // The reverse lookup: "this bundle carries a key — whose was it?".
+    index('student_credentials_institution_pubkey_idx').on(t.institution_id, t.student_pubkey),
+    check('student_credentials_student_pubkey_check', sql`${t.student_pubkey} ~ '^[0-9a-f]{64}$'`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Re-exported for convenience
 // ---------------------------------------------------------------------------
 
+export type StudentCredentialRow = typeof student_credentials.$inferSelect;
+export type NewStudentCredentialRow = typeof student_credentials.$inferInsert;
+export type Student = typeof students.$inferSelect;
+export type NewStudent = typeof students.$inferInsert;
+export type StudentRef = typeof student_refs.$inferSelect;
+export type NewStudentRef = typeof student_refs.$inferInsert;
+export type StudentEnrollment = typeof student_enrollments.$inferSelect;
+export type NewStudentEnrollment = typeof student_enrollments.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Session = typeof sessions.$inferSelect;

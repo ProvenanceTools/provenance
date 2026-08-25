@@ -247,6 +247,7 @@ export function makeMinimalIndex(): EventIndex {
 export function makeMinimalBundle(): Bundle {
   return {
     id: 'test-bundle-id',
+    droppedArtifacts: [],
     manifest: {
       format_version: '1.0' as const,
       assignment_id: 'hw1',
@@ -267,6 +268,10 @@ export function makeMinimalBundle(): Bundle {
         sessionId: 'abc',
         events: [],
         meta: {} as never,
+        slogSha256: 'a'.repeat(64),
+        slogSha256Lf: null,
+        tornTail: null,
+        metaSha256: 'b'.repeat(64),
         firstEvent: {
           seq: 0,
           kind: 'session.start',

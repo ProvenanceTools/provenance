@@ -22,7 +22,14 @@
 
 import { useContext, createContext } from 'react';
 import type { UseQueryResult } from '@tanstack/react-query';
-import type { SubmissionSummary, FlagRow, EventRow } from '@provenance/shared/api-schemas';
+import type {
+  SubmissionSummary,
+  FlagRow,
+  EventRow,
+  SubmittedContentSource,
+} from '@provenance/shared/api-schemas';
+
+export type { SubmittedContentSource };
 
 // ---------------------------------------------------------------------------
 // Sub-shapes returned by the provider hooks
@@ -56,6 +63,14 @@ export type ValidationCheckResult = {
 export type ValidationResults = {
   overall: 'pass' | 'warn' | 'fail';
   checks: ValidationCheckResult[];
+  /**
+   * When these results were computed — the server runs validation ONCE, at
+   * ingest, and every read serves that stored row. Without this on the wire the
+   * UI could not tell a grader how old the verdict in front of them is. Absent
+   * on the in-browser `/local` provider, which recomputes on load and so has no
+   * staleness to declare.
+   */
+  validated_at?: string | undefined;
 };
 
 export type FileListResult = {
@@ -66,7 +81,18 @@ export type FileContentResult = {
   content: string;
   at_seq: number;
   computed_at_ms: number;
+  /**
+   * `FILE_RECONSTRUCTION_TAINTED` — one content, best-effort.
+   * `FILE_RECONSTRUCTION_CONCURRENT` — two contributors' edits are unordered
+   * here, so there is NO single content and `content` is empty rather than one
+   * branch presented as the file (Tier 2.2).
+   * `FILE_RECONSTRUCTION_UNKNOWN` — the happens-before relation does not cover
+   * these events. A different fact from `CONCURRENT`: no record, versus two
+   * records that race.
+   */
   warning?: string | undefined;
+  /** Human-readable explanation for the warning, when one is available. */
+  warning_detail?: string | undefined;
 };
 
 export type ProvenanceRun = {
@@ -82,11 +108,21 @@ export type FileProvenanceResult = {
   at_seq: number;
 };
 
+/**
+ * Check 8 verdict for a submitted file.
+ *
+ * `'attachment'` is NOT a weaker `'unknown'`. Unknown means the check could
+ * not tell; attachment means the question does not apply, because the file
+ * was sealed and hashed but deliberately never captured (path scope). Never
+ * render it in the same bucket as `mismatch`, and never count it toward
+ * "files that failed check 8".
+ */
+export type SubmittedFileVerdict = 'match' | 'mismatch' | 'unknown' | 'attachment';
+
 export type SubmittedFileEntry = {
   path: string;
   status: 'present' | 'missing';
-  /** 'match' | 'mismatch' | 'unknown' — Check 8 verdict for this file. */
-  verdict: 'match' | 'mismatch' | 'unknown';
+  verdict: SubmittedFileVerdict;
   sha256: string | null;
 };
 
@@ -98,10 +134,25 @@ export type SubmittedFileListResult = {
 
 export type SubmittedFileContentResult = {
   path: string;
-  /** UTF-8 decoded content. */
+  /**
+   * UTF-8 decoded content. What this IS depends on `content_source` — read that
+   * before rendering it as the student's submission.
+   */
   content: string;
   status: 'present' | 'missing';
-  verdict: 'match' | 'mismatch' | 'unknown';
+  verdict: SubmittedFileVerdict;
+  /**
+   * `'submitted_bytes'` — the literal bytes sealed into the bundle (only the
+   * in-browser `/local` provider can produce this).
+   * `'event_replay'` — reconstructed by replaying the recording; the server can
+   * serve nothing else, because stored bundles are provenance-only. On a
+   * `mismatch` verdict this is provably NOT what was submitted.
+   *
+   * Absent (a server predating the field) is read as `'event_replay'`: the more
+   * caveated of the two, so an unknown provenance never gets upgraded into the
+   * claim that the pane is the submission.
+   */
+  content_source?: SubmittedContentSource | undefined;
 };
 
 export type EventQueryFilters = {

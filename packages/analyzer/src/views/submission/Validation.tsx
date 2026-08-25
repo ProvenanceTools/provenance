@@ -3,6 +3,14 @@
  *
  * Reads provider.useValidation() and renders all 8 check rows + overall status.
  * Replaces ValidationStub.
+ *
+ * These results are NOT computed on view. The server runs validation once, at
+ * ingest, and every read serves that stored `validation_results` row — which is
+ * deliberate (a re-run per page load would be expensive and non-deterministic
+ * across code changes). But a verdict with no date on it reads as current, so
+ * the panel prints when it was computed. `validated_at` was on the wire and in
+ * the OpenAPI schema all along; the client Zod schema was dropping it, which
+ * left staleness impossible to display even in principle.
  */
 
 import { CheckCircle2, XCircle, AlertCircle, Circle } from 'lucide-react';
@@ -26,6 +34,20 @@ const overallLabel: Record<string, string> = {
   warn: 'WARN',
   fail: 'FAIL',
 };
+
+// ---------------------------------------------------------------------------
+// validated_at formatting
+// ---------------------------------------------------------------------------
+
+/**
+ * Local-time rendering of the ISO timestamp, matching SessionsCard. Falls back
+ * to the raw string rather than printing "Invalid Date" if the server ever sends
+ * something unparseable.
+ */
+function formatValidatedAt(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
 
 // ---------------------------------------------------------------------------
 // CheckRow
@@ -135,6 +157,15 @@ export function Validation() {
           {badgeLabel}
         </span>
       </div>
+
+      {/* When these results were computed. Absent only on the in-browser
+          provider, which recomputes on load and so has no staleness to state. */}
+      {data.validated_at !== undefined && (
+        <p className="mb-4 text-xs text-gray-500" data-testid="validation-computed-at">
+          Computed once at ingest, on {formatValidatedAt(data.validated_at)}. These results are
+          served as recorded then, not recomputed for this page.
+        </p>
+      )}
 
       {/* Check rows */}
       <div className="space-y-1 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">

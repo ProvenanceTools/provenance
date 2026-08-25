@@ -1,0 +1,578 @@
+/**
+ * The three `session.start` capability reports, read off a real bundle
+ * (collaboration spec §5.6).
+ *
+ * ## What these tests are protecting
+ *
+ * The trap this whole change walks into is decision-log bug 12: an assertion
+ * about an ABSENT value is only meaningful if you know what the consumer does
+ * with absence. Absence is the UNIVERSAL case here — no recorder shipped to date
+ * emits any of these fields — so the first block below drives a bundle carrying
+ * none of them and pins what every consumer concludes from it. If any of those
+ * conclusions were `unavailable` / `impossible` / `not_watched`, every archived
+ * submission would start asserting that its own capture was broken.
+ *
+ * The second thing under protection is the `unavailable` / `not_owned`
+ * distinction. They lead to the same consequence (no `git.event`) and are
+ * different facts (no git integration on the machine vs. the assignment sitting
+ * outside every repository git could see). A grader acts differently on the two.
+ */
+
+import { describe, it, expect } from 'vitest';
+import { buildTestBundle } from '../test-support/build-test-bundle.js';
+import { loadBundle } from '../loader/parse-bundle.js';
+import type { Bundle } from '../loader/types.js';
+import {
+  readBundleCapabilities,
+  wasFileWatched,
+  gitObservationGap,
+  ignoredByAssignment,
+} from './session-capabilities.js';
+import type { BundleCapabilityFacts } from './session-capabilities.js';
+
+/**
+ * A minimal `BundleCapabilityFacts` carrying exactly one session's file scope,
+ * for testing `wasFileWatched` directly without round-tripping a bundle.
+ *
+ * `git`/`witness` are irrelevant to `wasFileWatched` and left `'absent'`.
+ */
+function factsWithFileScope(
+  fileScope: { watched: readonly string[]; complete: boolean },
+  opts?: { scopeCapped?: boolean },
+): BundleCapabilityFacts {
+  return {
+    sessions: [
+      {
+        sessionId: 's1',
+        git: { kind: 'absent' },
+        witness: { kind: 'absent' },
+        fileScope: { kind: 'recorded', watched: fileScope.watched, complete: fileScope.complete },
+      },
+    ],
+    counts: {
+      sessions: 1,
+      gitAvailable: 0,
+      gitUnavailable: 0,
+      gitNotOwned: 0,
+      gitUnreported: 1,
+      gitMalformed: 0,
+      witnessAvailable: 0,
+      witnessUnavailable: 0,
+      witnessUnreported: 1,
+      witnessMalformed: 0,
+      fileScopeReported: 1,
+      fileScopeIncomplete: fileScope.complete ? 0 : 1,
+      fileScopeUnreported: 0,
+      fileScopeMalformed: 0,
+    },
+    gitObservation: 'unknown',
+    gitImpossibleReason: null,
+    witnessing: 'unknown',
+    watchedFiles: [...fileScope.watched].sort(),
+    scopeCapped: opts?.scopeCapped ?? false,
+  };
+}
+
+/** A bundle whose sessions carry exactly the given `session.start` extras. */
+async function scope(...sessionStarts: Array<Record<string, unknown>>): Promise<Bundle> {
+  const { zipBuffer } = await buildTestBundle({
+    sessions: sessionStarts.map((sessionStart) => ({ eventCount: 2, sessionStart })),
+  });
+  const result = await loadBundle(new Blob([zipBuffer]), 'test.zip');
+  if (!result.ok) throw new Error(`Bundle load failed: ${JSON.stringify(result.error)}`);
+  return result.value;
+}
+
+// ---------------------------------------------------------------------------
+// Absence — the universal case
+// ---------------------------------------------------------------------------
+
+describe('a bundle whose recorder reports no capabilities at all', () => {
+  it('reads all three as UNREPORTED, never as a missing capability', async () => {
+    // This is EVERY bundle in existence. `{}` is not a special fixture — it is
+    // production, for every submission recorded before §5.6 landed.
+    const bundle = await scope({}, {});
+    const facts = readBundleCapabilities(bundle);
+
+    expect(facts.counts.sessions).toBe(2);
+    expect(facts.counts.gitUnreported).toBe(2);
+    expect(facts.counts.witnessUnreported).toBe(2);
+    expect(facts.counts.fileScopeUnreported).toBe(2);
+
+    // Nothing was reported as broken.
+    expect(facts.counts.gitUnavailable).toBe(0);
+    expect(facts.counts.gitNotOwned).toBe(0);
+    expect(facts.counts.witnessUnavailable).toBe(0);
+    expect(facts.counts.gitMalformed).toBe(0);
+    expect(facts.counts.witnessMalformed).toBe(0);
+    expect(facts.counts.fileScopeMalformed).toBe(0);
+  });
+
+  it('summarizes git and witnessing as UNKNOWN — not impossible', async () => {
+    const facts = readBundleCapabilities(await scope({}, {}));
+    expect(facts.gitObservation).toBe('unknown');
+    expect(facts.witnessing).toBe('unknown');
+    expect(facts.gitImpossibleReason).toBeNull();
+  });
+
+  it('answers "was this file watched?" with UNKNOWN — the ambiguity that exists today', async () => {
+    const facts = readBundleCapabilities(await scope({}, {}));
+    expect(wasFileWatched(facts, 'Solver.java')).toBe('unknown');
+    expect(facts.watchedFiles).toEqual([]);
+  });
+
+  it('classifies every silent session as silent-and-UNREPORTED', async () => {
+    const facts = readBundleCapabilities(await scope({}, {}));
+    const gap = gitObservationGap(facts, new Set());
+    expect(gap).toEqual({
+      sessions: 2,
+      observing: 0,
+      silentAndIncapable: 0,
+      silentThoughCapable: 0,
+      silentAndUnreported: 2,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §5.6 item 2 — git
+// ---------------------------------------------------------------------------
+
+describe('git capture', () => {
+  it('counts the three values apart', async () => {
+    const facts = readBundleCapabilities(
+      await scope(
+        { git_capture: 'available' },
+        { git_capture: 'unavailable' },
+        { git_capture: 'not_owned' },
+      ),
+    );
+    expect(facts.counts.gitAvailable).toBe(1);
+    expect(facts.counts.gitUnavailable).toBe(1);
+    expect(facts.counts.gitNotOwned).toBe(1);
+    expect(facts.counts.gitUnreported).toBe(0);
+  });
+
+  it('says AVAILABLE when any session could observe, even beside one that could not', async () => {
+    // One partner's machine has no git integration; the other's does. The scope
+    // had git observation.
+    const facts = readBundleCapabilities(
+      await scope({ git_capture: 'unavailable' }, { git_capture: 'available' }),
+    );
+    expect(facts.gitObservation).toBe('available');
+    expect(facts.gitImpossibleReason).toBeNull();
+  });
+
+  it('says IMPOSSIBLE, with a reason, when every session reported it could not', async () => {
+    const unavailable = readBundleCapabilities(
+      await scope({ git_capture: 'unavailable' }, { git_capture: 'unavailable' }),
+    );
+    expect(unavailable.gitObservation).toBe('impossible');
+    expect(unavailable.gitImpossibleReason).toBe('unavailable');
+
+    const notOwned = readBundleCapabilities(
+      await scope({ git_capture: 'not_owned' }, { git_capture: 'not_owned' }),
+    );
+    expect(notOwned.gitObservation).toBe('impossible');
+    expect(notOwned.gitImpossibleReason).toBe('not_owned');
+  });
+
+  it('keeps UNAVAILABLE and NOT_OWNED apart in the reason, and in the counts', async () => {
+    // The whole point of §5.6 item 2. "No git integration on this machine" and
+    // "the assignment sits outside every repository git could see" are different
+    // situations a grader acts on differently, and they reach the same
+    // consequence — so nothing but this distinction separates them.
+    const unavailable = readBundleCapabilities(await scope({ git_capture: 'unavailable' }));
+    const notOwned = readBundleCapabilities(await scope({ git_capture: 'not_owned' }));
+    expect(unavailable.gitImpossibleReason).not.toBe(notOwned.gitImpossibleReason);
+    expect(unavailable.counts.gitUnavailable).toBe(1);
+    expect(unavailable.counts.gitNotOwned).toBe(0);
+    expect(notOwned.counts.gitUnavailable).toBe(0);
+    expect(notOwned.counts.gitNotOwned).toBe(1);
+  });
+
+  it('reports a MIXED reason rather than picking one of the two', async () => {
+    const facts = readBundleCapabilities(
+      await scope({ git_capture: 'unavailable' }, { git_capture: 'not_owned' }),
+    );
+    expect(facts.gitObservation).toBe('impossible');
+    expect(facts.gitImpossibleReason).toBe('mixed');
+  });
+
+  it('falls back to UNKNOWN when one session said nothing — it might have been the capable one', async () => {
+    const facts = readBundleCapabilities(await scope({ git_capture: 'unavailable' }, {}));
+    expect(facts.gitObservation).toBe('unknown');
+    expect(facts.gitImpossibleReason).toBeNull();
+  });
+
+  it('treats a value outside the enum as MALFORMED, and never as a capability', async () => {
+    const facts = readBundleCapabilities(await scope({ git_capture: 'sort-of' }));
+    expect(facts.counts.gitMalformed).toBe(1);
+    expect(facts.counts.gitAvailable).toBe(0);
+    expect(facts.counts.gitUnavailable).toBe(0);
+    expect(facts.counts.gitNotOwned).toBe(0);
+    // A nonconforming writer must not be able to assert a capability by
+    // inventing a word for it.
+    expect(facts.gitObservation).toBe('unknown');
+    expect(facts.sessions[0]!.git).toEqual({ kind: 'malformed', problem: 'unknown_value' });
+  });
+
+  it('does not let a malformed report make the scope look INCAPABLE either', async () => {
+    // Both directions are wrong. `unknown` is the only honest answer.
+    const facts = readBundleCapabilities(
+      await scope({ git_capture: 'unavailable' }, { git_capture: 42 }),
+    );
+    expect(facts.gitObservation).toBe('unknown');
+  });
+});
+
+describe('gitObservationGap', () => {
+  it('separates silence that IS explained from silence that is not', async () => {
+    const bundle = await scope(
+      { git_capture: 'available' },
+      { git_capture: 'available' },
+      { git_capture: 'unavailable' },
+      {},
+    );
+    const facts = readBundleCapabilities(bundle);
+    const observing = new Set([bundle.sessions[0]!.sessionId]);
+    expect(gitObservationGap(facts, observing)).toEqual({
+      sessions: 4,
+      observing: 1,
+      // Session 2 could not observe git at all.
+      silentAndIncapable: 1,
+      // Session 1 could, and saw nothing. That is a statement about git
+      // activity, and it is NOT evidence of anything.
+      silentThoughCapable: 1,
+      // Session 3 said nothing.
+      silentAndUnreported: 1,
+    });
+  });
+
+  it('counts a not_owned session as incapable, same as unavailable — the CONSEQUENCE is shared', async () => {
+    const facts = readBundleCapabilities(await scope({ git_capture: 'not_owned' }));
+    expect(gitObservationGap(facts, new Set()).silentAndIncapable).toBe(1);
+    // ...while the REASON stays distinguishable on the facts themselves.
+    expect(facts.counts.gitNotOwned).toBe(1);
+  });
+
+  it('counts a malformed report as unreported, never as incapable', async () => {
+    const facts = readBundleCapabilities(await scope({ git_capture: 'nope' }));
+    const gap = gitObservationGap(facts, new Set());
+    expect(gap.silentAndUnreported).toBe(1);
+    expect(gap.silentAndIncapable).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §5.6 item 3 — witnessing
+// ---------------------------------------------------------------------------
+
+describe('witness capture', () => {
+  it('reads both values and summarizes them', async () => {
+    const available = readBundleCapabilities(await scope({ witness_capture: 'available' }));
+    expect(available.witnessing).toBe('available');
+    expect(available.counts.witnessAvailable).toBe(1);
+
+    const unavailable = readBundleCapabilities(await scope({ witness_capture: 'unavailable' }));
+    expect(unavailable.witnessing).toBe('impossible');
+    expect(unavailable.counts.witnessUnavailable).toBe(1);
+  });
+
+  it('falls back to UNKNOWN when one session said nothing', async () => {
+    const facts = readBundleCapabilities(await scope({ witness_capture: 'unavailable' }, {}));
+    expect(facts.witnessing).toBe('unknown');
+  });
+
+  it('rejects git_capture’s third value here rather than inventing a meaning', async () => {
+    const facts = readBundleCapabilities(await scope({ witness_capture: 'not_owned' }));
+    expect(facts.counts.witnessMalformed).toBe(1);
+    expect(facts.witnessing).toBe('unknown');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §5.6 item 1 — the effective resolved file set
+// ---------------------------------------------------------------------------
+
+describe('the resolved file set', () => {
+  it('answers WATCHED for a path a session names', async () => {
+    const facts = readBundleCapabilities(
+      await scope({ file_scope: { watched: ['Solver.java', 'src/Board.java'], complete: true } }),
+    );
+    expect(wasFileWatched(facts, 'Solver.java')).toBe('watched');
+    expect(wasFileWatched(facts, 'src/Board.java')).toBe('watched');
+    expect(facts.watchedFiles).toEqual(['Solver.java', 'src/Board.java']);
+  });
+
+  it('answers NOT_WATCHED only when every session reported a COMPLETE set', async () => {
+    // This is the answer that makes "no events for this file" unambiguous, and
+    // it is the only one that lets a file-scoped heuristic say "not applicable"
+    // instead of implying there was nothing to find.
+    const facts = readBundleCapabilities(
+      await scope(
+        { file_scope: { watched: ['Solver.java'], complete: true } },
+        { file_scope: { watched: ['Solver.java'], complete: true } },
+      ),
+    );
+    expect(wasFileWatched(facts, 'Secret.java')).toBe('not_watched');
+  });
+
+  it('answers UNKNOWN when any session did not report, even if another did', async () => {
+    const facts = readBundleCapabilities(
+      await scope({ file_scope: { watched: ['Solver.java'], complete: true } }, {}),
+    );
+    expect(wasFileWatched(facts, 'Secret.java')).toBe('unknown');
+    // ...and a positive match still stands, because membership needs no
+    // unanimity.
+    expect(wasFileWatched(facts, 'Solver.java')).toBe('watched');
+  });
+
+  it('never answers NOT_WATCHED off a TRUNCATED list — the path may be in the part that was cut', async () => {
+    const facts = readBundleCapabilities(
+      await scope({ file_scope: { watched: ['Solver.java'], complete: false } }),
+    );
+    expect(wasFileWatched(facts, 'Secret.java')).toBe('unknown');
+    expect(wasFileWatched(facts, 'Solver.java')).toBe('watched');
+    expect(facts.counts.fileScopeIncomplete).toBe(1);
+  });
+
+  it('treats an EMPTY complete set as a real answer, not as absence', async () => {
+    // "The scope resolved to nothing" is a positive claim: every file's silence
+    // is explained.
+    const facts = readBundleCapabilities(
+      await scope({ file_scope: { watched: [], complete: true } }),
+    );
+    expect(facts.counts.fileScopeReported).toBe(1);
+    expect(facts.counts.fileScopeUnreported).toBe(0);
+    expect(wasFileWatched(facts, 'Solver.java')).toBe('not_watched');
+  });
+
+  it('discards a set containing an absolute path WHOLE, and answers UNKNOWN', async () => {
+    // S14(b): an absolute path embeds the account name and the machine layout.
+    // Dropping only the offending entry would leave a silently narrowed list
+    // that says "not watched" about a file that was.
+    const facts = readBundleCapabilities(
+      await scope({
+        file_scope: {
+          watched: ['Solver.java', '/Users/student/cs61b/Secret.java'],
+          complete: true,
+        },
+      }),
+    );
+    expect(facts.counts.fileScopeMalformed).toBe(1);
+    expect(facts.counts.fileScopeReported).toBe(0);
+    expect(facts.watchedFiles).toEqual([]);
+    expect(wasFileWatched(facts, 'Solver.java')).toBe('unknown');
+  });
+
+  it('never lets a rejected path reach the union a UI would render', async () => {
+    const facts = readBundleCapabilities(
+      await scope({
+        file_scope: {
+          watched: ['https://github.com/some-student/proj2/Solver.java'],
+          complete: true,
+        },
+      }),
+    );
+    expect(facts.watchedFiles).toEqual([]);
+    expect(facts.sessions[0]!.fileScope).toEqual({
+      kind: 'malformed',
+      problem: 'path_has_colon',
+    });
+  });
+
+  it('unions and sorts the sets across sessions, deduplicating', async () => {
+    const facts = readBundleCapabilities(
+      await scope(
+        { file_scope: { watched: ['b.py', 'a.py'], complete: true } },
+        { file_scope: { watched: ['a.py', 'c.py'], complete: true } },
+      ),
+    );
+    expect(facts.watchedFiles).toEqual(['a.py', 'b.py', 'c.py']);
+  });
+
+  it('compares paths verbatim rather than normalizing separators', async () => {
+    // Deliberate: normalizing here would make two recorders' spellings compare
+    // equal on this one axis and unequal everywhere else in the log.
+    const facts = readBundleCapabilities(
+      await scope({ file_scope: { watched: ['src/Board.java'], complete: true } }),
+    );
+    expect(wasFileWatched(facts, 'src/Board.java')).toBe('watched');
+    expect(wasFileWatched(facts, 'src\\Board.java')).toBe('not_watched');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Independence
+// ---------------------------------------------------------------------------
+
+describe('the three reports are independent', () => {
+  it('a recorder may report one and not the others', async () => {
+    const facts = readBundleCapabilities(await scope({ git_capture: 'available' }));
+    expect(facts.gitObservation).toBe('available');
+    expect(facts.witnessing).toBe('unknown');
+    expect(wasFileWatched(facts, 'Solver.java')).toBe('unknown');
+  });
+
+  it('reports every session, in bundle order, with no session omitted', async () => {
+    const bundle = await scope({ git_capture: 'available' }, {}, { witness_capture: 'available' });
+    const facts = readBundleCapabilities(bundle);
+    expect(facts.sessions.map((s) => s.sessionId)).toEqual(bundle.sessions.map((s) => s.sessionId));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// wasFileWatched with a resolved scope — spec §5.1 tier 1
+// ---------------------------------------------------------------------------
+
+describe('wasFileWatched with a resolved scope (tier 1)', () => {
+  const scopeRules = { track: ['src/'], ignore: ['*.class'], attachments: [] };
+
+  it('answers definitively from the rules even when the list is incomplete', () => {
+    // The rules come from the SIGNED manifest in session.start, so this is not
+    // a guess — it is the same evaluation the recorder made. Spec §5.1 tier 1.
+    const facts = factsWithFileScope({ watched: [], complete: false });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('watched');
+    expect(wasFileWatched(facts, 'README.md', scopeRules)).toBe('not_watched');
+    expect(wasFileWatched(facts, 'src/A.class', scopeRules)).toBe('not_watched');
+  });
+
+  it('falls back to the list when no scope is supplied', () => {
+    const facts = factsWithFileScope({ watched: ['Main.java'], complete: true });
+    expect(wasFileWatched(facts, 'Main.java')).toBe('watched');
+    expect(wasFileWatched(facts, 'Other.java')).toBe('not_watched');
+  });
+
+  it('returns unknown from the rules when the recorder reported a capped session', () => {
+    // scope_capped means the recorder stopped admitting in-scope paths. The
+    // rules then describe what SHOULD have been watched, not what was — so
+    // "in scope, no activity" must not be concluded. R2.
+    const facts = factsWithFileScope({ watched: [], complete: false }, { scopeCapped: true });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('unknown');
+  });
+
+  it('does not assert from rules a session never evaluated', () => {
+    // A recorder that predates path scope may still emit `file_scope` under
+    // its OLD exact-match semantics, or may not report it at all. Either way,
+    // asserting 'watched' — the strongest of the three answers — from rules
+    // the recorder gives no evidence of having applied would be an accusatory
+    // error: the file may genuinely have gone unwatched despite being "in
+    // scope" on paper.
+    const absent: BundleCapabilityFacts = {
+      sessions: [
+        {
+          sessionId: 's1',
+          git: { kind: 'absent' },
+          witness: { kind: 'absent' },
+          fileScope: { kind: 'absent' },
+        },
+      ],
+      counts: {
+        sessions: 1,
+        gitAvailable: 0,
+        gitUnavailable: 0,
+        gitNotOwned: 0,
+        gitUnreported: 1,
+        gitMalformed: 0,
+        witnessAvailable: 0,
+        witnessUnavailable: 0,
+        witnessUnreported: 1,
+        witnessMalformed: 0,
+        fileScopeReported: 0,
+        fileScopeIncomplete: 0,
+        fileScopeUnreported: 1,
+        fileScopeMalformed: 0,
+      },
+      gitObservation: 'unknown',
+      gitImpossibleReason: null,
+      witnessing: 'unknown',
+      watchedFiles: [],
+      scopeCapped: false,
+    };
+    expect(wasFileWatched(absent, 'src/Solver.java', scopeRules)).toBe('unknown');
+
+    const malformed: BundleCapabilityFacts = {
+      ...absent,
+      sessions: [
+        {
+          ...absent.sessions[0]!,
+          fileScope: { kind: 'malformed', problem: 'path_absolute' },
+        },
+      ],
+    };
+    expect(wasFileWatched(malformed, 'src/Solver.java', scopeRules)).toBe('unknown');
+  });
+
+  it('still asserts from the rules once every session actually reported a file scope', () => {
+    // The gate is per-bundle-reporting, not a blanket suppression: a bundle
+    // whose every session DID evaluate file_scope (however incomplete) still
+    // gets the definitive rules-based answer.
+    const facts = factsWithFileScope({ watched: [], complete: false });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('watched');
+  });
+
+  it("does not assert WATCHED from a stale recorder's complete:true on a rule-bearing scope", () => {
+    // The exact stale-recorder shape: `track: ['src/']` is a RULE entry (not
+    // exact), and a pre-path-scope recorder treats it as a literal filename —
+    // matching nothing real — while believing it fully enumerated a one-entry
+    // list, so it reports `{ watched: ['src/'], complete: true }`. That report
+    // is `kind: 'recorded'`, so the bare "did every session report?" gate does
+    // not catch it. The honest tier-2 answer for this exact bundle is
+    // `not_watched` (the list is complete and never names the path) — tier 1
+    // must not INVERT that into `'watched'`, the most accusatory answer, about
+    // a file the recorder demonstrably never watched.
+    const facts = factsWithFileScope({ watched: ['src/'], complete: true });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('unknown');
+  });
+
+  it('still fires tier 1 on a rule-bearing scope once every session reports complete:false', () => {
+    // Not a blanket suppression for rule-bearing scopes: a path-scope-aware
+    // recorder is GUARANTEED to report complete:false when the scope carries a
+    // rule entry (recorder-context.ts), so that shape still gets the
+    // definitive rules-based answer.
+    const facts = factsWithFileScope({ watched: [], complete: false });
+    expect(wasFileWatched(facts, 'src/Solver.java', scopeRules)).toBe('watched');
+    expect(wasFileWatched(facts, 'README.md', scopeRules)).toBe('not_watched');
+  });
+
+  it('an EXACT-only scope is unaffected by the complete:false requirement', () => {
+    // No rule entries in `track`, so the stale-recorder hazard does not apply:
+    // a session reporting complete:true is exactly the ordinary case tier 1
+    // was built for, and must still answer definitively.
+    const exactScope = { track: ['Main.java'], ignore: [], attachments: [] };
+    const facts = factsWithFileScope({ watched: ['Main.java'], complete: true });
+    expect(wasFileWatched(facts, 'Main.java', exactScope)).toBe('watched');
+    expect(wasFileWatched(facts, 'Other.java', exactScope)).toBe('not_watched');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ignoredByAssignment — spec §9.3, R1
+// ---------------------------------------------------------------------------
+
+describe('ignoredByAssignment', () => {
+  const scopeRules = { track: ['src/'], ignore: ['*.class', 'vendor/'], attachments: ['logs/'] };
+
+  it('is true only for a path the course ignore list matches', () => {
+    expect(ignoredByAssignment('src/A.class', scopeRules)).toBe(true);
+    expect(ignoredByAssignment('vendor/dep.java', scopeRules)).toBe(true);
+    expect(ignoredByAssignment('src/Main.java', scopeRules)).toBe(false);
+    expect(ignoredByAssignment('logs/run.log', scopeRules)).toBe(false);
+  });
+
+  it("does not claim a hard-excluded path was the course's choice", () => {
+    // `.provenance/` is excluded by the protocol, not by the assignment. Saying
+    // "your course excluded this" about it would be false.
+    expect(ignoredByAssignment('.provenance/manifest.json', scopeRules)).toBe(false);
+  });
+
+  it('pairs with wasFileWatched to distinguish the two silences', () => {
+    const facts = factsWithFileScope({ watched: [], complete: false });
+    // Both are not_watched, but only one of them is the course's doing.
+    expect(wasFileWatched(facts, 'src/A.class', scopeRules)).toBe('not_watched');
+    expect(wasFileWatched(facts, 'README.md', scopeRules)).toBe('not_watched');
+    expect(ignoredByAssignment('src/A.class', scopeRules)).toBe(true);
+    expect(ignoredByAssignment('README.md', scopeRules)).toBe(false);
+  });
+});

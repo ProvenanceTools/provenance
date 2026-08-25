@@ -44,7 +44,7 @@ digraph ecosystem {
     server [label="server\nHono · Drizzle · pg-boss · S3"
             fillcolor="#0d1c33" color="#4b90f7" fontsize=9.5]
 
-    analyzer[label="analyzer\nReact / Vite SPA"
+    analyzer[label="analyzer\nReact / Vite SPA — staff triage, plus two routes\nthat are not triage at all: /compose/manifest signs a\ncourse manifest in the BROWSER, and /enroll is the one\nroute a STUDENT can reach"
             fillcolor="#2a0f1e" color="#e8559c" fontsize=9.5]
 
     vectors[label="conformance vectors\nexported from log-core's test vectors"
@@ -53,6 +53,9 @@ digraph ecosystem {
     allow  [label="known-good-extension-hashes.json\nrefreshed by npm run update-hashes after\nevery recorder release, in any language"
             shape=note fillcolor="#1e1830" color="#9d7bf5" fontsize=9]
   }
+
+  tgates [label="tools/ — COMPOSITION GATES\nno package.json, so it is the ONE place allowed to span\nboth dependency graphs and drive a real producer through\na real consumer: recorder-seal, enrollment-paste, and the\nbrowser-composer ↔ sign-manifest.ts byte-identity gate.\nRun by npm run test:tools, NOT by npm run test."
+          shape=note fillcolor="#241a0c" color="#F97316" fontsize=9]
 
   subgraph cluster_r3 {
     label="  REPO 4 · provgate — Python / uv  " fontsize=9.5 fontcolor="#17bfae"
@@ -87,7 +90,16 @@ digraph ecosystem {
   gsync -> gapi
   gsync -> gweb [style=dashed color="#c9a227"]
 
+  e2e [label="AND each sibling repo runs its OWN end-to-end gate,\ndriving a bundle it really produced through the real\nmonorepo loadBundle + runValidation. The vectors prove the\nPRIMITIVES agree; only this proves a whole archive is\nacceptable. All three exist, and every one has caught a\ndefect its own repo's suite asserted was impossible."
+        shape=note fillcolor="#0d2416" color="#3fbf62" fontsize=9]
+
   rule [label="A format change is a cross-repo, signature-affecting,\ntest-vector-pinned decision owned by the monorepo.\nIt is never made unilaterally in a sibling repo to make\nan implementation easier."
         shape=note fillcolor="#241a0c" color="#F97316" fontsize=9]
   vectors -> rule [style=dashed color="#F97316"]
+  analyzer -> tgates [label="the composer is signed-format code\nin a UI package — a unit test cannot\ncatch it drifting from the CLI"
+                      color="#F97316" style=dashed]
+  vsrec -> tgates [style=dashed color="#F97316"]
+  jrec -> e2e [style=dashed color="#3fbf62"]
+  nrec -> e2e [style=dashed color="#3fbf62"]
+  e2e -> acore [label="the REAL loader and\nthe REAL 8 checks" color="#3fbf62" style=dashed]
 }

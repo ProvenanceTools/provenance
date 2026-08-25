@@ -26,15 +26,15 @@ replay.
 
 ## Decision log
 
-| Decision | Alternatives | Why |
-|---|---|---|
-| Flag-count badges open an in-place list of that severity | Navigate away; expand named Top Flags chips | Staff asked to stay on the dashboard ("right there itself"). Named chips already jump to Overview. |
-| A listed flag name goes to Overview with that flag's drawer | Names only; jump straight to Replay | Same deep-link as today's Top Flags chips (`?tab=overview&flag=`). |
-| Dashboard shows Active + Idle (60s event-gap) | Active only; wall-clock span; heartbeat focused-time | Same pair local Overview already shows. Focused-time aggregation does not exist. |
-| Replay timestamps on each sidebar row | Transport bar only; both; playhead clock | Matches the timeline list. |
-| Terminal command + exit code on the sidebar row | Detail strip for the current event only | Same one-liner style as the timeline. |
-| Existing submissions show "—" until next ingest/recompute | One-shot backfill; compute on list load | No backfill job. List must not open bundles. |
-| Approach A: persist two columns, fetch flags on click, extend sidebar | New Popover dep / row accordion; N+1 `/stats` | No new npm packages. Cohort list stays one query. |
+| Decision                                                              | Alternatives                                         | Why                                                                                                |
+| --------------------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Flag-count badges open an in-place list of that severity              | Navigate away; expand named Top Flags chips          | Staff asked to stay on the dashboard ("right there itself"). Named chips already jump to Overview. |
+| A listed flag name goes to Overview with that flag's drawer           | Names only; jump straight to Replay                  | Same deep-link as today's Top Flags chips (`?tab=overview&flag=`).                                 |
+| Dashboard shows Active + Idle (60s event-gap)                         | Active only; wall-clock span; heartbeat focused-time | Same pair local Overview already shows. Focused-time aggregation does not exist.                   |
+| Replay timestamps on each sidebar row                                 | Transport bar only; both; playhead clock             | Matches the timeline list.                                                                         |
+| Terminal command + exit code on the sidebar row                       | Detail strip for the current event only              | Same one-liner style as the timeline.                                                              |
+| Existing submissions show "—" until next ingest/recompute             | One-shot backfill; compute on list load              | No backfill job. List must not open bundles.                                                       |
+| Approach A: persist two columns, fetch flags on click, extend sidebar | New Popover dep / row accordion; N+1 `/stats`        | No new npm packages. Cohort list stays one query.                                                  |
 
 This spec **supersedes** the 2026-07-23 clickable-chips spec's "flag_counts badges stay inert" out-of-scope line. Named Top Flags chips are unchanged.
 

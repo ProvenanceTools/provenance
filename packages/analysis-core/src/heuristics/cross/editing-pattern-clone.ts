@@ -40,7 +40,45 @@ import type {
   CrossHeuristicConfig,
   CrossSubmissionFeatures,
 } from './types.js';
+import type { CrossScopePartition } from '../../coverage/cross-scope.js';
+import { sameRepositoryLineage } from '../../coverage/cross-scope.js';
 import { NGRAM_SIZE } from './features.js';
+
+/**
+ * Capture signals whose absence changes the event-KIND alphabet this heuristic
+ * fingerprints.
+ *
+ * This is currently every gated signal there is — `inline_content` used to be the
+ * one exception, because it stripped content fields without removing any event,
+ * and it has since been removed from the policy entirely. The list stays explicit
+ * rather than collapsing to "anything disabled" because what matters here is the
+ * *reason* a signal counts: it removes kinds from the stream. A future knob that
+ * only thins a payload would belong outside this list, not inside it.
+ */
+const KIND_STREAM_SIGNALS = ['selection_change', 'focus_change', 'terminal'];
+
+/**
+ * Does this submission's recorded capture policy distort the kind-stream
+ * fingerprint?
+ *
+ * The absence-vs-disabled rule (program spec §4) bites hard here. Jaccard over
+ * 3-grams of the event-kind stream measures similarity against the size of the
+ * kind alphabet: switch `selection.change` and `terminal.*` off and the alphabet
+ * shrinks, the 3-gram vocabulary collapses toward "type, save, type, save", and
+ * two students who have never met start scoring above the threshold. Because a
+ * whole course shares one policy, that inflation would hit every pair in the
+ * cohort at once — a cross-submission flag storm manufactured entirely by the
+ * professor's capture settings.
+ *
+ * Renormalising the threshold per alphabet is a tuning decision, not a coding
+ * one, so this heuristic takes the conservative reading the rule prescribes and
+ * returns not-applicable for the affected submissions instead.
+ */
+function fingerprintIsPolicyDistorted(features: CrossSubmissionFeatures): boolean {
+  const disabled = features.disabledCaptureSignals;
+  if (disabled === undefined) return false;
+  return disabled.some((s) => KIND_STREAM_SIGNALS.includes(s));
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -64,7 +102,11 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 // Cross-heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(features: CrossSubmissionFeatures[], config: CrossHeuristicConfig): CrossFlag[] {
+function run(
+  features: CrossSubmissionFeatures[],
+  config: CrossHeuristicConfig,
+  scopes: CrossScopePartition,
+): CrossFlag[] {
   const { editingPatternCloneThreshold: threshold } = config;
 
   if (features.length < 2) return [];
@@ -83,6 +125,17 @@ function run(features: CrossSubmissionFeatures[], config: CrossHeuristicConfig):
     for (let j = i + 1; j < eligible.length; j++) {
       const aEntry = eligible[i]!;
       const bEntry = eligible[j]!;
+
+      // Same-scope exclusion (spec S20). Two views of ONE repository share every
+      // event, so the Jaccard is 1.0 by construction and the flag reduces to
+      // "these partners were partners". Excluded pairs are stated as a coverage
+      // fact by `coverage/cross-scope.ts` rather than dropped in silence.
+      if (sameRepositoryLineage(scopes, aEntry.bundleId, bEntry.bundleId)) continue;
+
+      // Absence-vs-disabled (program spec §4): one policy-distorted fingerprint
+      // is enough to make the comparison meaningless in the false-positive
+      // direction, so the whole pair is not-applicable.
+      if (fingerprintIsPolicyDistorted(aEntry) || fingerprintIsPolicyDistorted(bEntry)) continue;
 
       const score = jaccard(aEntry.kindNgrams, bEntry.kindNgrams);
       if (score < threshold) continue;

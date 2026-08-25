@@ -29,7 +29,13 @@ import type {
   SubmittedFileListResult,
   SubmittedFileContentResult,
 } from '../../data/SubmissionDataProvider.js';
-import type { SubmissionSummary, FlagRow, EventRow } from '@provenance/shared/api-schemas';
+import type {
+  SubmissionSummary,
+  SubmissionContributor,
+  FlagRow,
+  EventRow,
+} from '@provenance/shared/api-schemas';
+import { UNNAMED_CONTRIBUTOR_LABEL } from '../../lib/contributor-display.js';
 import { Overview } from './Overview.js';
 
 // ---------------------------------------------------------------------------
@@ -98,6 +104,19 @@ function makeErrorResult<T>(): UseQueryResult<T> {
 const DUMMY_SUMMARY: SubmissionSummary = {
   id: 'test',
   student: { sid: 'test', display_name: 'Test' },
+  contributors: [
+    {
+      contributor_key: 'roster:30000000-0000-0000-0000-0000000000aa',
+      kind: 'roster',
+      student: { id: '30000000-0000-0000-0000-0000000000aa', sid: 'test', display_name: 'Test' },
+      student_ref: null,
+      session_count: 0,
+      is_submitter: true,
+      score_total: 0,
+      score_max_severity: 'info',
+      flag_counts: { info: 0, low: 0, medium: 0, high: 0 },
+    },
+  ],
   assignment: { assignment_id_str: 'hw1', label: 'HW1' },
   version_index: 1,
   score_total: 0,
@@ -459,5 +478,271 @@ describe('Overview tab — sessions and validation labels', () => {
 
     expect(screen.getByText('Monotonic wall clock')).toBeInTheDocument();
     expect(screen.getByText('seq_gaps')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contributors (0029 cut-over)
+// ---------------------------------------------------------------------------
+
+function makeContributor(overrides: Partial<SubmissionContributor> = {}): SubmissionContributor {
+  return {
+    contributor_key: 'roster:30000000-0000-0000-0000-0000000000aa',
+    kind: 'roster',
+    student: {
+      id: '30000000-0000-0000-0000-0000000000aa',
+      sid: 'test',
+      display_name: 'Test',
+    },
+    student_ref: null,
+    session_count: 0,
+    is_submitter: true,
+    score_total: 0,
+    score_max_severity: 'info',
+    flag_counts: { info: 0, low: 0, medium: 0, high: 0 },
+    ...overrides,
+  };
+}
+
+describe('Overview tab — contributors', () => {
+  it('renders a solo submission exactly as before: "Student" over "Name (sid)"', () => {
+    renderAtRoute(makeProvider(makeQueryResult(DUMMY_SUMMARY)));
+
+    expect(DUMMY_SUMMARY.contributors).toHaveLength(1);
+    expect(screen.getByText('Student')).toBeInTheDocument();
+    expect(screen.getByTestId('summary-student')).toHaveTextContent('Test(test)');
+    expect(screen.queryByTestId('summary-contributors')).not.toBeInTheDocument();
+  });
+
+  it('lists every contributor of a group submission under the existing testid', () => {
+    const group: SubmissionSummary = {
+      ...DUMMY_SUMMARY,
+      student: null,
+      contributors: [
+        makeContributor(),
+        makeContributor({
+          contributor_key: 'roster:30000000-0000-0000-0000-0000000000bb',
+          student: {
+            id: '30000000-0000-0000-0000-0000000000bb',
+            sid: '3035678',
+            display_name: 'Bob Cratchit',
+          },
+        }),
+      ],
+    };
+    renderAtRoute(makeProvider(makeQueryResult(group)));
+
+    expect(screen.getByText('Contributors')).toBeInTheDocument();
+    expect(screen.getByTestId('summary-contributors')).toBeInTheDocument();
+    const listed = screen.getAllByTestId('summary-contributor');
+    expect(listed).toHaveLength(2);
+    expect(listed[0]).toHaveTextContent('Test(test)');
+    expect(listed[1]).toHaveTextContent('Bob Cratchit(3035678)');
+  });
+
+  it('renders an unnamed contributor neutrally and never invents a name', () => {
+    const unnamed: SubmissionSummary = {
+      ...DUMMY_SUMMARY,
+      student: null,
+      contributors: [
+        makeContributor({
+          contributor_key: 'attributed:abc',
+          kind: 'attributed',
+          student: null,
+          student_ref: 'ref-abc',
+          session_count: 3,
+          is_submitter: false,
+        }),
+      ],
+    };
+    renderAtRoute(makeProvider(makeQueryResult(unnamed)));
+
+    const cell = screen.getByTestId('summary-student');
+    expect(cell).toHaveTextContent(UNNAMED_CONTRIBUTOR_LABEL);
+    // No invented SID, and no parenthesised placeholder standing in for one.
+    expect(cell.textContent).not.toContain('(');
+    expect(cell.className).not.toMatch(/text-(red|orange|yellow)-/);
+  });
+
+  it('lists a mixed named/unnamed group without dropping the unnamed member', () => {
+    const mixed: SubmissionSummary = {
+      ...DUMMY_SUMMARY,
+      student: null,
+      contributors: [
+        makeContributor(),
+        makeContributor({
+          contributor_key: 'attributed:xyz',
+          kind: 'attributed',
+          student: null,
+          student_ref: 'ref-xyz',
+        }),
+      ],
+    };
+    renderAtRoute(makeProvider(makeQueryResult(mixed)));
+
+    const listed = screen.getAllByTestId('summary-contributor');
+    expect(listed).toHaveLength(2);
+    expect(listed[1]).toHaveTextContent(UNNAMED_CONTRIBUTOR_LABEL);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Coverage — §6 Rule 3, and the three states it must keep apart
+// ---------------------------------------------------------------------------
+
+/**
+ * The server-backed Overview used to pass `bundle={null}` unconditionally, so
+ * this surface ALWAYS said "not available" while `/local` showed real facts.
+ * The server now serves the coverage stage's output on the summary, and this
+ * suite pins both halves of what that has to mean here:
+ *
+ *  - `coverage` present → the real sections render;
+ *  - `coverage` absent → "the server did not send them", and NOT a page of
+ *    zeroes and NOT "nothing to note". Absence and emptiness are different
+ *    claims: a zeroed panel asserts "no commits observed, no contributors, no
+ *    root key", which is stronger than, and false where, the truth is that we
+ *    were never told.
+ */
+const COVERAGE_WITH_FACTS: NonNullable<SubmissionSummary['coverage']> = {
+  identity: {
+    resolved: true,
+    rootKeyConfigured: true,
+    attributed: 2,
+    unverifiable: 0,
+    unattributed: 1,
+  },
+  concurrentRecording: [
+    {
+      sessionA: 'session-a',
+      sessionB: 'session-b',
+      contributorA: 'alice',
+      contributorB: 'bob',
+      overlapMs: 3 * 3_600_000 + 12 * 60_000,
+      crashBounded: false,
+    },
+  ],
+  // One student on two enrolled machines (D5) — a separate fact from the
+  // partner collaboration above, and empty here so this fixture keeps
+  // describing exactly what it always did.
+  multiMachineRecording: [],
+  droppedArtifacts: [],
+  tornTails: [],
+  unattestedTails: [],
+  dagDefects: [],
+  dagCoverage: {
+    sessionsObserving: 0,
+    observations: 0,
+    commits: 0,
+    observedCommits: 0,
+    witnessedOnlyCommits: 0,
+    commitsWithUnrecordedParents: 0,
+    commitsWithConflictingParents: 0,
+    recordedRoots: 0,
+    gitEventsWithoutSha: 0,
+    gitEventsWithUnreadableRepository: 0,
+  },
+  repositoryAssumedSingle: false,
+  // The §5.6 shape a PRE-§5.6 recorder produces, which is every bundle in the
+  // archive: nothing reported, nothing witnessed, and no conclusion drawn.
+  // Deliberately not the "everything available" shape — this fixture's job is
+  // to keep describing the ordinary submission.
+  witnessing: {
+    capability: 'unknown',
+    sessions: 3,
+    witnessedSessions: 0,
+    unwitnessedSessions: 3,
+    corroborated: 0,
+    excluded: 0,
+    malformed: 0,
+    discrepancies: [],
+  },
+  gitObservation: {
+    availability: 'unknown',
+    impossibleReason: null,
+    sessions: 3,
+    observing: 0,
+    silentAndIncapable: 0,
+    silentThoughCapable: 0,
+    silentAndUnreported: 3,
+    malformed: 0,
+    malformedProblems: [],
+  },
+  // Likewise pre-§5.6: no session says which files it was watching, so every
+  // file's silence stays exactly as ambiguous as it has always been.
+  fileScope: {
+    reporting: 'unreported',
+    sessions: 3,
+    reportedSessions: 0,
+    incompleteSessions: 0,
+    unreportedSessions: 3,
+    malformedSessions: 0,
+    malformedProblems: [],
+    watchedFiles: [],
+    files: [],
+  },
+};
+
+describe('Overview coverage panel', () => {
+  it('renders the facts the server sent, not "not available"', async () => {
+    const withCoverage: SubmissionSummary = { ...DUMMY_SUMMARY, coverage: COVERAGE_WITH_FACTS };
+    renderOverview(makeProvider(makeQueryResult(withCoverage)));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('submission-coverage-panel')).toBeInTheDocument();
+    });
+    // The fact a suppressed overlap used to lose entirely, now on the
+    // server-backed surface for the first time.
+    expect(screen.getByTestId('coverage-concurrent-row').textContent).toMatch(/alice/);
+    expect(screen.getByTestId('coverage-concurrent-row').textContent).toMatch(/bob/);
+    expect(screen.getByTestId('coverage-identity-counts')).toBeInTheDocument();
+    expect(screen.queryByTestId('coverage-not-available')).toBeNull();
+  });
+
+  it('says the server did not send them when coverage is absent — never zeroes', async () => {
+    // DUMMY_SUMMARY deliberately carries no `coverage`: an older server.
+    expect(DUMMY_SUMMARY.coverage).toBeUndefined();
+    renderOverview(makeProvider(makeQueryResult(DUMMY_SUMMARY)));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('coverage-not-available-note')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('coverage-not-available-note').textContent).toMatch(
+      /did not send coverage facts/i,
+    );
+    // Not "nothing to note" — that would claim we checked and found nothing.
+    expect(screen.queryByTestId('coverage-nothing-to-note')).toBeNull();
+    // And not a single counting section, which is where zeroes would appear.
+    for (const id of [
+      'coverage-identity-counts',
+      'coverage-no-root-key',
+      'coverage-dag-counts',
+      'coverage-concurrent-recording',
+    ]) {
+      expect(screen.queryByTestId(id)).toBeNull();
+    }
+  });
+
+  it('says "nothing to note" for a submission whose facts are genuinely empty', async () => {
+    // Same shape the server sends for a solo, fully attributed, classically
+    // sealed bundle. This is the third state, and it must not be reachable by
+    // an absent payload — that is the distinction the test above protects.
+    const nothingToNote: NonNullable<SubmissionSummary['coverage']> = {
+      ...COVERAGE_WITH_FACTS,
+      identity: {
+        resolved: true,
+        rootKeyConfigured: true,
+        attributed: 1,
+        unverifiable: 0,
+        unattributed: 0,
+      },
+      concurrentRecording: [],
+      multiMachineRecording: [],
+    };
+    renderOverview(makeProvider(makeQueryResult({ ...DUMMY_SUMMARY, coverage: nothingToNote })));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('coverage-nothing-to-note')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('coverage-not-available')).toBeNull();
   });
 });

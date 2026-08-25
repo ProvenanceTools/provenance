@@ -13,7 +13,7 @@
 import { vi, describe, it, expect } from 'vitest';
 import JSZip from 'jszip';
 import { withTestMinio } from '../../../test/helpers/minio.js';
-import { parseBundlePhase } from './parse-bundle-phase.js';
+import { parseBundlePhase, errorDetail } from './parse-bundle-phase.js';
 import { putBlob } from '../storage/blobs.js';
 import { ingestStagingKey } from '../storage/keys.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
@@ -144,5 +144,47 @@ describe('parseBundlePhase', () => {
       if (!result.ok) return;
       expect(result.bundle.sessions).toHaveLength(2);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// errorDetail — the id space each stored failure string names.
+//
+// Pure; no MinIO. These strings land in `ingest_files.error.detail` and are read
+// by staff on a FAILURE path, which is exactly when someone goes looking through
+// the archive. Printing an id that no file carries makes the tool's own report
+// unverifiable by inspection.
+// ---------------------------------------------------------------------------
+
+describe('errorDetail id spaces', () => {
+  it.each(['orphaned_meta', 'orphaned_slog'] as const)(
+    "names %s's id as a log FILE, not a sessionId",
+    (kind) => {
+      const detail = errorDetail({ kind, sessionId: 'abc-123' })!;
+
+      // The mislabel, in the exact shape it used to take. `sessionId` on these
+      // two variants is the `.slog` FILENAME uuid — no `session.start` in the
+      // bundle carries it.
+      expect(detail).not.toBe('sessionId: abc-123');
+      expect(detail).not.toMatch(/^sessionId:/);
+      expect(detail).toContain('session-abc-123.slog');
+      expect(detail).toContain('not a session id');
+    },
+  );
+
+  it('describes session_id_mismatch ids as logical ids rather than filenames', () => {
+    const detail = errorDetail({
+      kind: 'session_id_mismatch',
+      slogSessionId: 'aaa-111',
+      metaSessionId: 'bbb-222',
+    })!;
+
+    // `slog=<id> meta=<id>` read as "the file is called this", sending a grader
+    // after `session-aaa-111.slog`, which is not a filename that exists. Both
+    // values genuinely ARE logical session ids; the labels have to say so.
+    expect(detail).not.toBe('slog=aaa-111 meta=bbb-222');
+    expect(detail).toContain('aaa-111');
+    expect(detail).toContain('bbb-222');
+    expect(detail).toContain('logical session id');
   });
 });

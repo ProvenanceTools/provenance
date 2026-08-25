@@ -13,7 +13,7 @@
  * but we still guard against null index/validationReport for type safety.
  */
 
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useBundle } from '../../context/BundleContext.js';
 import { Actions } from './Actions.js';
@@ -23,6 +23,12 @@ import { FlagDashboardPanel } from './FlagDashboardPanel.js';
 import { toFlagViewFromLocal, type SupportingRef } from './flag-view.js';
 import { collectActiveExtensions } from '../../extensions/collect-active-extensions.js';
 import { ActiveExtensionsCard } from '../../extensions/ActiveExtensionsCard.js';
+import { AssignmentManifestCard } from '../../components/AssignmentManifestCard.js';
+import { CoveragePanel } from '../coverage/CoveragePanel.js';
+import { coverageFacts } from '@provenance/analysis-core/coverage/coverage-facts.js';
+import { summarizeBundleManifest } from '@provenance/analysis-core/manifest/bundle-manifest.js';
+import type { BundleManifestSummary } from '@provenance/analysis-core/manifest/bundle-manifest.js';
+import { getRootPublicKeyHex } from '../../lib/root-key.js';
 
 export function OverviewView() {
   const { bundles, selectedBundleId, index, validationReport, flags } = useBundle();
@@ -49,6 +55,26 @@ export function OverviewView() {
     [flags, index],
   );
 
+  // Manifest 2.0 metadata. Computed here rather than in BundleContext because
+  // it is the only async, display-only derivation in the view and no other
+  // consumer needs it; a bad or absent manifest must never block the overview
+  // from rendering, hence the local state + null default.
+  const activeBundle = bundles.find((b) => b.id === selectedBundleId) ?? bundles[0];
+  const [manifestSummary, setManifestSummary] = useState<BundleManifestSummary | null>(null);
+  useEffect(() => {
+    if (activeBundle === undefined) {
+      setManifestSummary(null);
+      return;
+    }
+    let cancelled = false;
+    void summarizeBundleManifest(activeBundle, getRootPublicKeyHex()).then((summary) => {
+      if (!cancelled) setManifestSummary(summary);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBundle]);
+
   // Session id → 1-based ordinal, so the drawer can say "Session 2" rather than
   // a truncated uuid. Bundle order is chronological.
   const sessionOrdinals = useMemo(() => {
@@ -57,6 +83,16 @@ export function OverviewView() {
     bundle?.sessions.forEach((s, i) => map.set(s.sessionId, i + 1));
     return map;
   }, [bundles, selectedBundleId]);
+
+  // `/local` has no server, so it runs the coverage stage itself — the SAME
+  // pure, isomorphic function the server calls in its summary route, not a
+  // second implementation. Above the guard below because it is a hook; `null`
+  // here is unreachable in the render path, since that guard already returns
+  // for a missing bundle or index.
+  const coverage = useMemo(
+    () => (activeBundle === undefined || !index ? null : coverageFacts(activeBundle, index)),
+    [activeBundle, index],
+  );
 
   if (!index || !validationReport || bundles.length === 0) {
     return null;
@@ -75,8 +111,16 @@ export function OverviewView() {
   return (
     <div className="container mx-auto py-8 space-y-8" data-testid="overview-view">
       <Actions />
+      {/*
+        Coverage first, before any verdict surface: §6 Rule 3 wants the facts a
+        grader needs in order to READ the flags correctly, so they have to be
+        above the flags rather than below them. Never a finding — see
+        `views/coverage/CoveragePanel.tsx`.
+      */}
+      <CoveragePanel facts={coverage} />
       <ValidationReportPanel report={validationReport} />
       <SummaryStatsPanel index={index} bundle={bundle} />
+      <AssignmentManifestCard manifest={manifestSummary ?? undefined} />
       <ActiveExtensionsCard extensions={activeExtensions} />
       <FlagDashboardPanel
         flags={flagViews}

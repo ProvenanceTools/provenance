@@ -22,7 +22,7 @@ import { sha512 } from '@noble/hashes/sha2.js';
 import { App } from './App.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { mswServer } from './test-setup.js';
-import { meUnauthorizedHandler } from './test/msw-handlers.js';
+import { meNoSemestersHandler, meUnauthorizedHandler } from './test/msw-handlers.js';
 
 // Wire SHA-512 override.
 ed.hashes.sha512 = sha512;
@@ -68,6 +68,53 @@ describe('App routing', () => {
       expect(screen.getByRole('button', { name: /sign in with google/i })).toBeInTheDocument();
     });
     expect(screen.queryByTestId('drop-zone')).not.toBeInTheDocument();
+  });
+
+  it('renders /enroll for a student with no memberships', async () => {
+    // The point of the route: a student session has memberships: [], which
+    // RequireStaff would bounce to /home. /enroll must be reachable anyway.
+    mswServer.use(meNoSemestersHandler());
+    renderApp('/enroll');
+    await waitFor(() => {
+      expect(screen.getByTestId('enroll-form')).toBeInTheDocument();
+    });
+  });
+
+  it('sends an anonymous visitor at /enroll to the login page', async () => {
+    mswServer.use(meUnauthorizedHandler());
+    renderApp('/enroll');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /sign in with google/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('enroll-form')).not.toBeInTheDocument();
+  });
+
+  it('renders /compose/manifest for an authenticated staff member', async () => {
+    renderApp('/compose/manifest');
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-form')).toBeInTheDocument();
+    });
+  });
+
+  it('keeps a student out of /compose/manifest', async () => {
+    // The page handles the course SIGNING key. A student session is a valid
+    // session, so RequireAuth alone would let them in; RequireStaff is what
+    // does not. Bounced to /home, which for a student is the invite dead end.
+    mswServer.use(meNoSemestersHandler());
+    renderApp('/compose/manifest');
+    await waitFor(() => {
+      expect(screen.getByTestId('no-semesters-message')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('composer-form')).not.toBeInTheDocument();
+  });
+
+  it('sends an anonymous visitor at /compose/manifest to the login page', async () => {
+    mswServer.use(meUnauthorizedHandler());
+    renderApp('/compose/manifest');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /sign in with google/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('composer-form')).not.toBeInTheDocument();
   });
 
   it('renders /local/load for an authenticated staff member', async () => {

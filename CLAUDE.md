@@ -10,7 +10,7 @@ Provenance: an academic-integrity telemetry and analysis system. Six workspaces 
 - `packages/recorder/` — VS Code extension (**v1.1**) that records a tamper-evident `.provenance` log while a student works. All PRD §4 event types, three-signal paste detection, external-change detection, per-session signing keypair, signed checkpoints, chain recovery, bundle seal, disk-full degraded mode.
 - `packages/shared/` — Zod schemas shared between `server` and `analyzer` so API contracts stay in sync.
 - `packages/analysis-core/` — pure-TS analysis engine shared by `analyzer` and `server`: bundle loader (unzip + parse), the 8 validation checks, the EventIndex + file reconstruction, per-submission + cross-submission heuristics. Isomorphic (runs in browser and Node); depends only on `log-core` + a few libs (`jszip`, `diff`, `@noble/ed25519`). This is where the code that used to live inside the analyzer and be imported by the server now lives.
-- `packages/analyzer/` — React/Vite SPA (**v3**). Google OAuth login, semester switcher, cohort list, per-submission drill-in (overview / timeline / replay / validation / export / source), a 25-flag heuristics tuning UI (per-flag **weight** 0.0–2.0 + on/off — _not_ the heuristics' own thresholds, which live in `analysis-core/heuristics/config.ts`), cross-flags view. Also a standalone `/local` route that runs entirely in-browser (drop a `.zip`, no server). UI on top of `analysis-core`. Note: the submission **Export tab is a v3.1 stub**; the working findings export (markdown + PDF) exists only under `/local`.
+- `packages/analyzer/` — React/Vite SPA (**v3**). Google OAuth login, semester switcher, cohort list, per-submission drill-in (overview / timeline / replay / validation / export / source), a 29-flag heuristics tuning UI (per-flag **weight** 0.0–2.0 + on/off — _not_ the heuristics' own thresholds, which live in `analysis-core/heuristics/config.ts`; the 29 = 18 per-submission event-stream heuristics + 9 validation-derived integrity flags + 2 cross-submission heuristics, see `analysis-core/heuristics/known-flag-ids.ts`), cross-flags view. Also a standalone `/local` route that runs entirely in-browser (drop a `.zip`, no server). UI on top of `analysis-core`. Note: the submission **Export tab is a v3.1 stub**; the working findings export (markdown + PDF) exists only under `/local`.
 - `packages/server/` — Node + Hono API server (**v3**). Postgres + Drizzle ORM, Google OAuth + sessions + API tokens, ZIP ingest pipeline (parse → match → heuristics → cross-flags), pg-boss job queue, OpenAPI 3.1 + Redoc, Prometheus metrics, retention sweep + session purge cron jobs. Object storage is S3-compatible (MinIO for dev). **Events are not persisted in Postgres** and **stored bundles are provenance-only** (student source stripped after ingest); read paths re-parse the stored bundle blob on demand (see below).
 
 The product specs live in `docs/`. The recorder spec is `docs/prd.md`; the analyzer/server spec is `docs/analyzer-v3-prd.md`. Section references like "§4.2" mean the recorder PRD unless the surrounding text says otherwise. **Read the relevant PRD section before implementing anything.** If a PRD and this file disagree, this file wins for code conventions; the PRD wins for product behavior.
@@ -39,7 +39,10 @@ The product specs live in `docs/`. The recorder spec is `docs/prd.md`; the analy
 
   How: edit the relevant `tools/architecture/dot/*.dot`, run
   `python3 tools/architecture/build_diagrams.py` (needs Graphviz — dev-time only),
-  then update `content/nodes.ts` and `content/sections.ts`. The
+  then author the node detail in `content/nodes/<diagram>.ts`, keyed by the BARE
+  dot node name. Do **not** hand-edit `content/nodes.ts` — it is a derived barrel
+  that prefixes each key with its diagram id. Plate titles, captions, and bands
+  live in `layout.ts` (there is no `content/sections.ts`). The
   `nodes.coverage.test.ts` suite fails if a diagram gains a node with no detail,
   or keeps metadata for a node that no longer exists — so a stale page is a
   **failing test**, not a silent regression.
@@ -117,11 +120,17 @@ The product specs live in `docs/`. The recorder spec is `docs/prd.md`; the analy
 Workspace-wide (run from repo root):
 
 - `npm run build` — build all packages.
-- `npm run test` — run all Vitest suites (~1200+ tests; server integration tests spin up ephemeral Postgres/MinIO via testcontainers, so Docker must be running).
+- `npm run test` — run the **workspace** Vitest suites (~1200+ tests; server integration tests spin up ephemeral Postgres/MinIO via testcontainers, so Docker must be running). Note this is `--workspaces`, so it does **not** cover `tools/` — see `test:tools`.
+- `npm run test:tools` — run the `tools/` suites (course-keypair / cert-minting / manifest-signing, and the recorder→analyzer seal conformance gate). `tools/` is not an npm workspace, so these are invisible to `npm run test`; they ran under nothing at all until a root `vitest.config.ts` was added, deliberately scoped to `tools/**` so a bare `vitest` cannot wander into the server's testcontainers suites.
 - `npm run typecheck` — `tsc --noEmit` across the workspace.
 - `npm run lint` — ESLint (only the `src/` trees of the five packages) + Prettier check.
-- `npm run package:recorder` — build the dev-key VSIX for local install.
+- `npm run package:recorder` — build the dev-key VSIX for local install. It **must** run the `bundle` (esbuild) step, not just `build` (tsc): the VSIX is packaged with `vsce package --no-dependencies` and `.vscodeignore` excludes `node_modules/**`, so anything not inlined by esbuild cannot be resolved once installed. A tsc-only VSIX installs fine and then dies on activation with `Cannot find package '@provenance/log-core'`, because tsc leaves that import bare while esbuild inlines it. Nothing catches this before install — a packaged VSIX is never smoke-tested — so treat the bundle step as load-bearing rather than an optimization.
 - `npm run update-hashes` — refresh the analyzer's known-good extension-hash allowlist (see README for required flags).
+- Staff key/manifest tools, all thin wrappers around `node --experimental-strip-types tools/<tool>.ts` (pass flags after `--`; see README "Course staff: key & manifest workflow"):
+  - `npm run keygen:course` — generate an ed25519 keypair (root, course, **or** institution — same shape; positional path only unless you also want a course cert).
+  - `npm run mint:course-cert` — root-sign a `course_cert`.
+  - `npm run mint:institution-cert` — root-sign the `institution_cert` that `PROVENANCE_INSTITUTION_KEY` requires. Without it `POST /api/v1/identity/credential` is a permanent `503 no_institution_key`.
+  - `npm run sign:manifest` — sign a `.provenance-manifest`.
 - `python3 tools/architecture/build_diagrams.py` — regenerate the `/architecture`
   diagrams after editing `tools/architecture/dot/*.dot`. Requires Graphviz
   (`brew install graphviz`); dev-time only, never needed by `npm run build` or CI.
@@ -133,7 +142,7 @@ Per-workspace (run from root with `--workspace=packages/<name>`):
 - `npm run db:migrate --workspace=packages/server` — apply Drizzle migrations.
 - `npm run test:integration --workspace=packages/recorder` — download VS Code and run real-Extension-Host tests.
 - `npm run bench --workspace=packages/recorder` — SessionWriter perf benchmark (p99 << 1ms).
-- `npm run build:prod --workspace=packages/recorder` — production VSIX with course public key embedded (requires `PROVENANCE_COURSE_PUBLIC_KEY_HEX`).
+- `npm run build:prod --workspace=packages/recorder` — production VSIX with the Manifest 2.0 root public key embedded (requires `PROVENANCE_ROOT_PUBLIC_KEY_HEX`; optionally `PROVENANCE_LEGACY_COURSE_PUBLIC_KEY_HEX` for a build that still activates on Manifest 1.x). Setting the legacy variable changes the built bytes and therefore the `extension_hash`, so a two-variant release needs `npm run update-hashes` run once per variant.
 
 Dev infra:
 

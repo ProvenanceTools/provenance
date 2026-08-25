@@ -61,6 +61,7 @@ export const ingestPaths = {
               properties: {
                 assignment_id_str: { type: 'string' },
                 label: { type: 'string' },
+                ingest_scope: { $ref: '#/components/schemas/IngestScopeConfig' },
               },
             },
           },
@@ -89,7 +90,13 @@ export const ingestPaths = {
   '/semesters/{semesterId}/assignments/{assignmentId}': {
     patch: {
       tags: ['Assignments'],
-      summary: 'Update assignment label or sort order (semester admin)',
+      summary: 'Update assignment label, sort order or ingest scope (semester admin)',
+      description:
+        "At least one field is required. `ingest_scope` is the assignment's PERSISTED DEFAULT " +
+        'declared submission type — the one provgate writes once at mapping time — and it is ' +
+        'replaced wholesale, never merged, because the modes carry different meaningful fields. ' +
+        'An individual ingest request can still override it without touching this row. Read the ' +
+        'current value back from AssignmentSummary.ingest_scope.',
       security: [{ BearerAuth: [] }, { SessionCookie: [] }],
       parameters: [
         {
@@ -113,13 +120,29 @@ export const ingestPaths = {
               properties: {
                 label: { type: 'string' },
                 sort_order: { type: 'integer' },
+                ingest_scope: { $ref: '#/components/schemas/IngestScopeConfig' },
               },
             },
           },
         },
       },
       responses: {
-        '200': { description: 'Assignment updated' },
+        '200': {
+          description: 'Assignment updated',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['assignment'],
+                properties: {
+                  assignment: { $ref: '#/components/schemas/AssignmentSummary' },
+                },
+              },
+            },
+          },
+        },
+        '400': { description: 'VALIDATION (no fields given, or a malformed ingest_scope)' },
+        '404': { description: 'Unknown assignment, or it belongs to another semester' },
       },
     },
   },
@@ -132,7 +155,12 @@ export const ingestPaths = {
       tags: ['Ingest'],
       summary: 'Start an ingest job (semester admin)',
       description:
-        'Upload one or more .zip bundles (or a single zip-of-zips). Returns 202 immediately; processing is async.',
+        'Upload one or more .zip bundles, a single zip-of-zips, or a GIT REPO zip. ' +
+        'A repo zip (an archive carrying one or more `.provenance/` directories) is walked ' +
+        'for every assignment scope and fanned out into one submission per ACCEPTED scope, ' +
+        'using the same discovery and the same declared-submission-type rules as ' +
+        '`ingest:gradescope`. A flat sealed bundle and a zip-of-bundles are staged with their ' +
+        'original bytes, exactly as before. Returns 202 immediately; processing is async.',
       security: [{ BearerAuth: [] }, { SessionCookie: [] }],
       parameters: [
         {
@@ -140,6 +168,38 @@ export const ingestPaths = {
           in: 'path',
           required: true,
           schema: { $ref: '#/components/schemas/UUID' },
+        },
+        {
+          name: 'scope_mode',
+          in: 'query',
+          required: false,
+          description:
+            "PER-REQUEST ingest-scope override. When given it replaces every assignment's " +
+            'persisted `ingest_scope` default for this batch — a one-off re-ingest or fixup ' +
+            'without mutating the assignment row. This request body is multipart/form-data ' +
+            '(reserved for the uploaded files), so the override travels as these three flat ' +
+            'query params rather than a nested object — the identical shape ' +
+            '`ingest:gradescope` takes. Omit all three to use the persisted defaults.',
+          schema: {
+            type: 'string',
+            enum: ['self_identifying', 'bundle_zip', 'repo_whole', 'repo_scoped'],
+          },
+        },
+        {
+          name: 'scope_path_glob',
+          in: 'query',
+          required: false,
+          description:
+            'Override `path_glob`. Required when scope_mode=repo_scoped, rejected otherwise. ' +
+            'e.g. `proj2/**`.',
+          schema: { type: 'string' },
+        },
+        {
+          name: 'scope_on_multiple',
+          in: 'query',
+          required: false,
+          description: 'Override `on_multiple`. Defaults to `ingest_all` when omitted.',
+          schema: { type: 'string', enum: ['error', 'ingest_all'] },
         },
       ],
       requestBody: {
@@ -158,15 +218,33 @@ export const ingestPaths = {
       },
       responses: {
         '202': {
-          description: 'Job accepted',
+          description:
+            'Job accepted. `skipped` lists every scope that did NOT become a submission, ' +
+            'with the same reasons `ingest:gradescope` reports. It is never null on this ' +
+            'route — scope resolution completes inside the request — so `[]` is a positive ' +
+            'statement that nothing was skipped. The identical array is also written to the ' +
+            'job and served by GET /ingest/jobs/{jobId}. A job returned here whose status is ' +
+            'already `failed` with a non-empty `skipped` is the "every scope was rejected" ' +
+            'outcome: the upload produced no submissions and the array says why.',
           content: {
             'application/json': {
               schema: {
                 type: 'object',
-                properties: { job_id: { $ref: '#/components/schemas/UUID' } },
+                required: ['job_id', 'skipped'],
+                properties: {
+                  job_id: { $ref: '#/components/schemas/UUID' },
+                  skipped: {
+                    type: 'array',
+                    items: { $ref: '#/components/schemas/IngestSkippedEntry' },
+                  },
+                },
               },
             },
           },
+        },
+        '400': {
+          description:
+            'VALIDATION (no files provided, or a scope_* override that names no scope_mode)',
         },
         '413': { description: 'INGEST_BATCH_TOO_LARGE or INGEST_FILE_TOO_LARGE' },
         '422': { description: 'ROSTER_REQUIRED (no roster uploaded yet)' },
@@ -186,6 +264,38 @@ export const ingestPaths = {
           in: 'path',
           required: true,
           schema: { $ref: '#/components/schemas/UUID' },
+        },
+        {
+          name: 'scope_mode',
+          in: 'query',
+          required: false,
+          description:
+            "PER-REQUEST ingest-scope override. When given it replaces every assignment's " +
+            'persisted `ingest_scope` default for this batch — a one-off re-ingest or fixup ' +
+            'without mutating the assignment row. This request body is multipart/form-data ' +
+            '(reserved for the archive), so the override travels as these three flat query ' +
+            'params rather than a nested object; they map one-to-one onto IngestScopeConfig. ' +
+            'Omit all three to use the persisted defaults.',
+          schema: {
+            type: 'string',
+            enum: ['self_identifying', 'bundle_zip', 'repo_whole', 'repo_scoped'],
+          },
+        },
+        {
+          name: 'scope_path_glob',
+          in: 'query',
+          required: false,
+          description:
+            'Override `path_glob`. Required when scope_mode=repo_scoped, rejected otherwise. ' +
+            'e.g. `proj2/**`.',
+          schema: { type: 'string' },
+        },
+        {
+          name: 'scope_on_multiple',
+          in: 'query',
+          required: false,
+          description: 'Override `on_multiple`. Defaults to `ingest_all` when omitted.',
+          schema: { type: 'string', enum: ['error', 'ingest_all'] },
         },
       ],
       requestBody: {
@@ -292,7 +402,25 @@ export const ingestPaths = {
                   { $ref: '#/components/schemas/IngestJobSummary' },
                   {
                     type: 'object',
+                    required: ['skipped'],
                     properties: {
+                      skipped: {
+                        oneOf: [
+                          {
+                            type: 'array',
+                            items: { $ref: '#/components/schemas/IngestSkippedEntry' },
+                          },
+                          { type: 'null' },
+                        ],
+                        description:
+                          'Scopes that did not become submissions, for a job created by EITHER ' +
+                          'upload route — this is the mechanism-independent place to read them. ' +
+                          '`summary` above cannot carry them: it counts ingest_files rows, and a ' +
+                          'skipped scope has none. `null` means NOT KNOWN (staging has not ' +
+                          'finished resolving scopes, it aborted part-way, or the job predates ' +
+                          'the field); `[]` means resolution completed and skipped nothing. ' +
+                          'Treat null as "poll again", never as a clean result.',
+                      },
                       files: {
                         type: 'array',
                         items: { $ref: '#/components/schemas/IngestFileSummary' },
@@ -520,7 +648,11 @@ export const ingestPaths = {
       tags: ['Ingest'],
       summary: 'Complete a resumable upload and ingest it (semester admin)',
       description:
-        'Finalize the multipart upload, assemble the export, and run it through the ingest pipeline. Returns the same body as the single-shot Gradescope upload.',
+        'Finalize the multipart upload, assemble the export, and run it through the ingest pipeline. Returns the same body as the single-shot Gradescope upload. ' +
+        "`ingest_scope` is the PER-REQUEST override — it replaces every assignment's persisted default for this batch, and rides the background staging job, so it applies even though this call returns 202 before staging runs. " +
+        'NOTE: this call returns 202 before any staging has run, so the counts in the body are placeholder zeros and `skipped` is **null** — meaning NOT YET KNOWN, not "nothing was skipped". ' +
+        "Poll `GET /ingest/jobs/{jobId}`: once the background staging job finishes resolving scopes, that response's `skipped` array carries the same entries (including `submission_type_mismatch`) that the single-shot POST /ingest:gradescope inlines for the same export. " +
+        'It stays null while the job is still staging, and also if staging aborted before resolution completed; `[]` there means resolution ran and skipped nothing.',
       security: [{ BearerAuth: [] }, { SessionCookie: [] }],
       parameters: [
         {
@@ -543,7 +675,10 @@ export const ingestPaths = {
             schema: {
               type: 'object',
               required: ['s3_upload_id'],
-              properties: { s3_upload_id: { type: 'string' } },
+              properties: {
+                s3_upload_id: { type: 'string' },
+                ingest_scope: { $ref: '#/components/schemas/IngestScopeConfig' },
+              },
             },
           },
         },

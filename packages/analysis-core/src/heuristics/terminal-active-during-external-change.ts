@@ -36,14 +36,46 @@
  *     flags (strengthens the case that the terminal contributed to the change).
  *   - Aggregate to a single per-session flag listing all affected external-change
  *     events, rather than one per event.
- *   - Consider filtering out external changes with explanations that suggest
- *     automated origin (e.g., "git", "formatter").
+ *
+ * ## Tier 3.1 — content-based reclassification
+ *
+ * The worst instance of the flood above is the one the census names: the student
+ * ran `git pull` **in the integrated terminal**, so a terminal is definitionally
+ * open when every file the pull rewrote changes. In a COLLABORATIVE scope the
+ * event's content-derived classification now decides:
+ *
+ *  - `git_merge_in` — the bytes are a provably different verified contributor's
+ *    recorded state. The terminal was open because the student was using git,
+ *    and the change is their partner's work; no flag. The event stays in the
+ *    index and in the classification, visible and countable.
+ *  - `git_unrecorded_in` — flagged, unchanged, with the classification named.
+ *    A terminal open while content nobody recorded lands on disk is exactly the
+ *    "script-driven change" this heuristic was written for.
+ *  - `external` / `unclassified` — flagged exactly as before.
+ *
+ * Note the third bullet of the old mitigation list — "filter out changes whose
+ * `explanation` suggests an automated origin" — is deliberately NOT what
+ * shipped. `explanation` is the recorder's timing-based tag; the classification
+ * consumed here is derived from content and is the sounder discriminator.
+ *
+ * That is also why **D16 does not reach this heuristic**: D16 stops the
+ * `explanation: 'git'` tag suppressing a `git_unrecorded_in`, and this heuristic
+ * never let the tag suppress anything in the first place. No behaviour change,
+ * and adding a tag test for "consistency" would undo the paragraph above.
+ * `terminal-active-during-external-change.test.ts` pins it.
+ *
+ * A SOLO scope produces no verdicts, so behaviour there is unchanged.
  */
 
 import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
+import { isSignalCaptured } from '../manifest/bundle-manifest.js';
+import {
+  externalChangeClassificationFor,
+  describeClassification,
+} from '../index/classify-external-changes.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -57,7 +89,13 @@ function flagId(sessionId: string, seq: number): string {
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, _config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, _config: HeuristicConfig): Flag[] {
+  // Absence-vs-disabled (program spec §4). "No terminal was open when the file
+  // changed externally" is a real statement only when terminals were being
+  // recorded at all.
+  if (!isSignalCaptured(bundle, 'terminal')) return [];
+
+  const classification = externalChangeClassificationFor(bundle, index);
   const flags: Flag[] = [];
 
   for (const [, sessionEvents] of index.bySessionId) {
@@ -71,10 +109,15 @@ function run(index: EventIndex, _bundle: Bundle, _config: HeuristicConfig): Flag
 
     // For each external change, check if any terminal was already open (open.t <= change.t).
     const externalChangeEvents = sessionEvents.filter(
-      // D1: skip external changes that were the recorder reporting the editor's
-      // own save -- they describe something that never happened.
       (e) =>
-        e.kind === 'fs.external_change' && !index.selfInflictedExternalChanges?.has(e.globalIdx),
+        e.kind === 'fs.external_change' &&
+        // D1: skip external changes that were the recorder reporting the
+        // editor's own save -- they describe something that never happened.
+        !index.selfInflictedExternalChanges?.has(e.globalIdx) &&
+        // Tier 3.1: git delivered a partner's recorded work. The terminal was
+        // open because that is where git was run. Skipped here only; the event
+        // stays in the index and in the classification.
+        !classification.gitMergeIn.has(e.globalIdx),
     );
     for (const ev of externalChangeEvents) {
       const terminalWasOpen = terminalOpenTimes.some((openT) => openT <= ev.t);
@@ -83,6 +126,10 @@ function run(index: EventIndex, _bundle: Bundle, _config: HeuristicConfig): Flag
       const payload = ev.payload as Record<string, unknown> | null;
       const filePath = typeof payload?.['path'] === 'string' ? payload['path'] : 'unknown';
       const diffSize = typeof payload?.['diff_size'] === 'number' ? payload['diff_size'] : null;
+
+      // Tier 3.1. Empty for a solo scope and for `external` — those
+      // descriptions and details are byte-for-byte what they were.
+      const verdict = classification.byGlobalIdx.get(ev.globalIdx) ?? null;
 
       flags.push({
         id: flagId(ev.sessionId, ev.seq),
@@ -94,7 +141,8 @@ function run(index: EventIndex, _bundle: Bundle, _config: HeuristicConfig): Flag
         description:
           `A terminal was open when the file "${filePath}" was externally changed ` +
           `(diff_size: ${diffSize ?? 'unknown'} chars). This may indicate a script or ` +
-          `automated tool was responsible for the file change.`,
+          `automated tool was responsible for the file change.` +
+          describeClassification(verdict),
         detail: {
           sessionId: ev.sessionId,
           filePath,
@@ -102,6 +150,13 @@ function run(index: EventIndex, _bundle: Bundle, _config: HeuristicConfig): Flag
           terminalOpenCount: terminalOpenTimes.length,
           externalChangeT: ev.t,
           externalChangeSeq: ev.seq,
+          ...(verdict === null
+            ? {}
+            : {
+                externalChangeClass: verdict.classification,
+                externalChangeReason: verdict.reason?.kind ?? null,
+                externalChangeDetail: verdict.detail,
+              }),
         },
       });
     }

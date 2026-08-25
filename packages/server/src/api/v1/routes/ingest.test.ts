@@ -47,6 +47,7 @@ import {
   roster_entries,
   ingest_jobs,
   ingest_files,
+  assignments,
 } from '../../../db/schema.js';
 import type { DrizzleDb } from '../../../db/client.js';
 
@@ -1245,6 +1246,339 @@ describe('GET /semesters/:semesterId/ingest/jobs/:jobId/files — protected mode
           expect(item.matched_student).toBeDefined();
           expect(item.matched_student!.display_name).toBe('Chan Alice');
           expect(item.matched_student!.sid).toBe('123456');
+        } finally {
+          _testDb = null;
+        }
+      });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /semesters/:semesterId/ingest — scope awareness (program architecture §6)
+//
+// This route was the only one of the three ingest entry points with no scope
+// handling at all: a git repo zip fell through to the "one bundle" branch and
+// was staged whole, silently, on the path staff reach for when the automated
+// path has already gone wrong. These tests cover the two directions that
+// matter — the shapes it already handled must be untouched, and a repo zip must
+// now fan out — plus the per-request override and legible failure.
+// ---------------------------------------------------------------------------
+
+describe('POST /semesters/:semesterId/ingest — declared submission types', () => {
+  /** Lay one sealed bundle's files under `prefix`, `.provenance/`-nested. */
+  async function layScope(
+    files: Map<string, Uint8Array>,
+    prefix: string,
+    assignmentId: string,
+  ): Promise<void> {
+    const { buildTestBundle } =
+      await import('@provenance/analysis-core/test-support/build-test-bundle.js');
+    const { zipBuffer } = await buildTestBundle({
+      assignmentId,
+      semester: 'fa2026',
+      sessions: [{ eventCount: 3 }],
+      submissionFiles: [
+        { path: 'Main.java', status: 'present', content: `class Main {} // ${assignmentId}\n` },
+      ],
+    });
+    const provenanceFile =
+      /^(manifest\.json|manifest\.sig|manifest-[0-9a-f-]+\.(json|sig)|session-.*\.slog(\.meta)?)$/;
+    const inner = await JSZip.loadAsync(zipBuffer);
+    for (const [name, obj] of Object.entries(inner.files)) {
+      if (obj.dir) continue;
+      const bytes = await obj.async('uint8array');
+      files.set(
+        provenanceFile.test(name) ? `${prefix}.provenance/${name}` : `${prefix}${name}`,
+        bytes,
+      );
+    }
+  }
+
+  async function zipTree(files: Map<string, Uint8Array>): Promise<Uint8Array> {
+    const zip = new JSZip();
+    for (const [name, bytes] of files) zip.file(name, bytes);
+    return zip.generateAsync({ type: 'uint8array' });
+  }
+
+  /** A repo whose root is sealed as `hw10`, with a nested `lab5` scope. */
+  async function repoRootedZip(): Promise<Uint8Array> {
+    const files = new Map<string, Uint8Array>();
+    await layScope(files, '', 'hw10');
+    await layScope(files, 'vendor/', 'lab5');
+    files.set('README.md', new TextEncoder().encode('# repo\n'));
+    return zipTree(files);
+  }
+
+  async function seedAll(db: DrizzleDb) {
+    const admin = await seedUser(db);
+    const sessionId = await seedSession(db, admin.id);
+    const { semester } = await seedCourseAndSemester(db);
+    await seedMembership(db, admin.id, semester.id, 'admin');
+    await seedRosterEntry(db, semester.id);
+    return { sessionId, semester };
+  }
+
+  it('fans a git repo zip out into one ingest_files row per scope', async () => {
+    await withTestDb(async (db) => {
+      await withTestMinio(async ({ client, bucketName }) => {
+        _testDb = db;
+        try {
+          _setConfigForTest(
+            parseEnv(makeTestEnv(client.bucketUrl.replace(`/${bucketName}`, ''), bucketName)),
+          );
+          const { sessionId, semester } = await seedAll(db);
+
+          const app = createV1App();
+          const res = await app.fetch(
+            makeMultipartRequest(`http://localhost/semesters/${semester.id}/ingest`, sessionId, [
+              { field: 'files[]', name: 'repo.zip', bytes: await repoRootedZip() },
+            ]),
+          );
+          expect(res.status).toBe(202);
+          const body = (await res.json()) as { job_id: string; skipped: unknown[] };
+
+          const files = await db
+            .select()
+            .from(ingest_files)
+            .where(eq(ingest_files.ingest_job_id, body.job_id));
+          // Before this change the whole repo staged as ONE malformed bundle.
+          expect(files).toHaveLength(2);
+          expect(files.map((f) => f.original_filename).sort()).toEqual([
+            'repo.zip',
+            'repo/vendor.zip',
+          ]);
+
+          // Nothing was skipped, and `[]` says so positively — both inline and
+          // on the job row, which is what makes GET /ingest/jobs/:id agree.
+          expect(body.skipped).toEqual([]);
+          const [job] = await db.select().from(ingest_jobs).where(eq(ingest_jobs.id, body.job_id));
+          expect(job!.skipped).toEqual([]);
+        } finally {
+          _testDb = null;
+        }
+      });
+    });
+  });
+
+  it('a per-request override beats the assignment default', async () => {
+    await withTestDb(async (db) => {
+      await withTestMinio(async ({ client, bucketName }) => {
+        _testDb = db;
+        try {
+          _setConfigForTest(
+            parseEnv(makeTestEnv(client.bucketUrl.replace(`/${bucketName}`, ''), bucketName)),
+          );
+          const { sessionId, semester } = await seedAll(db);
+          // The persisted default for `hw10` says "this repo is ONE submission".
+          await db.insert(assignments).values({
+            semester_id: semester.id,
+            assignment_id_str: 'hw10',
+            label: 'HW 10',
+            ingest_scope: { mode: 'repo_whole', on_multiple: 'ingest_all' },
+          });
+
+          const app = createV1App();
+          const zipBytes = await repoRootedZip();
+
+          // No override → the persisted default applies: root only, nested
+          // scope excluded by declaration rather than fanned out.
+          const dflt = await app.fetch(
+            makeMultipartRequest(`http://localhost/semesters/${semester.id}/ingest`, sessionId, [
+              { field: 'files[]', name: 'repo.zip', bytes: zipBytes },
+            ]),
+          );
+          expect(dflt.status).toBe(202);
+          const dfltBody = (await dflt.json()) as {
+            job_id: string;
+            skipped: Array<{ reason: string; scope_path?: string }>;
+          };
+          const dfltFiles = await db
+            .select()
+            .from(ingest_files)
+            .where(eq(ingest_files.ingest_job_id, dfltBody.job_id));
+          expect(dfltFiles.map((f) => f.original_filename)).toEqual(['repo.zip']);
+          expect(dfltBody.skipped).toEqual([
+            { folder_key: 'repo', scope_path: 'vendor/', reason: 'scope_excluded' },
+          ]);
+
+          // Same upload, same assignment row — the override wins.
+          const over = await app.fetch(
+            makeMultipartRequest(
+              `http://localhost/semesters/${semester.id}/ingest?scope_mode=self_identifying`,
+              sessionId,
+              [{ field: 'files[]', name: 'repo.zip', bytes: zipBytes }],
+            ),
+          );
+          expect(over.status).toBe(202);
+          const overBody = (await over.json()) as { job_id: string; skipped: unknown[] };
+          const overFiles = await db
+            .select()
+            .from(ingest_files)
+            .where(eq(ingest_files.ingest_job_id, overBody.job_id));
+          expect(overFiles.map((f) => f.original_filename).sort()).toEqual([
+            'repo.zip',
+            'repo/vendor.zip',
+          ]);
+          expect(overBody.skipped).toEqual([]);
+        } finally {
+          _testDb = null;
+        }
+      });
+    });
+  });
+
+  it('a heterogeneous batch fails legibly, through skipped and not a new channel', async () => {
+    await withTestDb(async (db) => {
+      await withTestMinio(async ({ client, bucketName }) => {
+        _testDb = db;
+        try {
+          _setConfigForTest(
+            parseEnv(makeTestEnv(client.bucketUrl.replace(`/${bucketName}`, ''), bucketName)),
+          );
+          const { sessionId, semester } = await seedAll(db);
+
+          const app = createV1App();
+          // The batch declares "flat sealed bundles"; it is handed a repo.
+          const res = await app.fetch(
+            makeMultipartRequest(
+              `http://localhost/semesters/${semester.id}/ingest?scope_mode=bundle_zip`,
+              sessionId,
+              [{ field: 'files[]', name: 'repo.zip', bytes: await repoRootedZip() }],
+            ),
+          );
+          expect(res.status).toBe(202);
+          const body = (await res.json()) as {
+            job_id: string;
+            skipped: Array<{ reason: string }>;
+          };
+          expect(body.skipped.map((s) => s.reason)).toEqual([
+            'submission_type_mismatch',
+            'submission_type_mismatch',
+          ]);
+
+          // Nothing staged, and the job is settled rather than stuck at
+          // 'queued' — no file job will ever run to finalize it.
+          const files = await db
+            .select()
+            .from(ingest_files)
+            .where(eq(ingest_files.ingest_job_id, body.job_id));
+          expect(files).toHaveLength(0);
+          const [job] = await db.select().from(ingest_jobs).where(eq(ingest_jobs.id, body.job_id));
+          expect(job!.status).toBe('failed');
+          // The reasons survive the failure — failIngestJob must not clobber
+          // the only record that those scopes ever existed.
+          expect((job!.skipped as Array<{ reason: string }>).map((s) => s.reason)).toEqual([
+            'submission_type_mismatch',
+            'submission_type_mismatch',
+          ]);
+        } finally {
+          _testDb = null;
+        }
+      });
+    });
+  });
+
+  it('re-ingesting the same repo zip stages byte-identical blobs (idempotent)', async () => {
+    await withTestDb(async (db) => {
+      await withTestMinio(async ({ client, bucketName }) => {
+        _testDb = db;
+        try {
+          _setConfigForTest(
+            parseEnv(makeTestEnv(client.bucketUrl.replace(`/${bucketName}`, ''), bucketName)),
+          );
+          const { sessionId, semester } = await seedAll(db);
+          const app = createV1App();
+          const zipBytes = await repoRootedZip();
+
+          const shas: string[][] = [];
+          for (let i = 0; i < 2; i++) {
+            const res = await app.fetch(
+              makeMultipartRequest(`http://localhost/semesters/${semester.id}/ingest`, sessionId, [
+                { field: 'files[]', name: 'repo.zip', bytes: zipBytes },
+              ]),
+            );
+            expect(res.status).toBe(202);
+            const { job_id } = (await res.json()) as { job_id: string };
+            const rows = await db
+              .select()
+              .from(ingest_files)
+              .where(eq(ingest_files.ingest_job_id, job_id));
+            shas.push(rows.map((r) => r.blob_sha256).sort());
+          }
+          // The staged sha256 is the dedup key. A rebuild that was not
+          // deterministic would create a duplicate submission on every retry.
+          expect(shas[0]).toEqual(shas[1]);
+        } finally {
+          _testDb = null;
+        }
+      });
+    });
+  });
+
+  it('a flat sealed bundle stages the EXACT uploaded bytes — unchanged by this feature', async () => {
+    await withTestDb(async (db) => {
+      await withTestMinio(async ({ client, bucketName }) => {
+        _testDb = db;
+        try {
+          _setConfigForTest(
+            parseEnv(makeTestEnv(client.bucketUrl.replace(`/${bucketName}`, ''), bucketName)),
+          );
+          const { sessionId, semester } = await seedAll(db);
+          const { buildTestBundle } =
+            await import('@provenance/analysis-core/test-support/build-test-bundle.js');
+          const { zipBuffer } = await buildTestBundle({
+            assignmentId: 'hw10',
+            sessions: [{ eventCount: 3 }],
+          });
+          const uploaded = new Uint8Array(zipBuffer);
+          const { createHash } = await import('node:crypto');
+          const expectedSha = createHash('sha256').update(uploaded).digest('hex');
+
+          const app = createV1App();
+          const res = await app.fetch(
+            makeMultipartRequest(`http://localhost/semesters/${semester.id}/ingest`, sessionId, [
+              { field: 'files[]', name: 'hw10-123456.zip', bytes: uploaded },
+            ]),
+          );
+          expect(res.status).toBe(202);
+          const { job_id } = (await res.json()) as { job_id: string };
+          const rows = await db
+            .select()
+            .from(ingest_files)
+            .where(eq(ingest_files.ingest_job_id, job_id));
+          expect(rows).toHaveLength(1);
+          // Byte-for-byte: the staged blob IS the upload. Never rebuilt.
+          expect(rows[0]!.blob_sha256).toBe(expectedSha);
+          expect(rows[0]!.original_filename).toBe('hw10-123456.zip');
+        } finally {
+          _testDb = null;
+        }
+      });
+    });
+  });
+
+  it('rejects a scope_* override with no scope_mode rather than ignoring it', async () => {
+    await withTestDb(async (db) => {
+      await withTestMinio(async ({ client, bucketName }) => {
+        _testDb = db;
+        try {
+          _setConfigForTest(
+            parseEnv(makeTestEnv(client.bucketUrl.replace(`/${bucketName}`, ''), bucketName)),
+          );
+          const { sessionId, semester } = await seedAll(db);
+          const app = createV1App();
+          // A typo'd override that quietly did nothing is the failure this
+          // whole feature exists to stop, so it is a 400 — same rule, same
+          // schema, as POST /ingest:gradescope.
+          const res = await app.fetch(
+            makeMultipartRequest(
+              `http://localhost/semesters/${semester.id}/ingest?scope_path_glob=proj2/**`,
+              sessionId,
+              [{ field: 'files[]', name: 'hw01-123456.zip', bytes: makeZipBytes() }],
+            ),
+          );
+          expect(res.status).toBe(400);
         } finally {
           _testDb = null;
         }

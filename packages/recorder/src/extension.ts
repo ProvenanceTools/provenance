@@ -21,17 +21,38 @@
 
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import { SystemClock } from '@provenance/log-core';
+import { SystemClock, scopeFromManifest } from '@provenance/log-core';
 import { loadAndVerifyManifest } from './activation/manifest-loader.js';
 import type { ActivationError } from './activation/manifest-loader.js';
 import { discoverManifests } from './activation/manifest-discovery.js';
-import { createRecordingStatusBar } from './activation/status-bar.js';
-import { sealBundle } from './commands/seal.js';
+import { createRecordingStatusBar, setEnrollmentState } from './activation/status-bar.js';
+import {
+  ENROLL_URL,
+  NUDGE_ENROLL_LABEL,
+  NUDGE_LATER_LABEL,
+  NUDGE_MESSAGE,
+  NUDGE_SHOW_KEY_LABEL,
+  NUDGE_STATE_KEY,
+  isUnenrolled,
+  nextNudgeState,
+  parseNudgeState,
+  shouldShowNudge,
+} from './activation/enroll-nudge.js';
+import type { NudgeAction } from './activation/enroll-nudge.js';
+import { sealBundle, sealDroppedArtifacts } from './commands/seal.js';
 import { chooseSessionForSeal } from './commands/seal-selector.js';
 import { computeExtensionHash } from './commands/extension-hash.js';
+import {
+  showEnrollmentKey,
+  importEnrollmentToken,
+  exportIdentitySecret,
+  importIdentitySecret,
+} from './commands/enrollment.js';
+import type { EnrollmentCommandDeps } from './commands/enrollment.js';
 import { startSession, SessionRegistry } from './session/session-registry.js';
 import type { ActiveSession, HeartbeatVscodeDeps } from './session/session-registry.js';
-import { resolveOwnerRoot } from './session/session-router.js';
+import type { IdentityOutcome } from './identity/session-identity.js';
+import { isRepoOwnedByRoot, resolveOwnerRoot } from './session/session-router.js';
 import type { Manifest } from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
@@ -48,7 +69,14 @@ export type ActivateDeps = {
   vscodeVersion: string;
   /** Platform string (process.platform + '-' + process.arch in production). */
   platform: string;
-  /** Override for manifest verification pubkey (tests inject a test keypair's pubkey). */
+  /**
+   * Override for the embedded manifest-verification key (tests inject a test
+   * keypair's pubkey). At Manifest 2.0 this is the ROOT key the inline
+   * `course_cert` must chain to; at 1.x it is the key the payload signature is
+   * checked against directly. Defaults, per format_version, to ROOT_PUBLIC_KEY_HEX
+   * at 2.0 and the grandfathered LEGACY_COURSE_PUBLIC_KEY_HEX at 1.x — see
+   * manifest-loader.ts.
+   */
   pubkeyHex?: string;
   /** Override for the .provenance/ directory path (tests inject a tmp dir). */
   provenanceDirOverride?: string;
@@ -102,6 +130,7 @@ export function fallbackActivationMessage(error: ActivationError): string {
         'and try again.'
       );
     case 'manifest_signature_invalid':
+    case 'manifest_chain_invalid':
     case 'manifest_parse_error':
       return (
         'This folder\'s ".provenance-manifest" could not be verified, so Provenance ' +
@@ -218,7 +247,8 @@ export async function activateImpl(deps: ActivateDeps): Promise<ActiveSession | 
         provenanceDir: session.provenanceDir,
         assignmentId: session.manifest.assignment_id,
         semester: session.manifest.semester,
-        filesUnderReview: session.manifest.files_under_review,
+        scope: scopeFromManifest(session.manifest),
+        scopeCapped: session.expectedContentRegistry.capHit(),
         sessionPrivkey: session.sessionKeypair.privateKey,
         sessionPubkeyHex: session.sessionKeypair.publicKeyHex,
         computeExtensionHash: () => computeExtensionHash(extensionDistPath),
@@ -232,6 +262,20 @@ export async function activateImpl(deps: ActivateDeps): Promise<ActiveSession | 
         if (result.warnings.chainBroken || result.warnings.unreadableSession) {
           void vscode.window.showWarningMessage(
             'Provenance bundle produced. Integrity issues were detected in the recording and will be reviewed by course staff.',
+          );
+        }
+        // A dropped artifact must never read as "nothing was wrong". Separate
+        // message from the one above: this is not evidence of tampering —
+        // it's either an incomplete session recording (left out so the
+        // bundle stays readable) or a workspace source file the seal could
+        // not read, or dropped as a duplicate of one already sealed under
+        // another path. The copy below covers both: this branch is the ONLY
+        // disclosure a dropped source file ever gets (fix round 3,
+        // Moderate 3 — the previous copy named only the session-artifact
+        // case, which was wrong on every clause for a dropped source file).
+        if (sealDroppedArtifacts(result.warnings)) {
+          void vscode.window.showWarningMessage(
+            'Provenance bundle produced. Some files could not be included — either session recording artifacts left out so the bundle can be opened, or workspace files that could not be read, resolved outside this workspace folder, or were duplicates of another sealed file at seal time. Nothing was removed from disk. Mention this to course staff.',
           );
         }
       } else if (result.kind === 'no_sessions') {
@@ -253,7 +297,76 @@ export async function activateImpl(deps: ActivateDeps): Promise<ActiveSession | 
 
 const registry = new SessionRegistry();
 
+/**
+ * The single status bar item, held so enrollment state can be re-rendered after
+ * the sessions have started and again on every rescan. Null before activation
+ * mounts it, and in workspaces where no verified manifest was found.
+ */
+let statusBar: vscode.StatusBarItem | null = null;
+
+/**
+ * Render the enrollment state, and — at most twice in a student's life — say it
+ * out loud.
+ *
+ * Runs after every session has started, because only then is the answer known:
+ * `identityOutcome` is per-session, and a student is un-enrolled only when NO
+ * session managed to claim an identity (see `isUnenrolled`). Called again from
+ * `rescan()` so adding a workspace folder cannot leave a stale claim on screen.
+ *
+ * Never throws into activation. A failed nudge is a missing notification; a
+ * throw here would take the recording with it.
+ */
+async function reflectEnrollment(context: vscode.ExtensionContext): Promise<void> {
+  try {
+    const outcomes = registry
+      .all()
+      .map((s) => s.identityOutcome)
+      .filter((o): o is IdentityOutcome => o !== undefined);
+
+    if (statusBar !== null) setEnrollmentState(statusBar, isUnenrolled(outcomes));
+
+    const state = parseNudgeState(context.globalState.get(NUDGE_STATE_KEY));
+    if (!shouldShowNudge({ outcomes, state })) return;
+
+    // Modal-free and non-blocking by construction: `showWarningMessage` resolves
+    // `undefined` when the student ignores or dismisses it, which is the same
+    // answer as "Later" — a student who closes the toast has said no just as
+    // clearly as one who clicks the button.
+    const picked = await vscode.window.showWarningMessage(
+      NUDGE_MESSAGE,
+      NUDGE_ENROLL_LABEL,
+      NUDGE_SHOW_KEY_LABEL,
+      NUDGE_LATER_LABEL,
+    );
+
+    const action: NudgeAction =
+      picked === NUDGE_ENROLL_LABEL
+        ? 'enroll'
+        : picked === NUDGE_SHOW_KEY_LABEL
+          ? 'show_key'
+          : 'dismiss';
+
+    await context.globalState.update(NUDGE_STATE_KEY, nextNudgeState(state, action));
+
+    // The student's click, in the student's browser. The recorder itself opens no
+    // socket — recorder PRD NG2 holds, and enrollment stays a paste both ways.
+    if (action === 'enroll') {
+      await vscode.env.openExternal(vscode.Uri.parse(ENROLL_URL));
+    } else if (action === 'show_key') {
+      await vscode.commands.executeCommand('provenance.showEnrollmentKey');
+    }
+  } catch (e) {
+    console.warn('[provenance] could not surface enrollment state:', e);
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  // Registered FIRST, before the workspace guard and before any manifest is
+  // discovered: a student must be able to import their identity secret on a new
+  // machine, or paste an enrollment token, without a recording session already
+  // running. Nothing here starts a session or touches the log.
+  registerEnrollmentCommands(context);
+
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {
     return;
@@ -301,7 +414,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     if (found.length > 0) {
-      createRecordingStatusBar(context.subscriptions);
+      statusBar = createRecordingStatusBar(context.subscriptions);
     }
 
     for (const { root, manifest } of found) {
@@ -313,11 +426,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         platform: `${process.platform}-${process.arch}`,
         clock: new SystemClock(),
         extensionDistPath,
+        secrets: context.secrets,
         isOwnedByThisRoot: (fsPath: string) =>
           resolveOwnerRoot(
             fsPath,
             found.map((f) => f.root),
           ) === root,
+        // A repository root is an ANCESTOR of the assignment root it serves, so
+        // the containment predicate above can never match it — see
+        // isRepoOwnedByRoot and spec §3 S14(a).
+        isRepoOwnedByThisRoot: (repoRootFsPath: string) =>
+          isRepoOwnedByRoot(
+            repoRootFsPath,
+            root,
+            found.map((f) => f.root),
+          ),
       });
       context.subscriptions.push(...session.ownDisposables);
       session.ownDisposables.length = 0;
@@ -325,6 +448,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     registerSealCommand(context, extensionDistPath);
+
+    // After every session, never before: whether the student is enrolled is an
+    // answer only `startSession` has.
+    await reflectEnrollment(context);
 
     context.subscriptions.push(
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -366,12 +493,21 @@ async function rescan(
         platform: `${process.platform}-${process.arch}`,
         clock: new SystemClock(),
         extensionDistPath,
+        secrets: context.secrets,
         isOwnedByThisRoot: (fsPath: string) => resolveOwnerRoot(fsPath, allRoots) === root,
+        // See the activation call site: a repository root is an ancestor of the
+        // assignment root, which `resolveOwnerRoot` cannot express.
+        isRepoOwnedByThisRoot: (repoRootFsPath: string) =>
+          isRepoOwnedByRoot(repoRootFsPath, root, allRoots),
       });
       context.subscriptions.push(...session.ownDisposables);
       session.ownDisposables.length = 0;
       registry.add(session);
     }
+
+    // A folder joining or leaving changes which sessions exist, and so can change
+    // the answer. Re-render rather than leave a stale claim on screen.
+    await reflectEnrollment(context);
   } catch (e) {
     console.error('[provenance] unexpected error during workspace-folder rescan:', e);
   }
@@ -413,7 +549,8 @@ function registerSealCommand(context: vscode.ExtensionContext, extensionDistPath
         provenanceDir: chosen.provenanceDir,
         assignmentId: chosen.manifest.assignment_id,
         semester: chosen.manifest.semester,
-        filesUnderReview: chosen.manifest.files_under_review,
+        scope: scopeFromManifest(chosen.manifest),
+        scopeCapped: chosen.expectedContentRegistry.capHit(),
         sessionPrivkey: chosen.sessionKeypair.privateKey,
         sessionPubkeyHex: chosen.sessionKeypair.publicKeyHex,
         computeExtensionHash: () => computeExtensionHash(extensionDistPath),
@@ -429,6 +566,20 @@ function registerSealCommand(context: vscode.ExtensionContext, extensionDistPath
             'Provenance bundle produced. Integrity issues were detected in the recording and will be reviewed by course staff.',
           );
         }
+        // A dropped artifact must never read as "nothing was wrong". Separate
+        // message from the one above: this is not evidence of tampering —
+        // it's either an incomplete session recording (left out so the
+        // bundle stays readable) or a workspace source file the seal could
+        // not read, or dropped as a duplicate of one already sealed under
+        // another path. The copy below covers both: this branch is the ONLY
+        // disclosure a dropped source file ever gets (fix round 3,
+        // Moderate 3 — the previous copy named only the session-artifact
+        // case, which was wrong on every clause for a dropped source file).
+        if (sealDroppedArtifacts(result.warnings)) {
+          void vscode.window.showWarningMessage(
+            'Provenance bundle produced. Some files could not be included — either session recording artifacts left out so the bundle can be opened, or workspace files that could not be read, resolved outside this workspace folder, or were duplicates of another sealed file at seal time. Nothing was removed from disk. Mention this to course staff.',
+          );
+        }
       } else if (result.kind === 'no_sessions') {
         void vscode.window.showWarningMessage('No session data to seal.');
       } else if (result.kind === 'write_error') {
@@ -437,6 +588,49 @@ function registerSealCommand(context: vscode.ExtensionContext, extensionDistPath
     },
   );
   context.subscriptions.push(sealCmd);
+}
+
+/**
+ * Wire the four S2 enrollment commands to the real VS Code UI.
+ *
+ * The command bodies live in `commands/enrollment.ts` and take every seam as a
+ * dependency, so this function is the only place they meet `vscode`. None of
+ * them makes a network call — enrollment is a paste (recorder PRD NG2).
+ */
+function registerEnrollmentCommands(context: vscode.ExtensionContext): void {
+  const deps: EnrollmentCommandDeps = {
+    secrets: context.secrets,
+    // No course picker: identity 2.1 is institution-scoped, so none of these
+    // commands is per-course any more and there is nothing to disambiguate.
+    promptInput: (opts) =>
+      Promise.resolve(
+        vscode.window.showInputBox({
+          prompt: opts.prompt,
+          placeHolder: opts.placeHolder,
+          ignoreFocusOut: true,
+        }),
+      ) as Promise<string | undefined>,
+    showInfo: (message) => void vscode.window.showInformationMessage(message),
+    showError: (message) => void vscode.window.showWarningMessage(message),
+    copyToClipboard: (text) => Promise.resolve(vscode.env.clipboard.writeText(text)),
+    showDocument: async (text) => {
+      const doc = await vscode.workspace.openTextDocument({ content: text, language: 'plaintext' });
+      await vscode.window.showTextDocument(doc, { preview: true });
+    },
+  };
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('provenance.showEnrollmentKey', () => showEnrollmentKey(deps)),
+    vscode.commands.registerCommand('provenance.importEnrollmentToken', () =>
+      importEnrollmentToken(deps),
+    ),
+    vscode.commands.registerCommand('provenance.exportIdentitySecret', () =>
+      exportIdentitySecret(deps),
+    ),
+    vscode.commands.registerCommand('provenance.importIdentitySecret', () =>
+      importIdentitySecret(deps),
+    ),
+  );
 }
 
 export async function deactivate(): Promise<void> {

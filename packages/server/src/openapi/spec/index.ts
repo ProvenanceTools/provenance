@@ -27,6 +27,7 @@ import { components } from './components.js';
 import { authPaths } from './paths-auth.js';
 import { coursesPaths } from './paths-courses.js';
 import { rosterMembersPaths } from './paths-roster-members.js';
+import { enrollmentPaths } from './paths-enrollment.js';
 import { ingestPaths } from './paths-ingest.js';
 import { cohortPaths } from './paths-cohort.js';
 import { submissionsPaths } from './paths-submissions.js';
@@ -55,7 +56,14 @@ export const openApiSpec = {
       'Rate limits: see PRD §7.6. Headers X-RateLimit-Remaining and X-RateLimit-Reset are set',
       'on every response from a rate-limited route.',
     ].join('\n'),
-    version: '3.0.0',
+    // 3.1.0: path scope added two response fields. `verdict` on the
+    // submitted-files response gained 'attachment', and the coverage response's
+    // per-file entries gained `notWatchedReason` ('ignored_by_assignment' |
+    // 'attachment' | 'out_of_scope' | null), itself a closed enum. A widened
+    // enum breaks a strict client that switch/matches exhaustively, and
+    // `docs/api-quickstart.md` invites exactly those clients, so both get a
+    // version signal rather than arriving unannounced.
+    version: '3.1.0',
     contact: {
       name: 'Provenance Academic Integrity',
     },
@@ -73,6 +81,14 @@ export const openApiSpec = {
     { name: 'Semesters', description: 'Semester management' },
     { name: 'Members', description: 'Semester membership and invitations' },
     { name: 'Roster', description: 'Student roster management' },
+    {
+      name: 'Enrollment',
+      description:
+        'Student-facing credential issuance (identity 2.1). The only route on this ' +
+        'server intended for students rather than course staff. The 2.0 sibling, ' +
+        'POST /semesters/{semesterId}/enrollment, was retired before it shipped; ' +
+        'identity 2.0 verification is unaffected and stays supported forever.',
+    },
     { name: 'Assignments', description: 'Assignment labels and stats' },
     { name: 'Ingest', description: 'File ingest pipeline' },
     { name: 'Unmatched', description: 'Unmatched file tray' },
@@ -88,6 +104,7 @@ export const openApiSpec = {
     ...authPaths,
     ...coursesPaths,
     ...rosterMembersPaths,
+    ...enrollmentPaths,
     ...ingestPaths,
     ...cohortPaths,
     ...submissionsPaths,

@@ -23,9 +23,12 @@ import { and, or, eq, isNull, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { submissions, assignments, roster_entries } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
+import { isMicroTimestamp, keysetAfter, microTimestamp } from '../keyset.js';
 import type { Severity } from '@provenance/analysis-core/heuristics/types.js';
 import { SEVERITY_RANK } from '../scoring/denorm.js';
 import { projectStudent } from '../protect.js';
+import { fetchContributorsFor } from '../contributors/fetch-contributors.js';
+import type { SubmissionContributor } from '@provenance/shared/api-schemas';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -43,7 +46,9 @@ export type CohortFilters = {
   hasLargePaste?: boolean;
   recorderVersion?: string;
   includeSuperseded?: boolean; // default false
-  q?: string; // free-text on display_name or sid
+  // Free-text on roster display_name or sid, matched against EVERY contributor
+  // rather than only the submitter of record. See `buildSearchCondition`.
+  q?: string;
 };
 
 export type CohortSort =
@@ -58,7 +63,11 @@ export type CohortSort =
 // Encoded as base64url JSON for opacity to callers.
 export type CohortCursor =
   | { kind: 'score'; score_total: number; id: string }
-  | { kind: 'wall'; wall: string; id: string }
+  // `wall_us` is a MICROSECOND-precision UTC ISO string, not a
+  // `Date.toISOString()` value. The kind is named apart from the old `wall` so
+  // a pre-fix cursor is refused rather than silently mis-paginated — see
+  // `../keyset.ts`.
+  | { kind: 'wall_us'; wall_us: string; id: string }
   | { kind: 'display_name'; display_name: string; id: string }
   | { kind: 'protected_index'; protected_index: number; id: string }
   | { kind: 'assignment_label'; assignment_label: string; id: string };
@@ -67,7 +76,14 @@ export type SubmissionRow = {
   id: string;
   semester_id: string;
   assignment: { id: string; assignment_id_str: string; label: string };
-  student: { id: string; sid: string; display_name: string };
+  /**
+   * The submitter of record, or null when no single roster entry owns this
+   * submission (D9). Mirrors `SubmissionRowSchema.student` in
+   * `@provenance/shared`.
+   */
+  student: { id: string; sid: string; display_name: string } | null;
+  /** Everyone this submission is attributable to. Exactly one entry for solo. */
+  contributors: SubmissionContributor[];
   score_total: number;
   score_max_severity: Severity;
   flag_counts: { info: number; low: number; medium: number; high: number };
@@ -101,8 +117,12 @@ export function decodeCursor(encoded: string): CohortCursor | null {
     if (kind === 'score' && typeof p['score_total'] === 'number') {
       return { kind: 'score', score_total: p['score_total'], id: p['id'] };
     }
-    if (kind === 'wall' && typeof p['wall'] === 'string') {
-      return { kind: 'wall', wall: p['wall'], id: p['id'] };
+    // A pre-fix cursor arrives as `kind: 'wall'` with a millisecond-precision
+    // timestamp. It falls through to `return null` below, which the route turns
+    // into a 400: honouring it would mean treating its timestamp as a bucket
+    // floor and silently dropping the rest of that millisecond.
+    if (kind === 'wall_us' && typeof p['wall_us'] === 'string' && isMicroTimestamp(p['wall_us'])) {
+      return { kind: 'wall_us', wall_us: p['wall_us'], id: p['id'] };
     }
     if (kind === 'display_name' && typeof p['display_name'] === 'string') {
       return { kind: 'display_name', display_name: p['display_name'], id: p['id'] };
@@ -137,6 +157,72 @@ const SEVERITY_ORDER: Record<Severity, number> = {
 // with one comparison.
 
 // ---------------------------------------------------------------------------
+// Free-text search predicate
+// ---------------------------------------------------------------------------
+
+/**
+ * The `q` free-text predicate: a submission matches when ANY of the people it
+ * is attributable to matches on roster name or SID.
+ *
+ * ## The defect this closes
+ *
+ * This used to be an ILIKE against the `roster_entries` row reached through
+ * `submissions.student_id` — the single SUBMITTER OF RECORD. A group submission
+ * has one `submission_contributors` row per person but only one submitter of
+ * record, so typing the OTHER partner's name found nothing: a grader looking up
+ * a student by name was told that student had no submission, while their work
+ * sat in the system under their partner's name.
+ *
+ * `submissions.student_id` is deterministic now (settled on the lowest
+ * `roster_entries.sid` among co-submitters — see `ingest/dedup.ts`), so the
+ * miss was reliable rather than random: the same partner was unfindable on
+ * every search, forever.
+ *
+ * ## Why EXISTS on `submission_contributors`
+ *
+ * Exactly the shape the `studentId` filter already uses, and for the same
+ * reason. It is also a strict superset of the old predicate for every state
+ * production can reach: a submission with a non-null `student_id` always has a
+ * contributor row naming it — migration 0029 backfilled one for every
+ * pre-existing row, and `finalizeContributors` writes one in the same
+ * transaction on all three write paths (ingest, recompute, manual attach). So
+ * the submitter-of-record case matches precisely the rows it always did.
+ *
+ * EXISTS rather than a join: a join would emit one row per matching contributor
+ * and inflate both the page and COUNT(*).
+ *
+ * The subquery aliases both tables (`sc`, `re`) because callers already have
+ * `roster_entries` in their FROM via the submitter LEFT join, and an unaliased
+ * reference here would bind to that outer row instead of the contributor's.
+ *
+ * ## Protected mode
+ *
+ * Returns null — the search is SUPPRESSED, not merely masked. An ILIKE that
+ * narrowed the result set would be a name -> "Student N" lookup oracle: a
+ * protected principal could type a real name, see which placeholder rows came
+ * back, and recover exactly the identity protected mode withholds. Widening the
+ * predicate to contributors would have widened that oracle too, which is why
+ * the guard lives HERE, in the one place all three call sites go through,
+ * rather than being restated at each of them.
+ *
+ * Consequence, unchanged from before: in protected mode `q` is ignored, so the
+ * unfiltered result set comes back rather than an empty one.
+ */
+export function buildSearchCondition(q: string | undefined, protectedMode: boolean): SQL | null {
+  if (protectedMode) return null;
+  if (q === undefined) return null;
+  const trimmed = q.trim();
+  if (trimmed === '') return null;
+  const pattern = `%${trimmed}%`;
+  return sql`EXISTS (
+    SELECT 1 FROM submission_contributors sc
+    JOIN roster_entries re ON re.id = sc.roster_entry_id
+    WHERE sc.submission_id = ${submissions.id}
+      AND (re.display_name ILIKE ${pattern} OR re.sid ILIKE ${pattern})
+  )`;
+}
+
+// ---------------------------------------------------------------------------
 // Main query function
 // ---------------------------------------------------------------------------
 
@@ -165,8 +251,25 @@ export async function listCohortSubmissions(
   }
 
   // studentId
+  //
+  // A semi-join on `submission_contributors`, NOT `submissions.student_id`
+  // (D9). Filtering on the scalar column would show a group submission only to
+  // the partner who happened to submit it — the other partner would filter
+  // their own work out of view. Every existing solo submission has exactly one
+  // contributor row naming its `student_id`, so this matches precisely the same
+  // rows it always did for them.
+  //
+  // EXISTS rather than a join: a join would emit one row per matching
+  // contributor and inflate both the page and COUNT(*).
   if (filters.studentId !== undefined) {
-    whereConditions.push(eq(submissions.student_id, filters.studentId));
+    const wantedStudentId = filters.studentId;
+    whereConditions.push(
+      sql`EXISTS (
+        SELECT 1 FROM submission_contributors sc
+        WHERE sc.submission_id = ${submissions.id}
+          AND sc.roster_entry_id = ${wantedStudentId}
+      )`,
+    );
   }
 
   // validationStatus
@@ -248,16 +351,12 @@ export async function listCohortSubmissions(
     );
   }
 
-  // q: free-text ILIKE on roster_entries.display_name or sid.
-  // Disabled in protected mode (it would be a name->Student-N lookup oracle).
-  if (!protectedMode && filters.q !== undefined && filters.q.trim() !== '') {
-    const pattern = `%${filters.q.trim()}%`;
-    whereConditions.push(
-      or(
-        sql`${roster_entries.display_name} ILIKE ${pattern}`,
-        sql`${roster_entries.sid} ILIKE ${pattern}`,
-      )!,
-    );
+  // q: free-text search over every CONTRIBUTOR's roster name / SID, not just
+  // the submitter of record's. Suppressed in protected mode. See
+  // `buildSearchCondition`.
+  const searchCond = buildSearchCondition(filters.q, protectedMode);
+  if (searchCond !== null) {
+    whereConditions.push(searchCond);
   }
 
   // Apply cursor-based pagination based on sort
@@ -290,6 +389,10 @@ export async function listCohortSubmissions(
       total_idle_ms: submissions.total_idle_ms,
       validation_status: submissions.validation_status,
       ingested_at: submissions.ingested_at,
+      // Cursor-only projection. `ingested_at` above is a JS `Date` and has
+      // already lost the microseconds; this keeps them. The response field
+      // still comes from the `Date`, so the API shape is unchanged.
+      ingested_at_us: microTimestamp(submissions.ingested_at),
       recorder_version: submissions.recorder_version,
       superseded_by_submission_id: submissions.superseded_by_submission_id,
       recompute_status: submissions.recompute_status,
@@ -303,7 +406,12 @@ export async function listCohortSubmissions(
     })
     .from(submissions)
     .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
-    .innerJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
+    // LEFT, not INNER (D9). `submissions.student_id` is nullable now, and an
+    // INNER join would make a submission with no single owning roster entry
+    // DISAPPEAR from the cohort list entirely — no row, no error, and a
+    // `total_count` that silently disagrees with the page. The roster columns
+    // become nullable here and `student` carries the absence.
+    .leftJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
     .where(whereClause)
     .orderBy(...orderBy)
     .limit(limit + 1);
@@ -319,6 +427,15 @@ export async function listCohortSubmissions(
     nextCursor = encodeCursor(c);
   }
 
+  // One batched fetch of every contributor on this page (D9). Not per row —
+  // the cohort list is the query the denormalised columns exist to keep fast,
+  // and an N+1 here would undo that.
+  const contributorsBySubmission = await fetchContributorsFor(
+    db,
+    pageRows.map((r) => r.id),
+    protectedMode,
+  );
+
   // Assemble SubmissionRow items directly from the row's jsonb columns.
   // The defaults in migration 0014 (empty counts / empty array) cover
   // freshly-ingested rows that haven't been scored yet.
@@ -330,15 +447,21 @@ export async function listCohortSubmissions(
       assignment_id_str: row.assignment_assignment_id_str,
       label: row.assignment_label,
     },
-    student: projectStudent(
-      {
-        id: row.student_id,
-        sid: row.student_sid,
-        display_name: row.student_display_name,
-        protected_index: row.student_protected_index,
-      },
-      protectedMode,
-    ),
+    // Null when no single roster entry owns this submission. The LEFT join
+    // above is what makes that reachable instead of dropping the row.
+    student:
+      row.student_id === null || row.student_sid === null || row.student_display_name === null
+        ? null
+        : projectStudent(
+            {
+              id: row.student_id,
+              sid: row.student_sid,
+              display_name: row.student_display_name,
+              protected_index: row.student_protected_index,
+            },
+            protectedMode,
+          ),
+    contributors: contributorsBySubmission.get(row.id) ?? [],
     score_total: row.score_total,
     score_max_severity: row.score_max_severity as Severity,
     flag_counts: row.flag_counts as { info: number; low: number; medium: number; high: number },
@@ -362,7 +485,14 @@ export async function listCohortSubmissions(
     countConditions.push(eq(submissions.assignment_id, filters.assignmentId));
   }
   if (filters.studentId !== undefined) {
-    countConditions.push(eq(submissions.student_id, filters.studentId));
+    const wantedStudentId = filters.studentId;
+    countConditions.push(
+      sql`EXISTS (
+        SELECT 1 FROM submission_contributors sc
+        WHERE sc.submission_id = ${submissions.id}
+          AND sc.roster_entry_id = ${wantedStudentId}
+      )`,
+    );
   }
   if (filters.validationStatus !== undefined) {
     countConditions.push(eq(submissions.validation_status, filters.validationStatus));
@@ -411,22 +541,20 @@ export async function listCohortSubmissions(
       sql`NOT EXISTS (SELECT 1 FROM flags f WHERE f.submission_id = ${submissions.id} AND f.heuristic_id = 'large_paste')`,
     );
   }
-  // q: disabled in protected mode (oracle closure — same guard as main query).
-  if (!protectedMode && filters.q !== undefined && filters.q.trim() !== '') {
-    const pattern = `%${filters.q.trim()}%`;
-    countConditions.push(
-      or(
-        sql`${roster_entries.display_name} ILIKE ${pattern}`,
-        sql`${roster_entries.sid} ILIKE ${pattern}`,
-      )!,
-    );
+  // q: the identical predicate the page query uses — one function, so the count
+  // and the page cannot disagree about which rows the search matches.
+  if (searchCond !== null) {
+    countConditions.push(searchCond);
   }
 
   const [countResult] = await db
     .select({ count: sql<number>`COUNT(*)::int` })
     .from(submissions)
     .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
-    .innerJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
+    // LEFT for the same reason as the page query — the two must agree, or the
+    // pager reports a count it can never reach. Still COUNT(*) over one row per
+    // submission: the contributor filter above is an EXISTS, so nothing fans out.
+    .leftJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
     .where(and(...countConditions));
 
   const totalCount = countResult?.count ?? 0;
@@ -437,6 +565,30 @@ export async function listCohortSubmissions(
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * The name the `student_asc` / `student_desc` sorts order by.
+ *
+ * `COALESCE(..., '')` because the roster join is LEFT since D9: a submission
+ * with no single owning roster entry has a NULL display name, and a keyset
+ * predicate of the form `display_name > $cursor` evaluates to NULL — never
+ * true — for such a row, so it would be silently unreachable on every page
+ * after the first.
+ *
+ * Provably identity for every row that existed before the cut-over:
+ * `roster_entries.display_name` is NOT NULL, and the join was INNER, so a
+ * pre-0029 row can never have produced a NULL here. Solo ordering is unchanged
+ * byte for byte.
+ *
+ * KNOWN GAP, deliberately not closed: the protected-mode sorts order by
+ * `roster_entries.protected_index`, which was ALREADY nullable before this
+ * change, and the same keyset argument applies to a row whose index is unset.
+ * Coalescing it would move existing NULL-index rows in the ordering, which is a
+ * behaviour change to shipped data that this task has no mandate for. No
+ * current ingest path produces a null-roster submission, so the combination is
+ * unreachable today.
+ */
+const STUDENT_SORT_NAME = sql`COALESCE(${roster_entries.display_name}, '')`;
 
 function buildOrderBy(sort: CohortSort, protectedMode: boolean): SQL[] {
   switch (sort) {
@@ -449,11 +601,11 @@ function buildOrderBy(sort: CohortSort, protectedMode: boolean): SQL[] {
     case 'student_asc':
       return protectedMode
         ? [sql`${roster_entries.protected_index} ASC`, sql`${submissions.id} ASC`]
-        : [sql`${roster_entries.display_name} ASC`, sql`${submissions.id} ASC`];
+        : [sql`${STUDENT_SORT_NAME} ASC`, sql`${submissions.id} ASC`];
     case 'student_desc':
       return protectedMode
         ? [sql`${roster_entries.protected_index} DESC`, sql`${submissions.id} DESC`]
-        : [sql`${roster_entries.display_name} DESC`, sql`${submissions.id} DESC`];
+        : [sql`${STUDENT_SORT_NAME} DESC`, sql`${submissions.id} DESC`];
     case 'assignment_asc':
       return [sql`${assignments.label} ASC`, sql`${submissions.id} ASC`];
   }
@@ -488,23 +640,26 @@ function buildCursorCondition(
       )!;
     }
     case 'ingested_desc': {
-      if (cursor.kind !== 'wall') return null;
-      const cursorDate = new Date(cursor.wall);
-      if (isNaN(cursorDate.getTime())) return null;
-      // Use the millisecond+1 trick from V33 to handle µs precision
-      const nextMs = new Date(cursorDate.getTime() + 1);
-      // Pass dates as ISO strings — postgres-js cannot serialize Date objects
-      // when they originate from js Date instances in sql`` template params.
-      const cursorDateStr = cursorDate.toISOString();
-      const nextMsStr = nextMs.toISOString();
-      return or(
-        sql`${submissions.ingested_at} < ${cursorDateStr}::timestamptz`,
-        and(
-          sql`${submissions.ingested_at} >= ${cursorDateStr}::timestamptz`,
-          sql`${submissions.ingested_at} < ${nextMsStr}::timestamptz`,
-          sql`${submissions.id} < ${cursor.id}`,
-        ),
-      )!;
+      if (cursor.kind !== 'wall_us') return null;
+      // One row-value comparison, which IS the (ingested_at, id) lexicographic
+      // order `buildOrderBy` uses — so it agrees with it by construction. The
+      // cursor carries full microsecond precision, which is what makes that
+      // possible; `decodeCursor` has already refused anything less.
+      //
+      // The millisecond-bucket branches this replaces covered `[floor,
+      // floor+1ms)` with no gap, so they looked right — but the floor is all a
+      // `Date`-derived cursor can express, so every same-millisecond row was
+      // decided by the random-uuid tiebreak instead of by its true microsecond.
+      // That both DROPPED rows (true ts earlier than the cursor's but larger
+      // id) and DUPLICATED them (true ts later but smaller id). See
+      // `../keyset.ts`.
+      return keysetAfter(
+        submissions.ingested_at,
+        submissions.id,
+        cursor.wall_us,
+        cursor.id,
+        'desc',
+      );
     }
     case 'student_asc': {
       if (protectedMode) {
@@ -519,9 +674,9 @@ function buildCursorCondition(
       }
       if (cursor.kind !== 'display_name') return null;
       return or(
-        sql`${roster_entries.display_name} > ${cursor.display_name}`,
+        sql`${STUDENT_SORT_NAME} > ${cursor.display_name}`,
         and(
-          sql`${roster_entries.display_name} = ${cursor.display_name}`,
+          sql`${STUDENT_SORT_NAME} = ${cursor.display_name}`,
           sql`${submissions.id} > ${cursor.id}`,
         ),
       )!;
@@ -539,9 +694,9 @@ function buildCursorCondition(
       }
       if (cursor.kind !== 'display_name') return null;
       return or(
-        sql`${roster_entries.display_name} < ${cursor.display_name}`,
+        sql`${STUDENT_SORT_NAME} < ${cursor.display_name}`,
         and(
-          sql`${roster_entries.display_name} = ${cursor.display_name}`,
+          sql`${STUDENT_SORT_NAME} = ${cursor.display_name}`,
           sql`${submissions.id} < ${cursor.id}`,
         ),
       )!;
@@ -565,7 +720,10 @@ function buildCursorFromRow(
     id: string;
     score_total: number;
     ingested_at: Date;
-    student_display_name: string;
+    /** Microsecond-precision projection of `ingested_at`; see `../keyset.ts`. */
+    ingested_at_us: string;
+    /** Nullable since the roster join became LEFT (D9); mirrors STUDENT_SORT_NAME. */
+    student_display_name: string | null;
     student_protected_index: number | null;
     assignment_label: string;
   },
@@ -576,12 +734,16 @@ function buildCursorFromRow(
     case 'score_asc':
       return { kind: 'score', score_total: row.score_total, id: row.id };
     case 'ingested_desc':
-      return { kind: 'wall', wall: row.ingested_at.toISOString(), id: row.id };
+      // `ingested_at_us`, never `row.ingested_at.toISOString()` — the `Date`
+      // has already lost the microseconds the cursor needs.
+      return { kind: 'wall_us', wall_us: row.ingested_at_us, id: row.id };
     case 'student_asc':
     case 'student_desc':
       return protectedMode
         ? { kind: 'protected_index', protected_index: row.student_protected_index ?? 0, id: row.id }
-        : { kind: 'display_name', display_name: row.student_display_name, id: row.id };
+        : // `?? ''` mirrors STUDENT_SORT_NAME exactly — the cursor value and the
+          // predicate it is compared against must be the same expression.
+          { kind: 'display_name', display_name: row.student_display_name ?? '', id: row.id };
     case 'assignment_asc':
       return { kind: 'assignment_label', assignment_label: row.assignment_label, id: row.id };
   }

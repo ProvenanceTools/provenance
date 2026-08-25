@@ -18,6 +18,7 @@
 import { getBlob } from '../storage/blobs.js';
 import type { StorageClient } from '../storage/client.js';
 import { recordPhase } from '../../jobs/ingest-profile.js';
+import { getLogger } from '../../logging.js';
 import { loadBundle } from '@provenance/analysis-core/loader/parse-bundle.js';
 import type { Bundle } from '@provenance/analysis-core/loader/types.js';
 import type { LoaderError, SessionParseError } from '@provenance/analysis-core/loader/types.js';
@@ -126,14 +127,56 @@ export async function parseBundlePhase(
     return errResult;
   }
 
-  return { ok: true, bundle: parseResult.value };
+  const bundle = parseResult.value;
+
+  // -------------------------------------------------------------------------
+  // Report anything the loader could not analyse.
+  //
+  // `analysis-core`'s read-side orphan guard no longer fails a whole submission
+  // over a leftover `.slog.meta`, a zero-byte `.slog`, a quarantined
+  // `.corrupt-*` log or an orphaned rolling seal — the shapes a GIT submission
+  // carries because no seal step ran to filter them. It drops them and records
+  // them instead, which is only the right trade if the drop is visible: a silent
+  // exclusion is worse than the hard error it replaces.
+  //
+  // Logged at `warn`, NOT stored as an ingest failure and NOT turned into a
+  // finding. The submission ingested successfully and its sessions were analysed
+  // in full; this says the RECORDING was incomplete, not that anything is wrong
+  // with it. `ingest_files.error` is reserved for files that did not ingest.
+  //
+  // Read paths need no persistence for this: they re-parse the stored bundle
+  // through `loadSubmissionIndex`, so `bundle.droppedArtifacts` is recomputed
+  // and available on every one of them.
+  // -------------------------------------------------------------------------
+  if (bundle.droppedArtifacts.length > 0) {
+    getLogger().warn(
+      {
+        filename: originalFilename,
+        droppedArtifacts: bundle.droppedArtifacts.map((a) => ({
+          kind: a.kind,
+          filename: a.filename,
+        })),
+        analysedSessions: bundle.sessions.length,
+      },
+      'incomplete recording: artifacts left out of analysis (not an integrity finding)',
+    );
+  }
+
+  return { ok: true, bundle };
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-function errorDetail(error: LoaderError | SessionParseError): string | undefined {
+/**
+ * Exported ONLY so the id-space wording below can be pinned by a pure test.
+ *
+ * These strings are persisted to `ingest_files.error.detail` and read by staff
+ * on a failure path; the wording is the contract, so it needs a test that fails
+ * when it regresses.
+ */
+export function errorDetail(error: LoaderError | SessionParseError): string | undefined {
   // Surface any human-readable detail stored on the error variants.
   const e = error as Record<string, unknown>;
 
@@ -145,10 +188,31 @@ function errorDetail(error: LoaderError | SessionParseError): string | undefined
     return `line ${String(e['line'])}${typeof e['detail'] === 'string' ? `: ${e['detail']}` : ''}`;
   }
   if (typeof e['actualKind'] === 'string') return `actualKind: ${e['actualKind']}`;
+  // `session_id_mismatch`. Both values ARE logical session ids — but bare
+  // `slog=` / `meta=` reads as "the file called this", which sends a grader
+  // searching for `session-<value>.slog`. No file is named that. Say what the
+  // values are and where they were read from.
   if (typeof e['slogSessionId'] === 'string' && typeof e['metaSessionId'] === 'string') {
-    return `slog=${e['slogSessionId']} meta=${e['metaSessionId']}`;
+    return (
+      `logical session id in the .slog's session.start=${String(e['slogSessionId'])} ` +
+      `but in its .slog.meta=${String(e['metaSessionId'])} ` +
+      `(logical session ids, not filenames)`
+    );
   }
-  if (typeof e['sessionId'] === 'string') return `sessionId: ${e['sessionId']}`;
+  // The `.slog` FILENAME uuid, from `orphaned_meta` / `orphaned_slog`. Labelling
+  // it `sessionId:` sent a grader searching the archive for a session that does
+  // not exist under that id — on a failure path, which is exactly when they are
+  // looking. Name the file instead, and say which space it is.
+  //
+  // Reachability: the loader no longer fails a bundle on either orphan shape
+  // (`analysis-core`'s read-side orphan guard drops and reports the artifact
+  // instead), so no NEW row takes this branch. It is kept correct because
+  // `ingest_files.error` rows written before that change persist forever and are
+  // still read by staff — the same reason the analyzer's `ErrorPanel` keeps its
+  // two cases.
+  if (typeof e['sessionId'] === 'string') {
+    return `log file: session-${String(e['sessionId'])}.slog (.slog filename uuid, not a session id)`;
+  }
 
   return undefined;
 }

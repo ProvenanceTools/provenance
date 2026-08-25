@@ -24,16 +24,16 @@ digraph master {
 
     edt   [label="Editor\nVS Code · JetBrains · Neovim" fillcolor="#241a0c" color="#F97316"]
 
-    gate  [label="Workspace has\n.provenance-manifest\nsigned by course key?"
-           shape=diamond fillcolor="#1c1712" color="#F97316" fontsize=9.5 height=0.9 width=1.9]
+    gate  [label="Workspace has\n.provenance-manifest\nwith a valid trust chain?\nroot key → course_cert → manifest"
+           shape=diamond fillcolor="#1c1712" color="#F97316" fontsize=9.5 height=1.2 width=2.3]
 
     dorm  [label="dormant\nnothing is recorded"
            fillcolor="#15171d" color="#5d677d" fontcolor="#8b95a8" style="filled,rounded,dashed"]
 
-    sstart[label="session.start\ngenerate session keypair,\nbind it to the manifest sig"
+    sstart[label="session.start\ngenerate session keypair, bind it to the\nmanifest sig, and carry the FULL signed\nmanifest into entry 0"
            fillcolor="#241a0c" color="#F97316"]
 
-    sig   [label="signal capture\nedits · pastes · saves · focus\nexternal changes · terminal · git"
+    sig   [label="signal capture\nedits · pastes · saves · focus\nexternal changes · terminal · git\ngated by the signed capture policy"
            fillcolor="#241a0c" color="#F97316"]
 
     chain [label="hash chain\nsha256(prev ‖ JCS(entry))"
@@ -70,7 +70,10 @@ digraph master {
     upl   [label="staff upload\nstreamed · chunked+resumable ≥16 MiB\n(nginx caps a body at ~20 MiB)"
            fillcolor="#0e2422" color="#17bfae" fontsize=9.5]
 
-    local [label="/local offline mode\nthe same analysis-core runs in the\nbrowser — no server, nothing uploaded"
+    push  [label="git push — the SECOND way work leaves the machine\nThere is no submit moment: .provenance/ IS the submission,\nno seal step ever runs, and the ROLLING seal is its only seal.\nPer-session filenames keep a shared directory add-only\nand therefore merge-conflict-free."
+           fillcolor="#0e2422" color="#17bfae" fontsize=9]
+
+    local [label="/local offline mode\nthe same analysis-core runs in the\nbrowser — no server, nothing uploaded\na monorepo zip offers a scope choice"
            fillcolor="#0d2416" color="#3fbf62" style="filled,rounded,dashed" fontsize=9.5]
   }
 
@@ -84,7 +87,7 @@ digraph master {
     api   [label="Hono API\nOAuth · tokens · rate limit"
            fillcolor="#0d1c33" color="#4b90f7"]
 
-    dedup [label="seen this\nblob_sha256\nbefore?"
+    dedup [label="seen this before?\nDECLARED GROUP first,\nthen blob_sha256"
            shape=diamond fillcolor="#12161f" color="#4b90f7" fontsize=9 height=0.85 width=1.5]
 
     skip  [label="skip\ncheap by design" fillcolor="#15171d" color="#5d677d"
@@ -93,13 +96,13 @@ digraph master {
     queue [label="pg-boss\none job per submission"
            shape=cds fillcolor="#0d1c33" color="#4b90f7" margin="0.28,0.10"]
 
-    pipe  [label="ingest pipeline\nparse → match → stats · validation · heuristics"
+    pipe  [label="ingest pipeline\nscope → parse → match → stats · validation ·\nheuristics → contributors"
            fillcolor="#0d1c33" color="#4b90f7"]
 
     strip [label="strip student source\nstore provenance-only"
            fillcolor="#241a0c" color="#F97316" fontsize=9.5]
 
-    pg    [label="Postgres\n21 tables · no events table"
+    pg    [label="Postgres\n26 tables · no events table"
            shape=cylinder fillcolor="#0d1c33" color="#4b90f7" height=0.62]
 
     blob  [label="Blob store\n/home/submit/provenance · 1TB"
@@ -122,7 +125,7 @@ digraph master {
     heur  [label="18 per-submission heuristics\nprocess · environment · integrity"
            fillcolor="#0d2416" color="#3fbf62"]
 
-    cross [label="2 cross-submission heuristics\nshared paste · pattern clone\nNOT a pipeline stage → cross_flags,\nthe semester's set replaced atomically"
+    cross [label="2 cross-submission heuristics\nshared paste · pattern clone\nNOT a pipeline stage → cross_flags\n+ cross_flag_exclusions.\nCompared PER ASSIGNMENT, and never across two\nbundles of one git-shared scope — proved by a shared\nOBSERVED COMMIT or a shared SIGNED SESSION;\nthe semester's set is still replaced atomically"
            fillcolor="#0d2416" color="#3fbf62"]
 
     flags [label="ranked flags\nseverity ↓ confidence ↓ seq ↑"
@@ -145,7 +148,7 @@ digraph master {
     drill [label="drill in — six tabs\noverview · timeline · replay\nvalidation · export · source"
            fillcolor="#2a0f1e" color="#e8559c"]
 
-    tune  [label="tuning UI\n25 flag weights (0.0–2.0) + on/off\nnot the heuristics' own thresholds"
+    tune  [label="tuning UI\n29 flag weights (0.0–2.0) + on/off\nnot the heuristics' own thresholds"
            fillcolor="#2a0f1e" color="#e8559c" fontsize=9.5]
 
     close [label="no action" fillcolor="#15171d" color="#5d677d"
@@ -154,10 +157,24 @@ digraph master {
     exp   [label="findings export\nmarkdown + PDF w/ replay shots\n/local only — the Export tab is a v3.1 stub"
            fillcolor="#15171d" color="#5d677d" fontcolor="#8b95a8"
            style="filled,rounded,dashed" fontsize=9.5]
+
+    compose [label="/compose/manifest\nstaff compose + SIGN a .provenance-manifest\nIN THE BROWSER. The course private key is read\ninside the sign handler and dropped on return —\nnever state, never a request, never storage.\nByte-identical to tools/sign-manifest.ts."
+             fillcolor="#2a0f1e" color="#e8559c" fontsize=9]
   }
+
+  /* The one time a STUDENT's browser talks to the server. The RECORDER still
+     never does — /enroll is a page, not a recorder code path. */
+  enroll [label="/enroll — the ONLY student-reachable route\ninstitution-scoped: no course, no semester in the path.\nThe student PASTES a public key; no private material is\ngenerated, received or transmitted here."
+          fillcolor="#2a0f1e" color="#e8559c" fontsize=9]
 
   /* ─────────── EDGES ─────────── */
   stu   -> edt    [label="types"]
+  stu   -> enroll [label="ONCE, in a browser —\nthe student's only server contact" color="#e8559c" style=dashed]
+  enroll -> api   [label="POST /identity/credential\nno semester in the path" color="#e8559c" style=dashed]
+  enroll -> sstart [label="credential imported into the recorder;\nevery session after this is offline"
+                    color="#F97316" style=dashed constraint=false]
+  compose -> gate [label="the signed manifest the\nworkspace is checked against"
+                   color="#e8559c" style=dashed constraint=false]
   edt   -> gate   [label="on open"]
   gate  -> dorm   [label="no" color="#5d677d" style=dashed]
   gate  -> sstart [label="yes" color="#F97316"]
@@ -168,6 +185,9 @@ digraph master {
   ckpt  -> slog   [style=dashed color="#9d7bf5" constraint=false]
   slog  -> seal   [label="on submit"]
   seal  -> bundle [color="#17bfae"]
+  ckpt  -> push   [label="a rolling seal per session, rewritten on\nEVERY checkpoint — so whatever is committed\nis always a valid seal of that moment"
+                   color="#17bfae" constraint=false]
+  push  -> upl    [label="a clone, zipped. Ingest declares the batch\na repo and fans it out per assignment scope" color="#17bfae"]
 
   bundle -> gs   [label="student uploads" color="#17bfae"]
   bundle -> upl  [label="or staff uploads\nthe whole export" color="#17bfae" style=dashed]

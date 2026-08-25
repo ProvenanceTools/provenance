@@ -167,8 +167,39 @@ export function buildIndex(bundle: Bundle): EventIndex {
     file?: string;
   };
 
+  // ---------------------------------------------------------------------------
+  // ONE logical session is replayed ONCE, however many files record it.
+  //
+  // `bundle.sessions` deliberately carries every `.slog` that claims a logical
+  // session id — a log duplicated under a second filename by a hand copy of
+  // `.provenance/`, a backup taken before a push, an odd merge. Two consumers
+  // genuinely need all of them: the rolling seal is resolved on what the
+  // claimants AGREE about (`resolveAmbiguousCoverage`, bug 12), and the witness
+  // reconciler answers `indeterminate` rather than the harsher `tip_mismatch`
+  // when they disagree. Removing the duplicate upstream in `parse-bundle.ts`
+  // silently took both of those answers away — measured, not assumed: it turned
+  // two `witness/reconcile-witnesses.test.ts` cases red, one of them by
+  // producing exactly the harsher verdict that test exists to prevent.
+  //
+  // The INDEX is the one consumer that must not see them all. It dedupes only
+  // `bySeq` (a Map); `byKind`, `byFile` and `bySessionId` all push. So a second
+  // copy replayed every delta twice: `reconstructFile` returned content the
+  // student never wrote ("x2x2x1x1" for a file written as "x2x1"), `charsTyped`
+  // doubled, and every heuristic dividing by it saw a fabricated denominator.
+  //
+  // Ties break on `slogSha256` — content-derived, so the choice depends on
+  // neither the archive's entry order nor either id space, and the server's
+  // repeated re-parses of one stored blob agree with each other. WHICH copy is
+  // observable only when the copies disagree, and that case is already reported
+  // (an `ambiguous_session_log` defect naming both files, and coverage
+  // degraded to `indeterminate`). Replaying both is not the cautious
+  // alternative to choosing one: it is the only option that invents events.
+  const sessionsToReplay = [...bundle.sessions]
+    .sort((a, b) => (a.slogSha256 < b.slogSha256 ? -1 : a.slogSha256 > b.slogSha256 ? 1 : 0))
+    .filter((s, i, all) => all.findIndex((o) => o.sessionId === s.sessionId) === i);
+
   const flat: FlatEvent[] = [];
-  for (const session of bundle.sessions) {
+  for (const session of sessionsToReplay) {
     for (const envelope of session.events) {
       const file = getFileFromPayload(envelope.kind, envelope.data);
       const event: FlatEvent = {
@@ -416,4 +447,60 @@ export function buildIndexFromEventRows(rows: ReadonlyArray<ServerEventRow>): Ev
   }
 
   return { bySeq, byKind, byFile, bySessionId, ordered };
+}
+
+// ---------------------------------------------------------------------------
+// sessionsFromEventRows
+// ---------------------------------------------------------------------------
+
+/**
+ * Regroup a flat list of server-shape rows into the per-session shape the
+ * ordering tiers take (`ObservedDagSource` / `EventOrderingSource`).
+ *
+ * The companion to {@link buildIndexFromEventRows}: that one produces the
+ * `EventIndex`, this one produces the second half of what
+ * `buildReconstructionScopeFromSessions` needs, so a client with nothing but
+ * an index built from paged rows can build the SAME happens-before relation the
+ * server builds from the parsed bundle. Without it, every server-backed surface
+ * — Replay and Timeline both — has no choice but to assume one contributor.
+ *
+ * Takes the INDEX rather than the rows, deliberately. Every consumer already
+ * holds an index and not all of them still hold the rows that produced it, and
+ * `index.bySessionId` carries the four fields the ordering tiers read, in full,
+ * for both a row-built and a bundle-built index. One input, both callers.
+ *
+ * Two things this deliberately does not do:
+ *
+ *  - It does not invent `hash` / `prev_hash`. The ordering tiers read `seq`,
+ *    `kind`, `wall` and `data` and nothing else (`SourceEnvelope`), and writing
+ *    empty strings into hash fields to satisfy a type would put a value that
+ *    looks like a chain where there is no chain.
+ *  - It does not re-order sessions. Sessions appear in `bySessionId` order;
+ *    `buildEventOrdering` sorts session ids itself, so nothing downstream
+ *    depends on the choice.
+ *
+ * Events within a session are sorted by `seq` — the hash chain's own order, and
+ * the one `buildSegments` and the observation buckets assume. That matters here
+ * rather than being belt-and-braces: an index's own order is `globalIdx`, which
+ * is WALL-derived and across two machines can contradict the chain.
+ */
+export function sessionsFromIndex(index: EventIndex): {
+  sessions: {
+    sessionId: string;
+    events: { seq: number; kind: string; wall: string; data: unknown }[];
+  }[];
+} {
+  const sessions: {
+    sessionId: string;
+    events: { seq: number; kind: string; wall: string; data: unknown }[];
+  }[] = [];
+  for (const [sessionId, events] of index.bySessionId) {
+    sessions.push({
+      sessionId,
+      events: [...events]
+        .sort((a, b) => a.seq - b.seq)
+        .map((e) => ({ seq: e.seq, kind: e.kind, wall: e.wall, data: e.payload })),
+    });
+  }
+  return { sessions };
 }

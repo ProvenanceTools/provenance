@@ -21,39 +21,56 @@ import { useActiveSemester } from '../../api/use-active-semester.js';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, Label } from 'recharts';
 import { useActiveConfig, useCommitConfig, useDryRunConfig } from '../../api/queries.js';
 import type { HeuristicConfigBody } from '@provenance/shared/api-schemas';
+import {
+  ALL_FLAG_IDS,
+  CROSS_SUBMISSION_HEURISTIC_IDS,
+} from '@provenance/analysis-core/heuristics/known-flag-ids.js';
 import { RecomputeProgress } from './RecomputeProgress.js';
+import { contributorsLabel, personLabel } from '../../lib/contributor-display.js';
 
 // ---------------------------------------------------------------------------
-// All known heuristic IDs (from Phase 13a)
+// All known heuristic/flag IDs.
+//
+// A 2026-08 audit found this list had hand-drifted from the real set (it was
+// missing `inter_session_external_change`) while looking internally
+// consistent. Derived from analysis-core's known-flag-ids.ts — the single
+// source of truth for every id the engine can produce — instead of a
+// hand-maintained duplicate, so it cannot drift again. See
+// heuristics-doc-sync.test.ts for the regression guard on docs/heuristics.md.
 // ---------------------------------------------------------------------------
 
-const KNOWN_HEURISTIC_IDS = [
-  'large_paste',
-  'external_edits',
-  'low_typing_high_output',
-  'chain_broken',
-  'paste_is_solution',
-  'mass_external_replacement',
-  'time_to_first_save_anomaly',
-  'idle_then_complete',
-  'no_intermediate_errors',
-  'paste_matches_known_source',
-  'ai_extension_active',
-  'extension_hash_mismatch',
-  'extension_set_changed_mid_assignment',
-  'clock_jumps',
-  'gap_in_heartbeats',
-  'manifest_sig_invalid',
-  'session_binding_invalid',
-  'monotonic_t_regression',
-  'monotonic_wall_regression',
-  'shell_integration_disabled',
-  'terminal_active_during_external_change',
-  'multiple_sessions_overlap',
-  'editing_pattern_clone',
-  'paste_shared_across_students',
-  'submitted_code_match',
-] as const;
+const KNOWN_HEURISTIC_IDS = ALL_FLAG_IDS;
+
+// ---------------------------------------------------------------------------
+// Cross-submission heuristics: weight does not apply.
+//
+// `cross_flags` has no `score_contribution`/`weight_at_compute` column, and
+// cross flags feed no score anywhere — only per-submission `flags` rows reach
+// computeScore → submissions.score_total. So for these ids the weight slider
+// cannot do anything; dragging it would let staff believe they'd changed how
+// a cross flag is weighted when nothing downstream reads that value. The
+// enable/disable toggle (per_flag.enabled, honoured by run-cross.ts) is real
+// and stays fully functional. Derived from analysis-core's
+// CROSS_HEURISTIC_REGISTRY via known-flag-ids.ts so a future third cross
+// heuristic inherits this automatically.
+const CROSS_SUBMISSION_HEURISTIC_ID_SET = new Set(CROSS_SUBMISSION_HEURISTIC_IDS);
+
+// ---------------------------------------------------------------------------
+// paste_matches_known_source: no corpus source exists, so it can never fire.
+//
+// The heuristic matches pastes against `config.pasteMatchesKnownSource.corpus`
+// (see analysis-core/heuristics/config.ts), which defaults to `[]` and has no
+// upload path, storage, or config plumbing anywhere in packages/server/src or
+// packages/analyzer/src — course staff have no way to populate it. Ships
+// registered (so a future corpus feature can wire it up) but is inert in
+// every deployed semester today.
+//
+// Unlike the cross-submission case, BOTH controls are meaningless here, not
+// just weight: with an empty corpus the heuristic emits 0 flags regardless of
+// enabled/disabled, so letting staff flip either control would imply a lever
+// that does nothing. Both are disabled, with a visible explanation — see
+// docs/heuristics.md for the staff-facing version of this note.
+const INERT_HEURISTIC_IDS = new Set<string>(['paste_matches_known_source']);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -264,6 +281,10 @@ export function TuningView() {
         >
           {KNOWN_HEURISTIC_IDS.map((id) => {
             const flagCfg = candidate.per_flag[id] ?? { enabled: true, weight: 1.0 };
+            const isCrossFlag = CROSS_SUBMISSION_HEURISTIC_ID_SET.has(id);
+            const isInert = INERT_HEURISTIC_IDS.has(id);
+            const weightNoteId = `tuning-weight-note-${id}`;
+            const inertNoteId = `tuning-inert-note-${id}`;
             return (
               <div key={id} className="px-4 py-3 border-b border-gray-100">
                 <div className="flex items-center justify-between mb-1">
@@ -281,6 +302,8 @@ export function TuningView() {
                       className="h-3 w-3"
                       data-testid={`toggle-${id}`}
                       aria-label={`Enable ${id}`}
+                      disabled={isInert}
+                      aria-describedby={isInert ? inertNoteId : undefined}
                     />
                     <span className="text-xs text-gray-500">{flagCfg.enabled ? 'on' : 'off'}</span>
                   </label>
@@ -293,15 +316,38 @@ export function TuningView() {
                     step={0.1}
                     value={flagCfg.weight}
                     onChange={(e) => handleWeight(id, parseFloat(e.target.value))}
-                    className="flex-1 h-1"
+                    disabled={isCrossFlag || isInert}
+                    className="flex-1 h-1 disabled:opacity-50 disabled:cursor-not-allowed"
                     data-testid={`slider-${id}`}
                     aria-labelledby={`tuning-label-${id}`}
                     aria-valuetext={`${flagCfg.weight.toFixed(1)} weight`}
+                    aria-describedby={
+                      isCrossFlag ? weightNoteId : isInert ? inertNoteId : undefined
+                    }
                   />
                   <span className="text-xs text-gray-500 w-8 text-right">
                     {flagCfg.weight.toFixed(1)}
                   </span>
                 </div>
+                {isCrossFlag && (
+                  <p
+                    id={weightNoteId}
+                    className="mt-1 text-xs text-gray-600"
+                    data-testid={`weight-note-${id}`}
+                  >
+                    Cross-submission flags are surfaced, not scored. Weight does not apply.
+                  </p>
+                )}
+                {isInert && (
+                  <p
+                    id={inertNoteId}
+                    className="mt-1 text-xs text-gray-600"
+                    data-testid={`inert-note-${id}`}
+                  >
+                    No corpus source exists yet — this heuristic can never fire. Enable and weight
+                    have no effect.
+                  </p>
+                )}
               </div>
             );
           })}
@@ -387,7 +433,20 @@ export function TuningView() {
                     <tbody>
                       {dryRunData.top_movers.slice(0, 20).map((m) => (
                         <tr key={m.submission_id} className="border-b border-gray-50">
-                          <td className="px-4 py-1.5">{m.student.display_name}</td>
+                          {/*
+                            EVERY contributor, not the submitter of record. A
+                            mover row says "this score moves by N under the
+                            proposed weights"; the score belongs to the whole
+                            scope, so naming one partner of a group submission
+                            charges the swing to an arbitrary person. Falls back
+                            to `student` for a response predating
+                            `contributors`.
+                          */}
+                          <td className="px-4 py-1.5">
+                            {contributorsLabel(m.contributors, {
+                              fallbackStudent: m.student,
+                            }) || personLabel(null)}
+                          </td>
                           <td className="px-4 py-1.5 text-gray-500">
                             {m.assignment.assignment_id_str}
                           </td>

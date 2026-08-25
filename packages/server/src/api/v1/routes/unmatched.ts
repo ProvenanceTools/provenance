@@ -15,13 +15,14 @@
  *   ingest.unmatched.discard — on POST discard success
  *
  * Cursor format:
- *   Opaque base64-encoded JSON `{ ca: isoString, id: uuid }` for stable keyset
- *   pagination that ties on (created_at, id). The `id` tie-breaker prevents
- *   missed rows when multiple files share the same created_at timestamp.
+ *   Opaque base64-encoded JSON `{ v, ca, id }` for stable keyset pagination on
+ *   (created_at, id). `ca` is a MICROSECOND-precision UTC ISO string — not a
+ *   `Date.toISOString()` value, which would truncate to milliseconds and make
+ *   the whole millisecond bucket undecidable. See `services/keyset.ts`.
  */
 
 import { Hono } from 'hono';
-import { eq, and, or, sql, gt, gte } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { getDb } from '../../../db/client.js';
 import { requireAuth } from '../../middleware/authorize.js';
 import { requirePrincipal } from '../../middleware/auth-session.js';
@@ -34,34 +35,50 @@ import { getConfig } from '../../../config/index.js';
 import { getBoss } from '../../../jobs/pg-boss.js';
 import { attachUnmatchedFile, getIngestFileSemesterId } from '../../../services/ingest/attach.js';
 import { projectStudent, maskFilename, protectedLabel } from '../../../services/protect.js';
+import {
+  KEYSET_CURSOR_VERSION,
+  isMicroTimestamp,
+  keysetAfter,
+  microTimestamp,
+} from '../../../services/keyset.js';
 
 // ---------------------------------------------------------------------------
 // Cursor helpers
 // ---------------------------------------------------------------------------
 
 interface CursorPayload {
-  ca: string; // created_at ISO string
+  /** Microsecond-precision UTC ISO string; see `services/keyset.ts`. */
+  ca: string;
   id: string; // ingest_files.id UUID
 }
 
-function encodeCursor(createdAt: Date | null, id: string): string {
-  const payload: CursorPayload = { ca: createdAt?.toISOString() ?? '', id };
-  return Buffer.from(JSON.stringify(payload)).toString('base64url');
+function encodeCursor(createdAtMicros: string, id: string): string {
+  return Buffer.from(
+    JSON.stringify({ v: KEYSET_CURSOR_VERSION, ca: createdAtMicros, id }),
+  ).toString('base64url');
 }
 
+/**
+ * Returns `null` for anything this build cannot paginate from correctly — the
+ * route turns that into a 400.
+ *
+ * That deliberately includes a **pre-fix cursor**, which is recognisable both
+ * by its missing version tag and by its millisecond-precision timestamp.
+ * Honouring one would mean treating its timestamp as a bucket floor and
+ * silently dropping the rest of that millisecond — the exact defect this code
+ * exists to fix. A 400 the client recovers from by restarting pagination is the
+ * only honest answer.
+ */
 function decodeCursor(encoded: string): CursorPayload | null {
   try {
     const raw = Buffer.from(encoded, 'base64url').toString('utf8');
     const parsed: unknown = JSON.parse(raw);
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      typeof (parsed as Record<string, unknown>)['ca'] === 'string' &&
-      typeof (parsed as Record<string, unknown>)['id'] === 'string'
-    ) {
-      return parsed as CursorPayload;
-    }
-    return null;
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const p = parsed as Record<string, unknown>;
+    if (p['v'] !== KEYSET_CURSOR_VERSION) return null;
+    if (typeof p['ca'] !== 'string' || typeof p['id'] !== 'string') return null;
+    if (!isMicroTimestamp(p['ca'])) return null;
+    return { ca: p['ca'], id: p['id'] };
   } catch {
     return null;
   }
@@ -191,45 +208,47 @@ export function createUnmatchedRouter(): Hono {
 
       const cursorStr = c.req.query('cursor');
       const cursor = cursorStr !== undefined ? decodeCursor(cursorStr) : null;
+      // A cursor this build cannot honour is a 400, not a silent restart from
+      // page 1: paging from the top while the client believes it is paging
+      // forward produces a duplicate-laden result set with no error anywhere.
+      if (cursorStr !== undefined && cursor === null) {
+        return c.json(
+          Errors.validation([{ field: 'cursor', issue: 'Invalid cursor' }]).toBody(),
+          400,
+        );
+      }
 
       // Build the WHERE clause. We join ingest_files → ingest_jobs to filter
       // by semester_id, then apply the unmatched status filter (which uses the
       // ingest_files_unmatched_idx partial index when status='unmatched').
       //
-      // Keyset pagination: (created_at, id) compound cursor.
-      //   next page condition:  (created_at >= T_next_ms)
-      //                      OR (created_at >= T_this_ms AND id > cursor_id)
-      // We order by (created_at ASC, id ASC) and use the millisecond+1 trick
-      // to disambiguate same-ms rows by UUID (Postgres timestamptz has µs precision,
-      // but JS Date.toISOString() truncates to ms).
-      let cursorCondition = undefined;
-      if (cursor !== null && cursor.ca !== '') {
-        const cursorDate = new Date(cursor.ca);
-        if (!isNaN(cursorDate.getTime())) {
-          // Files created after the cursor date, or at the same time with a
-          // lexicographically larger ID (UUIDs sort lexicographically in Postgres).
-          // The cursor stores a millisecond-precision timestamp (JS Date), but
-          // Postgres stores timestamptz with microsecond precision.  A row whose
-          // DB timestamp is "2026-05-22T12:13:32.770123Z" compares as
-          //   created_at > '2026-05-22T12:13:32.770Z'   → TRUE (123µs > 0)
-          // which would include the cursor row itself in the next page.
-          //
-          // Fix: rows after the cursor are those with:
-          //   (created_at >= T_next_ms)                  — any row in the next ms or later
-          //   OR (created_at >= T_this_ms AND id > cursor.id)  — same ms bucket, later id
-          //
-          // T_next_ms is T_this_ms + 1 millisecond, so no row in the same ms
-          // bucket satisfies the first branch unless it's genuinely in a later ms.
-          const nextMs = new Date(cursorDate.getTime() + 1);
-          cursorCondition = or(
-            gte(ingest_files.created_at, nextMs),
-            and(gte(ingest_files.created_at, cursorDate), gt(ingest_files.id, cursor.id)),
-          );
-        }
-      }
+      // Keyset pagination on (created_at ASC, id ASC).
+      //
+      // One row-value comparison, which IS that lexicographic order — so it
+      // agrees with the ORDER BY by construction. The cursor carries full
+      // microsecond precision, which is what makes that possible; `decodeCursor`
+      // has already refused anything less.
+      //
+      // The millisecond-bucket branches this replaces covered `[floor, ∞)`
+      // with no gap, so they looked right — but the floor is all a `Date`-derived
+      // cursor can express, so every same-millisecond row was decided by the
+      // random-uuid tiebreak instead of by its true microsecond. That both
+      // DROPPED rows (true ts later than the cursor's but smaller id) and
+      // DUPLICATED them (true ts earlier but larger id). Batch ingest writes a
+      // whole tray in one go, so sharing a millisecond is the normal case here.
+      // See `services/keyset.ts`.
+      const cursorCondition =
+        cursor !== null
+          ? keysetAfter(ingest_files.created_at, ingest_files.id, cursor.ca, cursor.id, 'asc')
+          : undefined;
 
       const rows = await db
-        .select(FILE_SELECT)
+        .select({
+          ...FILE_SELECT,
+          // Cursor-only projection. `created_at` in FILE_SELECT is a JS `Date`
+          // and has already lost the microseconds; this keeps them.
+          created_at_us: microTimestamp(ingest_files.created_at),
+        })
         .from(ingest_files)
         .innerJoin(ingest_jobs, eq(ingest_files.ingest_job_id, ingest_jobs.id))
         .leftJoin(roster_entries, eq(ingest_files.matched_student_id, roster_entries.id))
@@ -248,7 +267,9 @@ export function createUnmatchedRouter(): Hono {
       const items = hasMore ? rows.slice(0, limit) : rows;
       const lastItem = items.at(-1);
       const nextCursor =
-        hasMore && lastItem !== undefined ? encodeCursor(lastItem.created_at, lastItem.id) : null;
+        hasMore && lastItem !== undefined
+          ? encodeCursor(lastItem.created_at_us, lastItem.id)
+          : null;
 
       const protectedMode = requirePrincipal(c).user.protected;
       return c.json({

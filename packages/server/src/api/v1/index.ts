@@ -34,6 +34,7 @@ import { createCoursesRouter } from './routes/courses.js';
 import { createSemestersRouter } from './routes/semesters.js';
 import { createMembersRouter } from './routes/members.js';
 import { createRosterRouter } from './routes/roster.js';
+import { createCredentialRouter } from './routes/credential.js';
 import { createIngestRouter } from './routes/ingest.js';
 import { createHeuristicConfigRouter } from './routes/heuristic-config.js';
 import { createUnmatchedRouter } from './routes/unmatched.js';
@@ -86,6 +87,20 @@ export function createV1App(): Hono {
   // Members + invitations routes.
   // Paths: /semesters/:semesterId/members and /semesters/:semesterId/invitations/:id
   app.route('/', createMembersRouter());
+
+  // Student credential issuance (identity 2.1).
+  // Path: /identity/credential (POST)
+  //
+  // The ONLY route a student — as opposed to course staff — can reach. It is
+  // mounted before the roster/ingest/cohort routers purely for readability;
+  // paths do not overlap. Authorization is an interactive session on an allowed
+  // hosted domain, not `memberships`, so it deliberately does NOT use
+  // requireAuth.
+  //
+  // The retired 2.0 sibling, POST /semesters/:semesterId/enrollment, used to be
+  // mounted here too. Removing it removed MINTING only; 2.0 verification in
+  // log-core and analysis-core is untouched and stays live forever.
+  app.route('/', createCredentialRouter());
 
   // Roster routes.
   // Paths: /semesters/:semesterId/roster (GET, POST :upload, POST :commit, PATCH /:id)

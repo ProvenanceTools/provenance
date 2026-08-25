@@ -37,7 +37,7 @@ digraph analysis {
   report [label="validation report" shape=note fillcolor="#1e1830" color="#9d7bf5"]
 
   subgraph cluster_heur {
-    label="  HEURISTIC REGISTRY — a fixed list, iterated in order  " fontsize=9.5
+    label="  HEURISTIC REGISTRY — a fixed list, iterated in order, ONCE over the WHOLE scope  " fontsize=9.5
     fontcolor="#3fbf62" color="#153c25" penwidth=1.5 style=rounded
     bgcolor="#0a130d" labeljust="l"
     node [fillcolor="#0d2416" color="#3fbf62" fontsize=9]
@@ -45,7 +45,7 @@ digraph analysis {
     cand [label="candidate-pastes\nunifies native paste events with\ndoc.change deltas marked paste_likely —\none place to teach about a new paste source"
           fillcolor="#0d1c33" color="#4b90f7" fontsize=9]
 
-    hp [label="PROCESS ×10\nlarge_paste · paste_is_solution\npaste_matches_known_source · external_edits · inter_session_external_change\nmass_external_replacement · low_typing_high_output\ntime_to_first_save_anomaly · idle_then_complete\nno_intermediate_errors"]
+    hp [label="PROCESS ×10\nlarge_paste · paste_is_solution\npaste_matches_known_source (INERT — nothing populates its\ncorpus, so the tuning UI disables BOTH its controls)\nexternal_edits · inter_session_external_change\nmass_external_replacement · low_typing_high_output\ntime_to_first_save_anomaly · idle_then_complete\nno_intermediate_errors"]
     he [label="ENVIRONMENT ×4\nai_extension_active\nshell_integration_disabled\nextension_set_changed_mid_assignment\nterminal_active_during_external_change"]
     hi [label="INTEGRITY ×4\nclock_jumps · gap_in_heartbeats\nmultiple_sessions_overlap\nextension_hash_mismatch"]
   }
@@ -72,16 +72,95 @@ digraph analysis {
     bgcolor="#150a10" labeljust="l"
     node [fillcolor="#2a0f1e" color="#e8559c" fontsize=9]
     c1 [label="paste_shared_across_students\nsha256 exact → high · fuzzy line match → medium"]
-    c2 [label="editing_pattern_clone\nanomalously similar timing and file-switch order"]
-    cx [label="cross_flags + participants" shape=note]
+    c2 [label="editing_pattern_clone\nJaccard over event-kind 3-grams —\nnot-applicable when either side had a\nkind-stream signal disabled by policy"]
+    xscope [label="cross-scope partition — S20 + D18a\nONE enumeration, ONE suppression decision.\nlineageOf is an OPAQUE class id: a heuristic can\nask ‘same scope?’ and cannot re-derive the rule.\nTWO KEYS: the OBSERVED commit (repository, sha) —\nnever ancestry, which would put a whole cohort's\nshared skeleton in one lineage — and the SESSION\nkey (session_pubkey, session_id), for the honest\npair that never ran a recorded git command.\nThe session key is capped by a COHORT-FRACTION\nCEILING, k·2 &lt; n, inert below n = 5: no single key\ncan move more than ⌈n/2⌉−1 submissions, so a\ncohort-wide switch-off is structurally unreachable.\nAbsence is its own singleton, so it never suppresses."
+            fillcolor="#0d2416" color="#3fbf62" fontsize=9]
+    cx [label="cross_flags + participants\nCOMPARED per assignment. The DELETE-then-INSERT\nstays semester-wide — the rows are semester-scoped." shape=note]
   }
+
+  subgraph cluster_collab {
+    label="  COLLABORATION SPINE — the three primitives  "
+    fontsize=9.5 fontcolor="#9d7bf5" color="#2e2450" penwidth=1.5 style=rounded
+    bgcolor="#0e0b18" labeljust="l"
+    node [fillcolor="#1e1830" color="#9d7bf5" fontsize=9]
+
+    contrib [label="contributor resolution\nattributed · unattributed · unverifiable —\nTHREE facts, never collapsed into two.\nGrouped on the attributed student_ref only;\nan unattributed session is its own singleton,\nnever pooled and never asserted distinct."]
+
+    dag [label="observed commit DAG\nnode identity is (repository, sha)\nabsent parents are null, NEVER []\ntwo claims disagreeing on one sha ⇒\nno edge asserted in either direction"]
+
+    order [label="happens-before  ≺\npartial by nature — before · after ·\nconcurrent · same · unknown.\nReturns a STRING, so it can never reach\nArray.sort. globalIdx is NOT re-keyed and\nthere is no parallel integer beside it.\nCONSUMED by segmented reconstruction, by\ncheck 8, and by the timeline on BOTH routes —\nstill never by buildIndex."]
+  }
+
+  subgraph cluster_creaders {
+    label="  WHAT READS THE SPINE  " fontsize=9.5 fontcolor="#9d7bf5" color="#2e2450"
+    penwidth=1.5 style=rounded bgcolor="#0e0b18" labeljust="l"
+    node [fillcolor="#1e1830" color="#9d7bf5" fontsize=9]
+
+    extclass [label="external-change reclassification\ngit_merge_in · git_unrecorded_in ·\nexternal · unclassified.\nOnly git_merge_in suppresses, and only on an\nexact sha256 match against a state a PROVABLY\nDIFFERENT verified contributor recorded on the\nsame path — never on a clock. Reclassified\nevents stay in the index and in the verdict map."]
+
+    split [label="partitionSessionOverlaps\nONE enumeration of overlapping session pairs,\nTWO decisions — same person? same machine? —\nand THREE parts: judged · collaboration · multiMachine.\njudged.comparison is typed same_machine | unknown,\nso neither a two-person nor a two-MACHINE pair has\nan arm to arrive in — drift is a compile error."]
+
+    capab [label="capability reader — §5.6\nreads git_capture · witness_capture · file_scope\nback off every session.start. Three answers each:\nabsent · recorded · malformed.\n‘impossible’ needs UNANIMITY; one unreported\nsession takes the bundle answer to ‘unknown’.\nfile_scope answers PER PATH — wasFileWatched\nreturns watched · not_watched · unknown."
+           fillcolor="#0d2416" color="#3fbf62" fontsize=9]
+
+    coverage [label="COVERAGE STAGE — facts, never findings\nconcurrent recording · ONE person's two machines ·\nidentity counts + rootKeyConfigured ·\ncommit-graph coverage + DAG defects ·\nthe single-repository caveat · witnessing coverage ·\ngit-observation coverage · FILE SCOPE, per reviewed\npath · unattested rolling-seal tails ·\nTORN TAILS (truncated and KEPT) ·\ndropped artifacts (left out entirely).\nAnswers in all three states: not available,\nnothing to note, or the facts."
+              fillcolor="#0d2416" color="#3fbf62" penwidth=1.8]
+
+    witness [label="peer witnessing — READER ONLY\ncorroborated · absent · short ·\ntip_mismatch · indeterminate, plus\nunwitnessed per SESSION.\nFacts only: no Flag, no check, no score,\nand it never names a person.\nReconciled by the COVERAGE STAGE — discrepancies\naggregated on (file, verdict), corroborated kept\nas a COUNT so it never joins a list of problems."
+             fillcolor="#0d2416" color="#3fbf62" fontsize=9]
+  }
+
+  rkpub [label="ROOT PUBLIC KEY\nconfigured server-side and in the browser build —\nthe same one value every recorder compiles in"
+         fillcolor="#2a0f1e" color="#e8559c" fontsize=9]
 
   cfg [label="HeuristicConfig\n24 tunable thresholds; per-semester overrides\nlayered over the shipped defaults"
        fillcolor="#0d1c33" color="#4b90f7" fontsize=9]
 
+  pol [label="RECORDED CAPTURE POLICY\nread back out of the bundle's own signed manifest —\nnot out of any server-side setting.\nA heuristic that consumes a DISABLED signal returns\nnot-applicable: never a flag, and never a zero."
+       fillcolor="#1e1830" color="#9d7bf5" fontsize=9]
+
   zip -> unzip
   unzip -> index
   index -> recon
+
+  /* the collaboration spine: identity, then the DAG, then the relation */
+  unzip -> contrib [label="session.start.identity —\nnever machine_id, never a git author,\nnever the upload filename" color="#9d7bf5"]
+  rkpub -> contrib [label="unset ⇒ every identified session is\nunverifiable / no_root_key, which is\n“cannot check”, NOT “checked and failed”.\nThe deployment still analyses." color="#e8559c" style=dashed]
+  index -> dag  [label="git.event observations" color="#9d7bf5"]
+  contrib -> order [label="L1 — a session back-pointer into a\nPROVABLY DIFFERENT contributor is refused" color="#9d7bf5"]
+  dag -> order  [label="L2 — the only trustworthy\ncross-contributor relation" color="#9d7bf5"]
+  order -> recon [label="segments a file only when two provably\ndifferent contributors touched it" color="#9d7bf5" style=dashed constraint=false]
+  order -> v8 [label="the ≺-maximal recorded states,\nnot whichever laptop clock ran last" color="#9d7bf5" style=dashed]
+
+  /* Tier 3.1 — content decides, not the recorder's 2 s timing tag */
+  index -> extclass [label="fs.external_change" color="#9d7bf5"]
+  contrib -> extclass [label="gated on a COLLABORATIVE scope —\na solo bundle short-circuits and is\nbyte-for-byte unaffected" color="#9d7bf5" style=dashed]
+  dag -> extclass [label="corroboration only:\nancestor · same_commit ·\nunordered · no_observations" color="#9d7bf5" style=dashed]
+  extclass -> hp [label="external_edits, mass_external_replacement and\nterminal_active_during_external_change SKIP\nthe git_merge_in set. low_typing_high_output,\ntime_to_first_save_anomaly and idle_then_complete\nSUBTRACT its characters from their own counts." color="#9d7bf5"]
+  extclass -> he [label="⇒ terminal_active_during_\nexternal_change too" color="#9d7bf5" style=dashed]
+
+  /* peer witnessing: the reader landed first, exactly as 2.0 and the seal did */
+  index -> witness [label="peer.observed — all three\nrecorders emit it as of 2026-08-20" color="#3fbf62"]
+  witness -> coverage [label="witnessing coverage — counts, capability,\nand the discrepancies. unwitnessed is the ORDINARY\nstate and is never rendered as a deficiency" color="#3fbf62" style=dashed constraint=false]
+  contrib -> witness [label="a witness is worth what the chain\ncarrying it is worth: attributed ⇒\nestablished · unattributed ⇒ inferred ·\nunverifiable ⇒ unknown" color="#5d677d" style=dashed]
+
+  /* the one enumeration of overlapping sessions, split two ways */
+  contrib -> split [color="#9d7bf5" style=dashed constraint=false]
+  index -> split [color="#9d7bf5"]
+  split -> hi [label="judged — one person's own two sessions on ONE\nmachine (high · 0.95), or a pair nothing settles\n(low · 0.5, with unresolvedBy naming why)" color="#9d7bf5"]
+  split -> coverage [label="collaboration — two VERIFIED, DISTINCT people recording\nat once; and multiMachine — ONE person's two enrolled\nmachines, kept a SEPARATE fact so it never reads as two\npeople. Both exculpatory, both once thrown away" color="#3fbf62"]
+
+  unzip -> coverage [label="dropped artifacts · unattested seal tails ·\nand the torn trailing lines it TRUNCATED\nrather than dropping" color="#3fbf62"
+                     style=dashed constraint=false]
+  unzip -> capab [label="every session.start's\ncapability block" color="#3fbf62"]
+  capab -> coverage [label="wasFileWatched, per reviewed path —\nwatched · not_watched · unknown. A file with\nno recorded activity that no session was\nwatching is EXPLAINED, not suspicious" color="#3fbf62"]
+  capab -> witness [label="witnessingCapability at bundle level,\nplus a per-session capability — a DIFFERENT\naxis from state: could this recorder have\nwitnessed anyone, not was it witnessed"
+                    color="#5d677d" style=dashed]
+  dag -> xscope [label="observedCommitKeys — the (repository, sha) keys of\nOBSERVED commits, never witnessed-only ancestors"
+                 color="#9d7bf5"]
+  unzip -> xscope [label="recordedSessionKeys — (session_pubkey, session_id)\nfor every session the archive carries. NOT the .slog\ndigest: .provenance/ is add-only, so a partner who\npulled yesterday holds a PREFIX and a different sha,\nwhile the pubkey sits in session.start, the first\nevent of every prefix" color="#3fbf62" style=dashed constraint=false]
+  xscope -> c1 [label="two bundles in one lineage\nare not compared at all" color="#e8559c"]
+  xscope -> c2 [label="same" color="#e8559c" style=dashed]
   index -> v1 [lhead=cluster_val color="#9d7bf5"]
   v1 -> report [ltail=cluster_val color="#9d7bf5"]
   report -> integ
@@ -94,6 +173,11 @@ digraph analysis {
   cfg -> hp [label="thresholds" color="#4b90f7" style=dashed]
   cfg -> he [color="#4b90f7" style=dashed]
   cfg -> hi [color="#4b90f7" style=dashed]
+  unzip -> pol [label="the manifest inside\nsession.start" color="#9d7bf5" style=dashed]
+  pol -> hp [label="terminal off ⇒\nno_intermediate_errors\nstands down" color="#9d7bf5" style=dashed]
+  pol -> he [label="⇒ shell_integration_disabled and\nterminal_active_during_external_change\nstand down too" color="#9d7bf5" style=dashed]
+  pol -> hi [label="the recorded heartbeat cadence\nraises the gap threshold" color="#9d7bf5" style=dashed]
+  pol -> c2 [label="a thinned event-kind alphabet\nis not a comparable fingerprint" color="#9d7bf5" style=dashed]
 
   hp -> imove [label="large_paste and\npaste_is_solution only" color="#F97316"]
   imove -> down [label="yes" color="#F97316"]

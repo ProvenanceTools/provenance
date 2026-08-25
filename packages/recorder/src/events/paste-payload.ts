@@ -40,6 +40,12 @@ export type PastePayloadFields = {
  * content: set when length <= MAX_INLINE_BYTES.
  * content_head / content_tail: set when length > MAX_INLINE_BYTES.
  *   Uses character slices (not byte slices) to avoid splitting multi-byte codepoints.
+ *
+ * The size cap is the ONLY thing that suppresses content. There was briefly a
+ * `policy.capture.inline_content` knob that stripped the snippet at any size;
+ * it was removed because `internal_move` reads paste content to DOWNGRADE a
+ * `large_paste` flag, so stripping it made the system more likely to falsely
+ * accuse a student relocating their own code (program spec §4).
  */
 export function buildPastePayload(text: string): PastePayloadFields {
   const byteLength = Buffer.byteLength(text, 'utf8');

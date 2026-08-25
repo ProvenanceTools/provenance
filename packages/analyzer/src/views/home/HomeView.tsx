@@ -34,10 +34,25 @@ export function HomeView() {
   }
 
   if (!semesters || semesters.length === 0) {
+    // Everyone without a membership lands here, and that is now two different
+    // people: a staff member awaiting an invite, and a STUDENT who followed a
+    // link into the analyzer. The student has exactly one thing to do here, and
+    // no other page lists it, so the dead end names it.
     return (
-      <div className="flex flex-1 items-center justify-center py-16">
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
         <p className="text-sm text-muted-foreground" data-testid="no-semesters-message">
           Ask an admin to invite you.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Enrolling in a course?{' '}
+          <Link
+            to="/enroll"
+            className="text-primary underline-offset-4 hover:underline"
+            data-testid="enroll-link"
+          >
+            Get your enrollment token
+          </Link>
+          .
         </p>
       </div>
     );
@@ -52,12 +67,24 @@ export function HomeView() {
             Choose a semester to review its submissions.
           </p>
         </div>
-        <Button asChild variant="outline" size="sm">
-          <Link to="/local/load" data-testid="local-analysis-link">
-            Local analysis
-            <span aria-hidden="true">→</span>
-          </Link>
-        </Button>
+        {/* Both links are reachable only from this branch, which renders only
+            when the principal has at least one membership — i.e. staff. The
+            composer handles the course signing key, so it must not appear in
+            the AppShell top bar, which /home also shows to students. */}
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link to="/compose/manifest" data-testid="manifest-composer-link">
+              Manifest composer
+              <span aria-hidden="true">→</span>
+            </Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/local/load" data-testid="local-analysis-link">
+              Local analysis
+              <span aria-hidden="true">→</span>
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <ul className="space-y-2.5" data-testid="semester-list">

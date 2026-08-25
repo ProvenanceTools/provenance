@@ -246,7 +246,11 @@ describe('startDocWiring', () => {
 
   it('registers all 6 subscriptions and disposes cleanly', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     const disposable = startDocWiring({
       workspace: testWorkspace,
@@ -275,7 +279,11 @@ describe('startDocWiring', () => {
 
   it('doc.open for watched file: creates registry entry and emits with hash', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -300,7 +308,11 @@ describe('startDocWiring', () => {
 
   it('doc.open for unwatched file: emits event but does NOT create registry entry', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -324,7 +336,11 @@ describe('startDocWiring', () => {
 
   it('doc.change emits with correct path, deltas, and source=typed', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -349,7 +365,11 @@ describe('startDocWiring', () => {
 
   it('doc.change applies deltas to ExpectedContent for watched files', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -377,7 +397,11 @@ describe('startDocWiring', () => {
 
   it('doc.change for unwatched file still emits but does not create registry entry', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -399,7 +423,11 @@ describe('startDocWiring', () => {
   it('doc.save emits with path and sha256', async () => {
     setMockWindowState({ focused: true });
     const content = 'content';
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -427,7 +455,11 @@ describe('startDocWiring', () => {
 
   it('doc.close emits correct path and does NOT delete registry entry', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -453,7 +485,11 @@ describe('startDocWiring', () => {
 
   it('selection.change emits correct payload for selection', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -487,7 +523,7 @@ describe('startDocWiring', () => {
 
   it('focus.change emits only on state transition', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry([]);
+    const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -514,7 +550,7 @@ describe('startDocWiring', () => {
 
   it('focus.change does NOT emit when state does not change', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry([]);
+    const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -535,7 +571,11 @@ describe('startDocWiring', () => {
 
   it('paste_likely doc.change: emits paste event (not doc.change)', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -557,7 +597,11 @@ describe('startDocWiring', () => {
 
   it('paste event has correct path, range, length, sha256', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -584,7 +628,11 @@ describe('startDocWiring', () => {
 
   it('short typed change: emits doc.change (not paste)', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -605,7 +653,11 @@ describe('startDocWiring', () => {
 
   it('large insert with non-empty range: emits doc.change with source=paste_likely (replacement-shaped bulk edit)', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -633,7 +685,11 @@ describe('startDocWiring', () => {
 
   it('multi-delta WorkspaceEdit (tool-applied): emits doc.change with source=paste_likely', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -673,7 +729,11 @@ describe('startDocWiring', () => {
 
   function startPasteRoutingHarness() {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -766,7 +826,7 @@ describe('startDocWiring', () => {
 
   it('large-insert counter increments on paste_likely, not on typed', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry([]);
+    const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
     const emitters = makeEmitters();
     const counter = makeLargeInsertCounter();
     startDocWiring({
@@ -800,7 +860,7 @@ describe('startDocWiring', () => {
 
   it('paste_confirmed (intercept just before doc.change): still emits paste event', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry([]);
+    const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
     const emitters = makeEmitters();
     const confirmingIntercept = makeConfirmingIntercept();
     confirmingIntercept.arm();
@@ -834,7 +894,11 @@ describe('startDocWiring', () => {
   it('doc.save with on-disk content matching expected: emits only doc.save', async () => {
     setMockWindowState({ focused: true });
     const content = 'def foo(): pass\n';
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
 
     startDocWiring({
@@ -868,7 +932,11 @@ describe('startDocWiring', () => {
     setMockWindowState({ focused: true });
     const expectedContent = 'def foo(): pass\n';
     const onDiskContent = 'def foo(): return 42  # externally edited\n';
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
 
     startDocWiring({
@@ -908,7 +976,11 @@ describe('startDocWiring', () => {
     setMockWindowState({ focused: true });
     const expectedContent = 'original';
     const onDiskContent = 'externally modified content';
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
 
     startDocWiring({
@@ -961,7 +1033,11 @@ describe('startDocWiring', () => {
 
   function startRaceHarness(readFile: () => Promise<string>) {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
 
     startDocWiring({
@@ -1065,7 +1141,11 @@ describe('startDocWiring', () => {
     setMockWindowState({ focused: true });
     const before = 'def foo(): pass\n';
     const after = 'def foo(): return 42  # written by external tool\n';
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
 
     startDocWiring({
@@ -1118,7 +1198,11 @@ describe('startDocWiring', () => {
     // edit, not a reload. (Real-world repro: cmd+delete right after a save.)
     setMockWindowState({ focused: true });
     const before = 'hello\n';
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
 
     startDocWiring({
@@ -1151,7 +1235,11 @@ describe('startDocWiring', () => {
   it('reload candidate where disk read throws: falls through to doc.change (does not relabel a real edit as external)', () => {
     setMockWindowState({ focused: true });
     const before = 'hello\n';
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
 
     startDocWiring({
@@ -1181,7 +1269,11 @@ describe('startDocWiring', () => {
   it('normal typing (isDirty=true): emits doc.change, NOT fs.external_change', () => {
     setMockWindowState({ focused: true });
     const before = 'hello\n';
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
 
     startDocWiring({
@@ -1210,7 +1302,11 @@ describe('startDocWiring', () => {
     // reason === undefined as a reload candidate; Undo/Redo are user actions.
     setMockWindowState({ focused: true });
     const before = 'x\n';
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
 
     startDocWiring({
@@ -1239,7 +1335,11 @@ describe('startDocWiring', () => {
   it('reload with identical content (touched, content same): emits nothing', () => {
     setMockWindowState({ focused: true });
     const content = 'unchanged\n';
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
 
     startDocWiring({
@@ -1272,7 +1372,11 @@ describe('startDocWiring', () => {
     // Files not in files_under_review have no expected-content baseline, so
     // we cannot emit a meaningful fs.external_change. Fall through.
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/watched.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/watched.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
 
     startDocWiring({
@@ -1296,7 +1400,11 @@ describe('startDocWiring', () => {
 
   it('getLastDocChangeAt returns -Infinity for unseen path, then updates on doc.change', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     let nowVal = 1234;
     const handle = startDocWiring({
@@ -1327,7 +1435,11 @@ describe('startDocWiring', () => {
     // must update lastDocChangeAt for fs-watcher tolerance. They don't emit doc.change,
     // but they do represent a document touch.
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     const nowVal = 5000;
     const handle = startDocWiring({
@@ -1364,7 +1476,11 @@ describe('startDocWiring', () => {
   it('doc.change with contentChanges=[] does NOT emit emitDocChange (non-content VS Code event)', () => {
     setMockWindowState({ focused: true });
     setMockTextDocuments([]);
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -1397,7 +1513,7 @@ describe('startDocWiring', () => {
 
   it('does NOT emit doc.open when a file under .provenance/ is opened', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry([]);
+    const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -1415,7 +1531,7 @@ describe('startDocWiring', () => {
 
   it('does NOT emit doc.change/paste for an auto-revert on the live .slog (feedback-loop guard)', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry([]);
+    const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -1443,7 +1559,7 @@ describe('startDocWiring', () => {
 
   it('does NOT emit selection.change when clicking around inside a .provenance/ file', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry([]);
+    const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -1474,7 +1590,7 @@ describe('startDocWiring', () => {
 
   it('does NOT emit doc.open for the activation manifest, even without provenanceDir', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry([]);
+    const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -1500,7 +1616,7 @@ describe('startDocWiring', () => {
         getText: () => '{"seq":0}\n',
       },
     ]);
-    const registry = new ExpectedContentRegistry([]);
+    const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -1516,7 +1632,11 @@ describe('startDocWiring', () => {
 
   it('still records a normal in-workspace file when provenanceDir is set (no over-exclusion)', () => {
     setMockWindowState({ focused: true });
-    const registry = new ExpectedContentRegistry(['src/foo.py']);
+    const registry = new ExpectedContentRegistry({
+      track: ['src/foo.py'],
+      ignore: [],
+      attachments: [],
+    });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: testWorkspace,
@@ -1568,7 +1688,7 @@ describe('startDocWiring', () => {
       },
     };
 
-    const registry = new ExpectedContentRegistry([]);
+    const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: workspaceWithRoot,
@@ -1604,7 +1724,7 @@ describe('startDocWiring', () => {
       },
     };
 
-    const registry = new ExpectedContentRegistry([]);
+    const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
     const emitters = makeEmitters();
     startDocWiring({
       workspace: workspaceWithRoot,
@@ -1632,7 +1752,7 @@ describe('startDocWiring', () => {
   describe('recordability filter', () => {
     it('skips doc.open / doc.change / doc.save / doc.close / selection for non-file scheme', () => {
       setMockWindowState({ focused: true });
-      const registry = new ExpectedContentRegistry([]);
+      const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
       const emitters = makeEmitters();
       startDocWiring({
         workspace: testWorkspace,
@@ -1686,7 +1806,7 @@ describe('startDocWiring', () => {
 
     it('skips out-of-workspace file-scheme documents (e.g. VS Code settings.json, /terminal2.py)', () => {
       setMockWindowState({ focused: true });
-      const registry = new ExpectedContentRegistry([]);
+      const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
       const emitters = makeEmitters();
       startDocWiring({
         workspace: testWorkspace,
@@ -1731,7 +1851,7 @@ describe('startDocWiring', () => {
 
     it('records in-workspace file-scheme documents normally', () => {
       setMockWindowState({ focused: true });
-      const registry = new ExpectedContentRegistry([]);
+      const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
       const emitters = makeEmitters();
       startDocWiring({
         workspace: testWorkspace,
@@ -1759,7 +1879,7 @@ describe('startDocWiring', () => {
   describe('isOwnedByThisRoot filter', () => {
     it('drops doc.open for a file this session does not own', () => {
       setMockWindowState({ focused: true });
-      const registry = new ExpectedContentRegistry([]);
+      const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
       const emitters = makeEmitters();
       startDocWiring({
         workspace: testWorkspace,
@@ -1778,7 +1898,7 @@ describe('startDocWiring', () => {
 
     it('emits doc.open for a file this session owns', () => {
       setMockWindowState({ focused: true });
-      const registry = new ExpectedContentRegistry([]);
+      const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
       const emitters = makeEmitters();
       startDocWiring({
         workspace: testWorkspace,
@@ -1797,7 +1917,7 @@ describe('startDocWiring', () => {
 
     it('defaults to owning everything when isOwnedByThisRoot is omitted (regression)', () => {
       setMockWindowState({ focused: true });
-      const registry = new ExpectedContentRegistry([]);
+      const registry = new ExpectedContentRegistry({ track: [], ignore: [], attachments: [] });
       const emitters = makeEmitters();
       startDocWiring({
         workspace: testWorkspace,

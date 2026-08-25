@@ -3,6 +3,8 @@
  *
  * Layout:
  *   [Step -1] [Play/Pause] [Step +1]  [scrub slider]  [event label]
+ *   (optional, only when `ribbons` is non-empty: contributor ribbons, stacked
+ *   directly beneath the slider)
  *
  * Scrub throttle:
  *   The slider's onValueChange fires on every pixel of drag. To avoid
@@ -13,6 +15,30 @@
  * Keyboard:
  *   Space → play/pause (on the play/pause button; handled by native button focus).
  *   Arrow keys → handled by Radix Slider natively.
+ *
+ * Contributor ribbons (optional, additive):
+ *   `ribbons` / `overlaps` are optional props consumed by split-replay-lanes
+ *   (design `docs/superpowers/specs/2026-08-24-split-replay-lanes-design.md`
+ *   §5). When omitted or empty, this component's render is byte-for-byte what
+ *   it was before those props existed — that is a hard requirement, not a
+ *   preference, because every caller that doesn't yet pass ribbons (and every
+ *   existing test) must see no difference.
+ *
+ *   The seam ticks are `absolute top-1/2 -translate-y-1/2` inside their
+ *   nearest `position: relative` ancestor — that ancestor's HEIGHT is what
+ *   `top-1/2` centres against, so that div must stay sized to the slider
+ *   alone. `track` (the `Slider` plus the seam ticks) is therefore built once
+ *   and mounted by two different wrappers below: with no ribbons, `track`
+ *   sits in exactly today's `<div className="relative flex-1">` — untouched.
+ *   With ribbons, `track` gets its OWN `relative` box (sized only by the
+ *   slider) nested inside a `flex-1` column, and `ContributorRibbons` is a
+ *   SIBLING of that box, not a child of it — so the ticks' positioning
+ *   context never includes the ribbons' height, and the ribbons block still
+ *   shares the slider's exact width via the shared `flex-1` column. (An
+ *   earlier revision mounted the ribbons block as an in-flow child of the
+ *   ticks' own `relative flex-1` div; that grew the div's height and the
+ *   ticks slid off the track onto the first ribbon row — see the regression
+ *   test in `TransportBar.ribbons.test.tsx`.)
  */
 
 import { useCallback, useRef } from 'react';
@@ -27,6 +53,8 @@ import { Play, Pause, SkipBack, SkipForward } from 'lucide-react';
 import type { ReplayState } from './engine-core.js';
 import type { IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import { formatGap, type Seam } from './bundle-clock.js';
+import { ContributorRibbons, type RibbonRow } from './ContributorRibbons.js';
+import type { OverlapInterval } from './contributor-activity.js';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -43,6 +71,13 @@ type TransportBarProps = {
   events: readonly IndexedEvent[];
   /** Session boundaries, rendered as ticks. Empty for a single-session bundle. */
   seams?: readonly Seam[];
+  /**
+   * One ribbon row per contributor, rendered beneath the slider. Omitted or
+   * empty renders nothing — see the header comment's "Contributor ribbons".
+   */
+  ribbons?: readonly RibbonRow[];
+  /** Overlap intervals for the ribbon band. Ignored when `ribbons` is empty. */
+  overlaps?: readonly OverlapInterval[];
   onPlay(): void;
   onPause(): void;
   onStep(n: number): void;
@@ -57,6 +92,8 @@ export function TransportBar({
   state,
   events,
   seams = [],
+  ribbons,
+  overlaps,
   onPlay,
   onPause,
   onStep,
@@ -156,29 +193,51 @@ export function TransportBar({
           <TooltipContent>Step forward (+1 event)</TooltipContent>
         </Tooltip>
 
-        {/* Scrub slider, with a tick per session boundary */}
-        <div className="relative flex-1">
-          <Slider
-            min={0}
-            max={sliderMax}
-            step={1}
-            value={[sliderValue]}
-            onValueChange={handleSliderChange}
-            disabled={eventCount === 0}
-            aria-label="Scrub timeline"
-          />
-          {sliderMax > 0 &&
-            seams.map((seam) => (
-              <span
-                key={seam.atGlobalIdx}
-                aria-hidden="true"
-                className="pointer-events-none absolute top-1/2 h-3 w-px -translate-y-1/2 bg-amber-500/70"
-                style={{ left: `${(seam.atGlobalIdx / sliderMax) * 100}%` }}
-                data-testid={`seam-tick-${seam.atGlobalIdx}`}
-                title={`Session boundary — ${formatGap(seam.realGapMs)} offline`}
+        {/* Scrub slider, with a tick per session boundary. `track` is shared
+            by both wrappers below so the slider + seam ticks are defined
+            once — see the header comment's "Contributor ribbons" for why the
+            two wrappers exist at all (the ticks' positioning context must
+            never include the ribbons' height). */}
+        {(() => {
+          const track = (
+            <>
+              <Slider
+                min={0}
+                max={sliderMax}
+                step={1}
+                value={[sliderValue]}
+                onValueChange={handleSliderChange}
+                disabled={eventCount === 0}
+                aria-label="Scrub timeline"
               />
-            ))}
-        </div>
+              {sliderMax > 0 &&
+                seams.map((seam) => (
+                  <span
+                    key={seam.atGlobalIdx}
+                    aria-hidden="true"
+                    className="pointer-events-none absolute top-1/2 h-3 w-px -translate-y-1/2 bg-amber-500/70"
+                    style={{ left: `${(seam.atGlobalIdx / sliderMax) * 100}%` }}
+                    data-testid={`seam-tick-${seam.atGlobalIdx}`}
+                    title={`Session boundary — ${formatGap(seam.realGapMs)} offline`}
+                  />
+                ))}
+            </>
+          );
+
+          if (ribbons !== undefined && ribbons.length > 0) {
+            return (
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <div className="relative w-full">{track}</div>
+                <ContributorRibbons
+                  rows={ribbons}
+                  overlaps={overlaps ?? []}
+                  sliderMax={sliderMax}
+                />
+              </div>
+            );
+          }
+          return <div className="relative flex-1">{track}</div>;
+        })()}
 
         {/* Event label */}
         <span className="text-xs text-muted-foreground tabular-nums min-w-[80px] text-right">

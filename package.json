@@ -7,12 +7,17 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build --workspace=packages/log-core && npm run build --workspace=packages/shared && npm run build --workspace=packages/analysis-core && npm run build --workspace=packages/analyzer --workspace=packages/recorder --workspace=packages/server --if-present",
     "test": "npm run test --workspaces --if-present",
+    "test:tools": "vitest run",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint 'packages/log-core/src' 'packages/analysis-core/src' 'packages/recorder/src' 'packages/analyzer/src' 'packages/server/src' 'packages/shared/src' && prettier --check .",
-    "package:recorder": "npm run build && npm run package --workspace=packages/recorder",
-    "update-hashes": "node scripts/update-extension-hash-allowlist.mjs"
+    "package:recorder": "npm run build && npm run bundle --workspace=packages/recorder && npm run package --workspace=packages/recorder",
+    "update-hashes": "node scripts/update-extension-hash-allowlist.mjs",
+    "keygen:course": "node --experimental-strip-types tools/generate-course-keypair.ts",
+    "mint:course-cert": "node --experimental-strip-types tools/mint-course-cert.ts",
+    "mint:institution-cert": "node --experimental-strip-types tools/mint-institution-cert.ts",
+    "sign:manifest": "node --experimental-strip-types tools/sign-manifest.ts"
   },
   "devDependencies": {
     "eslint": "^9.0.0",

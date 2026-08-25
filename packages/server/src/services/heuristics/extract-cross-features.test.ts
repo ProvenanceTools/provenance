@@ -16,6 +16,16 @@ import { describe, it, expect } from 'vitest';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { loadBundle } from '@provenance/analysis-core/loader/parse-bundle.js';
 import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
+import {
+  buildTrustChainKeys,
+  buildManifest2,
+  sessionStart2,
+} from '@provenance/analysis-core/test-support/build-manifest-2.js';
+import { establishBundleTrust } from '@provenance/analysis-core/manifest/bundle-manifest.js';
+import {
+  ASSUMED_SINGLE_REPOSITORY,
+  commitNodeKey,
+} from '@provenance/analysis-core/git/observed-dag.js';
 import { extractCrossFeaturesFromIndex } from './extract-cross-features.js';
 
 const SESSION = '11111111-1111-1111-1111-111111111111';
@@ -111,5 +121,166 @@ describe('extractCrossFeaturesFromIndex', () => {
     expect(features.eventCount).toBe(1);
     expect(features.kindNgrams.size).toBe(0);
     expect(features.pastes).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Capture policy (program spec §4)
+//
+// editing_pattern_clone fingerprints the event-KIND stream, so a course that
+// disables a gated kind shrinks the alphabet and inflates Jaccard similarity
+// across the whole cohort. The features must carry the recorded policy for the
+// heuristic to be able to decline the comparison.
+// ---------------------------------------------------------------------------
+
+describe('extractCrossFeaturesFromIndex — capture policy', () => {
+  it('reports no disabled signals when the bundle is not passed (1.x default)', async () => {
+    const { zipBuffer } = await buildTestBundle({ sessions: [{ sessionId: SESSION }] });
+    const parsed = await loadBundle(zipBuffer, 'b.zip');
+    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+
+    const { features } = extractCrossFeaturesFromIndex(
+      buildIndex(parsed.value),
+      'sub-1',
+      'bundle-1',
+    );
+    expect(features.disabledCaptureSignals).toBeUndefined();
+  });
+
+  it('reports an empty list for a 1.x bundle passed explicitly', async () => {
+    const { zipBuffer } = await buildTestBundle({ sessions: [{ sessionId: SESSION }] });
+    const parsed = await loadBundle(zipBuffer, 'b.zip');
+    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+
+    const { features } = extractCrossFeaturesFromIndex(
+      buildIndex(parsed.value),
+      'sub-1',
+      'bundle-1',
+      parsed.value,
+    );
+    expect(features.disabledCaptureSignals).toEqual([]);
+  });
+
+  it("carries a VERIFIED 2.0 bundle's disabled signals through to the cross-heuristics", async () => {
+    const keys = await buildTrustChainKeys();
+    const manifest = await buildManifest2({
+      keys,
+      policy: { capture: { terminal: false, focus_change: false } },
+    });
+    const { zipBuffer } = await buildTestBundle({
+      sessions: [{ sessionId: SESSION, sessionStart: sessionStart2(manifest) }],
+    });
+    const parsed = await loadBundle(zipBuffer, 'b.zip');
+    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+    // What loadSubmissionIndex does for every bundle it hands out. Without it
+    // the policy is not honoured at all — see the next case.
+    await establishBundleTrust(parsed.value, keys.rootPubkeyHex);
+
+    const { features } = extractCrossFeaturesFromIndex(
+      buildIndex(parsed.value),
+      'sub-1',
+      'bundle-1',
+      parsed.value,
+    );
+    expect(features.disabledCaptureSignals).toEqual(['focus_change', 'terminal']);
+  });
+
+  it('reports no disabled signals for a 2.0 bundle whose trust chain did not verify', async () => {
+    // The evasion this closes: `editing_pattern_clone` declines the comparison
+    // when EITHER side had a kind-stream signal disabled, so a student who
+    // tampers with their own manifest would suppress every cross-flag between
+    // themselves and a collusion partner — who would have nothing recorded
+    // against them at all. An unverified policy must narrow nothing.
+    const keys = await buildTrustChainKeys();
+    const wrongRoot = await buildTrustChainKeys(0x33, 0x44);
+    const manifest = await buildManifest2({
+      keys,
+      policy: { capture: { terminal: false, focus_change: false } },
+    });
+    const { zipBuffer } = await buildTestBundle({
+      sessions: [{ sessionId: SESSION, sessionStart: sessionStart2(manifest) }],
+    });
+    const parsed = await loadBundle(zipBuffer, 'b.zip');
+    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+    await establishBundleTrust(parsed.value, wrongRoot.rootPubkeyHex);
+
+    const { features } = extractCrossFeaturesFromIndex(
+      buildIndex(parsed.value),
+      'sub-1',
+      'bundle-1',
+      parsed.value,
+    );
+    expect(features.disabledCaptureSignals).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The same-scope exclusion key (spec S20)
+//
+// The server builds CrossSubmissionFeatures on its own path, so it has to
+// produce the same `observedCommitKeys` the browser does — otherwise a
+// git-native group submission is correctly excluded under `/local` and still
+// accused on the server.
+// ---------------------------------------------------------------------------
+
+describe('extractCrossFeaturesFromIndex — observed commit keys', () => {
+  const SHA = 'ab'.repeat(20);
+
+  it("carries the bundle's observed commits as (repository, sha) node keys", async () => {
+    const { zipBuffer } = await buildTestBundle({
+      sessions: [
+        {
+          sessionId: SESSION,
+          events: [
+            {
+              kind: 'git.event',
+              data: { operation: 'commit', sha: SHA, commit_sha: SHA, parents: [], branch: 'main' },
+            },
+          ],
+        },
+      ],
+    });
+    const parsed = await loadBundle(zipBuffer, 'b.zip');
+    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+
+    const { features } = extractCrossFeaturesFromIndex(
+      buildIndex(parsed.value),
+      'sub-1',
+      'bundle-1',
+      parsed.value,
+    );
+    // Identical to what the browser's extractCrossFeatures produces — the same
+    // `observedCommitKeysOf` is imported, not reimplemented.
+    expect(features.observedCommitKeys).toEqual([commitNodeKey(ASSUMED_SINGLE_REPOSITORY, SHA)]);
+  });
+
+  it('is an empty list, not undefined, when nothing was recorded', async () => {
+    // Empty and absent are different claims: empty is "we looked and there were
+    // none", absent is "nobody computed it". Both suppress nothing, but only the
+    // first is a statement about this bundle.
+    const { zipBuffer } = await buildTestBundle({ sessions: [{ sessionId: SESSION }] });
+    const parsed = await loadBundle(zipBuffer, 'b.zip');
+    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+
+    const { features } = extractCrossFeaturesFromIndex(
+      buildIndex(parsed.value),
+      'sub-1',
+      'bundle-1',
+      parsed.value,
+    );
+    expect(features.observedCommitKeys).toEqual([]);
+  });
+
+  it('is undefined when no bundle is passed — never computed, so nothing is excluded', async () => {
+    const { zipBuffer } = await buildTestBundle({ sessions: [{ sessionId: SESSION }] });
+    const parsed = await loadBundle(zipBuffer, 'b.zip');
+    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
+
+    const { features } = extractCrossFeaturesFromIndex(
+      buildIndex(parsed.value),
+      'sub-1',
+      'bundle-1',
+    );
+    expect(features.observedCommitKeys).toBeUndefined();
   });
 });

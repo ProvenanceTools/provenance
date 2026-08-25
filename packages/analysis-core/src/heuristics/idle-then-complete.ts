@@ -17,6 +17,15 @@
  *   - "Complete": the save's sha256 matches the file's final recorded save
  *     hash (i.e., no further content-changing events after this save).
  *
+ * Tier 3.1: both character counts EXCLUDE content a git merge delivered from a
+ * provably different verified contributor's recorded work. A student who opens
+ * the starter, goes to lunch, comes back, pulls their partner's implementation
+ * and saves it produces exactly this shape — skeleton before, complete file
+ * after — and fired at HIGH severity for it. Discounting the merged-in
+ * characters leaves the file with no growth of its own to explain, while a pull
+ * followed by a paste still fires on the paste. Always 0 for a solo bundle; see
+ * `merged-in-content.ts`.
+ *
  * Algorithm:
  *   For each (session, idle gap) pair where gap > idleGapMs:
  *     1. Find doc.save events in that session with t in [gapEnd, gapEnd + 60s].
@@ -32,7 +41,9 @@ import type { EventIndex, IndexedEvent } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
-import { reconstructFileWithProvenance } from '../index/reconstruct-file-provenance.js';
+import { establishedReplayState } from './reconstruction-gate.js';
+import { externalChangeClassificationFor } from '../index/classify-external-changes.js';
+import { mergedInCharCount } from './merged-in-content.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -107,13 +118,15 @@ function lastFileEventGlobalIdx(
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
   const { idleGapMs, sizeRatio, postIdleWindowMs } = config.idleThenComplete;
 
   const saveEvents = index.byKind.get('doc.save') ?? [];
   if (saveEvents.length === 0) return [];
 
   const heartbeatsBySession = buildHeartbeatsBySession(index);
+  // Tier 3.1. Empty for a solo bundle — the pass does not run there.
+  const { gitMergeIn } = externalChangeClassificationFor(bundle, index);
 
   // Collect save records with file path and sha256.
   type SaveRecord = { event: IndexedEvent; filePath: string; sha256: string };
@@ -133,19 +146,30 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
     finalSaveHash.set(r.filePath, r.sha256); // last write wins (globalIdx order)
   }
 
-  // Cache for final char count per file.
-  const finalCharCount = new Map<string, number>();
+  // Cache for final char count per file, net of merged-in content.
+  // `null` = no established final content for the file (Tier 2.2).
+  const finalCharCount = new Map<string, number | null>();
+  /** What was subtracted from each file's final count — stated in the flag. */
+  const finalMergedInChars = new Map<string, number>();
 
   // Cache for reconstruction results (keyed by filePath:upToGlobalIdx).
-  const reconstructionCache = new Map<string, number>();
+  // `null` = no established content at that boundary (Tier 2.2), so the
+  // "skeleton before the gap, complete file after" ratio has no operand.
+  //
+  // The cached number is the count of characters that are the student's to
+  // explain: total length minus what a git merge delivered (Tier 3.1). Both
+  // sides of the ratio use it, so the comparison stays like-for-like.
+  const reconstructionCache = new Map<string, number | null>();
 
-  function getContentLengthAt(filePath: string, upToGlobalIdx: number): number {
+  function getContentLengthAt(filePath: string, upToGlobalIdx: number): number | null {
     const key = `${filePath}:${upToGlobalIdx}`;
     const cached = reconstructionCache.get(key);
     if (cached !== undefined) return cached;
-    const state = reconstructFileWithProvenance(index, filePath, upToGlobalIdx);
-    reconstructionCache.set(key, state.content.length);
-    return state.content.length;
+    const state = establishedReplayState(index, bundle, filePath, upToGlobalIdx);
+    const length =
+      state === null ? null : state.content.length - mergedInCharCount(state, gitMergeIn);
+    reconstructionCache.set(key, length);
+    return length;
   }
 
   const flags: Flag[] = [];
@@ -189,23 +213,36 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
 
         // Get final char count.
         if (!finalCharCount.has(filePath)) {
-          const finalState = reconstructFileWithProvenance(index, filePath);
-          finalCharCount.set(filePath, finalState.content.length);
+          const finalState = establishedReplayState(index, bundle, filePath);
+          const merged = finalState === null ? 0 : mergedInCharCount(finalState, gitMergeIn);
+          finalMergedInChars.set(filePath, merged);
+          finalCharCount.set(
+            filePath,
+            finalState === null ? null : finalState.content.length - merged,
+          );
         }
-        const finalLen = finalCharCount.get(filePath)!;
-        if (finalLen === 0) continue;
+        const finalLen = finalCharCount.get(filePath);
+        // 0 now also means "everything in this file arrived by git merge from a
+        // partner's recorded work" — there is no completion of the student's own
+        // to compare a skeleton against.
+        if (finalLen === null || finalLen === undefined || finalLen === 0) continue;
 
         // Get pre-gap content: reconstruct up to (but not including) the first
         // file event after gapStartT. We use the globalIdx of the last file event
         // with t ≤ gapStartT, then take upTo = that globalIdx + 1.
         const preGapGi = lastFileEventGlobalIdx(index, filePath, sessionId, gap.gapStartT);
         const upTo = preGapGi !== undefined ? preGapGi + 1 : 0;
+        // `null` = no established pre-gap content (Tier 2.2). Without it the
+        // skeleton ratio has no numerator, and guessing one manufactures the
+        // flag rather than missing it.
         const preLen = getContentLengthAt(filePath, upTo);
+        if (preLen === null) continue;
 
         // Skeleton check: pre-gap content < sizeRatio × final.
         if (preLen >= sizeRatio * finalLen) continue;
 
         // All conditions met — flag.
+        const mergedIn = finalMergedInChars.get(filePath) ?? 0;
         const seqKey = `${postIdleSave.event.sessionId}:${postIdleSave.event.seq}`;
         const id = flagId(seqKey, flagIndex++);
 
@@ -219,11 +256,18 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
           description:
             `After an idle period >${Math.round(idleGapMs / 60000)}min, ` +
             `${filePath} went from ${preLen} chars to ${finalLen} chars in a single save ` +
-            `(skeleton threshold: ${Math.round(sizeRatio * 100)}% of final).`,
+            `(skeleton threshold: ${Math.round(sizeRatio * 100)}% of final).` +
+            // R1: say what was left out of both counts, rather than reporting
+            // numbers that silently disagree with the file's size.
+            (mergedIn > 0
+              ? ` Both counts exclude ${mergedIn} chars that arrived by git merge from a ` +
+                `partner's recorded work.`
+              : ''),
           detail: {
             filePath,
             preLength: preLen,
             finalLength: finalLen,
+            mergedInChars: mergedIn,
             sizeRatio,
             idleGapMs,
           },

@@ -33,8 +33,16 @@ import {
 import { SessionsCard } from './SessionsCard.js';
 import { collectActiveExtensions } from '../../extensions/collect-active-extensions.js';
 import { ActiveExtensionsCard } from '../../extensions/ActiveExtensionsCard.js';
+import { AssignmentManifestCard } from '../../components/AssignmentManifestCard.js';
+import { CoveragePanel } from '../coverage/CoveragePanel.js';
 import { StatusRegion } from '../../components/a11y/StatusRegion.js';
 import { ErrorRegion } from '../../components/a11y/ErrorRegion.js';
+import {
+  contributorLabel,
+  contributorSid,
+  contributorsLabel,
+  contributorsSidLabel,
+} from '../../lib/contributor-display.js';
 
 // ---------------------------------------------------------------------------
 // Severity chip
@@ -198,6 +206,11 @@ export function Overview() {
   const summary = summaryQuery.data;
   if (!summary) return null;
 
+  // `contributors` is the authoritative "who is this submission about";
+  // `student` is only the fallback for a response that predates it.
+  const soloName = contributorsLabel(summary.contributors, { fallbackStudent: summary.student });
+  const soloSid = contributorsSidLabel(summary.contributors, { fallbackStudent: summary.student });
+
   return (
     <div className="container mx-auto py-6 space-y-6" data-testid="submission-overview">
       {/* Summary card */}
@@ -208,10 +221,34 @@ export function Overview() {
         <h2 className="text-xl font-semibold text-gray-900">Submission</h2>
         <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4 text-sm">
           <div>
-            <dt className="text-gray-500">Student</dt>
+            <dt className="text-gray-500">
+              {summary.contributors.length > 1 ? 'Contributors' : 'Student'}
+            </dt>
+            {/*
+              Solo submissions keep the exact markup they had before the 0029
+              cut-over: `contributors` holds one entry, the same person as
+              `student`, so the label and sid below are byte-identical to
+              `student.display_name` / `student.sid`. Only a group submission
+              takes the list branch.
+            */}
             <dd className="font-medium" data-testid="summary-student">
-              {summary.student.display_name}
-              <span className="ml-1 text-gray-600">({summary.student.sid})</span>
+              {summary.contributors.length > 1 ? (
+                <ul data-testid="summary-contributors" className="space-y-0.5">
+                  {summary.contributors.map((c) => (
+                    <li key={c.contributor_key} data-testid="summary-contributor">
+                      {contributorLabel(c)}
+                      {contributorSid(c) && (
+                        <span className="ml-1 text-gray-600">({contributorSid(c)})</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <>
+                  {soloName}
+                  {soloSid && <span className="ml-1 text-gray-600">({soloSid})</span>}
+                </>
+              )}
             </dd>
           </div>
           <div>
@@ -261,6 +298,26 @@ export function Overview() {
           </div>
         </dl>
       </section>
+
+      {/*
+        Coverage — §6 Rule 3, per scope and always visible, above the verdict
+        surfaces because it is the context a grader needs in order to READ them.
+
+        The server now computes these facts on the bundle it already parsed for
+        `sessions[]` and serves them on the summary, so this route shows the
+        SAME facts `/local` does, from the same function.
+
+        `?? null` is the honest answer for the one case that remains, and is not
+        a stub: a server older than the `coverage` field sends nothing, and the
+        panel says the facts were not sent. Synthesising an empty object here
+        instead would render zeroes — "no commits observed, no contributors, no
+        root key" — which is a stronger and FALSE claim than "not available".
+      */}
+      <CoveragePanel facts={summary.coverage ?? null} />
+
+      {/* Manifest 2.0 metadata — renders nothing for a 1.x bundle with no
+          disabled capture signals. */}
+      <AssignmentManifestCard manifest={summary.assignment_manifest} />
 
       {/* Sessions — only rendered when there's more than one. */}
       <SessionsCard sessions={sessions} onOpenSession={handleOpenSession} />

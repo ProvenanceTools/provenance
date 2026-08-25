@@ -24,6 +24,8 @@ import { useNavigate } from 'react-router-dom';
 import { useBundle } from '../../context/BundleContext.js';
 import type { Bundle } from '@provenance/analysis-core/loader/types.js';
 import type { CrossFlag } from '@provenance/analysis-core/heuristics/cross/types.js';
+import type { SameScopeExclusion } from '@provenance/analysis-core/coverage/cross-scope.js';
+import { exclusionCopy, EXCLUSION_PANEL_INTRO } from '@/lib/exclusion-copy.js';
 
 // ---------------------------------------------------------------------------
 // Severity chip colours (same mapping as SeverityChip in overview)
@@ -152,6 +154,63 @@ function CrossFlagDetailPane({ flag, bundles, onClose }: CrossFlagDetailPaneProp
 }
 
 // ---------------------------------------------------------------------------
+// SameScopeExclusionPanel — what was NOT compared, and why.
+//
+// Spec S20 requires excluded pairs be VISIBLY excluded rather than silently
+// dropped, or the system has just become quieter with no explanation. §6 Rule 3
+// fixes the register: a statement about the recording ("these two archives are
+// one repository"), never a finding about anyone. So this is not a flag, has no
+// severity, carries no score, and deliberately renders in the neutral coverage
+// styling rather than the finding styling used by the table below.
+// ---------------------------------------------------------------------------
+
+function SameScopeExclusionPanel({ exclusions }: { exclusions: SameScopeExclusion[] }) {
+  if (exclusions.length === 0) return null;
+
+  return (
+    <section aria-labelledby="cross-exclusions-heading" data-testid="cross-scope-exclusions">
+      <h2 id="cross-exclusions-heading" className="text-base font-semibold mb-1">
+        Not cross-compared
+      </h2>
+      <p className="text-sm text-muted-foreground mb-3">{EXCLUSION_PANEL_INTRO}</p>
+      <ul className="space-y-3" role="list">
+        {exclusions.map((ex) => {
+          const copy = exclusionCopy(ex);
+          return (
+            <li
+              key={ex.bundleIds.join('|')}
+              className="rounded border bg-muted/30 p-3"
+              data-testid={`cross-scope-exclusion-${ex.bundleIds.join('|')}`}
+            >
+              <p className="text-sm font-medium">{ex.sourceFilenames.join(' · ')}</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {copy.label} —{' '}
+                {ex.excludedPairCount === 1
+                  ? '1 comparison not applicable'
+                  : `${ex.excludedPairCount} comparisons not applicable`}
+                . Established by {copy.evidence.length} {copy.evidenceNoun} {copy.evidenceClause}.
+              </p>
+              <ul className="mt-2 space-y-0.5" data-testid="cross-scope-exclusion-commits">
+                {copy.evidence.slice(0, 5).map((key) => (
+                  <li key={key} className="font-mono text-[11px] text-muted-foreground break-all">
+                    {key}
+                  </li>
+                ))}
+                {copy.evidence.length > 5 && (
+                  <li className="text-[11px] text-muted-foreground italic">
+                    and {copy.evidence.length - 5} more
+                  </li>
+                )}
+              </ul>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // CrossFlagTable
 // ---------------------------------------------------------------------------
 
@@ -244,7 +303,7 @@ function CrossFlagTable({ flags, bundles }: CrossFlagTableProps) {
 // ---------------------------------------------------------------------------
 
 export function CompareView() {
-  const { bundles, crossFlags, selectBundle, selectedBundleId } = useBundle();
+  const { bundles, crossFlags, crossScopeExclusions, selectBundle, selectedBundleId } = useBundle();
 
   // Locally track which bundles are selected for comparison (multi-select).
   // Default: all loaded bundles selected.
@@ -293,6 +352,24 @@ export function CompareView() {
   const visibleCrossFlags = crossFlags.filter((f) =>
     f.bundleIds.every((id) => selectedIdSet.has(id)),
   );
+
+  // An exclusion is shown once at least TWO of its members are selected —
+  // that is the point at which the user is looking at a comparison that did not
+  // happen. Filtering on `every` would hide the explanation for a partly
+  // selected group, which is the silence S20 forbids.
+  const visibleExclusions: SameScopeExclusion[] = [];
+  for (const ex of crossScopeExclusions) {
+    const kept = ex.bundleIds
+      .map((id, i) => ({ id, name: ex.sourceFilenames[i] ?? id }))
+      .filter((m) => selectedIdSet.has(m.id));
+    if (kept.length < 2) continue;
+    visibleExclusions.push({
+      ...ex,
+      bundleIds: kept.map((m) => m.id),
+      sourceFilenames: kept.map((m) => m.name),
+      excludedPairCount: (kept.length * (kept.length - 1)) / 2,
+    });
+  }
 
   return (
     <div className="container mx-auto py-8 space-y-8" data-testid="compare-view">
@@ -383,6 +460,9 @@ export function CompareView() {
           <CrossFlagTable flags={visibleCrossFlags} bundles={selectedBundles} />
         )}
       </section>
+
+      {/* What was deliberately NOT compared, and why (spec S20). */}
+      {selectedBundles.length >= 2 && <SameScopeExclusionPanel exclusions={visibleExclusions} />}
     </div>
   );
 }

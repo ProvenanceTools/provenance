@@ -11,6 +11,20 @@
  *   - check 6 (monotonic_wall): wall-time regression → 'medium'
  *   - check 8 (submitted_code_match): submitted file mismatch → 'high' (1.1+ bundles)
  *
+ * Bundle-level detections surfaced (NOT among the PRD §5.4 eight — they arrive
+ * on `ValidationReport.bundleDetections`, see check-types.ts):
+ *   - log_bytes_match: .slog/.slog.meta bytes differ from the digests the
+ *     SIGNED manifest commits to → 'high'
+ *   - checkpoint_chain_valid: a signed PRD §4.6 checkpoint is forged, or is
+ *     contradicted by the log it commits to → 'high', EXCEPT a seq_absent
+ *     offence at the tail of a session (the checkpoint names that session's
+ *     highest seq, and nothing later exists either) → 'low', via
+ *     `ValidationCheck.flagOverride` — an honest crash between the checkpoint
+ *     being signed and the entry being flushed produces that exact shape, so
+ *     it cannot be told apart from truncation. See `verify-checkpoint-chain.ts`.
+ *   - manifest_downgrade: a 1.x assignment manifest carrying Manifest 2.0-only
+ *     fields → 'high'
+ *
  * Checks NOT surfaced here:
  *   - check 4 (seq_gaps): surfaced if needed; not in PRD §7.4 flag list.
  *   - check 7 (doc_save_hashes): surfaced separately.
@@ -39,7 +53,9 @@ type CheckMeta = {
   fallbackDescription: string;
 };
 
-const CHECK_META: Partial<Record<ValidationCheckId, CheckMeta>> = {
+// Exported so known-flag-ids.ts can derive the canonical integrity-flag id
+// list from it, rather than a hand-maintained duplicate.
+export const CHECK_META: Partial<Record<ValidationCheckId, CheckMeta>> = {
   manifest_sig: {
     heuristic: 'manifest_sig_invalid',
     title: 'Manifest signature verification failed',
@@ -87,6 +103,55 @@ const CHECK_META: Partial<Record<ValidationCheckId, CheckMeta>> = {
     confidence: 1.0,
     fallbackDescription: 'The submitted file differs from the last recorded on-disk state.',
   },
+
+  // -------------------------------------------------------------------------
+  // Bundle-level detections. Same Flag shape, same table, but sourced from
+  // `report.bundleDetections` rather than `report.checks` — see the module
+  // docstring and `validation/check-types.ts`.
+  //
+  // All three are severity 'high' at confidence 1.0 in this table, and that is
+  // a deliberate choice rather than a default. Each is a CRYPTOGRAPHIC
+  // contradiction, not a behavioural inference: a digest that a signed
+  // manifest fixed at seal time does not match; a checkpoint signed by the
+  // session key is refuted by the log; a signed 1.x manifest carries fields no
+  // 1.x signer can emit. None has a benign explanation, none has a threshold
+  // to tune, and none can fire by accident — every "cannot evaluate" path in
+  // the three verifiers returns `skipped`, so a flag here only ever exists
+  // because evidence was present and contradicted. A log-bytes mismatch in
+  // particular is the single strongest signal the system can produce, and
+  // grading it below 'high' would rank proof-of-tampering under heuristics
+  // that are merely suggestive.
+  //
+  // The one exception is checkpoint_chain_valid's tail-position seq_absent
+  // case, which DOES have a benign explanation (an honest crash produces the
+  // same bytes as a truncation there) and is downgraded per-occurrence via
+  // `ValidationCheck.flagOverride` rather than in this table — see
+  // `verify-checkpoint-chain.ts` and the entry below.
+  // -------------------------------------------------------------------------
+  log_bytes_match: {
+    heuristic: 'log_bytes_match',
+    title: 'Session log bytes do not match the signed manifest',
+    severity: 'high',
+    confidence: 1.0,
+    fallbackDescription:
+      'A session .slog or .slog.meta file does not hash to the value the signed bundle manifest commits to. The log was modified after the bundle was sealed.',
+  },
+  checkpoint_chain_valid: {
+    heuristic: 'checkpoint_chain_valid',
+    title: 'Signed session checkpoint contradicts the log',
+    severity: 'high',
+    confidence: 1.0,
+    fallbackDescription:
+      'A signed seq/hash checkpoint in .slog.meta failed verification, or names an entry the log no longer contains or no longer matches. The log was rewritten or truncated after that checkpoint was signed.',
+  },
+  manifest_downgrade: {
+    heuristic: 'manifest_downgrade',
+    title: 'Assignment manifest carries fields its signature does not cover',
+    severity: 'high',
+    confidence: 1.0,
+    fallbackDescription:
+      'A sub-2.0 embedded assignment manifest carries Manifest 2.0-only fields, which no 1.x signer emits. The manifest was modified after it was signed, even though the modification granted nothing.',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -104,7 +169,13 @@ const CHECK_META: Partial<Record<ValidationCheckId, CheckMeta>> = {
 export function integrityFlagsFromReport(report: ValidationReport): Flag[] {
   const flags: Flag[] = [];
 
-  for (const check of report.checks) {
+  // The eight, then the bundle-level detections. Both are `ValidationCheck`s
+  // and both route through CHECK_META, so the mapping below is shared; only
+  // the source array differs. `bundleDetections` is optional because a report
+  // rebuilt from the stored eight-column row has none — an absent array yields
+  // no flags, which is correct: it means nobody evaluated them, not that they
+  // passed.
+  for (const check of [...report.checks, ...(report.bundleDetections ?? [])]) {
     if (check.status !== 'fail') continue;
 
     const meta = CHECK_META[check.id];
@@ -118,14 +189,24 @@ export function integrityFlagsFromReport(report: ValidationReport): Flag[] {
     const seqKey0 = supportingSeqs[0] ?? 'no-seq';
     const id = `${meta.heuristic}-${seqKey0}`;
 
+    // A check's `flagOverride`, when present, replaces CHECK_META's
+    // severity/confidence/description for THIS occurrence only — see
+    // `check-types.ts`. Used by `checkpoint_chain_valid`'s tail-position
+    // seq_absent case, where the check genuinely fails but an honest crash
+    // and a truncation are undecidable from the evidence, so accusing at the
+    // check's normal 'high' severity would outrun what was actually shown.
+    const severity = check.flagOverride?.severity ?? meta.severity;
+    const confidence = check.flagOverride?.confidence ?? meta.confidence;
+    const description = check.flagOverride?.description ?? check.detail ?? meta.fallbackDescription;
+
     flags.push({
       id,
       heuristic: meta.heuristic,
       title: meta.title,
-      severity: meta.severity,
-      confidence: meta.confidence,
+      severity,
+      confidence,
       supportingSeqs,
-      description: check.detail ?? meta.fallbackDescription,
+      description,
       detail: {
         checkId: check.id,
         checkLabel: check.label,

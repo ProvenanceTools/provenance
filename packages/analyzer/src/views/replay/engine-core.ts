@@ -59,7 +59,13 @@
  * PRD ref: §7.2 (replay view core).
  */
 
-import { reconstructFileWithProvenance } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
+import {
+  determinateValue,
+  reconstructFileSegmentedWithProvenance,
+  soloReconstructionScope,
+  type ReconstructionScope,
+  type SegmentedResult,
+} from '@provenance/analysis-core/index/reconstruct-segments.js';
 import type { FileReplayState } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
 import type { EventIndex, IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import { buildBundleClock, type Seam } from './bundle-clock.js';
@@ -140,6 +146,36 @@ export type EngineHandle = {
   eventCount(): number;
   /** Session boundaries in the stream. Empty for a single-session bundle. */
   seams(): readonly Seam[];
+  /**
+   * Files whose content at the CURRENT position has no single truth, and which
+   * kind of no it is (Tier 2.2, spec §6 Rule 4: "replay never linearizes
+   * concurrency").
+   *
+   * Such a file's entry in {@link EngineHandle.getFileStates} is empty rather
+   * than one branch's content, and the UI is expected to explain the gap. It is
+   * always empty for a single-contributor bundle.
+   */
+  ambiguousFiles(): ReadonlyMap<string, 'concurrent' | 'unknown'>;
+
+  /**
+   * The SAME files as {@link EngineHandle.ambiguousFiles}, but carrying the
+   * evidence rather than only its shape — for `concurrent`, every live branch
+   * with its contributor, its tip and its own replayed content.
+   *
+   * This exists because refusing and refusing-with-the-branches are different
+   * products. Spec §6 Rule 4 permits a replay inside a concurrent interval to
+   * "show the branches side by side, or refuse with an explanation"; the branches
+   * are what turns a dead end into evidence a grader can read, and they were
+   * being computed and then dropped on the floor.
+   *
+   * Deliberately a SEPARATE accessor rather than a widening of
+   * `ambiguousFiles()`: that one's `'concurrent' | 'unknown'` value is asserted
+   * by existing tests and is the right shape for callers that only need to know
+   * whether to render normally. Nothing here may be read as "pick branch 0" —
+   * the branches arrive as a list precisely so that indexing one looks like the
+   * choice it would be.
+   */
+  fileAmbiguity(): ReadonlyMap<string, AmbiguousReconstruction>;
 
   /** Advance by n events (may be negative). Clamps to valid range. Returns new state. */
   step(n?: number): ReplayState;
@@ -171,6 +207,24 @@ export type EngineHandle = {
    */
   endVirtualT(): number;
 };
+
+// ---------------------------------------------------------------------------
+// Ambiguity
+// ---------------------------------------------------------------------------
+
+/**
+ * A reconstruction that produced no single content — the two non-`determinate`
+ * arms of {@link SegmentedResult}, and nothing else.
+ *
+ * Defined by `Exclude` rather than re-declared so that a future arm added to
+ * `SegmentedResult` in analysis-core lands here as a type error at the point
+ * that must decide how to present it, instead of being silently absorbed by a
+ * hand-written union that happens to still compile.
+ */
+export type AmbiguousReconstruction = Exclude<
+  SegmentedResult<FileReplayState>,
+  { kind: 'determinate' }
+>;
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -210,6 +264,14 @@ type InternalState = {
   checkpoints: Map<number, Checkpoint>;
   /** The EventIndex (needed to call reconstructFileWithProvenance). */
   index: EventIndex;
+  /** Who each session belongs to, plus `≺`. Solo unless a bundle was supplied. */
+  scope: ReconstructionScope;
+  /**
+   * Files with no single content at the current position, with the evidence.
+   * Rebuilt per seek. The projection served by `ambiguousFiles()` is derived
+   * from this, so the two can never disagree about which files are ambiguous.
+   */
+  ambiguous: Map<string, AmbiguousReconstruction>;
 };
 
 // ---------------------------------------------------------------------------
@@ -285,9 +347,38 @@ function buildFileStates(
   upToGlobalIdx: number,
 ): Map<string, FileReplayState> {
   const result = new Map<string, FileReplayState>();
+  internal.ambiguous.clear();
   for (const filePath of internal.files) {
-    const state = reconstructFileWithProvenance(internal.index, filePath, upToGlobalIdx);
-    result.set(filePath, state);
+    const segmented = reconstructFileSegmentedWithProvenance(
+      internal.scope,
+      filePath,
+      upToGlobalIdx,
+    );
+    // Spec §6 Rule 4: a replay position inside a concurrent interval shows the
+    // branches side by side or REFUSES with an explanation. It does not pick one
+    // and it does not interleave.
+    //
+    // The whole result is retained, not just its kind. `getFileStates()` still
+    // serves an EMPTY state for this path — the main editor must never show one
+    // lineage as though it were the file — and the branches travel separately,
+    // where a caller has to name them to render them.
+    //
+    // The branch is taken on the discriminant rather than on
+    // `determinateValue(...) === null` because that function deliberately
+    // returns `T | null` and so cannot narrow its argument; without the
+    // discriminant there is no type-safe way to hand the ambiguous arms on.
+    if (segmented.kind !== 'determinate') {
+      internal.ambiguous.set(filePath, segmented);
+      result.set(filePath, emptyFileState());
+      continue;
+    }
+
+    // `determinateValue` remains the accessor that produces content — the only
+    // sanctioned narrowing in analysis-core, and the one that returns null for
+    // every arm without a single value. On this arm it cannot be null; the
+    // fallback is an EMPTY state rather than a branch, so even an impossible
+    // null could not become a fabricated file.
+    result.set(filePath, determinateValue(segmented) ?? emptyFileState());
   }
   return result;
 }
@@ -327,7 +418,12 @@ function clamp(idx: number, maxIdx: number): number {
  * @param index  The EventIndex for the whole bundle (we read ordered + byFile).
  * @returns      An EngineHandle with mutable internal state.
  */
-export function createEngine(index: EventIndex): EngineHandle {
+/**
+ * `scope` carries who each session belongs to and the happens-before relation.
+ * It defaults to a SOLO scope, which is today's exact behaviour, so a caller
+ * that has no bundle to hand keeps working unchanged.
+ */
+export function createEngine(index: EventIndex, scope?: ReconstructionScope): EngineHandle {
   const events = index.ordered;
   const files = computeFiles(events);
   const { bundleT, seams } = buildBundleClock(events);
@@ -355,6 +451,8 @@ export function createEngine(index: EventIndex): EngineHandle {
       [0, new Map(files.map((f) => [f, emptyFileState()]))],
     ]),
     index,
+    scope: scope ?? soloReconstructionScope(index),
+    ambiguous: new Map(),
   };
 
   // ---------------------------------------------------------------------------
@@ -434,6 +532,20 @@ export function createEngine(index: EventIndex): EngineHandle {
 
     seams() {
       return internal.seams;
+    },
+    ambiguousFiles() {
+      // A projection of `internal.ambiguous`, built here rather than maintained
+      // alongside it. Two maps that must agree about which files are ambiguous
+      // is exactly the shape that eventually disagrees.
+      const shapes = new Map<string, 'concurrent' | 'unknown'>();
+      for (const [filePath, result] of internal.ambiguous) {
+        shapes.set(filePath, result.kind);
+      }
+      return shapes;
+    },
+
+    fileAmbiguity() {
+      return internal.ambiguous;
     },
 
     step(n = 1) {

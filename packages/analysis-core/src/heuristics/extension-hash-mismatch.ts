@@ -21,7 +21,15 @@
  * (Mismatch could indicate a student compiled their own recorder, but could
  * also be a legitimate build they downloaded before the hash was updated.)
  *
- * One flag per bundle (not per session) — this is a bundle-level check.
+ * One flag per unrecognised BUILD, not per session and not one per bundle. A
+ * classic bundle observes exactly one build hash, so this is one flag as it
+ * always was. A rolling-sealed bundle has a signed manifest per session and may
+ * legitimately span several builds — a student who updates their recorder
+ * mid-assignment — so each distinct hash is checked and each unknown one is
+ * reported. Checking only the union manifest's single scalar would let a student
+ * record one session under an official recorder and the rest under a modified
+ * one with only the former ever examined.
+ *
  * The `supportingSeqs` list is empty (no specific event caused the mismatch;
  * it is a manifest-level property).
  *
@@ -41,29 +49,45 @@ import type { HeuristicConfig } from './config.js';
 
 function run(_index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
   const { knownGoodHashes } = config.extensionHashMismatch;
-  const extensionHash = bundle.manifest.extension_hash;
 
-  if (knownGoodHashes.includes(extensionHash)) return [];
+  // A rolling-sealed bundle has one signed manifest PER SESSION, and a student
+  // who updates their recorder mid-assignment legitimately records sessions
+  // under different build hashes — which is why that variance is no longer a
+  // `divergent_scope` defect. The union manifest can only carry one scalar, so
+  // checking `bundle.manifest.extension_hash` alone would leave every other
+  // build unchecked: record one session under an official recorder and the rest
+  // under a modified one, and only the session behind the scalar is ever seen.
+  // Check every build that touched the work.
+  const observed = [
+    ...new Set([
+      bundle.manifest.extension_hash,
+      ...(bundle.rollingSeal?.observedExtensionHashes ?? []),
+    ]),
+  ].sort();
 
-  return [
-    {
-      id: `extension_hash_mismatch-${extensionHash.slice(0, 16)}`,
-      heuristic: 'extension_hash_mismatch',
-      title: 'Recorder extension hash not in known-good list',
-      severity: 'medium',
-      confidence: 0.9,
-      supportingSeqs: [],
-      description:
-        `The recorder extension hash "${extensionHash}" is not in the course's ` +
-        `known-good recorder hash list. This may indicate the student used a ` +
-        `modified or unofficial version of the Provenance recorder extension. ` +
-        `Course staff should verify the hash against the published release hashes.`,
-      detail: {
-        extensionHash,
-        knownGoodHashCount: knownGoodHashes.length,
-      },
+  return observed
+    .filter((h) => !knownGoodHashes.includes(h))
+    .map((h) => flagFor(h, knownGoodHashes));
+}
+
+function flagFor(extensionHash: string, knownGoodHashes: readonly string[]): Flag {
+  return {
+    id: `extension_hash_mismatch-${extensionHash.slice(0, 16)}`,
+    heuristic: 'extension_hash_mismatch',
+    title: 'Recorder extension hash not in known-good list',
+    severity: 'medium',
+    confidence: 0.9,
+    supportingSeqs: [],
+    description:
+      `The recorder extension hash "${extensionHash}" is not in the course's ` +
+      `known-good recorder hash list. This may indicate the student used a ` +
+      `modified or unofficial version of the Provenance recorder extension. ` +
+      `Course staff should verify the hash against the published release hashes.`,
+    detail: {
+      extensionHash,
+      knownGoodHashCount: knownGoodHashes.length,
     },
-  ];
+  };
 }
 
 export const extensionHashMismatchHeuristic: Heuristic = {

@@ -10,14 +10,30 @@
  *
  * ## Known heuristic IDs
  *
- * The set of known IDs is defined as KNOWN_HEURISTIC_IDS below — the same
- * set backfilled in migration 0010. Any config PUT against the API must
- * include an entry for every known ID (none missing, none unknown).
- * This matches the PRD §10.2 validation rule and the convention stated in
+ * KNOWN_HEURISTIC_IDS is DERIVED from analysis-core's ALL_FLAG_IDS — the
+ * canonical enumeration built from the three live registries the engine
+ * actually runs. Any config PUT against the API must include an entry for
+ * every known ID (none missing, none unknown). This matches the PRD §10.2
+ * validation rule and the convention stated in
  * docs/analyzer-v3-implementation-plan.md §13a.
+ *
+ * It used to be a hand-maintained literal, and it drifted: it listed 24 ids
+ * while the engine emitted 26 (`inter_session_external_change` and
+ * `submitted_code_match` were absent). Deriving it means that cannot recur —
+ * see config.test.ts, which fails if the two ever diverge again.
+ *
+ * ## Missing per_flag entries
+ *
+ * A stored config can legitimately predate a newly shipped flag. The single
+ * definition of what that means lives in `resolvePerFlag` below: a missing
+ * entry is ENABLED at weight 1.0. Every consumer (ingest and recompute) must
+ * go through it — they previously disagreed, and the disagreement silently
+ * dropped real flags on recompute. See resolvePerFlag's JSDoc for the
+ * rationale behind choosing "enabled".
  */
 
 import { eq, desc, and, count, sql } from 'drizzle-orm';
+import { ALL_FLAG_IDS } from '@provenance/analysis-core/heuristics/known-flag-ids.js';
 import { heuristic_configs, recompute_jobs, submissions } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import { withTransaction } from '../../db/client.js';
@@ -66,47 +82,117 @@ export const DEFAULT_SEVERITY_WEIGHTS: SeverityWeights = {
 };
 
 /**
- * The set of known heuristic IDs. Must match the per_flag keys in migration 0010.
+ * The set of known heuristic IDs, derived from analysis-core.
  *
  * PRD §10.2: "Every known heuristicId must have a per_flag entry."
- * Source of truth: the complete list of IDs in v2's heuristic suite.
- * Convention (per plan §13a): these are the known IDs — any config must have
- * an entry for each, and may not introduce unknown IDs.
+ * Source of truth: `ALL_FLAG_IDS` — the union of the per-submission heuristic
+ * registry, the validation-derived integrity flags, and the cross-submission
+ * registry, all read straight off the objects the engine iterates at runtime.
  *
- * Integrity-derived flags (chain_broken, manifest_sig_invalid, etc.) are
- * included because they appear as Flag rows and must be configurable.
+ * Integrity-derived flags (chain_broken, manifest_sig_invalid,
+ * submitted_code_match, ...) are included because they appear as Flag rows and
+ * must be configurable. So are the cross-submission heuristics.
+ *
+ * The Set shape is kept because validateConfig does O(1) membership tests
+ * against it and callers outside this module read `.size` / iterate it.
  */
-export const KNOWN_HEURISTIC_IDS: ReadonlySet<string> = new Set([
-  'large_paste',
-  'external_edits',
-  'low_typing_high_output',
-  'chain_broken',
-  'paste_is_solution',
-  'mass_external_replacement',
-  'time_to_first_save_anomaly',
-  'idle_then_complete',
-  'no_intermediate_errors',
-  'paste_matches_known_source',
-  'ai_extension_active',
-  'extension_hash_mismatch',
-  'extension_set_changed_mid_assignment',
-  'clock_jumps',
-  'gap_in_heartbeats',
-  'manifest_sig_invalid',
-  'session_binding_invalid',
-  'monotonic_t_regression',
-  'monotonic_wall_regression',
-  'shell_integration_disabled',
-  'terminal_active_during_external_change',
-  'multiple_sessions_overlap',
-  'editing_pattern_clone',
-  'paste_shared_across_students',
-]);
+export const KNOWN_HEURISTIC_IDS: ReadonlySet<string> = new Set(ALL_FLAG_IDS);
+
+/**
+ * What a per_flag entry means when the stored config does not have one.
+ *
+ * ENABLED, weight 1.0 — deliberately the permissive option. See resolvePerFlag.
+ */
+export const DEFAULT_PER_FLAG_ENTRY: Readonly<PerFlagEntry> = Object.freeze({
+  enabled: true,
+  weight: 1.0,
+});
+
+/**
+ * Resolve the effective per_flag entry for one heuristic id.
+ *
+ * This is the ONLY place that decides what a missing entry means, and every
+ * consumer of a stored config must route through it. Before this existed,
+ * ingest read a missing entry as `{ enabled: true, weight: 1.0 }` while the
+ * recompute path read it as disabled, so two flags that the server's config
+ * had never listed (`inter_session_external_change`, `submitted_code_match`)
+ * were scored at ingest and then silently erased — unscored and invisible —
+ * the moment any staff member adjusted any weight.
+ *
+ * ## Why "enabled" rather than "disabled"
+ *
+ * Both are defensible: enabled-by-default fails safe toward surfacing
+ * evidence, disabled-by-default fails safe toward not accusing. We choose
+ * enabled, for four reasons:
+ *
+ *   1. A missing entry means "this flag is newer than this config row", not
+ *      "staff turned this off". Staff intent to suppress a flag is always
+ *      recorded explicitly as `enabled: false`; absence carries no intent, so
+ *      inferring suppression from it invents a decision nobody made.
+ *   2. Disabled-by-default is silent and indefinite. A newly shipped heuristic
+ *      would stay invisible on every semester whose config predates it, with
+ *      no signal anywhere that it was being suppressed — a clean-looking
+ *      submission and a suppressed-flag submission are indistinguishable in
+ *      the UI. An unexpectedly-present flag, by contrast, is visible and can
+ *      be weighted down in one PUT.
+ *   3. Flags are evidence for a human, not a verdict. Nothing is decided by
+ *      score alone; staff read the timeline and the supporting events. The
+ *      asymmetry that matters in an integrity proceeding is between "staff saw
+ *      the evidence and judged it" and "staff never saw it" — and only the
+ *      latter is unrecoverable.
+ *   4. It matches the system's own stated default everywhere else:
+ *      DEFAULT_SERVER_CONFIG enables every flag at weight 1.0, and migration
+ *      0010 backfilled every semester with all-enabled. Enabled-by-default is
+ *      the posture Provenance already ships; the ingest path was the one that
+ *      already implemented it, and it is the one that has been running in
+ *      production against every ingested submission.
+ *
+ * Predictability for pre-existing rows is provided by normalizeStoredConfig,
+ * which materializes the same default into the config on read (and by
+ * migration 0022, which materializes it in the stored rows), so a 24-entry row
+ * behaves identically to the 29-entry row a staff member would write today.
+ */
+export function resolvePerFlag(config: ServerHeuristicConfig, heuristicId: string): PerFlagEntry {
+  return config.per_flag[heuristicId] ?? DEFAULT_PER_FLAG_ENTRY;
+}
+
+/**
+ * Fill in defaults for any known heuristic id a stored config is missing.
+ *
+ * Read-side upgrade path for `heuristic_configs.config` rows written before a
+ * flag id existed. Rows backfilled by migration 0010 carry 24 entries; the
+ * known set is now 29 (the three 2026-08 bundle-level tamper detections were
+ * the most recent additions, and no stored row predating them carries an entry
+ * for any of the three). Without this, the analyzer would GET a short config
+ * and PUT it straight back, and validateConfig would 422 it for the entries
+ * the row could not possibly have contained when it was written.
+ *
+ * Entries that ARE present are returned untouched — including `enabled: false`
+ * ones, which are recorded staff intent. Unknown ids are preserved rather than
+ * dropped, for the same reason: if a heuristic is retired and later restored,
+ * silently discarding the staff setting for it is worse than carrying a key
+ * nobody reads. (validateConfig still rejects unknown ids on WRITE; this is a
+ * read-side normalization, not a write-side one.)
+ *
+ * Pure: never mutates its input.
+ */
+export function normalizeStoredConfig(config: ServerHeuristicConfig): ServerHeuristicConfig {
+  const perFlag: Record<string, PerFlagEntry> = { ...config.per_flag };
+  for (const id of KNOWN_HEURISTIC_IDS) {
+    if (perFlag[id] === undefined) {
+      perFlag[id] = { ...DEFAULT_PER_FLAG_ENTRY };
+    }
+  }
+  return {
+    ...config,
+    per_flag: perFlag,
+  };
+}
 
 /** The default server-side config (all heuristics enabled, weight 1.0). */
 export const DEFAULT_SERVER_CONFIG: ServerHeuristicConfig = {
   per_flag: Object.fromEntries(
-    [...KNOWN_HEURISTIC_IDS].map((id) => [id, { enabled: true, weight: 1.0 }]),
+    [...KNOWN_HEURISTIC_IDS].map((id) => [id, { ...DEFAULT_PER_FLAG_ENTRY }]),
   ),
   severity_weights: DEFAULT_SEVERITY_WEIGHTS,
   config_format_version: 1,
@@ -130,6 +216,13 @@ export type ActiveConfigRow = {
  * Returns null if no active config exists (e.g. a semester created before
  * the backfill migration ran, or a semester with no admin member).
  * Callers that need a config should fall back to DEFAULT_SERVER_CONFIG in that case.
+ *
+ * The returned `config` is passed through normalizeStoredConfig, so a row
+ * written before a flag id existed reads back with that id present at the
+ * default entry. This keeps the GET → PUT round-trip valid (the PUT validator
+ * requires an entry for every known id) and means ingest, recompute and the
+ * API all observe the same complete per_flag map. The stored row is not
+ * rewritten here — migration 0022 does that once, offline.
  */
 export async function getActiveConfig(
   db: DrizzleDb,
@@ -158,8 +251,10 @@ export async function getActiveConfig(
   return {
     id: activeRow.id,
     version: activeRow.version,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- jsonb stored as unknown, validated at write-time
-    config: activeRow.config as any as ServerHeuristicConfig,
+    config: normalizeStoredConfig(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- jsonb stored as unknown, validated at write-time
+      activeRow.config as any as ServerHeuristicConfig,
+    ),
     set_at: activeRow.set_at,
     note: activeRow.note,
   };

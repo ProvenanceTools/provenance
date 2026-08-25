@@ -73,6 +73,10 @@ function makeTwoFileBundle(): Bundle {
       events: allEvents,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: synthetic test
       meta: {} as any,
+      slogSha256: 'a'.repeat(64),
+      slogSha256Lf: null,
+      tornTail: null,
+      metaSha256: 'b'.repeat(64),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: synthetic test
       firstEvent: allEvents[0] as any,
     },
@@ -80,6 +84,7 @@ function makeTwoFileBundle(): Bundle {
 
   return {
     id: crypto.randomUUID(),
+    droppedArtifacts: [],
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: synthetic test
     manifest: {} as any,
     manifestSigHex: '',
@@ -124,6 +129,10 @@ function makeNoFileBundle(): Bundle {
       events: allEvents,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: synthetic test
       meta: {} as any,
+      slogSha256: 'a'.repeat(64),
+      slogSha256Lf: null,
+      tornTail: null,
+      metaSha256: 'b'.repeat(64),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: synthetic test
       firstEvent: allEvents[0] as any,
     },
@@ -131,6 +140,7 @@ function makeNoFileBundle(): Bundle {
 
   return {
     id: crypto.randomUUID(),
+    droppedArtifacts: [],
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FFI: synthetic test
     manifest: {} as any,
     manifestSigHex: '',

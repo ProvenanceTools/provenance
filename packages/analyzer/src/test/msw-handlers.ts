@@ -21,6 +21,7 @@ import {
   UnmatchedListResponseSchema,
   type Membership,
   type SubmissionRow,
+  type SubmissionContributor,
   type CohortFacets,
   type StudentRollupRow,
 } from '@provenance/shared/api-schemas';
@@ -151,6 +152,53 @@ export const DEFAULT_SEMESTER_ID = defaultMembership.semester_id;
 export const DEFAULT_SEMESTER_SLUG = defaultMembership.semester_slug;
 export const DEFAULT_COURSE_SLUG = defaultMembership.course_slug;
 
+/**
+ * A contributor consistent with a solo submission: the same person as the
+ * row's `student`, `kind: 'roster'`, `is_submitter: true`, and score fields
+ * mirroring the row's own score. That is exactly the shape the server emits
+ * for every pre-0029 submission, so fixtures built from it stay
+ * self-consistent.
+ */
+export function makeSoloContributor(
+  student: { id: string; sid: string; display_name: string },
+  score: {
+    score_total: number;
+    score_max_severity: SubmissionContributor['score_max_severity'];
+    flag_counts: SubmissionContributor['flag_counts'];
+  },
+): SubmissionContributor {
+  return {
+    contributor_key: `roster:${student.id}`,
+    kind: 'roster',
+    student,
+    student_ref: null,
+    session_count: 0,
+    is_submitter: true,
+    ...score,
+  };
+}
+
+/** Any contributor, defaulting to the solo Alice Liddell shape. */
+export function makeSubmissionContributor(
+  overrides: Partial<SubmissionContributor> = {},
+): SubmissionContributor {
+  return {
+    ...makeSoloContributor(
+      {
+        id: '30000000-0000-0000-0000-000000000001',
+        sid: '3031234',
+        display_name: 'Alice Liddell',
+      },
+      {
+        score_total: 5.0,
+        score_max_severity: 'medium',
+        flag_counts: { info: 1, low: 2, medium: 1, high: 0 },
+      },
+    ),
+    ...overrides,
+  };
+}
+
 export function makeSubmissionRow(overrides: Partial<SubmissionRow> = {}): SubmissionRow {
   const base: SubmissionRow = {
     id: '10000000-0000-0000-0000-000000000001',
@@ -165,6 +213,7 @@ export function makeSubmissionRow(overrides: Partial<SubmissionRow> = {}): Submi
       sid: '3031234',
       display_name: 'Alice Liddell',
     },
+    contributors: [],
     score_total: 5.0,
     score_max_severity: 'medium',
     flag_counts: { info: 1, low: 2, medium: 1, high: 0 },
@@ -179,7 +228,24 @@ export function makeSubmissionRow(overrides: Partial<SubmissionRow> = {}): Submi
   };
   // Merge overrides carefully: top-level fields override base, nested objects
   // (assignment, student, flag_counts) are replaced entirely if provided.
-  return { ...base, ...overrides };
+  const merged = { ...base, ...overrides };
+  // Default `contributors` to the SOLO shape derived from the merged row, so a
+  // fixture that overrides `student` (or the score) gets a contributor that
+  // agrees with it rather than the base Alice Liddell. An explicit
+  // `contributors` override always wins — that is how a group fixture is built.
+  if (overrides.contributors === undefined) {
+    merged.contributors =
+      merged.student === null
+        ? []
+        : [
+            makeSoloContributor(merged.student, {
+              score_total: merged.score_total,
+              score_max_severity: merged.score_max_severity,
+              flag_counts: merged.flag_counts,
+            }),
+          ];
+  }
+  return merged;
 }
 
 export const defaultFacets: CohortFacets = {
@@ -245,6 +311,9 @@ export function assignmentsHandler() {
             p95_score: 8.0,
             fail_count: 0,
             warn_count: 1,
+            // The server always sends this (NOT NULL column, narrowed through
+            // parseIngestScopeConfig); `self_identifying` is its default value.
+            ingest_scope: { mode: 'self_identifying', on_multiple: 'ingest_all' },
           },
         ],
       },
@@ -260,7 +329,17 @@ export function assignmentsHandler() {
 
 export const DEFAULT_JOB_ID = 'aaaa0000-0000-0000-0000-000000000001';
 
-export function makeIngestJob(status: string = 'succeeded', files: object[] = []): object {
+export function makeIngestJob(
+  status: string = 'succeeded',
+  files: object[] = [],
+  /**
+   * Scope-resolution skips. `null` (the default for a job that has not settled)
+   * means UNKNOWN — staging has not finished resolving scopes — and is what the
+   * chunked upload path serves until its background job records them. `[]` is
+   * the positive "resolution ran and skipped nothing".
+   */
+  skipped: object[] | null = status === 'queued' || status === 'running' ? null : [],
+): object {
   return {
     id: DEFAULT_JOB_ID,
     semester_id: DEFAULT_SEMESTER_ID,
@@ -277,6 +356,7 @@ export function makeIngestJob(status: string = 'succeeded', files: object[] = []
       superseded: 0,
       discarded: 0,
     },
+    skipped,
     files,
   };
 }

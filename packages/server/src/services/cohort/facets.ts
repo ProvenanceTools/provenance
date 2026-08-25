@@ -19,11 +19,12 @@
  * copy of the filter without its own dimension, then aggregates.
  */
 
-import { and, eq, isNull, inArray, or, sql } from 'drizzle-orm';
+import { and, eq, isNull, inArray, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { submissions, assignments, roster_entries } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import type { CohortFilters } from './list.js';
+import { buildSearchCondition } from './list.js';
 
 export type CohortFacets = {
   by_severity: { info: number; low: number; medium: number; high: number };
@@ -62,7 +63,18 @@ function buildWhereConditions(
   }
 
   if (filters.studentId !== undefined) {
-    conds.push(eq(submissions.student_id, filters.studentId));
+    // Semi-join on contributors, matching the cohort list exactly (D9). The
+    // facets and the list are shown side by side; if they filtered on different
+    // notions of "this student's submissions" the counts would contradict the
+    // rows beside them.
+    const wantedStudentId = filters.studentId;
+    conds.push(
+      sql`EXISTS (
+        SELECT 1 FROM submission_contributors sc
+        WHERE sc.submission_id = ${submissions.id}
+          AND sc.roster_entry_id = ${wantedStudentId}
+      )`,
+    );
   }
 
   // validationStatus — omitted for by_validation facet
@@ -127,16 +139,14 @@ function buildWhereConditions(
     );
   }
 
-  // q: free-text ILIKE on roster_entries.display_name or sid.
-  // Disabled in protected mode (it would be a name->Student-N lookup oracle).
-  if (!protectedMode && filters.q !== undefined && filters.q.trim() !== '') {
-    const pattern = `%${filters.q.trim()}%`;
-    conds.push(
-      or(
-        sql`${roster_entries.display_name} ILIKE ${pattern}`,
-        sql`${roster_entries.sid} ILIKE ${pattern}`,
-      )!,
-    );
+  // q: the same contributor-wide search predicate the cohort list uses (see
+  // `list.ts`). The facets and the list are rendered side by side, so a facet
+  // built on the submitter-of-record ILIKE while the list matched contributors
+  // would report counts that contradict the rows beneath them — the same
+  // argument the `studentId` semi-join above is written for.
+  const searchCond = buildSearchCondition(filters.q, protectedMode);
+  if (searchCond !== null) {
+    conds.push(searchCond);
   }
 
   return conds;
@@ -160,7 +170,11 @@ export async function buildFacets(
     })
     .from(submissions)
     .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
-    .innerJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
+    // LEFT (D9): an INNER join drops a submission with no single owning roster
+    // entry out of the facet counts, so the totals silently disagree with the
+    // list beside them. Still COUNT(*) over one row per submission — the
+    // student filter is an EXISTS, so nothing fans out.
+    .leftJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
     .where(and(...buildWhereConditions(semesterId, filters, new Set(['severity']), protectedMode)))
     .groupBy(submissions.score_max_severity);
 
@@ -180,7 +194,7 @@ export async function buildFacets(
     })
     .from(submissions)
     .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
-    .innerJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
+    .leftJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
     .where(
       and(...buildWhereConditions(semesterId, filters, new Set(['validation']), protectedMode)),
     )
@@ -203,7 +217,7 @@ export async function buildFacets(
     })
     .from(submissions)
     .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
-    .innerJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
+    .leftJoin(roster_entries, eq(submissions.student_id, roster_entries.id))
     .where(
       and(...buildWhereConditions(semesterId, filters, new Set(['assignment']), protectedMode)),
     )

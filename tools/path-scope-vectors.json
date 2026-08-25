@@ -1,0 +1,101 @@
+{
+  "comment": "Cross-port conformance vectors for the path-scope matcher. Consumed by packages/log-core (TypeScript), provjet (Kotlin) and provnvim (Lua). Design spec: docs/superpowers/specs/2026-08-22-path-scope-design.md. Changing this file means changing three repos.",
+  "match": [
+    { "path": "Makefile", "entry": "Makefile", "expect": true },
+    { "path": "src/Makefile", "entry": "Makefile", "expect": false },
+    { "path": "Makefile2", "entry": "Makefile", "expect": false },
+    { "path": "src/Main.java", "entry": "src/", "expect": true },
+    { "path": "src/util/deep/A.java", "entry": "src/", "expect": true },
+    { "path": "src", "entry": "src/", "expect": false },
+    { "path": "srcx/A.java", "entry": "src/", "expect": false },
+    { "path": "Main.java", "entry": "*.java", "expect": true },
+    { "path": "src/util/Main.java", "entry": "*.java", "expect": true },
+    { "path": "Main.javax", "entry": "*.java", "expect": false },
+    { "path": "Main.JAVA", "entry": "*.java", "expect": false },
+    { "path": "SRC/A.java", "entry": "src/", "expect": false },
+    { "path": ".java", "entry": "*.java", "expect": true },
+    { "path": "a/b/c/d/e.java", "entry": "a/b/", "expect": true }
+  ],
+  "editorGlobHazards": {
+    "comment": "Paths a permissive editor watcher glob would plausibly deliver but the matcher rejects. A port that emits on its watcher's verdict alone fails here. Design spec §4.2.",
+    "cases": [
+      { "path": "src", "entry": "src/", "expect": false },
+      { "path": "srcextra/A.java", "entry": "src/", "expect": false },
+      { "path": "notes.java.bak", "entry": "*.java", "expect": false },
+      { "path": "SRC/Main.java", "entry": "src/", "expect": false }
+    ]
+  },
+  "validate": [
+    { "entry": "Makefile", "problem": null },
+    { "entry": "src/util/Main.java", "problem": null },
+    { "entry": "src/", "problem": null },
+    { "entry": "*.java", "problem": null },
+    { "entry": "", "problem": "empty" },
+    { "entry": " src/", "problem": "whitespace" },
+    { "entry": "Makefile ", "problem": "whitespace" },
+    { "entry": "src\\Main.java", "problem": "backslash" },
+    { "entry": "/etc/passwd", "problem": "absolute" },
+    { "entry": "C:/Users/a", "problem": "absolute" },
+    { "entry": "/", "problem": "absolute" },
+    { "entry": "../secrets", "problem": "dot_segment" },
+    { "entry": "src/../etc", "problem": "dot_segment" },
+    { "entry": "./src/", "problem": "dot_segment" },
+    { "entry": "src//a.java", "problem": "empty_segment" },
+    { "entry": "src/*.java", "problem": "bad_wildcard" },
+    { "entry": "**/a.java", "problem": "bad_wildcard" },
+    { "entry": "*", "problem": "bad_wildcard" },
+    { "entry": "*.java/", "problem": "bad_wildcard" },
+    { "entry": "*/", "problem": "bad_wildcard" },
+    { "entry": "a?.java", "problem": "forbidden_char" },
+    { "entry": "a[0-9].java", "problem": "forbidden_char" },
+    { "entry": "{a,b}.java", "problem": "forbidden_char" },
+    { "entry": "a0-9].java", "problem": "forbidden_char" },
+    { "entry": "b}.java", "problem": "forbidden_char" }
+  ],
+  "role": [
+    {
+      "comment": "Hard exclusion beats every course list.",
+      "path": ".provenance/manifest.json",
+      "scope": { "track": ["*.json"], "ignore": [], "attachments": ["*.json"] },
+      "expect": "excluded"
+    },
+    {
+      "comment": "Hard exclusion also covers the exact-path form (HARD_EXCLUDED_PATHS), not just the directory-prefix form. A port that only implements the .provenance/ and .git/ prefix checks would pass every other vector here but miss this one.",
+      "path": ".provenance-manifest",
+      "scope": { "track": [".provenance-manifest"], "ignore": [], "attachments": [] },
+      "expect": "excluded"
+    },
+    {
+      "comment": "Same exact-path exclusion, the non-dotfile spelling.",
+      "path": "provenance-manifest",
+      "scope": { "track": ["provenance-manifest"], "ignore": [], "attachments": [] },
+      "expect": "excluded"
+    },
+    {
+      "comment": "ignore beats attachments beats track.",
+      "path": "src/A.class",
+      "scope": { "track": ["src/"], "ignore": ["*.class"], "attachments": ["src/"] },
+      "expect": "ignored"
+    },
+    {
+      "path": "src/build.log",
+      "scope": { "track": ["src/"], "ignore": [], "attachments": ["src/build.log"] },
+      "expect": "attachment"
+    },
+    {
+      "path": "src/Main.java",
+      "scope": { "track": ["src/"], "ignore": ["*.class"], "attachments": ["logs/"] },
+      "expect": "reviewed"
+    },
+    {
+      "path": "README.md",
+      "scope": { "track": ["src/"], "ignore": [], "attachments": [] },
+      "expect": "unscoped"
+    },
+    {
+      "path": ".git/config",
+      "scope": { "track": ["*"], "ignore": [], "attachments": [] },
+      "expect": "excluded"
+    }
+  ]
+}

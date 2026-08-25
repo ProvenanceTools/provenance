@@ -12,15 +12,53 @@
  *   5. Assign a stable id via crypto.randomUUID() (WebCrypto, available in browsers + jsdom).
  *   6. Return Bundle.
  *
+ * TWO SEAL SHAPES. A classic bundle is sealed once into `manifest.json` +
+ * `manifest.sig`. A git-submitted bundle is ROLLING-sealed: one
+ * `manifest-<session_id>.json` + `.sig` per session, each covering only its own
+ * session and signed by that session's own key (program spec §8). Both are
+ * accepted here. For a rolling bundle `bundle.manifest` is the SYNTHESIZED union
+ * at `format_version: '1.2'` and `bundle.rollingSeal` carries the per-session
+ * seals that check 1 verifies individually. A bundle with no rolling manifests
+ * takes the identical path it always took and never gets a `rollingSeal`.
+ *
  * NOTE: signature verification is NOT done here — that is Phase 2
  * (validation/verify-manifest-sig.ts). The loader checks structure only.
  */
 
-import { validateBundleManifestShape, sha256Hex, ok, err } from '@provenance/log-core';
-import type { Result } from '@provenance/log-core';
-import { unzipBundle } from './unzip.js';
+import {
+  validateBundleManifestShape,
+  sha256Hex,
+  ok,
+  err,
+  isFinalRollingSeal,
+} from '@provenance/log-core';
+import type { BundleManifest, Result } from '@provenance/log-core';
+import { unzipBundle, logicalSessionIdFromMeta } from './unzip.js';
 import { parseSession } from './parse-session.js';
-import type { Bundle, LoaderError, SessionParseError } from './types.js';
+import {
+  validateRollingSeals,
+  reconcileRollingSealsWithSessions,
+  synthesizeRollingUnionManifest,
+} from './rolling-seal.js';
+import {
+  computeSlogCoverage,
+  computeMetaCoverage,
+  wholeFileCoverage,
+  resolveAmbiguousCoverage,
+} from './rolling-coverage.js';
+import type { RollingSealCoverage } from './rolling-coverage.js';
+import { lfNormalizedSha256 } from './line-endings.js';
+import { asLogicalSessionId } from './types.js';
+import type {
+  Bundle,
+  BundleRollingSeal,
+  DroppedArtifact,
+  LoaderError,
+  LogicalSessionId,
+  RollingSealDefect,
+  SessionFiles,
+  SessionParseError,
+} from './types.js';
 
 // ---------------------------------------------------------------------------
 // Multi-bundle types
@@ -68,9 +106,83 @@ export async function loadBundle(
   const {
     manifestJson,
     manifestSigHex,
+    rollingSeals: allRawRollingSeals,
     sessions: sessionFiles,
     submissionFiles: bundleSubmissionFiles,
+    droppedArtifacts: unzipDropped,
   } = unzipResult.value;
+
+  // ---------------------------------------------------------------------------
+  // Step 1b: drop the rolling seal of any session the unzipper already dropped.
+  //
+  // This completes the read-side orphan guard. Without it, degrading gracefully
+  // would MANUFACTURE A FINDING out of the very crash it exists to absorb: a
+  // seal whose `.slog` is not in the bundle becomes a `no_session_log` defect,
+  // which fails check 1 (`manifest_sig`) for the WHOLE bundle at high severity.
+  // (That defect no longer asserts deletion or planting — see `rolling-seal.ts`
+  // — but it is still a finding, and manufacturing one out of a crash is still
+  // the wrong answer when the loader knows exactly which session went missing.)
+  // A student whose editor crashed would go from "your submission will not open"
+  // to "your submission looks tampered with" — strictly worse.
+  //
+  // The seal is matched on the LOGICAL session id recovered from the dropped
+  // session's `.slog.meta` sidecar, which is the id space `manifest-<id>.json`
+  // filenames live in. The `.slog` FILENAME uuid would match nothing here; the
+  // brands make that a compile error rather than a silent miss (types.ts).
+  //
+  // Dropping a seal cannot itself create a finding: `unsealed_session` is
+  // reported only for a session whose log IS present and uncovered, and this
+  // only ever drops seals whose session is absent. Same rule the recorders'
+  // seal-side guard follows — and, as there, nothing is deleted; the seal is
+  // simply not analysed, and the fact is reported.
+  // ---------------------------------------------------------------------------
+  const droppedArtifacts: DroppedArtifact[] = [...unzipDropped];
+
+  // Logical ids the SURVIVING sessions claim, read straight from their sidecars.
+  //
+  // A guard on the guard. If a stranded sidecar happens to name the same logical
+  // session as a session that IS here — a `.slog.meta` copied or renamed, so two
+  // sidecars claim one recording — then dropping "the seal of the dropped
+  // session" would drop a HEALTHY session's seal, and that session would come
+  // out `unsealed_session`: a finding manufactured against work we actually
+  // hold, by the very code meant to stop findings being manufactured. So a seal
+  // is only ever dropped when NO surviving session claims it.
+  //
+  // Read here rather than after step 3 because the seals have to be filtered
+  // before `validateRollingSeals` runs. A sidecar we cannot parse contributes
+  // nothing, which fails safe: the seal is kept and the existing defect path
+  // reports it.
+  const survivingLogicalIds = new Set<string>();
+  for (const files of sessionFiles) {
+    const id = logicalSessionIdFromMeta(files.metaJson);
+    if (id !== null) survivingLogicalIds.add(id);
+  }
+
+  const droppedLogicalIds = new Set<string>(
+    unzipDropped
+      .map((d) => d.logicalSessionId)
+      .filter((id): id is NonNullable<typeof id> => id !== undefined)
+      .filter((id) => !survivingLogicalIds.has(id)),
+  );
+  const rawRollingSeals =
+    droppedLogicalIds.size === 0
+      ? allRawRollingSeals
+      : allRawRollingSeals.filter((seal) => {
+          if (!droppedLogicalIds.has(seal.sessionId)) return true;
+          droppedArtifacts.push({
+            kind: 'orphaned_rolling_seal',
+            filename: `manifest-${seal.sessionId}.json`,
+            logicalSessionId: asLogicalSessionId(seal.sessionId),
+            detail:
+              `manifest-${seal.sessionId}.json seals a session whose log is not in ` +
+              `this bundle, because the log was left out as an incomplete ` +
+              `recording. Its signature can never be checked — the key that would ` +
+              `verify it lives in that session's own session.start — so it is left ` +
+              `out with the session it names. This records an INCOMPLETE ` +
+              `RECORDING, not an integrity problem.`,
+          });
+          return false;
+        });
 
   // ---------------------------------------------------------------------------
   // Step 2: Validate the manifest JSON shape.
@@ -80,31 +192,44 @@ export async function loadBundle(
   // Structural validation of manifest.json: invalid JSON or wrong shape both
   // surface as 'invalid_manifest' so callers can distinguish them from the
   // ZIP-itself-couldn't-be-read case.
-  let parsedManifestRaw: unknown;
-  try {
-    parsedManifestRaw = JSON.parse(manifestJson);
-  } catch (e) {
-    return err({
-      kind: 'invalid_manifest',
-      detail: `manifest.json is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
-    });
+  let classicManifest: BundleManifest | null = null;
+  if (manifestJson !== null) {
+    let parsedManifestRaw: unknown;
+    try {
+      parsedManifestRaw = JSON.parse(manifestJson);
+    } catch (e) {
+      return err({
+        kind: 'invalid_manifest',
+        detail: `manifest.json is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+
+    const manifestResult = validateBundleManifestShape(parsedManifestRaw);
+    if (!manifestResult.ok) {
+      const me = manifestResult.error;
+      const detail =
+        me.kind === 'not_object'
+          ? 'not_object'
+          : me.kind === 'wrong_version'
+            ? `wrong_version: ${String(me.actual)}`
+            : me.kind === 'missing_field'
+              ? `missing_field: ${me.field}`
+              : `invalid_field: ${me.field} — ${me.reason}`;
+      return err({ kind: 'invalid_manifest', detail: `manifest.json shape invalid: ${detail}` });
+    }
+
+    classicManifest = manifestResult.value;
   }
 
-  const manifestResult = validateBundleManifestShape(parsedManifestRaw);
-  if (!manifestResult.ok) {
-    const me = manifestResult.error;
-    const detail =
-      me.kind === 'not_object'
-        ? 'not_object'
-        : me.kind === 'wrong_version'
-          ? `wrong_version: ${String(me.actual)}`
-          : me.kind === 'missing_field'
-            ? `missing_field: ${me.field}`
-            : `invalid_field: ${me.field} — ${me.reason}`;
-    return err({ kind: 'invalid_manifest', detail: `manifest.json shape invalid: ${detail}` });
-  }
-
-  const manifest = manifestResult.value;
+  // ---------------------------------------------------------------------------
+  // Step 2b: Validate the rolling seals, if this bundle has any.
+  //
+  // Shape + the filename ↔ session_id binding only; the signatures need session
+  // public keys and are check 1's job. Defects never fail the load — see the
+  // module docstring of rolling-seal.ts.
+  // ---------------------------------------------------------------------------
+  const rollingValidation =
+    rawRollingSeals.length > 0 ? validateRollingSeals(rawRollingSeals) : null;
 
   // ---------------------------------------------------------------------------
   // Step 3: Parse all sessions in parallel (they are order-independent).
@@ -114,16 +239,75 @@ export async function loadBundle(
   // in step 4 imposes the final order.
   // ---------------------------------------------------------------------------
   const sessionResults = await Promise.all(
-    sessionFiles.map(({ slogText, metaJson }) => parseSession(slogText, metaJson)),
+    sessionFiles.map(({ slogText, metaJson, slogSha256, metaSha256 }) =>
+      parseSession(slogText, metaJson, { slogSha256, metaSha256 }),
+    ),
   );
 
   // Collect results — fail fast on the first error.
+  //
+  // This `return` used to be reachable by a student who did nothing wrong: a
+  // write interrupted mid-flush leaves a torn final line under the log's
+  // completely NORMAL filename, so none of the unzipper's drop patterns match
+  // it, `parseSession` returned `ndjson_parse_failed`, and one crashed session
+  // cost the whole submission before a single check ran. That case is now
+  // absorbed INSIDE `parseSession`, which truncates to the last complete entry,
+  // keeps the session, and reports the truncation on
+  // `ParsedSession.tornTail` — see `loader/types.ts` for why keeping beats
+  // dropping here, and `log-core/ndjson.ts` for the byte-level rule.
+  //
+  // What still reaches this line is a corrupt line in the MIDDLE of a log, a
+  // malformed `.slog.meta`, a first event that is not `session.start`, or a
+  // `session_id` that disagrees with its sidecar. None of those is a crash
+  // artifact; a chain break in the middle is real evidence, and it is
+  // deliberately NOT softened by the fix for the tail.
+  //
+  // Note also what does NOT happen for a torn session: it is not a dropped
+  // artifact, so it never enters `droppedLogicalIds` above and its rolling seal
+  // is NOT dropped with it. Dropping the seal of a session that is still here
+  // would produce an `unsealed_session` defect — a finding manufactured against
+  // work the bundle actually holds.
+  //
+  // The pairing between a parsed session and the FILES it was parsed from is
+  // established HERE, by index, because `Promise.all` preserves input order and
+  // this is the last point at which that correspondence exists — step 4 sorts
+  // `parsedSessions` by wall clock and destroys it.
+  //
+  // Keying by the parsed session's LOGICAL id (`session.start.data.session_id`)
+  // is the whole point: that is the id space rolling seals, manifest entries and
+  // every downstream consumer live in. The `.slog` FILENAME uuid is a different
+  // value in production and is now a distinct branded type so it cannot be used
+  // here by accident. See `types.ts` / {@link LogFileId}.
   const parsedSessions = [];
-  for (const result of sessionResults) {
+  const filesByLogicalSessionId = new Map<LogicalSessionId, SessionFiles[]>();
+  for (let i = 0; i < sessionResults.length; i++) {
+    const result = sessionResults[i]!;
     if (!result.ok) {
       return result;
     }
     parsedSessions.push(result.value);
+
+    // Two `.slog` files can carry the same logical session id only if a log was
+    // duplicated under a second filename — a hand copy of `.provenance/`, a
+    // backup, an odd merge. Then no single file is "the" file that session's
+    // seal covers, and silently taking the last one would compute coverage over
+    // bytes the seal never saw.
+    //
+    // EVERY claimant is kept, rather than one of them or a `'ambiguous'`
+    // sentinel, because the honest answer is decided by what they AGREE on —
+    // see `resolveAmbiguousCoverage`. The sentinel version of this line dropped
+    // the seal from coverage entirely, and an absent coverage entry is read as a
+    // classic whole-file commitment, which accused honest students at high
+    // severity. Keeping the list is what lets the seal be answered instead of
+    // abandoned.
+    const logicalId = asLogicalSessionId(result.value.sessionId);
+    const files = sessionFiles[i]!;
+    const claimants = filesByLogicalSessionId.get(logicalId);
+    if (claimants === undefined) {
+      filesByLogicalSessionId.set(logicalId, [files]);
+    } else {
+      claimants.push(files);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -137,6 +321,288 @@ export async function loadBundle(
   );
 
   // ---------------------------------------------------------------------------
+  // Step 4b: Resolve the rolling seal against the sessions that actually parsed,
+  // and synthesize the union manifest.
+  //
+  // This has to happen after the sort: the union's scalars are taken from the
+  // FIRST session in that order, and seals with no `.slog` are appended after
+  // it. See synthesizeRollingUnionManifest.
+  //
+  // `submission_files` is the one part that is NOT merged in that order. It is
+  // merged by seal recency (below), because a session that STARTS later can END
+  // earlier — two students recording concurrently against one shared repo — and
+  // merging by start then lets the earlier-finishing session's stale hashes
+  // overwrite the fresher ones, which check 8 reads as a tampered bundle.
+  // ---------------------------------------------------------------------------
+  let rollingSeal: BundleRollingSeal | undefined;
+  let unionManifest: BundleManifest | null = null;
+
+  if (rollingValidation !== null) {
+    const defects: RollingSealDefect[] = [...rollingValidation.defects];
+
+    defects.push(
+      ...reconcileRollingSealsWithSessions(
+        rawRollingSeals.map((s) => s.sessionId),
+        parsedSessions.map((s) => s.sessionId),
+        classicManifest !== null,
+      ),
+    );
+
+    // When each session's rolling seal was last rewritten, as far as this bundle
+    // can establish it: the wall clock of that session's LAST recorded event.
+    //
+    // A rolling manifest carries no seal timestamp, so this is the tightest
+    // in-data proxy available. The writer rewrites the seal at session start, at
+    // every checkpoint and at `dispose()`, and it cannot be rewritten after the
+    // session stops recording — so the last event's wall is an upper bound on
+    // the seal's write time, and it moves with the session's activity the way
+    // the seal does. `synthesizeRollingUnionManifest` uses it for the
+    // `submission_files` merge and for nothing else; see the caveat about
+    // cross-machine clocks in its docstring.
+    //
+    // MAX rather than last-write: two `.slog` files can carry the same logical
+    // session id (a duplicated log — see step 3), and the later of the two is
+    // the one that bounds when that session stopped.
+    const sealRecency = new Map<LogicalSessionId, number>();
+    for (const session of parsedSessions) {
+      const lastEvent = session.events[session.events.length - 1];
+      if (lastEvent === undefined) continue;
+      const at = new Date(lastEvent.wall).getTime();
+      if (!Number.isFinite(at)) continue;
+      const id = asLogicalSessionId(session.sessionId);
+      const known = sealRecency.get(id);
+      if (known === undefined || at > known) sealRecency.set(id, at);
+    }
+
+    const synthesized = synthesizeRollingUnionManifest(
+      rollingValidation.seals,
+      // LOGICAL ids, read out of each `.slog`'s session.start by parse-session.
+      parsedSessions.map((s) => asLogicalSessionId(s.sessionId)),
+      sealRecency,
+    );
+    if (synthesized !== null) {
+      unionManifest = synthesized.manifest;
+      defects.push(...synthesized.defects);
+    }
+
+    // Every build hash any seal reported, so the extension-hash allowlist can
+    // check all of them rather than only the one the union scalar kept.
+    const observedExtensionHashes = [
+      ...new Set(rollingValidation.seals.map((s) => s.manifest.extension_hash)),
+    ].sort();
+
+    // Prefix coverage, computed for every rolling-sealed session — INCLUDING in
+    // a bundle that also carries a classic `manifest.json`.
+    //
+    // This used to be gated on `classicManifest === null`, on the reasoning that
+    // "a classic seal is taken once over a finished log and commits to the whole
+    // file". That is true of a classic-ONLY bundle and false of a both-shapes
+    // one. `commands/seal.ts` writes `manifest.json` + `manifest.sig` INTO
+    // `.provenance/` and never removes them, so a student who runs "Prepare
+    // Submission Bundle" once and then keeps working and pushes ships a classic
+    // manifest that committed to the log as it stood THEN, beside rolling seals
+    // that commit to it as it stands NOW. `manifest = classicManifest ??
+    // unionManifest` makes the stale one the manifest the rest of analysis-core
+    // reads; coverage stayed `undefined`; and `verify-log-bytes.ts` reads absent
+    // coverage as a classic whole-file commitment. The student's honest later
+    // work then failed `log_bytes_match` at high severity, confidence 1.0, with
+    // text reading "This is not recoverable from a benign cause" — while check 1
+    // went on passing, so nothing contradicted it.
+    //
+    // This is the FIFTH route to the prefix-vs-whole-file accusation (bugs 5,
+    // 10, 12 were the others). Bug 10 fixed one branch of the conditional
+    // INSIDE this block and bug 12 fixed the other; the gate one level up was
+    // never looked at. The lesson the log already recorded — "fixing one branch
+    // of a conditional does not fix the conditional" — applies to the enclosing
+    // `if` too.
+    //
+    // The digest each session is measured against is the WINNING manifest's,
+    // because that is the digest `verify-log-bytes.ts` would otherwise compare
+    // whole-file. `final` is still honoured, so an append past a `dispose()`
+    // seal is still caught at full strength.
+    let coverage: RollingSealCoverage[] | undefined;
+    {
+      coverage = [];
+      for (const seal of rollingValidation.seals) {
+        // `seal.sessionId` is a LOGICAL session id — a rolling seal is named
+        // `manifest-<session.start.data.session_id>.json` — so it is resolved
+        // against the map built from the PARSED sessions above, never against
+        // the `.slog` filename uuids. Those are two different values in every
+        // production bundle; keying this lookup on the filename uuid missed on
+        // every git submission, left coverage empty, and sent
+        // `log_bytes_match` down the whole-file path that then accused honest
+        // students at high severity. See `types.ts` / {@link LogFileId}.
+        const claimants = filesByLogicalSessionId.get(seal.sessionId);
+        // No `.slog` records this session at all → `no_session_log`, already
+        // reported as a defect by reconcileRollingSealsWithSessions above.
+        if (claimants === undefined || claimants.length === 0) continue;
+
+        // Measure against the digest the rest of analysis-core will read.
+        //
+        // On a rolling-only bundle that is the seal's own entry, unchanged. On a
+        // both-shapes bundle it is the classic manifest's entry for this
+        // session, because `verify-log-bytes.ts` compares
+        // `bundle.manifest.sessions[]` and uses coverage in place of that
+        // comparison — measuring the rolling digest and applying the verdict to
+        // the classic one would answer a question nobody asked.
+        //
+        // Deliberately skipped when the classic manifest says nothing about this
+        // session, or says two different things about it.
+        //
+        // Zero entries: `verify-log-bytes.ts` skips the session outright, so a
+        // coverage verdict would be read by nobody.
+        //
+        // Entries that DISAGREE: two manifest entries claiming one session with
+        // different digests is itself evidence, and `verify-log-bytes.ts`
+        // deliberately checks every one of them rather than `find()`ing the
+        // first — precisely so the honest entry cannot mask the other. Coverage
+        // is per-session, so a single verdict would be applied to both and
+        // would restore exactly that masking. Falling through leaves whole-file
+        // equality, which is today's behaviour and the stricter reading.
+        //
+        // Entries that AGREE are one claim written more than once, and are used.
+        //
+        // Only the two DIGESTS are taken, not the manifest entry: a rolling
+        // entry's `session_id` is proven non-null by the filename binding and a
+        // classic one's is not, and nothing here needs the id anyway.
+        const sealEntry = seal.manifest.sessions[0];
+        let committedSlogSha: unknown = sealEntry.slog_sha256;
+        let committedMetaSha: unknown = sealEntry.meta_sha256;
+        if (classicManifest !== null) {
+          const classicEntries = classicManifest.sessions.filter(
+            (s) => s.session_id === seal.sessionId,
+          );
+          const distinct = new Set(
+            classicEntries.map((s) => `${String(s.slog_sha256)}|${String(s.meta_sha256)}`),
+          );
+          if (classicEntries.length === 0 || distinct.size !== 1) continue;
+          committedSlogSha = classicEntries[0]!.slog_sha256;
+          committedMetaSha = classicEntries[0]!.meta_sha256;
+        }
+        // A FINAL seal (written by dispose() over a finished, flushed log, and
+        // signed) commits to the whole file, so it skips the prefix search
+        // entirely and an append past it fails. Everything else is still
+        // growing when it is signed and keeps prefix semantics — the difference
+        // between catching a post-session append and accusing a student whose
+        // editor is still open. See loader/rolling-coverage.ts.
+        const final = isFinalRollingSeal(seal.manifest);
+        const per = claimants.map((files) => ({
+          slog: final
+            ? // The third argument is the git-line-ending escape hatch: a FINAL
+              // seal commits to the whole file, so without it a repository
+              // carrying `text=auto eol=crlf` fails at full strength with "the
+              // file was appended to, truncated, or edited after the session
+              // ended". See loader/line-endings.ts. `.slog.meta` needs no such
+              // argument — canonical JSON has no line terminator to widen.
+              //
+              // The committed digest is `committedSlogSha`, not the seal
+              // entry's own: in a bundle carrying BOTH shapes it comes from the
+              // classic manifest, which may be stale. Reading the seal entry
+              // here would reopen the outer-gate route to the prefix-versus-
+              // whole-file accusation.
+              wholeFileCoverage(
+                files.slogSha256,
+                committedSlogSha,
+                lfNormalizedSha256(files.slogText, files.slogSha256),
+              )
+            : computeSlogCoverage(files.slogText, files.slogSha256, committedSlogSha),
+          meta: final
+            ? wholeFileCoverage(files.metaSha256, committedMetaSha)
+            : computeMetaCoverage(files.metaJson, files.metaSha256, committedMetaSha),
+        }));
+
+        // The ordinary case: exactly one `.slog` records this session, and its
+        // coverage is the seal's coverage. `resolveAmbiguousCoverage` returns a
+        // single candidate unchanged, so this path is byte-for-byte what it was.
+        //
+        // The duplicated case (several `.slog`s carrying one logical session id)
+        // used to `continue` here, recording NOTHING — and an absent coverage
+        // entry is not inert: `verify-log-bytes.ts` reads absence as a classic
+        // whole-file commitment and fails a non-final rolling seal at high
+        // severity, confidence 1.0. Same outcome as bug 10, reached by the other
+        // branch of the same `if`. Now the seal is answered on what the
+        // claimants AGREE on, and the ambiguity itself is reported as a defect
+        // rather than swallowed.
+        if (claimants.length > 1) {
+          const filenames = claimants.map((f) => `session-${f.logFileId}.slog`).sort();
+          defects.push({
+            sessionId: seal.sessionId,
+            kind: 'ambiguous_session_log',
+            // States the fact and stops. Duplicating a log is not something the
+            // recorder does, but a hand copy of `.provenance/`, a backup taken
+            // before a push, or an odd merge all produce it, and nothing in the
+            // archive distinguishes those from a deliberate copy. So this names
+            // what is in the bundle and what follows from it, and asserts
+            // nothing about how it got there.
+            detail:
+              `${claimants.length} log files in this bundle record session ` +
+              `${seal.sessionId} (${filenames.join(', ')}), so manifest-${seal.sessionId}.json ` +
+              `cannot be matched to the one log it was written over. The seal's coverage of ` +
+              `those bytes is therefore checked only where every one of them agrees. This is a ` +
+              `duplicated log — a fact about the archive, not evidence of tampering on its own.`,
+          });
+        }
+
+        const ambiguityReason =
+          `${claimants.length} log files in this bundle record session ${seal.sessionId} and ` +
+          `they do not agree about this seal, so which log it commits to cannot be established`;
+
+        coverage.push({
+          sessionId: seal.sessionId,
+          final,
+          slog: resolveAmbiguousCoverage(
+            per.map((p) => p.slog),
+            ambiguityReason,
+          ),
+          meta: resolveAmbiguousCoverage(
+            per.map((p) => p.meta),
+            ambiguityReason,
+          ),
+        });
+      }
+    }
+
+    rollingSeal = {
+      seals: rollingValidation.seals,
+      defects,
+      observedExtensionHashes,
+      ...(coverage !== undefined ? { coverage } : {}),
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step 4c: Pick the manifest the rest of analysis-core reads.
+  //
+  // The classic `manifest.json` wins whenever it is present, so a classic bundle
+  // — and a bundle that carries both shapes — behaves exactly as it always has.
+  // The rolling seals of a both-shapes bundle are still verified by check 1
+  // alongside the classic signature; nothing is discarded.
+  // ---------------------------------------------------------------------------
+  const manifest = classicManifest ?? unionManifest;
+  if (manifest === null) {
+    // Rolling manifests were present but not one of them was usable, and there is
+    // no classic manifest either, so there is nothing to synthesize a manifest
+    // from. Report why, per file.
+    const why = (rollingSeal?.defects ?? []).map((d) => d.detail).join(' | ');
+    return err({
+      kind: 'invalid_manifest',
+      detail: `no usable manifest: every rolling manifest was rejected. ${why}`,
+    });
+  }
+
+  // A synthesized union must satisfy the same shape contract as an on-disk
+  // manifest. Cheap, and it stops a synthesis bug being mistaken for a bad bundle.
+  if (classicManifest === null) {
+    const unionShape = validateBundleManifestShape(manifest);
+    if (!unionShape.ok) {
+      return err({
+        kind: 'invalid_manifest',
+        detail: `synthesized rolling union manifest is not a valid manifest: ${unionShape.error.kind}`,
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Step 5: Build the submissionFiles map from manifest.submission_files.
   //
   // For each entry in the (optional) submission_files array, re-verify the
@@ -146,11 +612,19 @@ export async function loadBundle(
   // ---------------------------------------------------------------------------
   const submissionFiles = new Map<
     string,
-    { status: 'present' | 'missing'; sha256: string | null; bytes?: Uint8Array; hashOk: boolean }
+    {
+      status: 'present' | 'missing';
+      sha256: string | null;
+      bytes?: Uint8Array;
+      hashOk: boolean;
+      role: 'reviewed' | 'attachment';
+    }
   >();
   for (const f of manifest.submission_files ?? []) {
+    // Absent role reads as 'reviewed' — every bundle sealed before path scope.
+    const role = f.role ?? 'reviewed';
     if (f.status === 'missing') {
-      submissionFiles.set(f.path, { status: 'missing', sha256: null, hashOk: true });
+      submissionFiles.set(f.path, { status: 'missing', sha256: null, hashOk: true, role });
       continue;
     }
     const bytes = bundleSubmissionFiles.get(f.path);
@@ -160,6 +634,7 @@ export async function loadBundle(
       sha256: f.sha256,
       ...(bytes !== undefined ? { bytes } : {}),
       hashOk,
+      role,
     });
   }
 
@@ -167,7 +642,11 @@ export async function loadBundle(
     id: crypto.randomUUID(),
     manifest,
     manifestSigHex,
+    ...(rollingSeal !== undefined ? { rollingSeal } : {}),
     sessions: parsedSessions,
+    droppedArtifacts: droppedArtifacts.sort((a, b) =>
+      a.filename === b.filename ? 0 : a.filename < b.filename ? -1 : 1,
+    ),
     sourceFilename,
     loadedAt: nowFn(),
     submissionFiles,

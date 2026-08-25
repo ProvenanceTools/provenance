@@ -17,8 +17,19 @@
  * Fires one Flag per qualifying candidate. Severity is 'high'; confidence
  * is 0.85 (high signal but paste contents could match a skeleton/boilerplate).
  *
- * Threshold: ≥80% of the candidate's lines are present in the final file.
- * Specifically: shared_lines / candidate_lines ≥ pasteIsSolutionLineOverlap.
+ * Threshold: the insertion accounts for ≥80% of the FINAL FILE's lines, and at
+ * least `minSharedLines` (10) lines in absolute terms. Specifically:
+ *   shared_lines >= pasteIsSolution.minSharedLines            (checked first)
+ *   shared_lines / final_file_lines >= pasteIsSolution.finalFileCoverage
+ *
+ * NOT shared_lines / paste_lines ("survival" — how much of the paste made it
+ * into the file). Survival is trivially 1.0 for any small paste nobody
+ * deleted, so a 3-line import block pasted onto a 60-line hand-typed file used
+ * to score 1.0 and raise `high`, the most damning flag in the catalogue. The
+ * claim this flag makes is "the submitted file is pasted code, not written
+ * code", and coverage of the final file is the evidence for that claim.
+ * Survival is still reported in `detail.survivalRatio` for the grader reading
+ * the finding — informative, never load-bearing.
  *
  * Only candidates with inline content are eligible — paste events that exceed
  * the recorder's inline cap omit content and cannot be checked this way. The line
@@ -31,7 +42,7 @@ import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
-import { reconstructFileWithProvenance } from '../index/reconstruct-file-provenance.js';
+import { establishedReplayState } from './reconstruction-gate.js';
 import { iterateCandidatePastes } from './candidate-pastes.js';
 import { classifyInternalMoves } from './internal-move.js';
 
@@ -74,19 +85,23 @@ function flagId(seqKey: string, idx: number): string {
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[] {
-  const threshold = config.pasteIsSolution.lineOverlap;
+function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
+  const { finalFileCoverage, minSharedLines } = config.pasteIsSolution;
   const moves = classifyInternalMoves(index, config);
 
   // Cache the final state per file path to avoid re-running reconstruction.
-  const finalStateCache = new Map<string, string>();
+  // `null` marks a file with no established final state (Tier 2.2). This is the
+  // most damning flag in the catalogue, so "we cannot establish what the final
+  // file was" must mean no flag at all rather than a flag against one branch.
+  const finalStateCache = new Map<string, string | null>();
 
-  function getFinalContent(filePath: string): string {
+  function getFinalContent(filePath: string): string | null {
     const cached = finalStateCache.get(filePath);
     if (cached !== undefined) return cached;
-    const state = reconstructFileWithProvenance(index, filePath);
-    finalStateCache.set(filePath, state.content);
-    return state.content;
+    const state = establishedReplayState(index, bundle, filePath);
+    const content = state === null ? null : state.content;
+    finalStateCache.set(filePath, content);
+    return content;
   }
 
   const flags: Flag[] = [];
@@ -98,15 +113,25 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
     if (c.content === undefined || c.content.length === 0) continue;
 
     const finalContent = getFinalContent(c.path);
-    if (finalContent.length === 0) continue;
+    if (finalContent === null || finalContent.length === 0) continue;
 
     const pasteLines = lineCount(c.content);
     if (pasteLines === 0) continue;
 
-    const shared = sharedLineCount(c.content, finalContent);
-    const ratio = shared / pasteLines;
+    const finalFileLines = lineCount(finalContent);
+    if (finalFileLines === 0) continue;
 
-    if (ratio < threshold) continue;
+    const shared = sharedLineCount(c.content, finalContent);
+
+    // Size floor FIRST. Below it the coverage ratio is not meaningful evidence:
+    // a 4-line file whose 4 lines were pasted is 100% coverage and no story.
+    if (shared < minSharedLines) continue;
+
+    const coverage = shared / finalFileLines;
+    if (coverage < finalFileCoverage) continue;
+
+    // Informative only — see the module header.
+    const survivalRatio = shared / pasteLines;
 
     const id = flagId(c.seqKey, flagIndex++);
 
@@ -132,17 +157,21 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
       confidence: 0.85,
       supportingSeqs: [c.seqKey],
       description: isMove
-        ? `An insertion in ${c.path} shares ${Math.round(ratio * 100)}% of its lines with the ` +
-          `file's final content, but it is a relocation of the student's own previously-typed ` +
-          `code in ${move.sourcePath}. Not treated as an external paste.`
-        : `${sourceDescriptor} in ${c.path} shares ${Math.round(ratio * 100)}% of its lines with the ` +
-          `file's final content, suggesting the insertion may be the complete solution.`,
+        ? `An insertion in ${c.path} accounts for ${Math.round(coverage * 100)}% of the file's ` +
+          `final content (${shared} of ${finalFileLines} lines), but it is a relocation of the ` +
+          `student's own previously-typed code in ${move.sourcePath}. Not treated as an external paste.`
+        : `${sourceDescriptor} in ${c.path} accounts for ${Math.round(coverage * 100)}% of the ` +
+          `file's final content (${shared} of ${finalFileLines} lines), suggesting the insertion ` +
+          `may be the complete solution.`,
       detail: {
         filePath: c.path,
         pasteLines,
+        finalFileLines,
         sharedLines: shared,
-        overlapRatio: ratio,
-        threshold,
+        coverageRatio: coverage,
+        survivalRatio,
+        coverageThreshold: finalFileCoverage,
+        minSharedLines,
         origin: c.origin,
         ...(isMove
           ? {

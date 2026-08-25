@@ -37,7 +37,13 @@ export const cohortPaths = {
         { name: 'score_min', in: 'query', schema: { type: 'number' } },
         { name: 'score_max', in: 'query', schema: { type: 'number' } },
         { name: 'include_superseded', in: 'query', schema: { type: 'boolean', default: false } },
-        { name: 'q', in: 'query', schema: { type: 'string' } },
+        {
+          name: 'q',
+          in: 'query',
+          schema: { type: 'string' },
+          description:
+            'Free-text search on roster display_name or sid. Matches a submission when ANY of its contributors matches, not only the submitter of record — so a group submission is found under either partner. Ignored (not applied) for a protected-mode principal.',
+        },
         {
           name: 'sort',
           in: 'query',
@@ -193,6 +199,12 @@ export const cohortPaths = {
                     items: { $ref: '#/components/schemas/CrossFlagSummary' },
                   },
                   next_cursor: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                  exclusions: {
+                    type: 'array',
+                    description:
+                      'The cross-scope exclusion register (spec S20): which comparisons were NOT made, and why. Returned on the FIRST page only — it is not paginated, and describes the whole list rather than one page of it. Not narrowed by heuristic_id or severity_min (one exclusion covers every cross-heuristic); IS narrowed by submission_id.',
+                    items: { $ref: '#/components/schemas/CrossScopeExclusion' },
+                  },
                 },
               },
             },

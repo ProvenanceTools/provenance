@@ -3,8 +3,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { verifySubmittedCode } from './verify-submitted-code.js';
+import { verifySubmittedCode, submittedFileVerdicts } from './verify-submitted-code.js';
 import type { Bundle, ParsedSession } from '../loader/types.js';
+import type { SessionContributor } from '../identity/types.js';
 import type { HashedEnvelope, SlogMeta, BundleManifest } from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
@@ -67,6 +68,8 @@ type SubmissionFileInput = {
    * without tampering. Supply bytes to model an actually-tampered bundle.
    */
   bytes?: Uint8Array;
+  /** Defaults to 'reviewed' — every bundle sealed before path scope. */
+  role?: 'reviewed' | 'attachment';
 };
 
 function makeBundle(opts: {
@@ -95,18 +98,31 @@ function makeBundle(opts: {
     sessionId: 's1',
     events: allEvents,
     meta: fakeMeta,
+    // Check 8 does not read the log-byte digests; they are required by the type
+    // and carried through from the loader (see verify-log-bytes.ts).
+    slogSha256: 'a'.repeat(64),
+    slogSha256Lf: null,
+    tornTail: null,
+    metaSha256: 'b'.repeat(64),
     firstEvent: allEvents[0] as ParsedSession['firstEvent'],
   };
 
   const submissionFilesMap = new Map<
     string,
-    { status: 'present' | 'missing'; sha256: string | null; bytes?: Uint8Array; hashOk: boolean }
+    {
+      status: 'present' | 'missing';
+      sha256: string | null;
+      bytes?: Uint8Array;
+      hashOk: boolean;
+      role: 'reviewed' | 'attachment';
+    }
   >();
   for (const f of opts.submissionFiles) {
     submissionFilesMap.set(f.path, {
       status: f.status,
       sha256: f.sha256,
       hashOk: f.hashOk,
+      role: f.role ?? 'reviewed',
       ...(f.bytes !== undefined ? { bytes: f.bytes } : {}),
     });
   }
@@ -130,6 +146,7 @@ function makeBundle(opts: {
             path: f.path,
             status: f.status,
             sha256: f.sha256,
+            ...(f.role !== undefined ? { role: f.role } : {}),
           })),
         }
       : {
@@ -149,6 +166,7 @@ function makeBundle(opts: {
 
   return {
     id: 'test-bundle',
+    droppedArtifacts: [],
     manifest,
     manifestSigHex: 'sig'.padEnd(128, '0'),
     sessions: [session],
@@ -288,5 +306,476 @@ describe('verifySubmittedCode (Check 8)', () => {
     });
     const check = verifySubmittedCode(bundle, { chainIntact: true });
     expect(check.id).toBe('submitted_code_match');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Attachments (spec §9.1) — an attachment has no event provenance BY
+// DEFINITION, so check 8 must never compare it against reconstruction.
+// ---------------------------------------------------------------------------
+
+describe('attachments are never compared against reconstruction (R2)', () => {
+  it('reports an attachment as attested rather than mismatched', () => {
+    // An attachment has no event provenance BY DEFINITION — that is what makes
+    // it an attachment. Comparing it against reconstruction reports every
+    // attachment in every bundle as tampered, on a check used in
+    // academic-integrity proceedings. Spec §9.1.
+    const bundle = makeBundle({
+      submissionFiles: [
+        {
+          path: 'logs/run.log',
+          status: 'present',
+          sha256: 'ab'.repeat(32),
+          hashOk: true,
+          role: 'attachment',
+        },
+      ],
+      events: [],
+    });
+    const verdicts = submittedFileVerdicts(bundle, { chainIntact: true });
+    const v = verdicts.find((x) => x.path === 'logs/run.log');
+    expect(v?.verdict).toBe('attachment');
+    expect(v?.detail).toMatch(/never captured/i);
+  });
+
+  it('still compares a reviewed file in the same bundle', () => {
+    const bundle = makeBundle({
+      submissionFiles: [
+        {
+          path: 'logs/run.log',
+          status: 'present',
+          sha256: 'ab'.repeat(32),
+          hashOk: true,
+          role: 'attachment',
+        },
+        {
+          path: 'Main.java',
+          status: 'present',
+          sha256: 'cd'.repeat(32),
+          hashOk: true,
+          role: 'reviewed',
+        },
+      ],
+      events: [],
+    });
+    const verdicts = submittedFileVerdicts(bundle, { chainIntact: true });
+    expect(verdicts.find((x) => x.path === 'Main.java')?.verdict).not.toBe('attachment');
+  });
+
+  it('an attachment does not count toward the check-8 mismatch or match tallies', () => {
+    const bundle = makeBundle({
+      submissionFiles: [
+        {
+          path: 'logs/run.log',
+          status: 'present',
+          sha256: 'ab'.repeat(32),
+          hashOk: true,
+          role: 'attachment',
+        },
+        { path: 'Main.java', status: 'present', sha256: 'H', hashOk: true, role: 'reviewed' },
+      ],
+      events: [docSave('Main.java', 'H')],
+    });
+    const check = verifySubmittedCode(bundle, { chainIntact: true });
+    expect(check.status).toBe('pass');
+    expect(check.detail).not.toMatch(/logs\/run\.log/);
+  });
+
+  it('says WHY it skipped when every file is an attachment, rather than blaming plumbing', () => {
+    // R1. The fallback sentence names three causes — chain broken, missing, or
+    // no recorded state — and for an attachment-only file set NONE of them is
+    // true: the chain is fine, the files are present, and there is no event
+    // history by COURSE POLICY. A skip reported as a plumbing failure is a
+    // misattributed one, and this check's output is read in proceedings.
+    const bundle = makeBundle({
+      submissionFiles: [
+        {
+          path: 'logs/run.log',
+          status: 'present',
+          sha256: 'ab'.repeat(32),
+          hashOk: true,
+          role: 'attachment',
+        },
+        {
+          path: 'logs/other.log',
+          status: 'present',
+          sha256: 'cd'.repeat(32),
+          hashOk: true,
+          role: 'attachment',
+        },
+      ],
+      events: [],
+    });
+    const check = verifySubmittedCode(bundle, { chainIntact: true });
+    expect(check.status).toBe('skipped');
+    expect(check.detail).toMatch(/attachments/);
+    expect(check.detail).toMatch(/course policy, not a fact about the student/);
+    expect(check.detail).not.toMatch(/chain broken/);
+  });
+
+  it('still reports real tampering on an attachment whose bytes disagree with the manifest sha', () => {
+    // Real, detectable bundle tampering — present bytes that do not hash to
+    // their own signed manifest sha256 — needs no event provenance to catch,
+    // and 'attachment' must not become an unearned exculpatory claim about
+    // bytes the manifest hash has already contradicted. Under-reporting is the
+    // safe direction for an ACCUSATION; this is a false ASSURANCE instead, and
+    // that direction is not safe.
+    const bundle = makeBundle({
+      submissionFiles: [
+        {
+          path: 'logs/run.log',
+          status: 'present',
+          sha256: 'ab'.repeat(32),
+          hashOk: false,
+          bytes: TAMPERED_BYTES,
+          role: 'attachment',
+        },
+      ],
+      events: [],
+    });
+    const verdicts = submittedFileVerdicts(bundle, { chainIntact: true });
+    const v = verdicts.find((x) => x.path === 'logs/run.log');
+    expect(v?.verdict).toBe('mismatch');
+    expect(v?.detail).toMatch(/tampered/i);
+  });
+
+  it('a stored attachment whose bytes were stripped still reports attachment, not tampered', () => {
+    // A stored (provenance-only) bundle has no bytes for ANY file, attachment
+    // or not — `hashOk` is trivially false there. That must not be read as
+    // tampering, same as the non-attachment path below in this file.
+    const bundle = makeBundle({
+      submissionFiles: [
+        {
+          path: 'logs/run.log',
+          status: 'present',
+          sha256: 'ab'.repeat(32),
+          hashOk: false,
+          role: 'attachment',
+        },
+      ],
+      events: [],
+    });
+    const verdicts = submittedFileVerdicts(bundle, { chainIntact: true });
+    expect(verdicts.find((x) => x.path === 'logs/run.log')?.verdict).toBe('attachment');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Concurrency (Tier 2.2 / spec Tier 2.4)
+// ---------------------------------------------------------------------------
+
+/**
+ * "The last recorded hash" was a WALL-CLOCK claim: `bundle.sessions` is sorted
+ * by `firstEvent.wall` and the scan is last-write-wins over that order. With two
+ * partners on divergent branches that hands a HIGH-severity "File was changed
+ * outside the recording" to whichever student's laptop clock ran slow.
+ */
+describe('Check 8 — two contributors with concurrent recorded states', () => {
+  function contributor(sessionId: string, studentRef: string): SessionContributor {
+    return {
+      kind: 'attributed',
+      sessionId,
+      contributorKey: `attributed:2.0:course:c1:${studentRef}`,
+      studentRef,
+      identityVersion: '2.0',
+      scope: 'course',
+      scopeId: 'c1',
+      studentPubkey: 'pk',
+      certWindow: { in_window: true },
+      credentialWindow: { in_window: true },
+    };
+  }
+
+  function twoContributorBundle(opts: {
+    submittedSha: string;
+    aliceSha: string;
+    bobSha: string;
+    /** Give Bob's tip Alice's tip as a git parent, making Bob strictly later. */
+    bobDescendsFromAlice?: boolean;
+    /** Resolve both sessions to the SAME student. */
+    sameStudent?: boolean;
+  }): Bundle {
+    const ALICE_TIP = 'a'.repeat(40);
+    const BOB_TIP = 'b'.repeat(40);
+
+    const mk = (
+      sessionId: string,
+      sha: string,
+      commit: string,
+      parents: readonly string[],
+      wallBase: number,
+      /**
+       * Observe the commit BEFORE saving. This is what makes the save provably
+       * later than everything the commit descends from: a save that precedes its
+       * own session's only observation is genuinely unordered against another
+       * contributor, because the student could have saved before pulling.
+       */
+      observeFirst = false,
+    ): ParsedSession => {
+      const at = (seq: number, kind: string, data: Record<string, unknown>) => ({
+        seq,
+        t: seq,
+        wall: new Date(Date.UTC(2026, 0, 1, wallBase, seq)).toISOString(),
+        kind,
+        data,
+        prev_hash: '0'.repeat(64),
+        hash: '1'.repeat(64),
+      });
+      const save = { path: 'a.py', sha256: sha };
+      const git = { operation: 'commit', sha: commit, parents: [...parents] };
+      const events = [
+        at(0, 'session.start', {
+          format_version: '1.0',
+          session_id: sessionId,
+          prev_session_id: null,
+          assignment: { id: 'hw1', semester: 'sp26' },
+        }),
+        observeFirst ? at(1, 'git.event', git) : at(1, 'doc.save', save),
+        observeFirst ? at(2, 'doc.save', save) : at(2, 'git.event', git),
+      ] as unknown as HashedEnvelope[];
+      return {
+        sessionId,
+        events,
+        meta: {} as ParsedSession['meta'],
+        slogSha256: 'c'.repeat(64),
+        slogSha256Lf: null,
+        tornTail: null,
+        metaSha256: 'd'.repeat(64),
+        firstEvent: events[0] as ParsedSession['firstEvent'],
+      };
+    };
+
+    // Wall order puts Alice first, so wall-ordered last-write-wins picks BOB.
+    const sessions = [
+      mk('s-alice', opts.aliceSha, ALICE_TIP, [], 1),
+      mk(
+        's-bob',
+        opts.bobSha,
+        BOB_TIP,
+        opts.bobDescendsFromAlice === true ? [ALICE_TIP] : [],
+        2,
+        opts.bobDescendsFromAlice === true,
+      ),
+    ];
+
+    const bySession = new Map<string, SessionContributor>([
+      ['s-alice', contributor('s-alice', 'alice')],
+      ['s-bob', contributor('s-bob', opts.sameStudent === true ? 'alice' : 'bob')],
+    ]);
+
+    return {
+      id: 'bundle-1',
+      droppedArtifacts: [],
+      manifest: { format_version: '1.1' } as BundleManifest,
+      manifestSigHex: null,
+      sessions,
+      sourceFilename: 'b.zip',
+      loadedAt: '2026-01-01T00:00:00.000Z',
+      submissionFiles: new Map([
+        [
+          'a.py',
+          {
+            status: 'present' as const,
+            sha256: opts.submittedSha,
+            hashOk: true,
+            role: 'reviewed' as const,
+          },
+        ],
+      ]),
+      contributors: {
+        bySession,
+        contributors: [],
+        rootKeyConfigured: true,
+        counts: { attributed: 2, unverifiable: 0, unattributed: 0 },
+      },
+    };
+  }
+
+  /**
+   * The false accusation this removes. Wall order says Bob's save is "last", so
+   * the old rule reported Alice's genuinely-submitted file as changed outside
+   * the recording.
+   */
+  it('matching ANY concurrent recorded state passes', () => {
+    const bundle = twoContributorBundle({
+      submittedSha: 'ALICE_SHA',
+      aliceSha: 'ALICE_SHA',
+      bobSha: 'BOB_SHA',
+    });
+    const check = verifySubmittedCode(bundle, { chainIntact: true });
+    expect(check.status).toBe('pass');
+    expect(check.detail).toContain('match');
+  });
+
+  it('matching the wall-clock-last state also passes', () => {
+    const bundle = twoContributorBundle({
+      submittedSha: 'BOB_SHA',
+      aliceSha: 'ALICE_SHA',
+      bobSha: 'BOB_SHA',
+    });
+    expect(verifySubmittedCode(bundle, { chainIntact: true }).status).toBe('pass');
+  });
+
+  /**
+   * THE CONSERVATIVE CHOICE. Matching neither branch is exactly what a merge
+   * result no session observed on disk looks like — normal group work. Asserting
+   * "changed outside the recording" there is a fabricated high-severity finding.
+   */
+  it('matching NEITHER branch is skipped, never failed', () => {
+    const bundle = twoContributorBundle({
+      submittedSha: 'MERGED_SHA',
+      aliceSha: 'ALICE_SHA',
+      bobSha: 'BOB_SHA',
+    });
+    const check = verifySubmittedCode(bundle, { chainIntact: true });
+    expect(check.status).toBe('skipped');
+    expect(check.status).not.toBe('fail');
+    expect(verifySubmittedCode(bundle, { chainIntact: true }).detail).toContain('merge');
+  });
+
+  /**
+   * The gate. `≺` DOES order these two, so there is a single established last
+   * recorded state and the ordinary comparison applies — including a real
+   * mismatch. Concurrency handling must not become a blanket amnesty.
+   */
+  it('a DAG-ordered pair still reports a real mismatch', () => {
+    const bundle = twoContributorBundle({
+      submittedSha: 'SOMETHING_ELSE',
+      aliceSha: 'ALICE_SHA',
+      bobSha: 'BOB_SHA',
+      bobDescendsFromAlice: true,
+    });
+    expect(verifySubmittedCode(bundle, { chainIntact: true }).status).toBe('fail');
+  });
+
+  /**
+   * The solo guarantee for check 8: two sessions of ONE student are not a
+   * cross-contributor divergence, so the unchanged wall-ordered rule applies and
+   * a genuine mismatch is still reported.
+   */
+  it('two sessions of one student still report a mismatch', () => {
+    const bundle = twoContributorBundle({
+      submittedSha: 'SOMETHING_ELSE',
+      aliceSha: 'ALICE_SHA',
+      bobSha: 'BOB_SHA',
+      sameStudent: true,
+    });
+    expect(verifySubmittedCode(bundle, { chainIntact: true }).status).toBe('fail');
+  });
+
+  it('an unstamped bundle keeps the unchanged wall-ordered rule', () => {
+    const bundle = twoContributorBundle({
+      submittedSha: 'SOMETHING_ELSE',
+      aliceSha: 'ALICE_SHA',
+      bobSha: 'BOB_SHA',
+    });
+    delete bundle.contributors;
+    expect(verifySubmittedCode(bundle, { chainIntact: true }).status).toBe('fail');
+  });
+});
+
+/**
+ * The gate is PER PATH, not per bundle.
+ *
+ * Inside a genuine two-contributor bundle the ordering is built, so the
+ * concurrency branch is reachable for every path. A file only one partner
+ * touched must still take the unchanged comparison: two of Alice's own sessions
+ * being unordered against each other is not a cross-contributor divergence, and
+ * amnestying a real mismatch there would quietly weaken the check for
+ * solo-authored files inside group work.
+ */
+describe('Check 8 — the concurrency gate is per path', () => {
+  function contributor(sessionId: string, studentRef: string): SessionContributor {
+    return {
+      kind: 'attributed',
+      sessionId,
+      contributorKey: `attributed:2.0:course:c1:${studentRef}`,
+      studentRef,
+      identityVersion: '2.0',
+      scope: 'course',
+      scopeId: 'c1',
+      studentPubkey: 'pk',
+      certWindow: { in_window: true },
+      credentialWindow: { in_window: true },
+    };
+  }
+
+  function session(
+    sessionId: string,
+    path: string,
+    sha: string,
+    commit: string,
+    wallBase: number,
+  ): ParsedSession {
+    const at = (seq: number, kind: string, data: Record<string, unknown>) => ({
+      seq,
+      t: seq,
+      wall: new Date(Date.UTC(2026, 0, 1, wallBase, seq)).toISOString(),
+      kind,
+      data,
+      prev_hash: '0'.repeat(64),
+      hash: '1'.repeat(64),
+    });
+    const events = [
+      at(0, 'session.start', {
+        format_version: '1.0',
+        session_id: sessionId,
+        prev_session_id: null,
+        assignment: { id: 'hw1', semester: 'sp26' },
+      }),
+      at(1, 'doc.save', { path, sha256: sha }),
+      at(2, 'git.event', { operation: 'commit', sha: commit, parents: [] }),
+    ] as unknown as HashedEnvelope[];
+    return {
+      sessionId,
+      events,
+      meta: {} as ParsedSession['meta'],
+      slogSha256: 'c'.repeat(64),
+      slogSha256Lf: null,
+      tornTail: null,
+      metaSha256: 'd'.repeat(64),
+      firstEvent: events[0] as ParsedSession['firstEvent'],
+    };
+  }
+
+  it('still reports a mismatch on a file only one contributor touched', () => {
+    // Alice has two unordered sessions on a.py; Bob is elsewhere in the bundle,
+    // which is what makes this a two-contributor scope at all.
+    const bundle: Bundle = {
+      id: 'bundle-1',
+      droppedArtifacts: [],
+      manifest: { format_version: '1.1' } as BundleManifest,
+      manifestSigHex: null,
+      sessions: [
+        session('s-alice-1', 'a.py', 'ALICE_ONE', 'a'.repeat(40), 1),
+        session('s-alice-2', 'a.py', 'ALICE_TWO', 'b'.repeat(40), 2),
+        session('s-bob', 'b.py', 'BOB', 'c'.repeat(40), 3),
+      ],
+      sourceFilename: 'b.zip',
+      loadedAt: '2026-01-01T00:00:00.000Z',
+      submissionFiles: new Map([
+        [
+          'a.py',
+          {
+            status: 'present' as const,
+            sha256: 'SOMETHING_ELSE',
+            hashOk: true,
+            role: 'reviewed' as const,
+          },
+        ],
+      ]),
+      contributors: {
+        bySession: new Map<string, SessionContributor>([
+          ['s-alice-1', contributor('s-alice-1', 'alice')],
+          ['s-alice-2', contributor('s-alice-2', 'alice')],
+          ['s-bob', contributor('s-bob', 'bob')],
+        ]),
+        contributors: [],
+        rootKeyConfigured: true,
+        counts: { attributed: 3, unverifiable: 0, unattributed: 0 },
+      },
+    };
+
+    expect(verifySubmittedCode(bundle, { chainIntact: true }).status).toBe('fail');
   });
 });

@@ -6,7 +6,9 @@
  * in-memory whole-archive buffer), drives the worker through pg-boss, and
  * asserts the SAME end state the HTTP :gradescope route produces:
  *   - roster populated from the metadata (no pre-existing roster needed),
- *   - solo + group submitters matched, co-submitters share one blob,
+ *   - the solo submitter matched, and the two co-submitters of one group folder
+ *     collapsed onto ONE submission carrying both as contributors (D9) — the
+ *     second resolves as `duplicate` rather than fanning out a second row,
  *   - a no-manifest folder reported as skipped.
  *
  * Mirrors ingest-gradescope.e2e.test.ts: real pg-boss + Postgres + MinIO via
@@ -36,6 +38,7 @@ import {
   semesters,
   memberships,
   roster_entries,
+  assignments,
   ingest_jobs,
   ingest_files,
   submissions,
@@ -46,6 +49,7 @@ import { createStorageClient, storageConfigFromEnv } from '../storage/client.js'
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { ingestLocalPath } from './local-path.js';
 import { enqueueIngestJob } from './job-control.js';
+import { expectSoloPlusPairEndState } from '../../../test/helpers/gradescope-group-shape.js';
 import type { DrizzleDb } from '../../db/client.js';
 
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
@@ -92,6 +96,38 @@ submission_nobundle:
   - :name: No Recorder
     :sid: '444'
 `;
+
+/**
+ * A git-native export: ONE submitter, ONE repo folder, holding two sealed
+ * assignment scopes plus an unsealed one and repo noise. This is the CS 61B/61C
+ * shape — Gradescope clones the whole repository, not a sealed bundle.
+ */
+const REPO_METADATA = `submission_repo:
+  :submitters:
+  - :name: Repo Student
+    :sid: '555'
+    :email: repo@berkeley.edu
+`;
+
+async function writeRepoExportZip(dir: string): Promise<string> {
+  const root = 'assignment_9100_export/';
+  const folder = `${root}submission_repo/`;
+  const outer = new JSZip();
+  outer.file(`${root}submission_metadata.yml`, REPO_METADATA);
+  await layBundleIntoFolder(outer, `${folder}proj2/`, 'proj2');
+  await layBundleIntoFolder(outer, `${folder}lab5/`, 'lab5');
+  // A scope the student worked in but never sealed — no manifest.json, because
+  // nothing runs the seal command on a git push.
+  outer.file(
+    `${folder}lab6/.provenance/session-11111111-1111-4111-8111-111111111111.slog`,
+    new TextEncoder().encode('{}\n'),
+  );
+  outer.file(`${folder}README.md`, new TextEncoder().encode('# repo\n'));
+  const buf = await outer.generateAsync({ type: 'nodebuffer' });
+  const zipPath = path.join(dir, 'repo-export.zip');
+  await writeFile(zipPath, buf);
+  return zipPath;
+}
 
 async function writeExportZip(dir: string): Promise<string> {
   const root = 'assignment_8046601_export/';
@@ -144,7 +180,7 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('upserts roster, matches solo + group submitters, reports skipped folders', async () => {
+  it('upserts roster, gives the co-submitter pair ONE submission with both contributors, reports skipped folders', async () => {
     await withTestMinio(async ({ client, bucketName }) => {
       const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
@@ -223,7 +259,13 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
       expect(result.roster).toEqual({ added: 4, updated: 0 });
       expect(result.bundlesProcessed).toBe(2);
       expect(result.submissionsQueued).toBe(3);
-      expect(result.skipped).toEqual([{ folderKey: 'submission_nobundle', reason: 'no_manifest' }]);
+      // REGRESSION GUARD (flat Gradescope path): one `.provenance/` per folder
+      // still means ONE bundle per folder, at the root scope, and a folder that
+      // is not a bundle at all is still reported as no_manifest — the fan-out
+      // adapter must not change any of this.
+      expect(result.skipped).toEqual([
+        { folderKey: 'submission_nobundle', scopePath: '', reason: 'no_manifest' },
+      ]);
       expect(result.jobId).not.toBeNull();
       const jobId = result.jobId!;
 
@@ -259,37 +301,11 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
       expect(['succeeded', 'partial']).toContain(jobRow!.status);
       expect((jobRow!.summary as { total: number }).total).toBe(3);
 
-      // All three files matched.
-      const fileRows = await db
-        .select({ status: ingest_files.status })
-        .from(ingest_files)
-        .where(eq(ingest_files.ingest_job_id, jobId));
-      expect(fileRows).toHaveLength(3);
-      expect(fileRows.every((f) => f.status === 'matched')).toBe(true);
-
-      // Three submissions; the two co-submitters share one blob.
-      const subs = await db
-        .select({ student_id: submissions.student_id, blob_sha256: submissions.blob_sha256 })
-        .from(submissions)
-        .where(eq(submissions.semester_id, semester!.id));
-      expect(subs).toHaveLength(3);
-
-      const rosterBySid = new Map(
-        (
-          await db
-            .select({ id: roster_entries.id, sid: roster_entries.sid })
-            .from(roster_entries)
-            .where(eq(roster_entries.semester_id, semester!.id))
-        ).map((r) => [r.sid, r.id]),
-      );
-      const subByStudent = new Map(subs.map((s) => [s.student_id, s.blob_sha256]));
-      const pairBlobs = [
-        subByStudent.get(rosterBySid.get('222')!),
-        subByStudent.get(rosterBySid.get('333')!),
-      ];
-      expect(pairBlobs[0]).toBeTruthy();
-      expect(pairBlobs[0]).toBe(pairBlobs[1]);
-      expect(subByStudent.get(rosterBySid.get('111')!)).not.toBe(pairBlobs[0]);
+      // The solo + pair end state, shared with every other upload mechanism
+      // (see `expectSoloPlusPairEndState`): three ingest_files rows resolving
+      // matched/matched/duplicate, TWO submissions rather than three, and both
+      // co-submitters present as contributors on the shared one.
+      await expectSoloPlusPairEndState(db, semester!.id, jobId);
     });
   });
 
@@ -374,6 +390,337 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
       expect(result.jobId).toBe(jobId);
       const jobRows = await db.select({ id: ingest_jobs.id }).from(ingest_jobs);
       expect(jobRows).toHaveLength(1);
+    });
+  });
+
+  it('fans one git repo out to one submission per assignment scope', async () => {
+    await withTestMinio(async ({ client, bucketName }) => {
+      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+      _setConfigForTest(
+        parseEnv({
+          NODE_ENV: 'test',
+          PUBLIC_BASE_URL: 'http://localhost:3000',
+          DATABASE_URL: pgContainer.getConnectionUri(),
+          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_BUCKET: bucketName,
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+          OBJECT_STORAGE_REGION: 'us-east-1',
+          GOOGLE_OAUTH_CLIENT_ID: 'client-id',
+          GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
+          AUTH_ALLOWED_HOSTED_DOMAINS: '["berkeley.edu"]',
+          AUTH_SUPERADMIN_EMAILS: '["admin@berkeley.edu"]',
+          AUTH_COOKIE_SIGNING_SECRET: 'test-signing-secret-for-e2e-tests-123456789',
+          SESSION_TTL_DAYS: '14',
+          INGEST_MAX_BUNDLE_BYTES: '52428800',
+          INGEST_MAX_BATCH_BYTES: '5368709120',
+          INGEST_MAX_BATCH_FILES: '10000',
+        }),
+      );
+
+      const userId = crypto.randomUUID();
+      await db.insert(users).values({
+        id: userId,
+        google_subject: `sub-${userId}`,
+        email: `admin-${userId}@berkeley.edu`,
+        display_name: 'Admin',
+      });
+      const [course] = await db
+        .insert(courses)
+        .values({ name: 'CS 61B', slug: `cs61b-${crypto.randomUUID().slice(0, 8)}` })
+        .returning();
+      const [semester] = await db
+        .insert(semesters)
+        .values({
+          course_id: course!.id,
+          term: 'fa',
+          year: 2026,
+          slug: `fa2026-${crypto.randomUUID().slice(0, 8)}`,
+          display_name: 'Fall 2026',
+          filename_convention: '^(?<assignment_id>[a-z0-9_-]+)[-_](?<sid>\\d{6,12})\\.zip$',
+        })
+        .returning();
+      await db.insert(memberships).values({
+        user_id: userId,
+        semester_id: semester!.id,
+        role: 'admin',
+        granted_by: userId,
+      });
+
+      workerStop = await startWorker();
+
+      const cfg = getConfig();
+      const storageClient = createStorageClient(storageConfigFromEnv(cfg));
+      const archivePath = await writeRepoExportZip(tmpDir);
+
+      const result = await ingestLocalPath(
+        { db, storageClient },
+        {
+          semesterId: semester!.id,
+          userId,
+          archivePath,
+          maxBundleBytes: cfg.INGEST_MAX_BUNDLE_BYTES,
+          maxBatchFiles: cfg.INGEST_MAX_BATCH_FILES,
+        },
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      // One uploaded repo, one submitter — but TWO sealed scopes, so two bundles
+      // and two staged files.
+      expect(result.bundlesProcessed).toBe(2);
+      expect(result.submissionsQueued).toBe(2);
+      // The unsealed scope is reported per-scope, not silently dropped.
+      expect(result.skipped).toEqual([
+        { folderKey: 'submission_repo', scopePath: 'lab6/', reason: 'no_seal' },
+      ]);
+      expect(result.jobId).not.toBeNull();
+      const jobId = result.jobId!;
+
+      const start = Date.now();
+      let finalStatus: string | null = null;
+      while (Date.now() - start < 120_000) {
+        const [jobRow] = await db
+          .select({ status: ingest_jobs.status })
+          .from(ingest_jobs)
+          .where(eq(ingest_jobs.id, jobId));
+        if (jobRow && jobRow.status !== 'queued' && jobRow.status !== 'running') {
+          finalStatus = jobRow.status;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      expect(finalStatus).toBe('succeeded');
+
+      const fileRows = await db
+        .select({ status: ingest_files.status, original_filename: ingest_files.original_filename })
+        .from(ingest_files)
+        .where(eq(ingest_files.ingest_job_id, jobId));
+      expect(fileRows).toHaveLength(2);
+      expect(fileRows.every((f) => f.status === 'matched')).toBe(true);
+      expect(fileRows.map((f) => f.original_filename).sort()).toEqual([
+        'submission_repo/lab5.zip',
+        'submission_repo/proj2.zip',
+      ]);
+
+      // Two submissions for ONE student, one per scope, each under the
+      // assignment its own manifest declared — and each with its own blob.
+      const subs = await db
+        .select({
+          student_id: submissions.student_id,
+          blob_sha256: submissions.blob_sha256,
+          assignment_id_str: assignments.assignment_id_str,
+          version_index: submissions.version_index,
+        })
+        .from(submissions)
+        .innerJoin(assignments, eq(submissions.assignment_id, assignments.id))
+        .where(eq(submissions.semester_id, semester!.id));
+
+      expect(subs).toHaveLength(2);
+      expect(new Set(subs.map((s) => s.student_id)).size).toBe(1);
+      expect(subs.map((s) => s.assignment_id_str).sort()).toEqual(['lab5', 'proj2']);
+      expect(new Set(subs.map((s) => s.blob_sha256)).size).toBe(2);
+      // Independent version streams: each scope is version 1 of its own
+      // assignment, not v1 and v2 of a shared one.
+      expect(subs.map((s) => s.version_index)).toEqual([1, 1]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Per-request declared-submission-type override
+  //
+  // The unit tests prove the resolver mechanism; this proves the WIRING —
+  // that `ingestLocalPath` actually honours `args.ingestScopeOverride` and
+  // that it beats what the assignment rows say. Dropping the override on the
+  // floor is invisible to every other test in the suite, because the same repo
+  // ingests perfectly well under the default.
+  // -------------------------------------------------------------------------
+
+  async function seedSemesterFor(label: string) {
+    const userId = crypto.randomUUID();
+    await db.insert(users).values({
+      id: userId,
+      google_subject: `sub-${userId}`,
+      email: `admin-${userId}@berkeley.edu`,
+      display_name: 'Admin',
+    });
+    const [course] = await db
+      .insert(courses)
+      .values({ name: label, slug: `cs61b-${crypto.randomUUID().slice(0, 8)}` })
+      .returning();
+    const [semester] = await db
+      .insert(semesters)
+      .values({
+        course_id: course!.id,
+        term: 'fa',
+        year: 2026,
+        slug: `fa2026-${crypto.randomUUID().slice(0, 8)}`,
+        display_name: 'Fall 2026',
+        filename_convention: '^(?<assignment_id>[a-z0-9_-]+)[-_](?<sid>\\d{6,12})\\.zip$',
+      })
+      .returning();
+    await db.insert(memberships).values({
+      user_id: userId,
+      semester_id: semester!.id,
+      role: 'admin',
+      granted_by: userId,
+    });
+    return { userId, semesterId: semester!.id };
+  }
+
+  function e2eEnv(minioEndpoint: string, bucketName: string) {
+    return parseEnv({
+      NODE_ENV: 'test',
+      PUBLIC_BASE_URL: 'http://localhost:3000',
+      DATABASE_URL: pgContainer.getConnectionUri(),
+      OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+      OBJECT_STORAGE_BUCKET: bucketName,
+      OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+      OBJECT_STORAGE_REGION: 'us-east-1',
+      GOOGLE_OAUTH_CLIENT_ID: 'client-id',
+      GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
+      AUTH_ALLOWED_HOSTED_DOMAINS: '["berkeley.edu"]',
+      AUTH_SUPERADMIN_EMAILS: '["admin@berkeley.edu"]',
+      AUTH_COOKIE_SIGNING_SECRET: 'test-signing-secret-for-e2e-tests-123456789',
+      SESSION_TTL_DAYS: '14',
+      INGEST_MAX_BUNDLE_BYTES: '52428800',
+      INGEST_MAX_BATCH_BYTES: '5368709120',
+      INGEST_MAX_BATCH_FILES: '10000',
+    });
+  }
+
+  it('honours a per-request ingest_scope override, beating the assignment defaults', async () => {
+    await withTestMinio(async ({ client, bucketName }) => {
+      _setConfigForTest(e2eEnv(client.bucketUrl.replace(`/${bucketName}`, ''), bucketName));
+      const { userId, semesterId } = await seedSemesterFor('CS 61B override');
+
+      const cfg = getConfig();
+      const storageClient = createStorageClient(storageConfigFromEnv(cfg));
+      const archivePath = await writeRepoExportZip(tmpDir);
+
+      // No assignment rows exist yet, so every scope resolves to the
+      // self_identifying DEFAULT — which would fan this repo out to two
+      // submissions (proved by the test above). The override says otherwise.
+      const result = await ingestLocalPath(
+        { db, storageClient },
+        {
+          semesterId,
+          userId,
+          archivePath,
+          maxBundleBytes: cfg.INGEST_MAX_BUNDLE_BYTES,
+          maxBatchFiles: cfg.INGEST_MAX_BATCH_FILES,
+          ingestScopeOverride: {
+            mode: 'repo_scoped',
+            path_glob: 'proj2/**',
+            on_multiple: 'ingest_all',
+          },
+        },
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      // ONE submission, not two: the override narrowed the batch.
+      expect(result.bundlesProcessed).toBe(1);
+      expect(result.submissionsQueued).toBe(1);
+      expect(result.skipped).toEqual(
+        expect.arrayContaining([
+          { folderKey: 'submission_repo', scopePath: 'lab5/', reason: 'scope_excluded' },
+          { folderKey: 'submission_repo', scopePath: 'lab6/', reason: 'no_seal' },
+        ]),
+      );
+    });
+  });
+
+  it('an override that the batch does not match fails the submission, legibly', async () => {
+    await withTestMinio(async ({ client, bucketName }) => {
+      _setConfigForTest(e2eEnv(client.bucketUrl.replace(`/${bucketName}`, ''), bucketName));
+      const { userId, semesterId } = await seedSemesterFor('CS 61B mismatch');
+
+      const cfg = getConfig();
+      const storageClient = createStorageClient(storageConfigFromEnv(cfg));
+      const archivePath = await writeRepoExportZip(tmpDir);
+
+      // Declaring bundle_zip over a repo: the homogeneity failure, end to end.
+      const result = await ingestLocalPath(
+        { db, storageClient },
+        {
+          semesterId,
+          userId,
+          archivePath,
+          maxBundleBytes: cfg.INGEST_MAX_BUNDLE_BYTES,
+          maxBatchFiles: cfg.INGEST_MAX_BATCH_FILES,
+          ingestScopeOverride: { mode: 'bundle_zip', on_multiple: 'ingest_all' },
+        },
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      // Nothing ingested, and no job created — but the roster was still
+      // upserted and every scope is accounted for by name and reason.
+      expect(result.bundlesProcessed).toBe(0);
+      expect(result.submissionsQueued).toBe(0);
+      expect(result.jobId).toBeNull();
+      expect(result.skipped).toEqual(
+        expect.arrayContaining([
+          {
+            folderKey: 'submission_repo',
+            scopePath: 'proj2/',
+            reason: 'submission_type_mismatch',
+          },
+          {
+            folderKey: 'submission_repo',
+            scopePath: 'lab5/',
+            reason: 'submission_type_mismatch',
+          },
+        ]),
+      );
+
+      // The batch failed per-submission, not by throwing: no submission rows,
+      // and — the constraint that matters — nothing was deleted to get there.
+      const subs = await db
+        .select({ id: submissions.id })
+        .from(submissions)
+        .where(eq(submissions.semester_id, semesterId));
+      expect(subs).toHaveLength(0);
+    });
+  });
+
+  it('a glob that matches nothing fails loudly rather than reporting a clean empty ingest', async () => {
+    await withTestMinio(async ({ client, bucketName }) => {
+      _setConfigForTest(e2eEnv(client.bucketUrl.replace(`/${bucketName}`, ''), bucketName));
+      const { userId, semesterId } = await seedSemesterFor('CS 61B empty glob');
+
+      const cfg = getConfig();
+      const storageClient = createStorageClient(storageConfigFromEnv(cfg));
+      const archivePath = await writeRepoExportZip(tmpDir);
+
+      const result = await ingestLocalPath(
+        { db, storageClient },
+        {
+          semesterId,
+          userId,
+          archivePath,
+          maxBundleBytes: cfg.INGEST_MAX_BUNDLE_BYTES,
+          maxBatchFiles: cfg.INGEST_MAX_BATCH_FILES,
+          ingestScopeOverride: {
+            mode: 'repo_scoped',
+            path_glob: 'proj3/**',
+            on_multiple: 'ingest_all',
+          },
+        },
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.submissionsQueued).toBe(0);
+      // Without the folder-level check this is indistinguishable from a repo
+      // that legitimately had nothing to ingest — a typo'd glob would silently
+      // drop the whole cohort while the ingest reported success.
+      expect(result.skipped.map((s) => s.reason)).toContain('submission_type_mismatch');
     });
   });
 });

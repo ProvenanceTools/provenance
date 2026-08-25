@@ -43,6 +43,12 @@ export async function withTestDb(fn: (db: DrizzleDb) => Promise<void>): Promise<
     .withDatabase('provenance_test')
     .withUsername('test')
     .withPassword('test')
+    // testcontainers waits for the container's ports to bind on its OWN 10s
+    // timer, which is independent of vitest's testTimeout — raising that alone
+    // leaves this failing as `Timed out after 10000ms while waiting for
+    // container ports to be bound to the host`. On a machine already running
+    // other suites, Docker routinely needs longer than 10s to publish a port.
+    .withStartupTimeout(120_000)
     .start();
 
   const connectionString = container.getConnectionUri();

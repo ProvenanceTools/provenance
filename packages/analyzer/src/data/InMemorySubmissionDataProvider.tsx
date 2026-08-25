@@ -28,8 +28,13 @@ import React, { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useBundle } from '../context/BundleContext.js';
 import { computeStats } from '@provenance/analysis-core/index/stats.js';
-import { reconstructFile } from '@provenance/analysis-core/index/reconstruct-file.js';
-import { reconstructFileWithProvenance } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
+import {
+  buildReconstructionScope,
+  determinateValue,
+  describeAmbiguity,
+  reconstructFileSegmented,
+  reconstructFileSegmentedWithProvenance,
+} from '@provenance/analysis-core/index/reconstruct-segments.js';
 import { SubmissionDataContext } from './SubmissionDataProvider.js';
 import { submittedFileVerdicts } from '@provenance/analysis-core/validation/verify-submitted-code.js';
 import type {
@@ -116,6 +121,13 @@ function validationReportToResults(report: ValidationReport): ValidationResults 
  * assignment metadata. We synthesize a minimal summary that lets the Overview
  * tab render meaningfully.
  */
+/**
+ * Placeholder roster id for the synthetic /local contributor. There is no
+ * roster in the in-browser path, so the nil UUID stands in for one rather than
+ * inventing an identity that could collide with a real roster entry.
+ */
+const LOCAL_STUDENT_ID = '00000000-0000-0000-0000-000000000000';
+
 function bundleToSubmissionSummary(
   bundle: Bundle,
   flags: Flag[],
@@ -137,9 +149,33 @@ function bundleToSubmissionSummary(
         ? 'low'
         : 'info';
 
+  const flagCounts = {
+    info: flags.filter((f) => f.severity === 'info').length,
+    low: flags.filter((f) => f.severity === 'low').length,
+    medium: flags.filter((f) => f.severity === 'medium').length,
+    high: flags.filter((f) => f.severity === 'high').length,
+  };
+  const localStudent = { sid: 'local', display_name: 'Local bundle' };
+
   return {
     id: bundle.id,
-    student: { sid: 'local', display_name: 'Local bundle' },
+    student: localStudent,
+    // The /local route has no roster and no server, so this is a synthetic
+    // solo submission: exactly one contributor, the same person as `student`,
+    // which is what keeps the shared UI rendering it as it always has.
+    contributors: [
+      {
+        contributor_key: 'roster:local',
+        kind: 'roster',
+        student: { id: LOCAL_STUDENT_ID, ...localStudent },
+        student_ref: null,
+        session_count: 0,
+        is_submitter: true,
+        score_total: scoreTotal,
+        score_max_severity: maxSeverity,
+        flag_counts: flagCounts,
+      },
+    ],
     assignment: { assignment_id_str: bundle.manifest.assignment_id ?? 'unknown', label: null },
     version_index: 1,
     score_total: scoreTotal,
@@ -200,6 +236,9 @@ function createInMemoryProvider(
   flags: Flag[],
 ): SubmissionDataProvider {
   // Pre-compute translations once
+  // Built once per provider: for a solo bundle this is a contributor scan and
+  // no graph at all, so the local route pays nothing it did not pay before.
+  const reconstructionScope = buildReconstructionScope(bundle, index);
   const flagRows = flagsToFlagRows(flags);
   const allEventRows = indexedEventsToEventRows(index.ordered);
   const validationResults = validationReportToResults(validationReport);
@@ -289,16 +328,34 @@ function createInMemoryProvider(
       return useQuery({
         queryKey: ['inmem', bundle.id, 'file-content', path, atSeq],
         queryFn: () => {
-          // reconstructFile takes (index, filePath, upToGlobalIdx?) where
           // upToGlobalIdx is exclusive. Use atSeq + 1 to include that event.
           const upTo = atSeq !== undefined ? atSeq + 1 : undefined;
-          const result = reconstructFile(index, path, upTo);
+          const segmented = reconstructFileSegmented(reconstructionScope, path, upTo);
+          const result = determinateValue(segmented);
 
           // Determine actual seq: last file event up to (inclusive) atSeq
           const fileEvents = index.byFile.get(path) ?? [];
           const slice =
             atSeq !== undefined ? fileEvents.filter((e) => e.globalIdx <= atSeq) : fileEvents;
           const actualSeq = slice.length > 0 ? slice[slice.length - 1]!.globalIdx : 0;
+
+          // Tier 2.2: with two contributors' edits unordered here there is no
+          // single content, and showing one branch as "the file" is the exact
+          // fabrication this removes. Return nothing plus the reason, the same
+          // shape the tainted path already uses — a viewer that renders content
+          // it was not given cannot be fixed by a nicer error string.
+          if (result === null) {
+            return Promise.resolve({
+              content: '',
+              at_seq: actualSeq,
+              computed_at_ms: 0,
+              warning:
+                segmented.kind === 'concurrent'
+                  ? 'FILE_RECONSTRUCTION_CONCURRENT'
+                  : 'FILE_RECONSTRUCTION_UNKNOWN',
+              warning_detail: describeAmbiguity(segmented) ?? '',
+            });
+          }
 
           return Promise.resolve({
             content: result.content,
@@ -315,8 +372,16 @@ function createInMemoryProvider(
       return useQuery({
         queryKey: ['inmem', bundle.id, 'file-provenance', path, atSeq],
         queryFn: () => {
-          // Use reconstructFileWithProvenance which takes (index, filePath, upToGlobalIdx)
-          const state = reconstructFileWithProvenance(index, path, atSeq);
+          // Tier 2.2: no single content means no single per-character
+          // attribution either. Colouring one branch's characters as though they
+          // were the file's would attribute text to a contributor on the
+          // strength of a coin flip.
+          const state = determinateValue(
+            reconstructFileSegmentedWithProvenance(reconstructionScope, path, atSeq),
+          );
+          if (state === null) {
+            return Promise.resolve({ length: 0, provenance: [], at_seq: 0, computed_at_ms: 0 });
+          }
           const provArray = state.provenance;
           const fileEvents = index.byFile.get(path) ?? [];
           const slice =
@@ -388,7 +453,12 @@ function createInMemoryProvider(
             path,
             content,
             status: (entry?.status ?? 'missing') as 'present' | 'missing',
-            verdict: (v?.verdict ?? 'unknown') as 'match' | 'mismatch' | 'unknown',
+            verdict: v?.verdict ?? 'unknown',
+            // `/local` reads the dropped .zip directly, so these ARE the bytes
+            // that were sealed into the bundle — not a replay of the recording.
+            // That is a stronger claim than the server can make and the pane is
+            // allowed to say so.
+            content_source: 'submitted_bytes' as const,
           });
         },
         staleTime: Infinity,

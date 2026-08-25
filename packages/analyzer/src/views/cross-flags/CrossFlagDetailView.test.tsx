@@ -10,15 +10,41 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { mswServer } from '../../test-setup.js';
 import { CrossFlagDetailView } from './CrossFlagDetailView.js';
-import { DEFAULT_COURSE_SLUG, DEFAULT_SEMESTER_SLUG } from '../../test/msw-handlers.js';
+import {
+  DEFAULT_COURSE_SLUG,
+  DEFAULT_SEMESTER_SLUG,
+  makeSoloContributor,
+} from '../../test/msw-handlers.js';
+import { UNNAMED_CONTRIBUTOR_LABEL } from '../../lib/contributor-display.js';
 
 const CROSS_FLAG_ID = 'cf000000-0000-0000-0000-000000000001';
+
+const ALICE = {
+  id: '30000000-0000-0000-0000-000000000001',
+  sid: '3031234',
+  display_name: 'Alice Liddell',
+};
+const BOB = {
+  id: '30000000-0000-0000-0000-000000000002',
+  sid: '3032345',
+  display_name: 'Bob Builder',
+};
+const CAROL = {
+  id: '30000000-0000-0000-0000-000000000003',
+  sid: '3033456',
+  display_name: 'Carol Danvers',
+};
+const NO_SCORE = {
+  score_total: 0,
+  score_max_severity: 'info' as const,
+  flag_counts: { info: 0, low: 0, medium: 0, high: 0 },
+};
 
 const DETAIL_FIXTURE = {
   item: {
@@ -30,21 +56,15 @@ const DETAIL_FIXTURE = {
     participants: [
       {
         submission_id: 'aa000000-0000-0000-0000-000000000001',
-        student: {
-          id: '30000000-0000-0000-0000-000000000001',
-          sid: '3031234',
-          display_name: 'Alice Liddell',
-        },
+        student: ALICE,
+        contributors: [makeSoloContributor(ALICE, NO_SCORE)],
         assignment: { id: '20000000-0000-0000-0000-000000000001', assignment_id_str: 'hw1' },
         supporting_seqs: [100, 101, 102],
       },
       {
         submission_id: 'bb000000-0000-0000-0000-000000000001',
-        student: {
-          id: '30000000-0000-0000-0000-000000000002',
-          sid: '3032345',
-          display_name: 'Bob Builder',
-        },
+        student: BOB,
+        contributors: [makeSoloContributor(BOB, NO_SCORE)],
         assignment: { id: '20000000-0000-0000-0000-000000000001', assignment_id_str: 'hw1' },
         supporting_seqs: [200, 201, 202],
       },
@@ -155,5 +175,116 @@ describe('CrossFlagDetailView', () => {
     await waitFor(() => {
       expect(screen.getByTestId('list-page')).toBeInTheDocument();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unnamed participants (0029 cut-over)
+// ---------------------------------------------------------------------------
+
+describe('CrossFlagDetailView — participants not on the roster', () => {
+  it('still lists a participant whose student is null, with neutral wording', async () => {
+    const body = {
+      item: {
+        ...DETAIL_FIXTURE.item,
+        participants: [
+          DETAIL_FIXTURE.item.participants[0],
+          {
+            ...DETAIL_FIXTURE.item.participants[1],
+            student: null,
+            contributors: [
+              {
+                ...makeSoloContributor(BOB, NO_SCORE),
+                contributor_key: 'attributed:bob-ref',
+                kind: 'attributed' as const,
+                student: null,
+                student_ref: 'bob-ref',
+              },
+            ],
+          },
+        ],
+      },
+    };
+    setupDetailHandler(200, body);
+    renderDetailView();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('participants-grid')).toBeInTheDocument();
+    });
+
+    // Both participants are present — an unnamed one is never dropped, which
+    // would turn a two-party cross flag into a one-party one.
+    expect(
+      screen.getByTestId('participant-aa000000-0000-0000-0000-000000000001'),
+    ).toBeInTheDocument();
+    const unnamedCard = screen.getByTestId('participant-bb000000-0000-0000-0000-000000000001');
+    expect(unnamedCard).toBeInTheDocument();
+
+    expect(within(unnamedCard).getByText(UNNAMED_CONTRIBUTOR_LABEL)).toBeInTheDocument();
+    // No invented SID, and the assignment id still renders.
+    expect(unnamedCard.textContent).not.toContain('SID:');
+    expect(within(unnamedCard).getByText('hw1')).toBeInTheDocument();
+    // The named participant is untouched.
+    expect(screen.getByText('Alice Liddell')).toBeInTheDocument();
+    expect(screen.getByText(/SID: 3031234/)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Group participants (the submitter of record is one of several people)
+// ---------------------------------------------------------------------------
+
+describe('CrossFlagDetailView — a participant that is a group submission', () => {
+  it('names every contributor, not just the submitter of record', async () => {
+    // A cross flag is a finding about sharing BETWEEN students, so a card that
+    // names one partner of a pair points it at an arbitrary person — and which
+    // one was decided by an ingest race. Both must be on the card.
+    const body = {
+      item: {
+        ...DETAIL_FIXTURE.item,
+        participants: [
+          {
+            ...DETAIL_FIXTURE.item.participants[0],
+            contributors: [
+              makeSoloContributor(ALICE, NO_SCORE),
+              makeSoloContributor(CAROL, NO_SCORE),
+            ],
+          },
+          DETAIL_FIXTURE.item.participants[1],
+        ],
+      },
+    };
+    setupDetailHandler(200, body);
+    renderDetailView();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('participants-grid')).toBeInTheDocument();
+    });
+
+    const groupCard = screen.getByTestId('participant-aa000000-0000-0000-0000-000000000001');
+    expect(within(groupCard).getByText('Alice Liddell, Carol Danvers')).toBeInTheDocument();
+    expect(within(groupCard).getByText(/SID: 3031234, 3033456/)).toBeInTheDocument();
+  });
+
+  it('falls back to the submitter for a response predating contributors', async () => {
+    const body = {
+      item: {
+        ...DETAIL_FIXTURE.item,
+        participants: [
+          { ...DETAIL_FIXTURE.item.participants[0], contributors: [] },
+          DETAIL_FIXTURE.item.participants[1],
+        ],
+      },
+    };
+    setupDetailHandler(200, body);
+    renderDetailView();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('participants-grid')).toBeInTheDocument();
+    });
+
+    const card = screen.getByTestId('participant-aa000000-0000-0000-0000-000000000001');
+    expect(within(card).getByText('Alice Liddell')).toBeInTheDocument();
+    expect(within(card).getByText(/SID: 3031234/)).toBeInTheDocument();
   });
 });

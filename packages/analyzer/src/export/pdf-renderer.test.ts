@@ -68,6 +68,7 @@ function makeBundle(): Bundle {
 
   return {
     id: 'bundle-id-1',
+    droppedArtifacts: [],
     manifest: {
       format_version: '1.0',
       assignment_id: 'hw1',
@@ -88,6 +89,10 @@ function makeBundle(): Bundle {
         sessionId: 'sess-abc',
         events: events as readonly HashedEnvelope[],
         meta: {} as import('@provenance/log-core').SlogMeta,
+        slogSha256: 'a'.repeat(64),
+        slogSha256Lf: null,
+        tornTail: null,
+        metaSha256: 'b'.repeat(64),
         firstEvent: events[0] as HashedEnvelope<'session.start'> & {
           data: import('@provenance/log-core').SessionStartPayload;
         },

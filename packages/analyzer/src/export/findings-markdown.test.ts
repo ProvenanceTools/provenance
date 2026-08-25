@@ -72,6 +72,7 @@ function makeFixtureBundle(): Bundle {
 
   return {
     id: 'test-bundle-id',
+    droppedArtifacts: [],
     manifest: {
       format_version: '1.0',
       assignment_id: 'hw1',
@@ -92,6 +93,10 @@ function makeFixtureBundle(): Bundle {
         sessionId: 'abc',
         events,
         meta: {} as never,
+        slogSha256: 'a'.repeat(64),
+        slogSha256Lf: null,
+        tornTail: null,
+        metaSha256: 'b'.repeat(64),
         firstEvent: events[0] as never,
       },
     ],

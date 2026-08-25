@@ -14,9 +14,25 @@ digraph chain {
     bgcolor="#150a10" labeljust="l"
     node [fillcolor="#2a0f1e" color="#e8559c" fontsize=9.5]
 
+    rkpriv [label="root PRIVATE key\nProvenance maintainer, offline —\nNEVER signs a manifest"]
+    rkpub  [label="root PUBLIC key\nONE value, compiled into every\nrecorder; also configured on the\nserver and in the browser build"]
     ckpriv [label="course PRIVATE key\nheld offline by staff —\nnever on a server or in git"]
-    ckpub  [label="course PUBLIC key\ncompiled into every\nrecorder build"]
+    ckpub  [label="course PUBLIC key\nNOT compiled in any more —\nit travels inside course_cert"]
+    lkpub  [label="legacy course PUBLIC key\n1.x manifests only. Each recorder\ngrandfathers ITS OWN prior constant.\nScheduled for removal."
+            fillcolor="#15171d" color="#5d677d" fontcolor="#98a2b6"]
     skey   [label="session keypair\ngenerated fresh at session.start"]
+  }
+
+  /* ── student identity: a SECOND chain off the same root ── */
+  subgraph cluster_id21 {
+    label="  STUDENT IDENTITY 2.1 — a second chain off the SAME root  "
+    fontsize=9.5 fontcolor="#e8559c" color="#4a1b35" penwidth=1.5 style=rounded
+    bgcolor="#150a10" labeljust="l"
+    node [fillcolor="#2a0f1e" color="#e8559c" fontsize=9]
+
+    icert [label="institution_cert\ninstitution_id · institution_pubkey\nvalid_from · valid_until · root_sig" shape=note]
+    scred [label="student_credential\ninstitution_id · student_ref · student_pubkey\nissued_at · expires_at · institution_sig\nIssued by the SERVER from /enroll — no course,\nno semester, and NO roster row required" shape=note]
+    sbind [label="the student key countersigns\nthe SESSION pubkey\n{institution_id, purpose, session_pubkey, student_ref}\nA keypair, NOT a bearer token: a uuid is copyable and\nrepudiable, a signature is not — and the server holds\nonly PUBLIC keys, so a breach forges nobody"]
   }
 
   /* ── activation ── */
@@ -26,9 +42,12 @@ digraph chain {
     bgcolor="#12100c" labeljust="l"
     node [fillcolor="#241a0c" color="#F97316" fontsize=9.5]
 
-    amf   [label=".provenance-manifest\nassignment_id · semester · issued_at\nfiles_under_review · sig" shape=note]
-    averify [label="verify\nsignature" shape=diamond fillcolor="#1c1712" fontsize=9
-             height=0.75 width=1.35]
+    cert  [label="course_cert\ncourse_id · course_pubkey\nvalid_from · valid_until · root_sig" shape=note]
+    amf   [label=".provenance-manifest — Manifest 2.0\ncourse_id · assignment_id · semester · issued_at\nfiles_under_review (exact · dir/ · *.suffix)\nignore · attachments · collaboration · submission\nscope · policy   ← all of it covered by sig" shape=note]
+    averify [label="walk the chain\nroot → cert → manifest\nformat_version must be 2.0\nBEFORE any of it" shape=diamond fillcolor="#1c1712" fontsize=9
+             height=1.35 width=2.4]
+    pol   [label="capture policy — signed, so a professor can\nturn capture DOWN and a student cannot turn it OFF\nselection_change · focus_change · terminal ·\nheartbeat_interval_ms. EVERYTHING else is floor:\nthe schema has no key that could disable it."
+           fillcolor="#1e1830" color="#9d7bf5" fontsize=9]
     bind  [label="BIND (two mechanisms)\n(1) manifest sig copied into session.start,\ncovered by the hash chain\n(2) session privkey AEAD-wrapped under a key\nHKDF-derived from that same manifest sig"
            fillcolor="#1e1830" color="#9d7bf5"]
   }
@@ -41,7 +60,7 @@ digraph chain {
     node [fillcolor="#1e1830" color="#9d7bf5" fontsize=9.5]
 
     gen  [label="GENESIS_PREV_HASH\nseq 0 only" fillcolor="#15171d" color="#5d677d" fontcolor="#98a2b6"]
-    e0   [label="entry 0\nsession.start" shape=note]
+    e0   [label="entry 0\nsession.start — manifest (payload + sig +\ncourse_cert) · identity · host, and the three\n§5.6 capability reports beside them:\ngit_capture · witness_capture · file_scope.\nOptional PERMANENTLY — absent ≠ unavailable." shape=note]
     e1   [label="entry 1\ndoc.open" shape=note]
     e2   [label="entry 2\ndoc.change" shape=note]
     edots[label="…" fillcolor="#0e0b18" color="#2e2450" fontcolor="#8b95a8" width=0.35]
@@ -59,6 +78,10 @@ digraph chain {
     bman [label="manifest.json\nextension_hash + per-session\nslog_sha256 / meta_sha256" shape=note]
     bsig [label="manifest.sig\ned25519 over JCS(manifest)" shape=note]
     zip  [label="bundle .zip" shape=note penwidth=2.0]
+
+    rseal[label="ROLLING SEAL — format_version 1.2\nmanifest-<session_id>.json + .sig, ONE session per\nfile, rewritten at start, at every checkpoint and at\ndispose. Its digests commit to a PREFIX — except the\ndispose-time roll, which carries final: true inside the\nsigned payload and commits to the WHOLE file." shape=note]
+    push [label="git push\n.provenance/ IS the submission.\nNo seal step ever runs, so the archived\nlog routinely runs past its own last seal."
+          shape=note penwidth=2.0]
   }
 
   /* ── verification, later ── */
@@ -70,7 +93,7 @@ digraph chain {
 
     vchain [label="walk the chain\nrecompute every link"]
     vsig   [label="verify manifest.sig"]
-    vbind  [label="verify session binding\nall sessions share one manifest_sig\n(session-to-session only — the stored\nbundle carries no course-key sig to check)"]
+    vbind  [label="verify session binding\n2.0: re-walk root → course_cert → manifest → session,\noffline, from the bundle alone\n1.x: all sessions share one manifest_sig"]
     verdict[label="any link,\nsignature or binding\nbroken?" shape=diamond fillcolor="#12161f"
             fontsize=9 height=0.9 width=1.7]
     ok     [label="valid\nchain intact" fillcolor="#0d2416" color="#3fbf62"]
@@ -78,12 +101,26 @@ digraph chain {
             fillcolor="#2a1216" color="#ff6b6b"]
   }
 
-  ckpriv -> amf     [label="signs, offline" color="#e8559c"]
+  rkpriv -> cert    [label="signs root_sig. The root key signs\nCERTIFICATES only — never a manifest,\nnever a credential, never a log" color="#e8559c"]
+  rkpriv -> icert   [label="and the institution's cert.\nONE delegation hop, not two: the institution\nkey lives on a server and mints on demand,\nwhich is what the offline course key cannot do"
+                     color="#e8559c"]
+  icert  -> scred   [label="the institution's server-held key\nsigns institution_sig" color="#e8559c"]
+  scred  -> sbind   [color="#e8559c"]
+  skey   -> sbind   [label="the ephemeral pubkey is\nwhat gets countersigned" color="#e8559c" style=dashed]
+  sbind  -> e0      [label="session.start.identity — never machine_id,\nnever a git author, never the upload filename.\nAbsent is the ORDINARY case and is blameless."
+                     color="#e8559c" style=dashed]
+  cert   -> ckpub   [label="vouches for, for one\nsemester-length window" color="#e8559c" constraint=false]
+  ckpriv -> amf     [label="signs the payload, offline" color="#e8559c"]
+  cert   -> amf     [label="travels inline, OUTSIDE the\ncourse-signed payload" color="#e8559c" style=dashed]
   amf    -> averify
-  ckpub  -> averify [label="checks against" color="#e8559c"]
+  rkpub  -> averify [label="step 1 checks\ncourse_cert against" color="#e8559c"]
+  ckpub  -> averify [label="step 2 checks\nthe payload against" color="#e8559c"]
+  lkpub  -> averify [label="1.x only — no cert to walk" color="#5d677d" style=dashed]
+  averify-> pol     [label="valid 2.0 — resolve\nthe capture policy" color="#F97316"]
   averify-> bind    [label="valid" color="#F97316"]
   skey   -> bind    [color="#e8559c"]
 
+  pol  -> e0   [label="the EFFECTIVE policy rides into the bundle,\nso the analyzer can tell 'not recorded by\npolicy' from 'did not happen'" color="#9d7bf5" style=dashed]
   bind -> e0   [label="entry 0 carries manifest_sig\n+ the session pubkey" color="#9d7bf5"]
   gen  -> e0   [label="prev_hash" color="#5d677d" style=dashed]
   e0 -> e1 [label="prev_hash =\nhash(entry 0)" color="#9d7bf5"]
@@ -99,12 +136,20 @@ digraph chain {
   bman -> zip
   bsig -> zip
 
+  e100 -> rseal [label="on EVERY checkpoint —\nthere is no submit moment\nto wait for" color="#17bfae"]
+  skey -> rseal [label="each session signs its OWN seal,\nso no key can vouch for another" color="#e8559c" style=dashed]
+  rseal -> push [color="#17bfae"]
+  rseal -> zip  [label="a classically sealed bundle carries\nBOTH shapes, and check 1 requires\nboth — neither excuses the other"
+                 color="#17bfae" style=dashed]
+
   zip -> vchain [label="ingest, or a drag-and-drop\ninto /local" color="#3fbf62"]
+  push -> vchain [label="the grader clones, and ingest\nfans the repo out per scope" color="#3fbf62"]
   vchain -> verdict
   vsig -> verdict
   vbind -> verdict
   zip -> vsig
   zip -> vbind
+  rkpub -> vbind [label="the SAME root key, configured\nserver-side and in the browser build.\nUnset ⇒ the check reports SKIPPED,\nnever a false pass." color="#e8559c" style=dashed constraint=false]
   verdict -> ok  [label="no" color="#3fbf62"]
   verdict -> bad [label="yes" color="#ff6b6b"]
 }

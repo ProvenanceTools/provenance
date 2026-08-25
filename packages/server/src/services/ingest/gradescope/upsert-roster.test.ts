@@ -5,7 +5,7 @@
 import { vi, describe, it, expect } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { withTestDb } from '../../../../test/helpers/db.js';
-import { courses, semesters, roster_entries } from '../../../db/schema.js';
+import { courses, semesters, roster_entries, students } from '../../../db/schema.js';
 import { upsertRosterFromSubmitters } from './upsert-roster.js';
 import type { DrizzleDb } from '../../../db/client.js';
 
@@ -143,6 +143,115 @@ describe('upsertRosterFromSubmitters', () => {
         carol!.protected_index,
       ];
       expect(new Set(indices).size).toBe(3);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Identity 2.1 roster linking — the "student enrolls, then submits" direction
+  // -------------------------------------------------------------------------
+
+  it('links newly-created roster rows to a student who already holds a credential', async () => {
+    // The normal ordering: the student obtained an identity BEFORE doing the
+    // work, and the roster row only comes into existence when Gradescope ingest
+    // runs after their first submission. Under 2.0 that ordering was impossible.
+    await withTestDb(async (db) => {
+      const semesterId = await seedSemester(db);
+      const [student] = await db
+        .insert(students)
+        .values({
+          institution_id: 'berkeley',
+          sso_subject: 'sub-alice',
+          sso_email: 'alice@berkeley.edu',
+        })
+        .returning();
+
+      await upsertRosterFromSubmitters(db, semesterId, [
+        { sid: '100', name: 'Alice', email: 'alice@berkeley.edu' },
+        { sid: '200', name: 'Bob', email: 'bob@berkeley.edu' },
+      ]);
+
+      expect((await getEntry(db, semesterId, '100'))!.student_ref).toBe(student!.student_ref);
+      // Bob holds no credential, so his row is simply unlinked — not an error.
+      expect((await getEntry(db, semesterId, '200'))!.student_ref).toBeNull();
+    });
+  });
+
+  it('links case-insensitively in the ingest direction too', async () => {
+    await withTestDb(async (db) => {
+      const semesterId = await seedSemester(db);
+      const [student] = await db
+        .insert(students)
+        .values({
+          institution_id: 'berkeley',
+          sso_subject: 'sub-carol',
+          sso_email: 'carol@berkeley.edu',
+        })
+        .returning();
+
+      await upsertRosterFromSubmitters(db, semesterId, [
+        { sid: '300', name: 'Carol', email: 'CAROL@Berkeley.EDU' },
+      ]);
+
+      expect((await getEntry(db, semesterId, '300'))!.student_ref).toBe(student!.student_ref);
+    });
+  });
+
+  it('does not re-point a roster row already linked to another student', async () => {
+    // The link is WRITE-ONCE. Re-pointing would silently re-attribute work.
+    //
+    // The incumbent's own sso_email deliberately does NOT match the roster
+    // row's, so only the pre-existing link ties them together and an unguarded
+    // UPDATE would have exactly one candidate to re-point to — making the
+    // assertion deterministic rather than a race between two matching rows.
+    await withTestDb(async (db) => {
+      const semesterId = await seedSemester(db);
+      const [incumbent] = await db
+        .insert(students)
+        .values({
+          institution_id: 'berkeley',
+          sso_subject: 'sub-incumbent',
+          sso_email: 'incumbent@berkeley.edu',
+        })
+        .returning();
+      const [newcomer] = await db
+        .insert(students)
+        .values({
+          institution_id: 'berkeley',
+          sso_subject: 'sub-newcomer',
+          sso_email: 'shared@berkeley.edu',
+        })
+        .returning();
+
+      await db.insert(roster_entries).values({
+        semester_id: semesterId,
+        sid: '400',
+        display_name: 'Shared',
+        email: 'shared@berkeley.edu',
+        student_ref: incumbent!.student_ref,
+      });
+
+      await upsertRosterFromSubmitters(db, semesterId, [
+        { sid: '400', name: 'Shared', email: 'shared@berkeley.edu' },
+      ]);
+
+      const row = await getEntry(db, semesterId, '400');
+      expect(row!.student_ref).toBe(incumbent!.student_ref);
+      expect(row!.student_ref).not.toBe(newcomer!.student_ref);
+    });
+  });
+
+  it('a roster row with no email is never linked', async () => {
+    await withTestDb(async (db) => {
+      const semesterId = await seedSemester(db);
+      await db.insert(students).values({
+        institution_id: 'berkeley',
+        sso_subject: 'sub-dave',
+        sso_email: 'dave@berkeley.edu',
+      });
+
+      await upsertRosterFromSubmitters(db, semesterId, [{ sid: '500', name: 'NoEmail' }]);
+
+      expect((await getEntry(db, semesterId, '500'))!.student_ref).toBeNull();
     });
   });
 });

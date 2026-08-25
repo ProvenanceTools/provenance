@@ -36,6 +36,8 @@ import React, {
 import { loadBundle, parseBundles } from '@provenance/analysis-core/loader/parse-bundle.js';
 import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
 import { runValidation } from '@provenance/analysis-core/validation/run-validation.js';
+import { establishBundleContributors } from '@provenance/analysis-core/identity/resolve-contributors.js';
+import { getRootPublicKeyHex, localValidationOptions } from '../lib/root-key.js';
 import { runHeuristics } from '@provenance/analysis-core/heuristics/run-heuristics.js';
 import type {
   Bundle,
@@ -47,14 +49,42 @@ import type { EventIndex } from '@provenance/analysis-core/index/event-index.js'
 import type { ValidationReport } from '@provenance/analysis-core/validation/check-types.js';
 import type { Flag } from '@provenance/analysis-core/heuristics/types.js';
 import type { CrossFlag } from '@provenance/analysis-core/heuristics/cross/types.js';
-import { runCrossHeuristics } from '@provenance/analysis-core/heuristics/cross/run-cross-heuristics.js';
+import { runCrossAnalysis } from '@provenance/analysis-core/heuristics/cross/run-cross-heuristics.js';
 import { extractCrossFeatures } from '@provenance/analysis-core/heuristics/cross/features.js';
+import type { SameScopeExclusion } from '@provenance/analysis-core/coverage/cross-scope.js';
+import {
+  inspectDroppedFiles,
+  candidateToFile,
+  type ScopeCandidate,
+} from '../lib/inspect-dropped-files.js';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 export type LoadingStage = 'unzip' | 'index' | 'validate' | 'heuristics' | null;
+
+/**
+ * The choice a monorepo drop puts to the user.
+ *
+ * A dropped file that is a flat sealed bundle, or a repo holding exactly one
+ * sealed scope, never lands here — there is nothing to ask. Only a file holding
+ * more than one scope (or none that can be selected) produces a group.
+ */
+export interface PendingScopeChoice {
+  /** Files that need no choice; loaded as-is once the choice is confirmed. */
+  passthrough: File[];
+  /** One entry per repo-shaped file that holds more than one scope. */
+  groups: Array<{ stem: string; candidates: ScopeCandidate[] }>;
+}
+
+/**
+ * Namespaces a scope path by the file it came from, so two dropped repos that
+ * both contain `proj2/` cannot select each other's scope.
+ */
+export function scopeSelectionKey(stem: string, scopePath: string): string {
+  return `${stem} ${scopePath}`;
+}
 
 export type BundleContextValue = {
   /** All loaded bundles. Empty when idle/error. */
@@ -83,7 +113,24 @@ export type BundleContextValue = {
    */
   crossFlags: CrossFlag[];
 
-  status: 'idle' | 'loading' | 'loaded' | 'error';
+  /**
+   * Pairs of loaded submissions the cross-heuristics did NOT compare, because
+   * they are two views of one repository (spec S20).
+   *
+   * A git-native group submission shares one committed, add-only
+   * `.provenance/`, so both partners' signed logs sit inside both partners'
+   * archives. Comparing them accuses the two people the course assigned to work
+   * together. The suppression is deliberately NOT silent: a grader reading "no
+   * findings" has to be able to tell a searched comparison from a withheld one,
+   * which is what this list is for (§6 Rule 3 — a fact about the recording,
+   * never a finding about anyone).
+   *
+   * Comes from the same single `partitionCrossScopes` pass that produced the
+   * suppression, so it cannot disagree with it.
+   */
+  crossScopeExclusions: SameScopeExclusion[];
+
+  status: 'idle' | 'loading' | 'choosing' | 'loaded' | 'error';
   loadingStage: LoadingStage;
   /** The loader error, set when status === 'error'. */
   loadError: LoaderError | SessionParseError | null;
@@ -93,10 +140,23 @@ export type BundleContextValue = {
    */
   partialLoadErrors: BlobLoadError[];
 
+  /** The outstanding scope choice; non-null exactly when status === 'choosing'. */
+  pendingScopes: PendingScopeChoice | null;
+
   /** Load a single bundle file (append, not replace). */
   loadBundleFile(file: File): Promise<void>;
   /** Load multiple bundle files at once (fan-out, append). */
   loadBundleFiles(files: File[]): Promise<void>;
+  /**
+   * Phase A of the drop: inspect the files for repo shape, then either load
+   * straight through (the pre-existing behaviour for every flat bundle) or
+   * enter 'choosing' so the user can pick which recordings to analyze.
+   */
+  beginLoad(files: File[]): Promise<void>;
+  /** Confirm a pending choice, loading the selected scopes plus any passthrough. */
+  chooseScopes(selectionKeys: string[]): Promise<void>;
+  /** Abandon a pending choice without loading anything. */
+  cancelChoice(): void;
   /** Reset state back to idle. */
   clearBundle(): void;
 };
@@ -135,11 +195,13 @@ export function BundleProvider({ children }: { children: ReactNode }) {
   const [flagsByBundle, setFlagsByBundle] = useState<Map<string, Flag[]>>(new Map());
 
   const [crossFlags, setCrossFlags] = useState<CrossFlag[]>([]);
+  const [crossScopeExclusions, setCrossScopeExclusions] = useState<SameScopeExclusion[]>([]);
 
   const [status, setStatus] = useState<BundleContextValue['status']>('idle');
   const [loadingStage, setLoadingStage] = useState<LoadingStage>(null);
   const [loadError, setLoadError] = useState<LoaderError | SessionParseError | null>(null);
   const [partialLoadErrors, setPartialLoadErrors] = useState<BlobLoadError[]>([]);
+  const [pendingScopes, setPendingScopes] = useState<PendingScopeChoice | null>(null);
 
   // ---------------------------------------------------------------------------
   // loadBundleFile — single file, append
@@ -165,7 +227,15 @@ export function BundleProvider({ children }: { children: ReactNode }) {
       const idx = buildIndex(bundle);
 
       setLoadingStage('validate');
-      const report = await runValidation(bundle);
+      // Stamp "who produced this session?" onto the bundle before anything
+      // reads it. `/local` runs entirely in-browser with no server, so this is
+      // the ONLY place the stamp can be established here. Unset
+      // VITE_ROOT_PUBLIC_KEY_HEX is a supported state: every identified session
+      // then reads `unverifiable / no_root_key`, which is "we could not check",
+      // not "we checked and it failed", and a bundle with no identity block
+      // stays blamelessly `unattributed`.
+      await establishBundleContributors(bundle, getRootPublicKeyHex());
+      const report = await runValidation(bundle, localValidationOptions());
 
       setLoadingStage('heuristics');
       const heuristicFlags = runHeuristics(idx, bundle, report);
@@ -256,7 +326,10 @@ export function BundleProvider({ children }: { children: ReactNode }) {
         const idx = buildIndex(bundle);
 
         setLoadingStage('validate');
-        const report = await runValidation(bundle);
+        // Per bundle, never shared: the stamp is a property of THIS bundle and
+        // merging two would attribute one student's sessions to another.
+        await establishBundleContributors(bundle, getRootPublicKeyHex());
+        const report = await runValidation(bundle, localValidationOptions());
 
         setLoadingStage('heuristics');
         const heuristicFlags = runHeuristics(idx, bundle, report);
@@ -300,6 +373,85 @@ export function BundleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // ---------------------------------------------------------------------------
+  // beginLoad — Phase A of the drop (scope inspection), then Phase B
+  //
+  // `loadBundleFiles` is deliberately NOT modified: it is the pipeline every
+  // existing caller and test relies on, and the picker needs a decision from
+  // the user in the middle of a load, which a single promise cannot express.
+  // So the inspection sits in front of it and hands it ordinary Files.
+  // ---------------------------------------------------------------------------
+
+  const beginLoad = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+      setStatus('loading');
+      setLoadError(null);
+      setPartialLoadErrors([]);
+      setLoadingStage('unzip');
+
+      const inspected = await inspectDroppedFiles(files);
+      const groups: PendingScopeChoice['groups'] = [];
+      const direct: File[] = [];
+
+      for (const item of inspected) {
+        if (item.candidates === null) {
+          direct.push(item.file);
+          continue;
+        }
+        const stem = item.file.name.endsWith('.zip') ? item.file.name.slice(0, -4) : item.file.name;
+        const selectable = item.candidates.filter((c) => c.selectable);
+        if (selectable.length === 1) {
+          // Exactly one recording in this repo: there is no question to ask.
+          direct.push(await candidateToFile(stem, selectable[0]!));
+        } else {
+          groups.push({ stem, candidates: item.candidates });
+        }
+      }
+
+      if (groups.length === 0) {
+        await loadBundleFiles(direct);
+        return;
+      }
+      setPendingScopes({ passthrough: direct, groups });
+      setStatus('choosing');
+      setLoadingStage(null);
+    },
+    [loadBundleFiles],
+  );
+
+  // ---------------------------------------------------------------------------
+  // chooseScopes / cancelChoice — resolving a pending choice
+  // ---------------------------------------------------------------------------
+
+  const chooseScopes = useCallback(
+    async (selectionKeys: string[]) => {
+      const pending = pendingScopes;
+      if (pending === null) return;
+      setPendingScopes(null);
+      const chosen: File[] = [...pending.passthrough];
+      for (const group of pending.groups) {
+        for (const c of group.candidates) {
+          if (c.selectable && selectionKeys.includes(scopeSelectionKey(group.stem, c.scopePath))) {
+            chosen.push(await candidateToFile(group.stem, c));
+          }
+        }
+      }
+      if (chosen.length === 0) {
+        setStatus('idle');
+        return;
+      }
+      await loadBundleFiles(chosen);
+    },
+    [pendingScopes, loadBundleFiles],
+  );
+
+  const cancelChoice = useCallback(() => {
+    setPendingScopes(null);
+    setStatus('idle');
+    setLoadingStage(null);
+  }, []);
+
+  // ---------------------------------------------------------------------------
   // clearBundle — reset all state
   // ---------------------------------------------------------------------------
 
@@ -310,6 +462,8 @@ export function BundleProvider({ children }: { children: ReactNode }) {
     setValidationReportByBundle(new Map());
     setFlagsByBundle(new Map());
     setCrossFlags([]);
+    setCrossScopeExclusions([]);
+    setPendingScopes(null);
     setStatus('idle');
     setLoadingStage(null);
     setLoadError(null);
@@ -344,7 +498,13 @@ export function BundleProvider({ children }: { children: ReactNode }) {
       const index = indicesByBundle.get(bundle.id);
       if (index !== undefined) features.push(extractCrossFeatures(bundle, index));
     }
-    setCrossFlags(runCrossHeuristics(features));
+    // Both halves of ONE pass. This used to be `runCrossHeuristics` plus a
+    // second, side-door `partitionCrossScopes` call to recover the register —
+    // which worked here and left the server, which never made that second call,
+    // showing the suppression with no explanation for it.
+    const { flags, exclusions } = runCrossAnalysis(features);
+    setCrossFlags(flags);
+    setCrossScopeExclusions([...exclusions]);
   }, [bundles, indicesByBundle]);
 
   // ---------------------------------------------------------------------------
@@ -373,12 +533,17 @@ export function BundleProvider({ children }: { children: ReactNode }) {
       validationReport,
       flags,
       crossFlags,
+      crossScopeExclusions,
       status,
       loadingStage,
       loadError,
       partialLoadErrors,
+      pendingScopes,
       loadBundleFile,
       loadBundleFiles,
+      beginLoad,
+      chooseScopes,
+      cancelChoice,
       clearBundle,
     }),
     [
@@ -392,12 +557,17 @@ export function BundleProvider({ children }: { children: ReactNode }) {
       validationReport,
       flags,
       crossFlags,
+      crossScopeExclusions,
       status,
       loadingStage,
       loadError,
       partialLoadErrors,
+      pendingScopes,
       loadBundleFile,
       loadBundleFiles,
+      beginLoad,
+      chooseScopes,
+      cancelChoice,
       clearBundle,
     ],
   );

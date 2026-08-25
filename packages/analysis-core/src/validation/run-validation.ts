@@ -7,6 +7,13 @@
  * reach overall 'pass'. 1.0 bundles still yield overall 'warn' because Check
  * 8 is skipped (empty submissionFiles → skipped).
  *
+ * ORDERING: run this BEFORE `runHeuristics`. Check 2 is what establishes the
+ * bundle's Manifest 2.0 trust verdict (see verify-session-binding.ts), and the
+ * course-signed capture policy is only honoured once that verdict says
+ * `verified`. Running heuristics first is not unsafe — an unstamped bundle
+ * resolves to the default "everything captured" policy — but it would ignore a
+ * legitimate course policy and over-report.
+ *
  * overall rules:
  *   - Any 'fail' → 'fail'.
  *   - No 'fail' but ≥1 'skipped' → 'warn'.
@@ -15,6 +22,7 @@
 
 import type { Bundle } from '../loader/types.js';
 import type { ValidationCheck, ValidationReport } from './check-types.js';
+import type { SessionBindingOptions } from './verify-session-binding.js';
 import { verifyManifestSig } from './verify-manifest-sig.js';
 import { verifySessionBinding } from './verify-session-binding.js';
 import { verifyChain } from './verify-chain.js';
@@ -23,6 +31,9 @@ import { verifyMonotonicT } from './verify-monotonic-t.js';
 import { verifyMonotonicWall } from './verify-monotonic-wall.js';
 import { verifyDocSaveHashes } from './verify-doc-save-hashes.js';
 import { verifySubmittedCode } from './verify-submitted-code.js';
+import { verifyLogBytes } from './verify-log-bytes.js';
+import { verifyCheckpointChain } from './verify-checkpoint-chain.js';
+import { verifyManifestDowngrade } from './verify-manifest-downgrade.js';
 
 // ---------------------------------------------------------------------------
 // overall computation
@@ -38,10 +49,23 @@ function computeOverall(checks: ValidationCheck[]): 'pass' | 'warn' | 'fail' {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function runValidation(bundle: Bundle): Promise<ValidationReport> {
-  // Checks 1 (async) and 2–7 (sync) run in spec order.
+/**
+ * Options threaded into the individual checks.
+ *
+ * `rootPubkeyHex` is the ROOT public key of the Manifest 2.0 trust chain, used
+ * by check 2. It is a parameter and never a constant in this package —
+ * `analysis-core` is isomorphic and must stay pure, and one deployment's root
+ * key is not another's. 1.x bundles ignore it entirely.
+ */
+export type ValidationOptions = SessionBindingOptions;
+
+export async function runValidation(
+  bundle: Bundle,
+  options: ValidationOptions = {},
+): Promise<ValidationReport> {
+  // Checks 1–2 (async) and 3–8 (sync) run in spec order.
   const check1 = await verifyManifestSig(bundle);
-  const check2 = verifySessionBinding(bundle);
+  const check2 = await verifySessionBinding(bundle, options);
   const check3 = verifyChain(bundle);
   const check4 = verifySeq(bundle);
   const check5 = verifyMonotonicT(bundle);
@@ -60,8 +84,30 @@ export async function runValidation(bundle: Bundle): Promise<ValidationReport> {
     check8,
   ];
 
+  // ---------------------------------------------------------------------------
+  // Bundle-level tamper detections — NOT among the PRD §5.4 eight.
+  //
+  // These are the format's two designed-but-never-wired tamper defences
+  // (the manifest's commitment to the log bytes, and the signed checkpoints)
+  // plus the manifest-downgrade reader. They live outside `checks` because the
+  // eight are a frozen persisted contract — see ValidationReport.
+  //
+  // They run HERE, rather than in the flag adapter, for one reason: this is the
+  // function both ingest and recompute call against a freshly parsed bundle, so
+  // computing them here is what guarantees the two agree and that a recompute
+  // recomputes them instead of resurrecting a stored row.
+  //
+  // `overall` is deliberately left derived from the eight alone.
+  // ---------------------------------------------------------------------------
+  const bundleDetections: ValidationCheck[] = [
+    verifyLogBytes(bundle),
+    await verifyCheckpointChain(bundle),
+    verifyManifestDowngrade(bundle),
+  ];
+
   return {
     checks,
+    bundleDetections,
     overall: computeOverall(checks),
   };
 }

@@ -7,8 +7,15 @@
  * buffers the whole upload in memory (and trips a ~2 GiB FormData ceiling);
  * this path never holds more than one rebuilt bundle at a time. It otherwise
  * reuses the exact same downstream pipeline — roster upsert → stage blob →
- * `ingest_files` row → enqueue one `ingest_file` job per submitter — so the
- * worker processes locally-ingested submissions identically to uploaded ones.
+ * `ingest_files` row → enqueue one `ingest_file` job per (assignment scope ×
+ * submitter) — so the worker processes locally-ingested submissions identically
+ * to uploaded ones.
+ *
+ * A submission folder can hold more than one assignment scope: CS 61B/61C
+ * students push a git repo and Gradescope clones the WHOLE repository, so one
+ * folder can carry `proj2/.provenance/` and `lab5/.provenance/` side by side.
+ * `repo-scopes.ts` fans that out into one flat bundle per scope before staging;
+ * a classic flat folder has exactly one scope and is unaffected.
  *
  * Deliberately does NOT enforce INGEST_MAX_BATCH_BYTES (the total-size cap that
  * exists to bound the in-memory HTTP path); processing arbitrarily large local
@@ -24,16 +31,23 @@ import {
   markStagingStarted,
   markStagingComplete,
   maybeEnqueueFinalize,
+  recordIngestJobSkipped,
 } from './job-control.js';
 import { stageBlob } from './stage-blob.js';
 import { createBoundedRunner } from './bounded-runner.js';
 import { recordPhase } from '../../jobs/ingest-profile.js';
 import { upsertRosterFromSubmitters } from './gradescope/upsert-roster.js';
-import { openLocalExport } from './gradescope/stream-export.js';
-import { zipBundleEntries, type BundleEntry } from './gradescope/build-bundle-zip.js';
+import { openLocalExport, type StreamedSkipReason } from './gradescope/stream-export.js';
+import { loadIngestScopeConfigs, scopeConfigResolver } from './gradescope/scope-config.js';
+import type { IngestScopeConfig } from './gradescope/repo-scopes.js';
+import {
+  zipBundleEntries,
+  type BundleEntry,
+} from '@provenance/analysis-core/scopes/select-entries.js';
 import { createRebuildPool, type RebuildPool } from './gradescope/rebuild-pool.js';
 import { getBoss, JOB_KINDS } from '../../jobs/pg-boss.js';
 import type { StorageClient } from '../storage/client.js';
+import type { GradescopeSkippedEntry } from '@provenance/shared/api-schemas';
 
 export interface IngestLocalPathDeps {
   db: DrizzleDb;
@@ -82,11 +96,56 @@ export interface IngestLocalPathArgs {
    * connection for its row insert.
    */
   stageConcurrency?: number;
+  /**
+   * Per-request declared-submission-type override (§6).
+   *
+   * When present it REPLACES the per-assignment `assignments.ingest_scope`
+   * default for every scope in this batch, which is how a one-off re-ingest or
+   * a fixup declares a different shape without mutating the assignment row. It
+   * beats the default by the simplest possible mechanism: the resolver handed
+   * downstream ignores its assignment-id key and returns this config for every
+   * scope, so nothing below here knows or cares which of the two it got.
+   *
+   * Omitted ⇒ the DB-backed per-assignment resolver, i.e. the behaviour that
+   * existed before overrides.
+   */
+  ingestScopeOverride?: IngestScopeConfig;
 }
 
 export interface IngestLocalPathSkipped {
   folderKey: string;
-  reason: 'no_manifest' | 'no_submitters' | 'bundle_too_large';
+  /**
+   * The assignment scope within the folder that was skipped: `''` for the
+   * folder root, else a directory prefix such as `proj2/`. Non-empty only for
+   * git-repo submissions carrying several scopes.
+   */
+  scopePath: string;
+  reason: StreamedSkipReason | 'bundle_too_large';
+}
+
+/**
+ * The ONE place `IngestLocalPathSkipped` becomes the wire/storage shape.
+ *
+ * Both upload routes have to report skips identically — provgate must not have
+ * to know whether an export arrived single-shot or chunked — and both of them
+ * ultimately get their list from this module. So the mapping lives here, once,
+ * and is used by all three consumers: the `POST /ingest:gradescope` response,
+ * the `ingest_jobs.skipped` write below, and (through that column) the
+ * `GET /ingest/jobs/:jobId` response. Two hand-rolled mappings would be two
+ * shapes waiting to drift.
+ *
+ * `scope_path` is emitted unconditionally, including the `''` that means "the
+ * folder root". Omitting it on the flat path would make the two routes'
+ * payloads differ in key presence for the very case they most often share.
+ */
+export function toSkippedWire(
+  skipped: readonly IngestLocalPathSkipped[],
+): GradescopeSkippedEntry[] {
+  return skipped.map((s) => ({
+    folder_key: s.folderKey,
+    scope_path: s.scopePath,
+    reason: s.reason,
+  }));
 }
 
 export type IngestLocalPathResult =
@@ -95,7 +154,9 @@ export type IngestLocalPathResult =
       /** Null when the export had no stageable submissions (roster-only). */
       jobId: string | null;
       roster: { added: number; updated: number };
+      /** Bundles staged — one per ACCEPTED SCOPE, not per submission folder. */
       bundlesProcessed: number;
+      /** `ingest_files` rows staged — one per (accepted scope × submitter). */
       submissionsQueued: number;
       skipped: IngestLocalPathSkipped[];
     }
@@ -121,7 +182,18 @@ export async function ingestLocalPath(
   const { semesterId, userId, archivePath, maxBundleBytes, maxBatchFiles } = args;
   const existingJobId = args.jobId ?? null;
 
-  const opened = await openLocalExport(archivePath);
+  // A per-request override applies to the WHOLE batch, so it short-circuits the
+  // DB read entirely — there is nothing per-assignment left to look up. Without
+  // one, scope-resolution config is per assignment and keyed by the id each
+  // scope declares, so the whole semester's map is read once up front (a handful
+  // of rows) rather than per discovered scope.
+  const override = args.ingestScopeOverride;
+  const scopeConfigFor =
+    override !== undefined
+      ? () => override
+      : scopeConfigResolver(await loadIngestScopeConfigs(db, semesterId));
+
+  const opened = await openLocalExport(archivePath, { scopeConfigFor });
   if (!opened.ok) {
     return { ok: false, error: opened.error, detail: opened.detail };
   }
@@ -184,7 +256,11 @@ export async function ingestLocalPath(
         const sub = next.value;
 
         if (sub.kind === 'skipped') {
-          skipped.push({ folderKey: sub.folderKey, reason: sub.reason });
+          skipped.push({
+            folderKey: sub.folderKey,
+            scopePath: sub.scopePath,
+            reason: sub.reason,
+          });
           continue;
         }
 
@@ -192,7 +268,11 @@ export async function ingestLocalPath(
         // headers; estimate it here (cheap) to preserve the pre-count size cap
         // without doing the actual (now-offloaded) serialization first.
         if (estimateStoreZipSize(sub.entries) > maxBundleBytes) {
-          skipped.push({ folderKey: sub.folderKey, reason: 'bundle_too_large' });
+          skipped.push({
+            folderKey: sub.folderKey,
+            scopePath: sub.scopePath,
+            reason: 'bundle_too_large',
+          });
           continue;
         }
 
@@ -222,6 +302,26 @@ export async function ingestLocalPath(
 
         bundlesProcessed++;
         const { entries, folderKey } = sub;
+        // One ingest_files row per (scope x submitter). The root scope keeps the
+        // historical `<folder>.zip` name so the flat Gradescope path is
+        // byte-for-byte unchanged; a fanned-out scope names its directory so the
+        // unmatched tray shows which part of the repo it came from.
+        const sourceName =
+          sub.scopePath === ''
+            ? `${folderKey}.zip`
+            : `${folderKey}/${sub.scopePath.slice(0, -1)}.zip`;
+        // The DECLARED group, persisted rather than left as a local (migration
+        // 0033). Until now the only thing putting a group back together after
+        // this fan-out was the single shared `rebuild` promise below giving
+        // every co-submitter identical bytes, so blob dedup collapsed them —
+        // a coincidence of this function, not an invariant. Any byte divergence
+        // silently produced two submissions with one contributor each, which
+        // the cross-heuristics then compare against each other (S20).
+        //
+        // Keyed on (folder, SCOPE), never the folder alone: nested manifest
+        // discovery lets one folder yield several scopes, and those are
+        // genuinely different artifacts that must not collapse together.
+        const sourceGroupKey = `${folderKey}/${sub.scopePath}`;
         // Rebuild the bundle ZIP once per bundle (offloaded to the pool), shared
         // across its co-submitters. Kicked off here so it proceeds while we
         // stream the next folders; the runner's backpressure bounds how far the
@@ -249,11 +349,12 @@ export async function ingestLocalPath(
             await db.insert(ingest_files).values({
               id: fileId,
               ingest_job_id: activeJobId,
-              original_filename: `${folderKey}.zip`,
+              original_filename: sourceName,
               size_bytes: sizeBytes,
               blob_sha256: blobSha256,
               status: 'pending',
               match_sid: matchSid,
+              source_group_key: sourceGroupKey,
             });
             await boss.send(
               JOB_KINDS.INGEST_FILE,
@@ -281,6 +382,30 @@ export async function ingestLocalPath(
     // permitted, then trigger one check in case every enqueued file already
     // drained before we got here (no worker would otherwise re-trigger it).
     if (jobId !== null) {
+      // Persist the scope-resolution skip list BEFORE opening the finalize gate.
+      //
+      // This is the whole fix for the chunked-upload path. That route returns
+      // 202 long before this code runs, so its HTTP response cannot carry the
+      // list; and `finalizeIngestJob` builds `summary` purely by counting
+      // `ingest_files` rows, which a skipped scope does not have. Without this
+      // write the reasons — `no_seal`, `scope_excluded`, `ambiguous_scope`,
+      // `submission_type_mismatch` — were computed and then dropped, so a
+      // submission rejected by the batch homogeneity check simply vanished.
+      //
+      // Ordering is load-bearing twice over. It must come AFTER the loop,
+      // because only then is the list complete (a partial list published as
+      // complete is the same lie in a different costume — an aborted run leaves
+      // the column `null`/unknown instead). And it must come BEFORE
+      // `markStagingComplete`, because that is the gate `maybeEnqueueFinalize`
+      // waits on: once it opens, a worker may settle the job at any instant,
+      // and a client that polls a terminal job must never still see `null`.
+      //
+      // Both upload routes reach this line — the single-shot route inlines the
+      // same list in its own response, the chunked route has only this — which
+      // is what makes `GET /ingest/jobs/:jobId` report identically for either.
+      // Writing `[]` here is a real statement ("resolution ran, nothing was
+      // skipped"), not a no-op to be optimized away.
+      await recordIngestJobSkipped(db, jobId, toSkippedWire(skipped));
       await markStagingComplete(db, jobId);
       await maybeEnqueueFinalize(boss, db, jobId);
     }

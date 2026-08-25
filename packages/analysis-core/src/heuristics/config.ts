@@ -28,7 +28,8 @@
  *     - always high, confidence 1.0 (cryptographic check — no ambiguity).
  *
  *   paste_is_solution (Phase 16):
- *     - high: shared lines / paste lines >= lineOverlap threshold (default 0.8)
+ *     - high: shared lines >= minSharedLines (default 10) AND
+ *             shared lines / final file lines >= finalFileCoverage (default 0.8)
  *     - confidence: 0.85.
  *
  *   mass_external_replacement (Phase 16):
@@ -126,10 +127,35 @@ export type HeuristicConfig = {
   /** Phase 16: paste_is_solution heuristic thresholds. */
   pasteIsSolution: {
     /**
-     * Minimum shared-line ratio (sharedLines / pasteLines) to flag.
+     * Minimum coverage ratio (sharedLines / finalFileLines) to flag — how much
+     * of the SUBMITTED FILE the insertion accounts for.
+     *
+     * Deliberately not sharedLines/pasteLines ("how much of the paste
+     * survived"), which is trivially 1.0 for any small paste nobody deleted:
+     * a 3-line import block pasted onto a 60-line hand-typed file scored 1.0
+     * under the old ratio and raised `high`. The claim this flag makes is
+     * "the submitted file is pasted code", and the evidence for that claim is
+     * coverage of the final file, not survival of the paste.
+     *
+     * Coverage is per candidate and deliberately does not sum: four pastes
+     * each covering 25% clear neither gate. "How much of this file arrived
+     * without being typed" is low_typing_high_output's question.
+     *
      * Default: 0.8 (80%).
      */
-    lineOverlap: number;
+    finalFileCoverage: number;
+    /**
+     * Minimum absolute shared-line count before the flag can raise at all.
+     *
+     * Deliberately equal to `largePaste.minLines` (10): large_paste declines
+     * to raise even `medium` below 10 lines, and paste_is_solution raises
+     * `high` — a strictly stronger claim — so it must not be reachable below
+     * the same floor. Without it, coverage alone still fires on a 4-line file
+     * whose 4 lines were pasted.
+     *
+     * Default: 10 lines.
+     */
+    minSharedLines: number;
   };
   /** Phase 16: mass_external_replacement heuristic thresholds. */
   massExternalReplacement: {
@@ -139,6 +165,32 @@ export type HeuristicConfig = {
      * Default: 0.2 (20%).
      */
     sharedThreshold: number;
+  };
+  /** Phase 16: no_intermediate_errors heuristic thresholds. */
+  noIntermediateErrors: {
+    /**
+     * Minimum number of terminal commands that actually REPORTED an exit code,
+     * across the WHOLE submission, before "none of them failed" is evidence of
+     * anything at all.
+     *
+     * Without a floor the flag fires on one `ls` and one keystroke. It also
+     * used to count commands with NO recorded exit code as successes, so a
+     * session where nothing reported an exit code raised the flag on zero
+     * evidence — absence of capture read as evidence of success. Only reported
+     * exit codes count toward this floor.
+     *
+     * Why a floor makes the flag discriminating at all: "the student never saw
+     * an error" is consistent with "they pasted working code" AND with "they
+     * are a strong programmer", and on one or two runs those are
+     * indistinguishable — a clean short session is an ordinary morning. What
+     * is unusual is a LONG run of commands with not one non-zero exit: real
+     * terminal use produces failures from typos alone. Below the floor the
+     * flag is not weak evidence, it is no evidence, and emitting it costs a
+     * false accusation.
+     *
+     * Default: 5.
+     */
+    minCommandsWithExitCode: number;
   };
   /** Phase 16: time_to_first_save_anomaly heuristic thresholds. */
   timeToFirstSaveAnomaly: {
@@ -273,10 +325,15 @@ export const DEFAULT_HEURISTIC_CONFIG: HeuristicConfig = {
     minCharsForConfidence: 500,
   },
   pasteIsSolution: {
-    lineOverlap: 0.8,
+    finalFileCoverage: 0.8,
+    // Mirrors largePaste.minLines. See the field doc above.
+    minSharedLines: 10,
   },
   massExternalReplacement: {
     sharedThreshold: 0.2,
+  },
+  noIntermediateErrors: {
+    minCommandsWithExitCode: 5,
   },
   timeToFirstSaveAnomaly: {
     anomalySeconds: 30,
@@ -336,6 +393,10 @@ export function mergeConfig(override?: Partial<HeuristicConfig>): HeuristicConfi
     massExternalReplacement: {
       ...DEFAULT_HEURISTIC_CONFIG.massExternalReplacement,
       ...override.massExternalReplacement,
+    },
+    noIntermediateErrors: {
+      ...DEFAULT_HEURISTIC_CONFIG.noIntermediateErrors,
+      ...override.noIntermediateErrors,
     },
     timeToFirstSaveAnomaly: {
       ...DEFAULT_HEURISTIC_CONFIG.timeToFirstSaveAnomaly,

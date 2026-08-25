@@ -28,9 +28,13 @@ import { authorize } from '../../../auth/authorize.js';
 import { findMembership } from '../../../auth/membership-cache.js';
 import { resolveSemesterFromSubmission } from '../../../services/submissions/resolve.js';
 import { getSubmissionSummary } from '../../../services/submissions/summary.js';
+import { rootPublicKeyHex } from '../../../config/root-key.js';
 import { getSubmissionFlags } from '../../../services/submissions/flags.js';
 import { getSubmissionStats } from '../../../services/submissions/stats.js';
-import { getSubmissionValidation } from '../../../services/submissions/validation.js';
+import {
+  getSubmissionValidation,
+  getStoredChainIntact,
+} from '../../../services/submissions/validation.js';
 import { getSubmissionFiles } from '../../../services/submissions/files.js';
 import { getBlob } from '../../../services/storage/blobs.js';
 import { bundleKey } from '../../../services/storage/keys.js';
@@ -80,7 +84,13 @@ export function createSubmissionsRouter(): Hono {
 
     const protectedMode = principal.user.protected;
     const summaryStorage = getStorageClient();
-    const summary = await getSubmissionSummary(db, summaryStorage, submissionId, protectedMode);
+    const summary = await getSubmissionSummary(
+      db,
+      summaryStorage,
+      submissionId,
+      protectedMode,
+      rootPublicKeyHex(),
+    );
     if (summary === null) {
       return c.json(Errors.notFound().toBody(), 404);
     }
@@ -292,7 +302,10 @@ export function createSubmissionsRouter(): Hono {
     if (blob === null) {
       return c.json({ available: false, files: [] });
     }
-    return c.json(await extractSubmittedFiles(blob));
+    // Gate the per-file verdicts on the STORED chain_integrity verdict, so this
+    // tab and the Validation tab cannot disagree about it on one page load.
+    const gate = await getStoredChainIntact(db, submissionId);
+    return c.json(await extractSubmittedFiles(blob, gate));
   });
 
   // -------------------------------------------------------------------------
@@ -338,7 +351,8 @@ export function createSubmissionsRouter(): Hono {
         return c.json(Errors.notFound().toBody(), 404);
       }
 
-      const content = await extractSubmittedFileContent(blob, filePath);
+      const gate = await getStoredChainIntact(db, submissionId);
+      const content = await extractSubmittedFileContent(blob, filePath, gate);
       if (content === null) {
         return c.json(Errors.notFound().toBody(), 404);
       }

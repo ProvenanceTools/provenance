@@ -9,10 +9,10 @@ import type { IndexedEvent } from '@provenance/analysis-core/index/event-index.j
 import type { EventKind } from '@provenance/log-core';
 
 let _g = 0;
-function ev(kind: EventKind, payload: unknown, file?: string): IndexedEvent {
+function ev(kind: EventKind, payload: unknown, file?: string, sessionId = 's1'): IndexedEvent {
   const globalIdx = _g++;
   return {
-    sessionId: 's1',
+    sessionId,
     seq: globalIdx,
     globalIdx,
     wall: '2026-01-01T00:00:00.000Z',
@@ -34,6 +34,21 @@ const docChange = (file: string) => ev('doc.change', { deltas: [] }, file);
 const paste = (file: string) => ev('paste', { length: 10 }, file);
 const docOpen = (file: string) => ev('doc.open', { sha256: 'x' }, file);
 const docSave = (file: string) => ev('doc.save', { sha256: 'x' }, file);
+
+// sessionId-carrying variants, for the `sessionIds` filter tests only —
+// every event above stays on the default 's1' so the existing tests are
+// unaffected.
+const focusLostFor = (sessionId: string, reason?: string) =>
+  ev(
+    'focus.change',
+    reason !== undefined ? { gained: false, reason } : { gained: false },
+    undefined,
+    sessionId,
+  );
+const focusGainedFor = (sessionId: string) =>
+  ev('focus.change', { gained: true }, undefined, sessionId);
+const docChangeFor = (sessionId: string, file: string) =>
+  ev('doc.change', { deltas: [] }, file, sessionId);
 
 describe('currentFocusAwaySpan', () => {
   it('returns null before the first event (playhead -1)', () => {
@@ -83,6 +98,63 @@ describe('currentFocusAwaySpan', () => {
     reset();
     const e = [focusLost('window'), docChange('a.py'), paste('a.py')];
     expect(currentFocusAwaySpan(e, 2)).toEqual({ reason: 'window' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `sessionIds` filter — split-lanes defect: this scan must NOT attribute one
+// contributor's `focus.change` to a lane belonging to a different
+// contributor. Mirrors `currentEditedFile`'s existing `sessionIds` shape.
+// ---------------------------------------------------------------------------
+
+describe('currentFocusAwaySpan — sessionIds filter', () => {
+  it('omitted, behaves exactly as before (whole-stream scan, unaffected by session)', () => {
+    reset();
+    const e = [
+      docChangeFor('sA', 'a.py'),
+      focusLostFor('sB', 'window'),
+      docChangeFor('sA', 'a.py'),
+    ];
+    expect(currentFocusAwaySpan(e, 2)).toEqual({ reason: 'window' });
+  });
+
+  it("ignores a DIFFERENT session's focus-lost — the false-attribution case", () => {
+    reset();
+    // sB tabs away; sA is still actively editing at the same playhead.
+    const e = [
+      docChangeFor('sA', 'a.py'),
+      focusLostFor('sB', 'window'),
+      docChangeFor('sA', 'a.py'),
+    ];
+    expect(currentFocusAwaySpan(e, 2, new Set(['sA']))).toBeNull();
+    // The evidence is still there for the session it actually belongs to.
+    expect(currentFocusAwaySpan(e, 2, new Set(['sB']))).toEqual({ reason: 'window' });
+  });
+
+  it("reports away from the filtered session's OWN focus-lost, ignoring a later event from elsewhere", () => {
+    reset();
+    const e = [focusLostFor('sA', 'tab'), docChangeFor('sB', 'b.py')];
+    expect(currentFocusAwaySpan(e, 1, new Set(['sA']))).toEqual({ reason: 'tab' });
+  });
+
+  it("a DIFFERENT session's focus-gained does not clear the filtered session's away state", () => {
+    reset();
+    // sA tabs away and never itself regains; sB's own (unrelated) regain must
+    // not be read as sA's.
+    const e = [focusLostFor('sA', 'tab'), focusGainedFor('sB')];
+    expect(currentFocusAwaySpan(e, 1, new Set(['sA']))).toEqual({ reason: 'tab' });
+  });
+
+  it('clears once the SAME session regains focus', () => {
+    reset();
+    const e = [focusLostFor('sA', 'tab'), focusGainedFor('sA')];
+    expect(currentFocusAwaySpan(e, 1, new Set(['sA']))).toBeNull();
+  });
+
+  it('a session set with multiple ids still excludes sessions outside it', () => {
+    reset();
+    const e = [focusLostFor('sC', 'window')];
+    expect(currentFocusAwaySpan(e, 0, new Set(['sA', 'sB']))).toBeNull();
   });
 });
 

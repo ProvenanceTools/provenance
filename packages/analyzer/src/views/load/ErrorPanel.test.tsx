@@ -145,4 +145,30 @@ describe('ErrorPanel', () => {
     // The <details> is closed by default; the raw-detail pre should still be in DOM.
     expect(screen.getByTestId('error-raw-detail').textContent).toContain('invalid_manifest');
   });
+
+  // -------------------------------------------------------------------------
+  // The two orphan variants name a FILE, not a session.
+  //
+  // `error.sessionId` on both is the uuid in the `.slog` FILENAME, minted by the
+  // recorder's writer. It is NOT a session id: no `session.start` in the archive
+  // carries that value. These used to render "Session <id> has a .slog.meta
+  // file...", so a staff member reading a FAILURE panel — exactly when they go
+  // looking — searched the bundle for a session that does not exist under that
+  // id and found nothing.
+  // -------------------------------------------------------------------------
+  it.each([
+    { kind: 'orphaned_meta' as const, id: 'abc-123' },
+    { kind: 'orphaned_slog' as const, id: 'def-456' },
+  ])('renders $kind as a filename, never as "Session <id>"', ({ kind, id }) => {
+    render(<ErrorPanel error={{ kind, sessionId: id }} />);
+    const text = screen.getByTestId('error-panel').textContent ?? '';
+
+    // The mislabel, in the exact shape it used to take.
+    expect(text).not.toContain(`Session ${id}`);
+    // The id is named as what it actually identifies: a file on disk.
+    expect(text).toContain(`session-${id}.slog`);
+    // And the reader is told which space it is, since they cannot be expected
+    // to know there are two.
+    expect(text).toMatch(/names the log FILE/);
+  });
 });

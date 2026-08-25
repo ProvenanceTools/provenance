@@ -344,7 +344,7 @@ export function startDocWiring(deps: DocWiringDeps): DocWiringHandle {
           const oldHash = ec.hash;
           const oldLength = ec.content.length;
           if (newHash !== oldHash) {
-            const explanation = explanationTagger?.consume();
+            const explanation = explanationTagger?.consume(relativePath);
             emitFsExternalChange({
               path: relativePath,
               operation: 'modify',
@@ -497,7 +497,7 @@ export function startDocWiring(deps: DocWiringDeps): DocWiringHandle {
             if (result.kind === 'external_change') {
               // Emit fs.external_change FIRST, then reset, then emit doc.save.
               // Order matters: doc.save's hash represents the post-reset state.
-              const explanation = explanationTagger?.consume();
+              const explanation = explanationTagger?.consume(relativePath);
               emitFsExternalChange({
                 path: relativePath,
                 operation: 'modify',

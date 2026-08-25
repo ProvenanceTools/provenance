@@ -22,12 +22,17 @@ import type {
 import { DEFAULT_CROSS_HEURISTIC_CONFIG } from './types.js';
 import { pasteSharedAcrossStudentsHeuristic } from './paste-shared-across-students.js';
 import { editingPatternCloneHeuristic } from './editing-pattern-clone.js';
+import { partitionCrossScopes } from '../../coverage/cross-scope.js';
+import type { SameScopeExclusion } from '../../coverage/cross-scope.js';
 
 // ---------------------------------------------------------------------------
 // Registry
+//
+// Exported so known-flag-ids.ts can derive the canonical cross-submission
+// heuristic id list from it, rather than a hand-maintained duplicate.
 // ---------------------------------------------------------------------------
 
-const CROSS_HEURISTIC_REGISTRY: CrossHeuristic[] = [
+export const CROSS_HEURISTIC_REGISTRY: CrossHeuristic[] = [
   pasteSharedAcrossStudentsHeuristic,
   editingPatternCloneHeuristic,
 ];
@@ -52,26 +57,59 @@ function severityRank(flag: CrossFlag): number {
 // ---------------------------------------------------------------------------
 
 /**
- * Run all cross-bundle heuristics and return a sorted CrossFlag list.
+ * Both halves of one cross-submission pass.
+ *
+ * The flags are what WAS found. The exclusions are what was NOT compared, and
+ * why — the visible register S20 requires, because a suppressed comparison that
+ * nobody is told about is indistinguishable from a comparison that came back
+ * clean. Both come out of a single `partitionCrossScopes` call, so the findings
+ * and the explanation for their absence can never disagree about which pairs
+ * were withheld.
+ */
+export type CrossAnalysis = {
+  flags: CrossFlag[];
+  exclusions: readonly SameScopeExclusion[];
+};
+
+/**
+ * Run all cross-bundle heuristics and return BOTH halves of the pass.
+ *
+ * Every consumer that shows a grader "no findings" needs the exclusions too, so
+ * this — not {@link runCrossHeuristics} — is what the browser and the server
+ * both call. Recomputing the partition on the side to recover the register is
+ * how the two used to drift apart: the browser did it and the server simply did
+ * not, so the server-backed cross-flags view showed the suppression with no
+ * explanation for it.
  *
  * @param features       - Per-submission cross features (must be >= 2 to produce any flags).
  * @param configOverride - Optional partial config override.
  */
-export function runCrossHeuristics(
+export function runCrossAnalysis(
   features: CrossSubmissionFeatures[],
   configOverride?: Partial<CrossHeuristicConfig>,
-): CrossFlag[] {
-  if (features.length < 2) return [];
+): CrossAnalysis {
+  if (features.length < 2) return { flags: [], exclusions: [] };
 
   const config: CrossHeuristicConfig = {
     ...DEFAULT_CROSS_HEURISTIC_CONFIG,
     ...configOverride,
   };
 
+  // The repository-lineage partition, computed ONCE and handed to every
+  // heuristic (spec S20). A git-native group submission shares one committed,
+  // add-only `.provenance/`, so both partners' bundles carry both partners'
+  // signed logs; without this, every paste either partner made fires
+  // `paste_shared_across_students` at high severity against the two people the
+  // course assigned to work together. `coverage/cross-scope.ts` owns the rule —
+  // no heuristic re-derives it, and the coverage register reads the other half
+  // of the same partition so the two can never disagree about what was
+  // suppressed.
+  const scopes = partitionCrossScopes(features);
+
   const allFlags: CrossFlag[] = [];
 
   for (const heuristic of CROSS_HEURISTIC_REGISTRY) {
-    const flags = heuristic.run(features, config);
+    const flags = heuristic.run(features, config, scopes);
     // Use a for-of append rather than `allFlags.push(...flags)` — spread-into-push
     // passes every element as a separate argument, which overflows the call stack
     // when a single heuristic returns tens of thousands of candidate flags
@@ -97,5 +135,22 @@ export function runCrossHeuristics(
     return 0;
   });
 
-  return allFlags;
+  return { flags: allFlags, exclusions: scopes.exclusions };
+}
+
+/**
+ * Run all cross-bundle heuristics and return a sorted CrossFlag list.
+ *
+ * The flags-only view of {@link runCrossAnalysis} — a projection of the same
+ * single pass, not a second code path, so the two can never disagree. Kept
+ * because most callers (and most tests) only ever want the findings.
+ *
+ * @param features       - Per-submission cross features (must be >= 2 to produce any flags).
+ * @param configOverride - Optional partial config override.
+ */
+export function runCrossHeuristics(
+  features: CrossSubmissionFeatures[],
+  configOverride?: Partial<CrossHeuristicConfig>,
+): CrossFlag[] {
+  return runCrossAnalysis(features, configOverride).flags;
 }

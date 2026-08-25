@@ -28,6 +28,7 @@
  */
 
 import { runValidation } from '@provenance/analysis-core/validation/run-validation.js';
+import type { ValidationOptions } from '@provenance/analysis-core/validation/run-validation.js';
 import type { Bundle } from '@provenance/analysis-core/loader/types.js';
 import type { ValidationReport } from '@provenance/analysis-core/validation/check-types.js';
 import { validation_results, submissions } from '../../db/schema.js';
@@ -48,8 +49,14 @@ export async function runAndStoreValidation(
   db: DrizzleDb,
   submissionId: string,
   bundle: Bundle,
+  /**
+   * Carries the Manifest 2.0 ROOT public key into check 2. Defaults to empty so
+   * unit tests that drive this directly need no config; production call sites
+   * pass `configuredValidationOptions()`.
+   */
+  options: ValidationOptions = {},
 ): Promise<ValidationReport> {
-  const report = await runValidation(bundle);
+  const report = await runValidation(bundle, options);
 
   // Defensive assertion: v2 must return exactly 8 checks in spec order.
   // If this fires, runValidation has drifted from the PRD contract — stop loudly.

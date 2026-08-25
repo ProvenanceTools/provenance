@@ -33,6 +33,11 @@ export type ExternalChangeContentFields = {
  * not string.length — multi-byte codepoints count as more than one byte).
  * Either `new_content` is set (small file) or `new_content_head` +
  * `new_content_tail` are set (large file), never both.
+ *
+ * The size cap is the ONLY thing that suppresses content. There was briefly a
+ * `policy.capture.inline_content` knob that stripped the snippet at any size; it
+ * was removed for the reason set out in `log-core/src/policy.ts` (program spec
+ * §4) — a course must not be able to make the system more accusatory.
  */
 export function buildExternalChangeContent(text: string): ExternalChangeContentFields {
   const byteLength = Buffer.byteLength(text, 'utf8');

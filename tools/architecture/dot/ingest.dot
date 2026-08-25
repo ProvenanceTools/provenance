@@ -23,8 +23,12 @@ digraph ingest {
     meta   [label="read submission_metadata.yml"]
     hasmeta[label="is this actually a\nGradescope export?" shape=diamond fillcolor="#12161f"
             fontsize=9 height=0.85 width=1.8]
-    fanout [label="fan out — one job per submission\npg-boss, bounded concurrency, cancellable"
+    scope  [label="declared submission type — one per BATCH\nself_identifying · bundle_zip · repo_whole · repo_scoped.\nThe assignment's persisted default, or a per-request\noverride on ANY of the three upload routes.\nAn archive is REPO-SHAPED iff a non-junk entry sits under\na .provenance/ directory — decided from entry NAMES alone,\nwhich a flat sealed bundle can never satisfy, so its staged\nbytes (and therefore its dedup key) are unchanged\nby construction."
+            fillcolor="#0e2422" color="#17bfae" fontsize=9]
+    fanout [label="fan out — one job per scope × submitter\npg-boss, bounded concurrency, cancellable"
             shape=cds margin="0.26,0.10"]
+    skiplist[label="ingest_jobs.skipped\nno_seal · scope_excluded · ambiguous_scope ·\nsubmission_type_mismatch. A skipped scope has NO\ningest_files row — that is what being skipped means —\nso the job summary, which counts rows, cannot report it.\nNullable with NO default: null = resolution unfinished,\n[] = finished and skipped nothing. Collapsing those two\nis how a heterogeneous batch read as clean."
+            fillcolor="#241a0c" color="#F97316" fontsize=9]
     pbun   [label="parse bundle\nmanifest + every .slog"]
     pfail  [label="invalid_manifest / unparseable\nrecorded on the job, not fatal\nto the rest of the export"
             fillcolor="#2a1216" color="#ff6b6b" fontsize=9]
@@ -34,8 +38,8 @@ digraph ingest {
     label="  DEDUP — before any heavy work  " fontsize=9.5 fontcolor="#4b90f7"
     color="#16294a" penwidth=1.5 style=rounded bgcolor="#0a0f18" labeljust="l"
     node [fillcolor="#0d1c33" color="#4b90f7" fontsize=9.5]
-    dd  [label="(semester_id, blob_sha256)\nalready present?" shape=diamond fillcolor="#12161f"
-         fontsize=9 height=0.9 width=2.0]
+    dd  [label="already present?\nThe DECLARED GROUP is asked FIRST —\n(semester_id, source_group_key), 0033 —\nand only then (semester_id, blob_sha256)." shape=diamond fillcolor="#12161f"
+         fontsize=9 height=1.5 width=3.4]
     ddskip [label="skip\nre-sending an unchanged bundle is cheap\n— this is what lets provgate treat its\nwatermark as an optimisation"
             fillcolor="#15171d" color="#5d677d" fontcolor="#98a2b6" style="filled,rounded,dashed" fontsize=9]
   }
@@ -57,7 +61,7 @@ digraph ingest {
     bgcolor="#0a130d" labeljust="l"
     node [fillcolor="#0d2416" color="#3fbf62" fontsize=9.5]
     stats [label="per-file statistics"]
-    val   [label="8 validation checks\nincluding check 8, which needs\nthe submitted bytes"]
+    val   [label="8 validation checks\ncheck 2 walks the trust chain against the\nconfigured ROOT public key — unset ⇒ skipped\ncheck 8 needs the submitted bytes"]
     heur  [label="18 heuristics + integrity flags\nlifted from failed checks"]
   }
 
@@ -71,6 +75,10 @@ digraph ingest {
     strip [label="STRIP student source\nthe stored blob becomes provenance-only"
            fillcolor="#241a0c" color="#F97316" penwidth=2.0]
     ins   [label="insert submission, per_file_stats,\nvalidation_results, flags"]
+    contrib[label="finalizeContributors — AFTER heuristics, deliberately\nestablishBundleContributors MUTATES the bundle and several\nheuristics read that stamp, so stamping earlier would change\nwhich flags an ingest produces. Roster side and bundle side\nreconcile onto ONE row per person; unattributed and\nunverifiable sessions get NO row."
+            fillcolor="#1e1830" color="#9d7bf5" fontsize=9]
+    lock  [label="pg_advisory_xact_lock — TWO of them\n(semester_id, blob_sha256), then, for a grouped file only,\n(semester_id, 'group:' + source_group_key). Always in that\norder, so two writers can never hold them crosswise and\ndeadlock; a file with no group key takes exactly one.\nTwo co-submitters carry byte-identical bundles, so both\ncleared dedup before either committed and both created a\nsubmission. Serial execution looked perfect; only\nconcurrency reinstated the fan-out."
+            fillcolor="#2a1216" color="#ff6b6b" fontsize=9]
     fail  [label="rollback\nblob orphan left for the retention\nsweep — non-fatal by design"
            fillcolor="#2a1216" color="#ff6b6b" fontsize=9]
   }
@@ -80,7 +88,7 @@ digraph ingest {
     penwidth=1.5 style=rounded bgcolor="#0a130d" labeljust="l"
     node [fillcolor="#0d2416" color="#3fbf62" fontsize=9.5]
     xf [label="cohort-wide correlation\nshared paste · editing-pattern clone"]
-    xp [label="cross_flags + participants"]
+    xp [label="cross_flags + participants\n+ exclusion register"]
   }
 
   done [label="cohort is ready\na retry of this whole pipeline produces\nbyte-identical flags and stats — tests assert it"
@@ -91,7 +99,10 @@ digraph ingest {
   e_gate -> meta
   meta -> hasmeta
   hasmeta -> pfail [label="no — clear error" color="#ff6b6b" style=dashed]
-  hasmeta -> fanout [label="yes" color="#4b90f7"]
+  hasmeta -> scope [label="yes" color="#4b90f7"]
+  scope -> fanout [label="a scope is SEALED by either shape —\nmanifest.json, or the per-session rolling\nmanifest a git submission's only seal" color="#17bfae"]
+  scope -> skiplist [label="a scope the declaration refuses.\nPer SUBMISSION, never per batch: staging is\nincremental with no transaction spanning it,\nso aborting would strand a half-ingested one"
+                     color="#F97316" style=dashed]
   fanout -> pbun
   pbun -> pfail [label="malformed" color="#ff6b6b" style=dashed]
   pbun -> dd    [label="parsed" color="#4b90f7"]
@@ -102,13 +113,15 @@ digraph ingest {
   match -> stats [label="yes" color="#4b90f7"]
   stats -> val
   val -> heur
-  heur -> upa [label="all computation done" color="#4b90f7"]
+  heur -> lock [label="all computation done" color="#4b90f7"]
+  lock -> upa [label="RE-CHECK each key inside its own lock —\na hit here is handled exactly as a\nphase-2 hit: attach, do not create" color="#ff6b6b"]
   upa -> ver
   ver -> mv
   mv -> fail [label="blob write fails" color="#ff6b6b" style=dashed]
   mv -> strip
   strip -> ins
-  ins -> xf [label="commit" color="#3fbf62"]
+  ins -> contrib
+  contrib -> xf [label="commit" color="#3fbf62"]
   xf -> xp
   xp -> done
 }

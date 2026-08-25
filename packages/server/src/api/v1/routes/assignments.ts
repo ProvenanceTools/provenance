@@ -6,7 +6,12 @@
  * Auth:  semester admin (action='write', target=semester).
  * Audit: 'assignment.update' on the assignment id.
  *
- * Body: { label?: string, sort_order?: number } — at least one required.
+ * Body: { label?, sort_order?, ingest_scope? } — at least one required.
+ *
+ * `ingest_scope` is the assignment's persisted DEFAULT declared submission type
+ * (see IngestScopeConfigSchema). provgate writes it once at Gradescope→
+ * Provenance mapping time; an individual ingest request can still override it.
+ * It is replaced wholesale, not merged.
  *
  * Returns: { assignment: AssignmentSummary } so the UI can patch in-place.
  *
@@ -32,6 +37,7 @@ import {
   CreateAssignmentResponseSchema,
 } from '@provenance/shared/api-schemas';
 import * as assignmentService from '../../../services/cohort/assignments.js';
+import { parseIngestScopeConfig } from '../../../services/ingest/gradescope/repo-scopes.js';
 
 export function createAssignmentsRouter(): Hono {
   const router = new Hono();
@@ -61,9 +67,14 @@ export function createAssignmentsRouter(): Hono {
       }
 
       const db = getDb();
-      const updateInput: { label?: string; sort_order?: number } = {};
+      const updateInput: assignmentService.UpdateAssignmentInput = {};
       if (parsed.data.label !== undefined) updateInput.label = parsed.data.label;
       if (parsed.data.sort_order !== undefined) updateInput.sort_order = parsed.data.sort_order;
+      if (parsed.data.ingest_scope !== undefined) {
+        // Re-narrow through the same function every storage read uses, so what
+        // is written is byte-for-byte what a later read will produce.
+        updateInput.ingest_scope = parseIngestScopeConfig(parsed.data.ingest_scope);
+      }
 
       const updated = await assignmentService.updateAssignment(
         db,
@@ -105,6 +116,9 @@ export function createAssignmentsRouter(): Hono {
         assignmentIdStr: parsed.data.assignment_id_str,
       };
       if (parsed.data.label !== undefined) createInput.label = parsed.data.label;
+      if (parsed.data.ingest_scope !== undefined) {
+        createInput.ingest_scope = parseIngestScopeConfig(parsed.data.ingest_scope);
+      }
       const created = await assignmentService.createAssignment(db, semesterId, createInput);
 
       // Feed the audit middleware the created entity's UUID.

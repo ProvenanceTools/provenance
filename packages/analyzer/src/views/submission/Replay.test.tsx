@@ -139,6 +139,23 @@ function makeProvider(): SubmissionDataProvider {
   const summary: SubmissionSummary = {
     id: 'test-sub-id',
     student: { sid: 'test', display_name: 'Test Student' },
+    contributors: [
+      {
+        contributor_key: 'roster:30000000-0000-0000-0000-0000000000aa',
+        kind: 'roster',
+        student: {
+          id: '30000000-0000-0000-0000-0000000000aa',
+          sid: 'test',
+          display_name: 'Test Student',
+        },
+        student_ref: null,
+        session_count: 0,
+        is_submitter: true,
+        score_total: 0,
+        score_max_severity: 'info',
+        flag_counts: { info: 0, low: 0, medium: 0, high: 0 },
+      },
+    ],
     assignment: { assignment_id_str: 'hw1', label: 'Homework 1' },
     version_index: 1,
     score_total: 0,
@@ -687,5 +704,202 @@ describe('Replay tab — session select', () => {
     const search = screen.getByTestId('location-probe').textContent ?? '';
     expect(search).toContain('event=');
     expect(search).not.toContain('session=');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Split lanes, through the SERVER-BACKED mount
+//
+// Both surfaces go through the same `ReplayInner`, so `views/replay/
+// ReplayView.concurrent.test.tsx` covers the lane behaviour itself. What this
+// file has to prove is that the tab actually DELIVERS the inputs lanes need —
+// the contributor stamp off the summary, via `useServerScope` — because that
+// is the wiring the `/local` tests cannot see, and the exact wiring whose
+// absence once made this tab linearize two partners' work.
+// ---------------------------------------------------------------------------
+
+/** A two-contributor stamp in the wire shape the summary carries. */
+function twoContributorStamp(): NonNullable<SubmissionSummary['contributor_stamp']> {
+  const aliceKey = 'attributed:2.1:institution:inst-1:alice';
+  const bobKey = 'attributed:2.1:institution:inst-1:bob';
+  return {
+    by_session: [
+      {
+        kind: 'attributed',
+        session_id: 'sess-1',
+        contributor_key: aliceKey,
+        student_ref: 'alice',
+        identity_version: '2.1',
+        scope: 'institution',
+        scope_id: 'inst-1',
+        student_pubkey: 'aa',
+        cert_window: { in_window: true },
+        credential_window: { in_window: true },
+      },
+      {
+        kind: 'attributed',
+        session_id: 'sess-2',
+        contributor_key: bobKey,
+        student_ref: 'bob',
+        identity_version: '2.1',
+        scope: 'institution',
+        scope_id: 'inst-1',
+        student_pubkey: 'bb',
+        cert_window: { in_window: true },
+        credential_window: { in_window: true },
+      },
+    ],
+    contributors: [
+      {
+        key: aliceKey,
+        kind: 'attributed',
+        student_ref: 'alice',
+        identity_version: '2.1',
+        scope: 'institution',
+        scope_id: 'inst-1',
+        session_ids: ['sess-1'],
+      },
+      {
+        key: bobKey,
+        kind: 'attributed',
+        student_ref: 'bob',
+        identity_version: '2.1',
+        scope: 'institution',
+        scope_id: 'inst-1',
+        session_ids: ['sess-2'],
+      },
+    ],
+    root_key_configured: true,
+    counts: { attributed: 2, unverifiable: 0, unattributed: 0 },
+  };
+}
+
+describe('Replay tab — split lanes', () => {
+  beforeEach(() => {
+    mockIndexResult.value = null;
+  });
+
+  /** sess-1 (alice) is in hw1.py; sess-2 (bob) is in part2.py. */
+  function renderTwoContributorTab(initialEntry: string) {
+    const wallBase = 1_700_000_000_000;
+    mockIndexResult.value = makeQueryResult(
+      buildIndexFromEventRows([
+        {
+          seq: 0,
+          session_id: 'sess-1',
+          t: 0,
+          wall: new Date(wallBase).toISOString(),
+          kind: 'session.start',
+          payload: {},
+        },
+        {
+          seq: 1,
+          session_id: 'sess-1',
+          t: 100,
+          wall: new Date(wallBase + 100).toISOString(),
+          kind: 'doc.open',
+          payload: { path: 'hw1.py', content: 'alice' },
+        },
+        {
+          seq: 2,
+          session_id: 'sess-2',
+          t: 0,
+          wall: new Date(wallBase + 1000).toISOString(),
+          kind: 'session.start',
+          payload: {},
+        },
+        {
+          seq: 3,
+          session_id: 'sess-2',
+          t: 100,
+          wall: new Date(wallBase + 1100).toISOString(),
+          kind: 'doc.open',
+          payload: { path: 'part2.py', content: 'bob' },
+        },
+      ]),
+    );
+
+    const provider = makeProvider();
+    const groupProvider: SubmissionDataProvider = {
+      ...provider,
+      useSummary: () =>
+        makeQueryResult({
+          ...(provider.useSummary().data as SubmissionSummary),
+          session_ids: ['sess-1', 'sess-2'],
+          contributor_stamp: twoContributorStamp(),
+        }),
+    };
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route
+              path="/s/:courseSlug/:semesterSlug/sub/:submissionId"
+              element={
+                <SubmissionDataContext.Provider value={groupProvider}>
+                  <Replay />
+                </SubmissionDataContext.Provider>
+              }
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it('renders lanes for a two-contributor submission on the deployed tab', async () => {
+    renderTwoContributorTab('/s/cs61a/fa26/sub/test-sub-id?event=3');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-lanes')).toBeInTheDocument();
+    });
+
+    // One lane per contributor, each in their own file — the grid is keyed by
+    // file (§4), and these two are in different ones.
+    const lanes = screen.getAllByTestId('replay-lane');
+    expect(lanes).toHaveLength(2);
+    expect(
+      lanes
+        .map((l) => l.getAttribute('data-contributor-keys') ?? '')
+        .join(',')
+        .includes('alice'),
+    ).toBe(true);
+    expect(
+      screen
+        .getAllByTestId('replay-lane-file')
+        .map((e) => e.textContent)
+        .sort(),
+    ).toEqual(['hw1.py', 'part2.py']);
+    // And the ribbons reached the transport through the same wiring.
+    expect(screen.getByTestId('contributor-ribbons')).toBeInTheDocument();
+  });
+
+  it('honours ?split=0 on the deployed tab too', async () => {
+    renderTwoContributorTab('/s/cs61a/fa26/sub/test-sub-id?event=3&split=0');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-view')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('replay-lanes')).toBeNull();
+    expect(screen.queryByTestId('contributor-ribbons')).toBeNull();
+    expect(screen.getByTestId('file-tabs')).toBeInTheDocument();
+  });
+
+  /**
+   * The control that matters most here: the SOLO summary this file has always
+   * used carries a single-contributor `contributors` list and no stamp at all,
+   * and must be untouched by any of the above.
+   */
+  it('leaves the ordinary single-contributor tab exactly as it was', async () => {
+    mockIndexResult.value = makeQueryResult(buildSyntheticIndex());
+    renderReplay(makeProvider());
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-view')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('replay-lanes')).toBeNull();
+    expect(screen.queryByTestId('split-lanes-toggle')).toBeNull();
+    expect(screen.queryByTestId('contributor-ribbons')).toBeNull();
   });
 });

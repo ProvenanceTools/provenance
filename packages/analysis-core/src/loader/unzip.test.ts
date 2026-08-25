@@ -30,19 +30,42 @@ describe('unzipBundle', () => {
     if (!result.ok) return;
 
     expect(typeof result.value.manifestJson).toBe('string');
-    expect(result.value.manifestJson.length).toBeGreaterThan(0);
+    expect(result.value.manifestJson!.length).toBeGreaterThan(0);
 
     expect(typeof result.value.manifestSigHex).toBe('string');
-    expect(result.value.manifestSigHex.length).toBeGreaterThan(0);
+    expect(result.value.manifestSigHex!.length).toBeGreaterThan(0);
 
     expect(result.value.sessions).toHaveLength(1);
     const s = result.value.sessions[0]!;
-    expect(typeof s.sessionId).toBe('string');
-    expect(s.sessionId.length).toBeGreaterThan(0);
+    expect(typeof s.logFileId).toBe('string');
+    expect(s.logFileId.length).toBeGreaterThan(0);
     expect(typeof s.slogText).toBe('string');
     expect(s.slogText.length).toBeGreaterThan(0);
     expect(typeof s.metaJson).toBe('string');
     expect(s.metaJson.length).toBeGreaterThan(0);
+  });
+
+  it('reports the .slog FILENAME uuid, not the logical session id', async () => {
+    // The two are different values in production, and the loader has already
+    // crossed them once — with a maximum-severity false accusation as the
+    // result. Pin which one the unzipper reports, on a bundle where they differ.
+    const built = await buildTestBundle({
+      sessions: [
+        {
+          sessionId: 'aaaaaaaa-0000-4000-8000-000000000000',
+          fileUuid: 'bbbbbbbb-0000-4000-8000-000000000000',
+        },
+      ],
+    });
+    const result = await unzipBundle(built.blob);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const s = result.value.sessions[0]!;
+    expect(s.logFileId).toBe('bbbbbbbb-0000-4000-8000-000000000000');
+    expect(s.logFileId).not.toBe('aaaaaaaa-0000-4000-8000-000000000000');
+    expect(built.sessionIds).toEqual(['aaaaaaaa-0000-4000-8000-000000000000']);
   });
 
   it('returns ok for a multi-session ZIP', async () => {
@@ -97,19 +120,76 @@ describe('unzipBundle', () => {
     expect(result.error.kind).toBe('no_sessions');
   });
 
-  it('returns orphaned_meta when a .slog.meta has no matching .slog', async () => {
+  // -------------------------------------------------------------------------
+  // The read-side orphan guard.
+  //
+  // PREMISE CHANGE, deliberate: the two tests below used to assert that an
+  // orphaned `.slog.meta` and an orphaned `.slog` each FAIL THE WHOLE BUNDLE
+  // (`expect(result.ok).toBe(false)`). That premise was wrong, and it was wrong
+  // in the direction that costs a student their whole submission.
+  //
+  // The classic path never produces these shapes — `sealBundle`'s orphan guard
+  // drops them before they are packed — so the fatality protected nothing there.
+  // The GIT path has no seal step: the student pushes, the grader clones, and
+  // whatever is in `.provenance/` is the submission. There a stranded
+  // `.slog.meta` is the ORDINARY output of crash recovery (`chain-recovery.ts`
+  // quarantines a damaged `.slog` to `.corrupt-<ISO>` and leaves the sidecar),
+  // and it made every session the student had recorded unreadable.
+  //
+  // So the assertion is inverted, not weakened: the bundle must LOAD, the
+  // healthy session must survive, and the leftover must be REPORTED. Silence
+  // would be a worse outcome than the old hard error, and is asserted against.
+  // -------------------------------------------------------------------------
+
+  it('drops an orphaned .slog.meta and reports it, keeping the healthy session', async () => {
     // Two sessions: session[0] is present fully; session[1]'s .slog is omitted
-    // but its .meta remains → orphaned_meta for session[1].
+    // but its .meta remains — the shape crash recovery leaves behind.
     const { blob } = await buildTestBundle({ sessions: [{}, {}], tamper: { omitOneSlog: true } });
     const result = await unzipBundle(blob);
 
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error.kind).toBe('orphaned_meta');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The healthy session is still analysable — the whole point.
+    expect(result.value.sessions).toHaveLength(1);
+
+    const dropped = result.value.droppedArtifacts;
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]!.kind).toBe('orphaned_meta');
+    expect(dropped[0]!.filename).toMatch(/^session-.+\.slog\.meta$/);
+    // Reported, not silent — and reported as an incomplete recording rather
+    // than as tampering.
+    expect(dropped[0]!.detail).toContain('INCOMPLETE RECORDING');
+    expect(dropped[0]!.detail).not.toMatch(/tamper/i);
+    // The sidecar names the recording that went missing, which is what lets its
+    // rolling seal be dropped with it rather than becoming a check-1 failure.
+    expect(dropped[0]!.logicalSessionId).toBeDefined();
   });
 
-  it('returns orphaned_slog when a .slog has no matching .slog.meta', async () => {
-    // omitOneSlogMeta: the last session's .meta is omitted but its .slog remains
+  it('drops an orphaned .slog and reports it, keeping the healthy session', async () => {
+    // omitOneSlogMeta: the LAST session's .meta is omitted but its .slog remains.
+    // Two sessions, so that what is measured is the degrade rather than the
+    // nothing-left-to-analyse case covered by the next test.
+    const { blob } = await buildTestBundle({
+      sessions: [{}, {}],
+      tamper: { omitOneSlogMeta: true },
+    });
+    const result = await unzipBundle(blob);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.sessions).toHaveLength(1);
+
+    const dropped = result.value.droppedArtifacts;
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]!.kind).toBe('orphaned_slog');
+    expect(dropped[0]!.filename).toMatch(/^session-.+\.slog$/);
+    expect(dropped[0]!.detail).toContain('INCOMPLETE RECORDING');
+  });
+
+  it('still returns no_sessions when dropping leaves nothing analysable', async () => {
+    // The one case where degrading has nowhere to degrade TO. A single session
+    // whose sidecar is missing is dropped like any other, and then there is no
+    // reading left to give — so the load fails, exactly as it always has.
     const { blob } = await buildTestBundle({
       sessions: [{}],
       tamper: { omitOneSlogMeta: true },
@@ -118,7 +198,7 @@ describe('unzipBundle', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.kind).toBe('orphaned_slog');
+    expect(result.error.kind).toBe('no_sessions');
   });
 
   it('returns unexpected_file for a stray file in the ZIP', async () => {
@@ -132,6 +212,27 @@ describe('unzipBundle', () => {
     expect(result.error.kind).toBe('unexpected_file');
     if (result.error.kind !== 'unexpected_file') return;
     expect(result.error.filename).toBe('README.txt');
+  });
+
+  it('TOLERATES .gitattributes — the recorder writes it, and it is not evidence', async () => {
+    // All three recorders write `.provenance/.gitattributes` so git cannot
+    // rewrite the signed bytes. Both producers filter it out (seal.ts skips it,
+    // the git path's selectBundleEntries drops it), but the loader is where all
+    // three consumers converge — including a student hand-zipping `.provenance/`
+    // for the analyzer's /local route, which nothing filters. Failing a whole
+    // submission on a file the recorder itself wrote is the defect class the
+    // read-side orphan guard exists to undo.
+    const { blob } = await buildTestBundle({
+      tamper: { addStrayFile: { name: '.gitattributes', content: '* -text\n' } },
+    });
+    const result = await unzipBundle(blob);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Ignored, not reported as a dropped artifact: a DroppedArtifact means an
+    // INCOMPLETE RECORDING, and this is neither analysable nor missing.
+    expect(result.value.droppedArtifacts).toHaveLength(0);
+    expect(result.value.sessions.length).toBeGreaterThan(0);
   });
 
   // ---------------------------------------------------------------------------

@@ -204,7 +204,20 @@ for sev in ["high", "medium", "low", "info"]:
 flagged = sorted(items, key=lambda s: s["score_total"], reverse=True)[:10]
 print(f"\nTop 10 by risk score:")
 for rank, sub in enumerate(flagged, 1):
-    student = sub["student"]["sid"]
+    # `student` is NULLABLE — a group submission has no single student (migration
+    # 0029 / D9). `contributors` is always populated and is correct for both
+    # shapes, so read it and keep `student` only as the solo fast path.
+    # A contributor's own `student` is null too when they are not on the roster
+    # (D13: a real contributor we cannot name), so fall back to `student_ref`.
+    solo = sub.get("student")
+    if solo is not None:
+        student = solo["sid"]
+    else:
+        names = [
+            c["student"]["sid"] if c["student"] else (c["student_ref"] or "unidentified")
+            for c in sub["contributors"]
+        ]
+        student = " + ".join(names) if names else "unattributed"
     assignment = sub["assignment"]["label"]
     score = sub["score_total"]
     severity = sub["score_max_severity"]
@@ -258,7 +271,7 @@ curl -s \
 curl -s -X POST \
   -H "Authorization: Bearer $PROVENANCE_TOKEN" \
   -H "Content-Type: application/json" \
-  "$PROVENANCE_BASE_URL/semesters/$SEMESTER_ID/heuristic-config/recompute" \
+  "$PROVENANCE_BASE_URL/semesters/$SEMESTER_ID/recompute" \
   -d '{}' \
   | python3 -m json.tool
 ```
@@ -267,8 +280,12 @@ curl -s -X POST \
 
 Upload the ZIP from Gradescope's "Download Submissions" directly. The roster is
 populated from the export's `submission_metadata.yml` (no separate roster upload
-needed) and every student bundle is processed in one job. Group submissions
-produce one submission per co-submitter.
+needed) and every student bundle is processed in one job. A group submission
+produces **one** submission with **N contributors** — not one submission per
+co-submitter. (The old fan-out, which ingested the same bundle once per
+co-submitter into N independent rows, was removed in migration 0029; it could not
+carry which partner a finding belonged to. Rows created by the old fan-out are
+deliberately left as they are and are not merged retroactively.)
 
 ```bash
 curl -s -X POST \
@@ -291,13 +308,33 @@ And when the export already lives on the server's disk, skip uploading entirely 
 [`packages/server/README.md` → Ingesting submissions](../packages/server/README.md#ingesting-submissions).
 
 **Resumable `/complete` is asynchronous.** `POST …/uploads/:uploadId/complete` returns
-`202` immediately with a `job_id` and placeholder zeros for `roster`,
-`bundles_processed`, `submissions_queued`, and `skipped`; it does **not** block while the
-export is assembled and staged. Assembly and staging run in a background
-`ingest_stage_upload` job. Poll `GET /semesters/:semesterId/ingest/jobs/:jobId` until
-`status` is terminal (`succeeded` / `partial` / `failed`) to get the real outcome — the
-same job-status endpoint used by every other ingest path. An invalid export surfaces as a
-`failed` job rather than a synchronous `400`.
+`202` immediately with a `job_id`, placeholder zeros for `roster`, `bundles_processed`
+and `submissions_queued`, and `"skipped": null`; it does **not** block while the export is
+assembled and staged. Assembly and staging run in a background `ingest_stage_upload` job.
+Poll `GET /semesters/:semesterId/ingest/jobs/:jobId` until `status` is terminal
+(`succeeded` / `partial` / `failed`) to get the real outcome — the same job-status endpoint
+used by every other ingest path. An invalid export surfaces as a `failed` job rather than a
+synchronous `400`.
+
+**`skipped` is `null`, not `[]`, when it is not yet known.** The counts above are numbers
+and have no null to spend, so they read as zeros you are meant to ignore. `skipped` does
+have one, and uses it — `null` means _scope resolution has not finished_, never "nothing
+was skipped". Read the real list off the job:
+
+```bash
+curl -s -H "Authorization: Bearer $PROVENANCE_TOKEN" \
+  "$PROVENANCE_BASE_URL/semesters/$SEMESTER_ID/ingest/jobs/$JOB_ID" \
+  | python3 -c 'import json,sys; j=json.load(sys.stdin); print(j["status"], j["skipped"])'
+# -> succeeded [{'folder_key': 'submission_412', 'scope_path': 'proj2/', 'reason': 'submission_type_mismatch'}]
+```
+
+`GET …/ingest/jobs/:jobId` reports the **same entries** for a job created by either upload
+mechanism — the single-shot `:gradescope` route also inlines them in its own response — so
+a client never has to know how the export was uploaded. On that endpoint, `[]` means
+resolution completed and skipped nothing, while `null` still means unknown (staging in
+flight, or a run that aborted before resolution finished). Treat `null` as "poll again",
+never as a clean result: `submission_type_mismatch` in particular is the batch-homogeneity
+failure, and a submission that hits it never appears anywhere else.
 
 ## API reference
 

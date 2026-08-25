@@ -16,6 +16,7 @@ import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
+import { isSignalCaptured } from '../manifest/bundle-manifest.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -30,7 +31,13 @@ function flagId(sessionId: string, terminalId: string, idx: number): string {
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, _config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, _config: HeuristicConfig): Flag[] {
+  // Absence-vs-disabled (program spec §4). Shell-integration state is only
+  // observable through terminal.open. With terminal capture switched off the
+  // absence of this flag would read as "shell integration was fine", which the
+  // bundle carries no evidence for either way.
+  if (!isSignalCaptured(bundle, 'terminal')) return [];
+
   const flags: Flag[] = [];
   let globalIdx = 0;
 

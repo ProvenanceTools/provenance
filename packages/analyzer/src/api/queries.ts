@@ -49,6 +49,8 @@ import {
   SemesterListResponseSchema,
   AuditListResponseSchema,
   GradescopeIngestResponseSchema,
+  IngestStartResponseSchema,
+  StudentCredentialResponseSchema,
 } from '@provenance/shared/api-schemas';
 import type {
   Membership,
@@ -57,6 +59,7 @@ import type {
   CreateCourseRequest,
   CreateSemesterRequest,
   GradescopeIngestResponse,
+  IngestStartResponse,
 } from '@provenance/shared/api-schemas';
 
 // ---------------------------------------------------------------------------
@@ -405,6 +408,12 @@ export function useIngestJobFiles(jobId: string, semesterId: string, cursor?: st
 /**
  * Mutation: POST /semesters/:semesterId/ingest (multipart upload).
  * Uses XMLHttpRequest to support upload progress callbacks.
+ *
+ * The response now carries `skipped` alongside `job_id`: this route runs the
+ * same scope discovery the Gradescope path does, so a git repo zip fans out
+ * into one submission per accepted scope and every scope that did not become
+ * one is named here. `[]` — the answer for every upload with no repo zip — is a
+ * positive statement that resolution ran and skipped nothing.
  */
 export function useStartIngest(semesterId: string) {
   const queryClient = useQueryClient();
@@ -415,7 +424,7 @@ export function useStartIngest(semesterId: string) {
     }: {
       files: File[];
       onProgress?: (pct: number) => void;
-    }): Promise<{ job_id: string }> =>
+    }): Promise<IngestStartResponse> =>
       new Promise((resolve, reject) => {
         const formData = new FormData();
         for (const file of files) {
@@ -430,8 +439,11 @@ export function useStartIngest(semesterId: string) {
         };
         xhr.onload = () => {
           if (xhr.status === 202) {
-            const data = JSON.parse(xhr.responseText) as { job_id: string };
-            resolve(data);
+            try {
+              resolve(IngestStartResponseSchema.parse(JSON.parse(xhr.responseText)));
+            } catch (e) {
+              reject(e instanceof Error ? e : new Error('Invalid server response'));
+            }
           } else {
             try {
               const err = JSON.parse(xhr.responseText) as {
@@ -1090,6 +1102,54 @@ export function useRevokeToken() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.myTokens });
     },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Student credentials (identity format_version 2.1 — institution-scoped)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mutation: POST /identity/credential — issue this student's credential.
+ *
+ * The one call in this file made by a student rather than by course staff.
+ *
+ * ## No semester, and no course, in the path
+ *
+ * This replaced `POST /semesters/:semesterId/enrollment`, which minted a
+ * per-COURSE 2.0 token and has been removed from the server. A 2.1 credential
+ * names no course, no semester, and no assignment, so there is no path
+ * parameter to scope it by — a student obtains ONE credential, once, and it
+ * serves every course forever. Course membership is answered later from the
+ * roster, by the server, against data it owns.
+ *
+ * Two deliberate omissions, unchanged from the 2.0 hook:
+ *
+ *  - **No `onSuccess` invalidation.** Nothing in the query cache describes a
+ *    credential; a student can read no endpoint that would change. It lives in
+ *    component state and is shown once, exactly like the API token secret in
+ *    `useCreateToken`.
+ *  - **No retry, and no wrapper query.** Issuing writes bookkeeping columns and
+ *    signs a fresh credential, so a silent retry would churn writes behind a
+ *    student who pressed the button once. `useMutation` does not retry by
+ *    default; this comment is here so nobody adds one.
+ *
+ * The response is validated against `StudentCredentialResponseSchema` before it
+ * reaches the view, so a truncated or altered body fails here rather than being
+ * handed to a student as something to paste.
+ */
+export function useMintCredential() {
+  return useMutation({
+    mutationFn: (studentPubkey: string) =>
+      apiFetch(
+        '/identity/credential',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ student_pubkey: studentPubkey }),
+        },
+        StudentCredentialResponseSchema,
+      ),
   });
 }
 

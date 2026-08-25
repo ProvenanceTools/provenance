@@ -18,7 +18,7 @@ At submission time, **"Provenance: Prepare Submission Bundle"** (command palette
 
 The status bar always shows "**Provenance: recording**" while the extension is active. This is both the in-product disclosure required for the telemetry to be ethical, and a tamper signal — if it disappears, something is wrong.
 
-The extension activates **only** when the workspace root contains a valid `.provenance-manifest` manifest signed by the course's offline key. In any other folder, the extension does nothing — no logging, no UI noise, no `.provenance/` directory.
+The extension activates **only** when the workspace root contains a valid `.provenance-manifest` manifest signed by the course's offline key **and** carrying an inline `course_cert` that chains to the root public key the extension embeds. In any other folder, the extension does nothing — no logging, no UI noise, no `.provenance/` directory.
 
 ## Activation manifest (`.provenance-manifest`)
 
@@ -77,7 +77,7 @@ This is a **deterrent**, not a cryptographic guarantee. The threat model is in P
 | Attack                                                                                     | Detection                                                                                                                                                             |
 | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Hand-edit the JSON log to remove or rewrite an entry                                       | Hash chain breaks at that seq; `validateChain` reports the location                                                                                                   |
-| Drop a fake `.provenance-manifest` manifest into any folder to make the recorder log there | Manifest signature fails to verify against the embedded course public key; extension silently does nothing                                                            |
+| Drop a fake `.provenance-manifest` manifest into any folder to make the recorder log there | Manifest trust chain fails to verify against the embedded **root** public key (a forged `course_cert` cannot be root-signed); extension silently does nothing         |
 | Replay last week's session for this week's assignment                                      | Each session pubkey is bound to that session's `manifest_sig`; analyzer detects the mismatch                                                                          |
 | Tamper between sessions (edit a saved `.slog`)                                             | Next session's startup chain-recovery quarantines the corrupt file and emits `recorder.recovered_from_corruption`                                                     |
 | Edit assignment files via Claude Code / Codex / `vim` / `cp` outside VS Code               | Per-file expected-content model detects hash drift at next save; FileSystemWatcher catches edits while VS Code is unfocused; both produce `fs.external_change` events |
@@ -149,11 +149,13 @@ Produces `packages/recorder/provenance-recorder-<version>.vsix` (~250 KB). Insta
 See the [repo root README](../README.md#course-staff-key--manifest-workflow). The short version:
 
 ```sh
-PROVENANCE_COURSE_PUBLIC_KEY_HEX=<64-hex> \
+PROVENANCE_ROOT_PUBLIC_KEY_HEX=<64-hex> \
   npm run build:prod --workspace packages/recorder
 ```
 
-The `build:prod` script refuses to run if the env var is missing, malformed, or matches the dev key, then embeds the production key, builds, packages, and restores the source.
+`PROVENANCE_ROOT_PUBLIC_KEY_HEX` is the **root** key of the Manifest 2.0 trust chain — the key an inline `course_cert` must chain to. It is required. `PROVENANCE_LEGACY_COURSE_PUBLIC_KEY_HEX` is optional and grandfathers 1.x manifests, whose payload signature is checked against it directly. (There is no `PROVENANCE_COURSE_PUBLIC_KEY_HEX`; `tools/embed-root-key.ts` reads only those two names.)
+
+The `build:prod` script refuses to run if the required env var is missing, malformed, or matches the dev key, then embeds the production key(s), builds, packages, and restores the source.
 
 ## Architecture overview
 
@@ -161,8 +163,10 @@ The `build:prod` script refuses to run if the env var is missing, malformed, or 
 src/
 ├── extension.ts                      # VS Code entry: activate() / deactivate()
 ├── activation/
-│   ├── course-keys.ts                # re-exports the course public key
-│   ├── course-public-key.ts          # the constant; swapped by build:prod
+│   ├── course-keys.ts                # re-exports the embedded verification keys
+│   ├── root-public-key.ts            # the 2.0 root constant; swapped by build:prod
+│   ├── legacy-course-public-key.ts   # the grandfathered 1.x constant; ditto
+│   ├── manifest-discovery.ts         # globs nested manifests under the workspace
 │   ├── manifest-loader.ts            # reads + verifies .provenance-manifest
 │   └── status-bar.ts                 # the "Provenance: recording" indicator
 ├── session/

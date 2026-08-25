@@ -194,6 +194,35 @@ export const nodes: Record<string, ArchNode> = {
     body: 'web/ does not exist. It is drawn to show the seam it would attach to: the core is layered so that a frontend is a thin thing depending on sync and store, and today cli/ is the only such frontend. A future web GUI would reuse store and sync unchanged and add no sync logic of its own.\n\nThe value of naming the reserved slot is that it constrains the present. The rule “frontends depend on core, core never depends on a frontend” is what keeps the CLI from accreting orchestration a second frontend would then have to duplicate or fight: the boundary is maintained now precisely so the reserved frontend can stay a drop-in later.',
     links: [{ label: 'provgate CLAUDE.md', href: `${GH_PROVGATE}/CLAUDE.md` }],
   },
+  e2e: {
+    title: 'The per-repo end-to-end gates',
+    body: 'The conformance vectors prove the PRIMITIVES agree — a hash, a signature, one canonical payload. They cannot prove that a whole archive a recorder produces is one the analyzer will accept, because that depends on filenames, on pairing, on entry order, on what the seal step chose to include, and on a dozen decisions the vectors never touch.\n\nSo each recorder repo runs its own gate: build a real bundle with the real recorder, then drive it through the real monorepo loadBundle and runValidation. All three exist now, and the argument for them is not theoretical. Every one has already caught a defect the producing repo\u2019s own suite asserted was impossible: provnvim\u2019s found an orphaned rolling seal, provjet\u2019s found that shipping code the log had never seen left the Gradle suite BUILD SUCCESSFUL while the gate went red, and the VS Code one found the seal path packing bundles the loader could not open.\n\nThat is the same argument as the tools/ composition gates, applied across repository boundaries instead of across package boundaries. Two green suites either side of a seam prove nothing about the seam \u2014 and a recorder repo\u2019s suite is, by construction, entirely on one side of it.',
+    invariant:
+      'A recorder is conformant when a bundle it really produced passes the real loader and the real checks. Green vectors are necessary and are not sufficient.',
+    links: [
+      { label: 'unzip.ts', href: `${GH}/packages/analysis-core/src/loader/unzip.ts` },
+      {
+        label: 'run-validation.ts',
+        href: `${GH}/packages/analysis-core/src/validation/run-validation.ts`,
+      },
+    ],
+  },
+  tgates: {
+    title: 'tools/ — the composition gates',
+    body: 'tools/ has no package.json, and that is what makes it useful rather than what makes it untidy. Because it is not a workspace, importing from it creates no dependency edge, so it is the one place in the repo allowed to span both dependency graphs and drive a real producer through a real consumer. Unit tests on either side of a contract can both pass while the contract itself is broken; these gates are what catch that.\n\nThree of them run today. The recorder-seal gate drives a real recorder seal through the real analyzer loader. The enrollment-paste gate drives what the recorder prints through what the /enroll page accepts, which is the pairing that a marker prefix on one side and a parser on the other would otherwise let drift apart silently. And the manifest-composer gate spawns the real sign-manifest.ts CLI as a subprocess over a real temp file and compares octets against what the browser composer produces — byte for byte, at 2.0 and at 1.0, including the signature and the trailing newline. That last one exists because the composer is signed-format code living inside a UI package, which is exactly where a second implementation of a signing contract goes unnoticed.\n\nThe trap worth knowing: these run under npm run test:tools, NOT under npm run test. The root test script is --workspaces, and tools/ is not a workspace, so for a long time these suites ran under nothing at all — sixty-two tests executing in no CI job. A root vitest config now scopes a bare run to tools/** deliberately, so that an unqualified vitest cannot wander into the server’s testcontainers suites.',
+    invariant:
+      'A cross-repo or cross-package format contract is proven by driving a real producer through a real consumer. Two green unit suites either side of a seam prove nothing about the seam.',
+    links: [
+      {
+        label: 'manifest-composer-conformance.test.ts',
+        href: `${GH}/tools/manifest-composer-conformance.test.ts`,
+      },
+      {
+        label: 'recorder-seal-conformance.test.ts',
+        href: `${GH}/tools/recorder-seal-conformance.test.ts`,
+      },
+    ],
+  },
 };
 
 /** Self-explanatory labels that deliberately carry no detail panel. */

@@ -1,184 +1,388 @@
 /**
- * Dev tooling: generate an ed25519 keypair and sign a .provenance-manifest file.
+ * Dev/course-staff tooling: sign a `.provenance-manifest` file.
  *
- * Usage (run once to generate keypair + sign test-workspace/.provenance-manifest):
- *   node --experimental-strip-types tools/sign-manifest.ts
+ * Program spec: `docs/superpowers/specs/2026-08-18-multicourse-program-architecture.md`
+ * §3. Emits Manifest 2.0 by default (course-signed payload + a root-signed
+ * `course_cert` stapled inline); pass `--format 1.0` for the legacy shape,
+ * which remains fully supported (log-core parses 1.x manifests permanently —
+ * see `packages/log-core/src/manifest.ts`).
  *
- * The keypair is saved to .notes/dev-keypair.json (git-excluded via .git/info/exclude).
- * Only the public key should be copied into packages/recorder/src/activation/course-keys.ts.
- * The private key NEVER enters the repo.
+ * USAGE (2.0 — default)
+ *   node --experimental-strip-types tools/sign-manifest.ts [manifestPath] \
+ *     [--course-keypair <path>]   (default: PROVENANCE_COURSE_KEYPAIR_PATH env,
+ *                                  else .notes/dev-keypair.json)
+ *     [--course-cert <path>]      (default: PROVENANCE_COURSE_CERT_PATH env,
+ *                                  else .notes/dev-course-cert.json — minted via
+ *                                  tools/mint-course-cert.ts)
+ *     [--root-pubkey <64-hex>]    (default: PROVENANCE_ROOT_PUBLIC_KEY_HEX env,
+ *                                  else public_key_hex from .notes/dev-root-keypair.json;
+ *                                  used ONLY to self-verify the chain before writing —
+ *                                  the recorder embeds this key itself, this tool does
+ *                                  not distribute it)
  *
- * Signing payload: canonicalize({assignment_id, semester, issued_at, files_under_review})
- * — same as manifest.ts in log-core.
+ *   The target manifest file must already contain, unsigned: `assignment_id`,
+ *   `semester`, `issued_at`, `files_under_review`, `course_id`, `collaboration`,
+ *   `submission`, `scope`, `policy`, `ignore`, `attachments`. `course_id` MUST
+ *   equal the course_cert's `course_id` (chain step 3) or signing will succeed
+ *   but self-verification — and therefore this tool — will refuse to write the
+ *   file.
+ *
+ * USAGE (1.0 — legacy, permanently supported)
+ *   node --experimental-strip-types tools/sign-manifest.ts [manifestPath] --format 1.0 \
+ *     [--course-keypair <path>]
+ *
+ *   The target manifest file must contain: `assignment_id`, `semester`, `issued_at`,
+ *   `files_under_review`. No `course_id` / `collaboration` / `submission` / `scope` /
+ *   `policy` / `course_cert` — those fields do not exist at 1.0.
+ *
+ * Both paths: any existing `sig` (and, at 2.0, `course_cert`) in the target file is
+ * stripped and rebuilt. The result is self-verified — `verifyManifestChain` at 2.0,
+ * `verifyManifest` at 1.0 — before anything is written. A tool that emits a manifest
+ * that fails its own check is worse than no tool.
+ *
+ * The course keypair defaults to `.notes/dev-keypair.json`, the same dev keypair
+ * `tools/generate-course-keypair.ts` and the old version of this script used. Course
+ * staff signing a real assignment should set `PROVENANCE_COURSE_KEYPAIR_PATH` to the
+ * offline-generated key (produced by `tools/generate-course-keypair.ts`) and, at 2.0,
+ * `PROVENANCE_COURSE_CERT_PATH` to the certificate minted for that key
+ * (`tools/mint-course-cert.ts`).
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as crypto from 'node:crypto';
-import canonicalizeLib from 'canonicalize';
+import {
+  canonicalize,
+  signManifest,
+  verifyManifest,
+  verifyManifestChain,
+  MANIFEST_FORMAT_VERSION_2,
+  MANIFEST_FORMAT_VERSION_LEGACY,
+  ok,
+  err,
+} from '@provenance/log-core';
+import type { Manifest, CourseCert, Result } from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
-// Paths
+// Paths / env defaults
 // ---------------------------------------------------------------------------
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 
-// Default to the dev keypair under .notes/. Course staff signing real assignments
-// should set PROVENANCE_COURSE_KEYPAIR_PATH to point at the offline-generated key
-// (produced by tools/generate-course-keypair.ts).
-const KEYPAIR_PATH =
-  process.env.PROVENANCE_COURSE_KEYPAIR_PATH ?? path.join(REPO_ROOT, '.notes', 'dev-keypair.json');
-
-// Default target manifest; can be overridden by passing a path as argv[2].
-const manifestPath =
-  process.argv[2] ?? path.join(REPO_ROOT, 'test-workspace', '.provenance-manifest');
+const DEFAULT_COURSE_KEYPAIR_PATH = path.join(REPO_ROOT, '.notes', 'dev-keypair.json');
+const DEFAULT_COURSE_CERT_PATH = path.join(REPO_ROOT, '.notes', 'dev-course-cert.json');
+const DEFAULT_ROOT_KEYPAIR_PATH = path.join(REPO_ROOT, '.notes', 'dev-root-keypair.json');
+const DEFAULT_MANIFEST_PATH = path.join(REPO_ROOT, 'test-workspace', '.provenance-manifest');
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type StoredKeypair = {
+export type StoredKeypair = {
   public_key_hex: string;
   private_key_hex: string;
 };
 
-type ManifestJson = {
-  assignment_id: string;
-  semester: string;
-  issued_at: string;
-  files_under_review: string[];
-  sig?: string;
+export type SignFormat = '1.0' | '2.0';
+
+export type RawSignArgs = {
+  manifestPath: string | undefined;
+  format: string | undefined;
+  courseKeypairPath: string | undefined;
+  courseCertPath: string | undefined;
+  rootPubkeyHex: string | undefined;
 };
 
+export type SignOptions = {
+  manifestPath: string;
+  format: SignFormat;
+  courseKeypairPath: string;
+  /** Only meaningful at format 2.0. */
+  courseCertPath: string;
+  /** Only meaningful at format 2.0 — used to self-verify, never embedded by this tool. */
+  rootPubkeyHex: string | null;
+};
+
+export type SignArgsError = { message: string };
+
 // ---------------------------------------------------------------------------
-// Helpers
+// Argument parsing — pure, unit-tested.
 // ---------------------------------------------------------------------------
 
-function bytesToHex(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString('hex');
-}
-
-function hexToBytes(hex: string): Buffer {
-  return Buffer.from(hex, 'hex');
-}
+const FLAGS = new Set(['--format', '--course-keypair', '--course-cert', '--root-pubkey']);
 
 /**
- * Generate an ed25519 keypair using Node's built-in crypto.
- * Extracts the raw 32-byte seed and public key from DER-encoded output.
- *
- * PKCS8 DER for ed25519: raw 32-byte seed starts at byte offset 16.
- * SPKI DER for ed25519: raw 32-byte public key starts at byte offset 12.
+ * Parse argv. The first bare (non-flag) token, if present, is the manifest
+ * path — matching the original script's `argv[2]` positional convention.
  */
-function generateKeypair(): { privateKeyHex: string; publicKeyHex: string } {
-  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519', {
-    privateKeyEncoding: { type: 'pkcs8', format: 'der' },
-    publicKeyEncoding: { type: 'spki', format: 'der' },
+export function parseSignArgs(argv: readonly string[]): Result<RawSignArgs, SignArgsError> {
+  const values: Record<string, string> = {};
+  let manifestPath: string | undefined;
+
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === undefined) continue;
+    if (FLAGS.has(token)) {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        return err({ message: `${token} requires a value` });
+      }
+      values[token] = value;
+      i++;
+      continue;
+    }
+    if (token.startsWith('--')) {
+      return err({ message: `Unknown argument: ${token}` });
+    }
+    if (manifestPath !== undefined) {
+      return err({ message: `Unexpected extra positional argument: ${token}` });
+    }
+    manifestPath = token;
+  }
+
+  return ok({
+    manifestPath,
+    format: values['--format'],
+    courseKeypairPath: values['--course-keypair'],
+    courseCertPath: values['--course-cert'],
+    rootPubkeyHex: values['--root-pubkey'],
   });
-
-  const seedBytes = (privateKey as Buffer).subarray(16, 48);
-  const pubkeyBytes = (publicKey as Buffer).subarray(12, 44);
-
-  return {
-    privateKeyHex: bytesToHex(seedBytes),
-    publicKeyHex: bytesToHex(pubkeyBytes),
-  };
 }
+
+export type SignEnv = {
+  PROVENANCE_COURSE_KEYPAIR_PATH?: string;
+  PROVENANCE_COURSE_CERT_PATH?: string;
+  PROVENANCE_ROOT_PUBLIC_KEY_HEX?: string;
+};
+
+export type SignDefaults = {
+  manifestPath: string;
+  courseKeypairPath: string;
+  courseCertPath: string;
+};
 
 /**
- * Sign a message with an ed25519 private key seed (32 bytes).
- * Wraps the raw seed into PKCS8 DER format for Node's crypto.sign.
- * Returns the 64-byte signature as a 128-char hex string.
+ * Apply CLI-flag > env-var > built-in-default precedence and validate
+ * `--format`. Pure — no filesystem access, no crypto.
  */
-function signMessage(message: Uint8Array, privateKeySeedHex: string): string {
-  const seedBytes = hexToBytes(privateKeySeedHex);
+export function resolveSignOptions(
+  raw: RawSignArgs,
+  env: SignEnv,
+  defaults: SignDefaults = {
+    manifestPath: DEFAULT_MANIFEST_PATH,
+    courseKeypairPath: DEFAULT_COURSE_KEYPAIR_PATH,
+    courseCertPath: DEFAULT_COURSE_CERT_PATH,
+  },
+): Result<SignOptions, SignArgsError> {
+  const format = raw.format ?? '2.0';
+  if (format !== '1.0' && format !== '2.0') {
+    return err({ message: `--format must be '1.0' or '2.0', got '${format}'` });
+  }
 
-  // PKCS8 DER header for ed25519 (16 bytes) followed by the 32-byte seed.
-  // Header: SEQUENCE { INTEGER 0, SEQUENCE { OID 1.3.101.112 }, OCTET STRING { OCTET STRING seed } }
-  const pkcs8Header = Buffer.from('302e020100300506032b657004220420', 'hex');
-  const pkcs8Der = Buffer.concat([pkcs8Header, seedBytes]);
-
-  const keyObj = crypto.createPrivateKey({ key: pkcs8Der, format: 'der', type: 'pkcs8' });
-  const sigBuffer = crypto.sign(null, Buffer.from(message), keyObj);
-  return bytesToHex(sigBuffer);
+  return ok({
+    manifestPath: raw.manifestPath ?? defaults.manifestPath,
+    format,
+    courseKeypairPath:
+      raw.courseKeypairPath ?? env.PROVENANCE_COURSE_KEYPAIR_PATH ?? defaults.courseKeypairPath,
+    courseCertPath:
+      raw.courseCertPath ?? env.PROVENANCE_COURSE_CERT_PATH ?? defaults.courseCertPath,
+    rootPubkeyHex: raw.rootPubkeyHex ?? env.PROVENANCE_ROOT_PUBLIC_KEY_HEX ?? null,
+  });
 }
 
 // ---------------------------------------------------------------------------
-// Main
+// Unsigned-manifest construction — pure, unit-tested.
 // ---------------------------------------------------------------------------
+
+export type BuildManifestError = { message: string };
+
+/**
+ * Strip any previously-attached `sig` / `course_cert` and pull the fields a
+ * manifest of the given format requires out of an already-JSON-parsed,
+ * author-supplied object. Presence-only validation — deep shape/type
+ * validation is `verifyManifest` / `verifyManifestChain`'s job (via
+ * `parseManifestValue` internally), not duplicated here.
+ */
+export function buildUnsignedManifest(
+  format: SignFormat,
+  raw: unknown,
+): Result<Omit<Manifest, 'sig'>, BuildManifestError> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return err({ message: 'Manifest file does not contain a JSON object' });
+  }
+  const obj = raw as Record<string, unknown>;
+
+  const required1x = ['assignment_id', 'semester', 'issued_at', 'files_under_review'] as const;
+  for (const field of required1x) {
+    if (obj[field] === undefined) {
+      return err({ message: `Manifest is missing required field '${field}'` });
+    }
+  }
+
+  const base = {
+    assignment_id: obj['assignment_id'],
+    semester: obj['semester'],
+    issued_at: obj['issued_at'],
+    files_under_review: obj['files_under_review'],
+  } as Pick<Manifest, 'assignment_id' | 'semester' | 'issued_at' | 'files_under_review'>;
+
+  if (format === MANIFEST_FORMAT_VERSION_LEGACY) {
+    return ok(base);
+  }
+
+  const required2x = [
+    'course_id',
+    'collaboration',
+    'submission',
+    'scope',
+    'policy',
+    'ignore',
+    'attachments',
+  ] as const;
+  for (const field of required2x) {
+    if (obj[field] === undefined) {
+      return err({
+        message: `Manifest is missing required 2.0 field '${field}' (or pass --format 1.0)`,
+      });
+    }
+  }
+
+  return ok({
+    ...base,
+    format_version: MANIFEST_FORMAT_VERSION_2,
+    course_id: obj['course_id'],
+    collaboration: obj['collaboration'],
+    submission: obj['submission'],
+    scope: obj['scope'],
+    policy: obj['policy'],
+    ignore: obj['ignore'],
+    attachments: obj['attachments'],
+  } as Omit<Manifest, 'sig'>);
+}
+
+// ---------------------------------------------------------------------------
+// CLI wrapper — I/O only, not unit-tested.
+// ---------------------------------------------------------------------------
+
+function die(message: string): never {
+  process.stderr.write(`[sign-manifest] ${message}\n`);
+  process.exit(1);
+}
+
+function readJsonFile(filePath: string, label: string): unknown {
+  if (!fs.existsSync(filePath)) {
+    die(`${label} not found: ${filePath}`);
+  }
+  const raw = fs.readFileSync(filePath, 'utf8');
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    die(`${label} at ${filePath} is not valid JSON: ${String(e)}`);
+  }
+}
+
+function loadKeypair(keypairPath: string, label: string): StoredKeypair {
+  const parsed = readJsonFile(keypairPath, label) as Partial<StoredKeypair>;
+  if (typeof parsed.public_key_hex !== 'string' || typeof parsed.private_key_hex !== 'string') {
+    die(`${label} file ${keypairPath} is missing public_key_hex / private_key_hex.`);
+  }
+  return { public_key_hex: parsed.public_key_hex, private_key_hex: parsed.private_key_hex };
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+  }
+  return bytes;
+}
 
 async function main(): Promise<void> {
-  // Step 1: Load or generate keypair.
-  let keypair: StoredKeypair;
-
-  if (fs.existsSync(KEYPAIR_PATH)) {
-    console.log(`[sign-manifest] Loading existing keypair from ${KEYPAIR_PATH}`);
-    const raw = fs.readFileSync(KEYPAIR_PATH, 'utf8');
-    keypair = JSON.parse(raw) as StoredKeypair;
-  } else {
-    console.log('[sign-manifest] Generating new ed25519 keypair...');
-    const { privateKeyHex, publicKeyHex } = generateKeypair();
-    keypair = { public_key_hex: publicKeyHex, private_key_hex: privateKeyHex };
-    fs.writeFileSync(KEYPAIR_PATH, JSON.stringify(keypair, null, 2) + '\n', { mode: 0o600 });
-    console.log(`[sign-manifest] Keypair saved to ${KEYPAIR_PATH}`);
+  const parsedArgs = parseSignArgs(process.argv.slice(2));
+  if (!parsedArgs.ok) {
+    die(
+      `${parsedArgs.error.message}\n\n` +
+        'Usage: node --experimental-strip-types tools/sign-manifest.ts [manifestPath] \\\n' +
+        '  [--format 1.0|2.0] [--course-keypair <path>] [--course-cert <path>] [--root-pubkey <hex>]',
+    );
   }
 
-  console.log(`[sign-manifest] Public key: ${keypair.public_key_hex}`);
+  const resolved = resolveSignOptions(parsedArgs.value, process.env as SignEnv);
+  if (!resolved.ok) {
+    die(resolved.error.message);
+  }
+  const opts = resolved.value;
 
-  // Step 2: Read the target manifest.
-  if (!fs.existsSync(manifestPath)) {
-    console.error(`[sign-manifest] ERROR: manifest not found at ${manifestPath}`);
-    process.exit(1);
+  console.log(`[sign-manifest] Format: ${opts.format}`);
+  console.log(`[sign-manifest] Manifest: ${opts.manifestPath}`);
+  console.log(`[sign-manifest] Course keypair: ${opts.courseKeypairPath}`);
+
+  const keypair = loadKeypair(opts.courseKeypairPath, 'Course keypair');
+  console.log(`[sign-manifest] Course public key: ${keypair.public_key_hex}`);
+
+  const rawManifest = readJsonFile(opts.manifestPath, 'Manifest');
+  const built = buildUnsignedManifest(opts.format, rawManifest);
+  if (!built.ok) {
+    die(built.error.message);
+  }
+  const unsigned = built.value;
+
+  const sig = await signManifest(unsigned, hexToBytes(keypair.private_key_hex));
+
+  if (opts.format === MANIFEST_FORMAT_VERSION_LEGACY) {
+    const signed: Manifest = { ...unsigned, sig };
+
+    const verified = await verifyManifest(signed, keypair.public_key_hex);
+    if (!verified.ok) {
+      die(
+        `Refusing to write: the manifest this tool just signed did not verify ` +
+          `(${JSON.stringify(verified.error)}). This is a bug — please report it.`,
+      );
+    }
+
+    const canonicalOutput = canonicalize(signed);
+    fs.writeFileSync(opts.manifestPath, canonicalOutput + '\n');
+    console.log(`[sign-manifest] Manifest signed and written to ${opts.manifestPath}`);
+    console.log(`[sign-manifest] sig (128 hex chars): ${sig}`);
+    return;
   }
 
-  const rawManifest = fs.readFileSync(manifestPath, 'utf8');
-  let manifest: ManifestJson;
-  try {
-    manifest = JSON.parse(rawManifest) as ManifestJson;
-  } catch (e) {
-    console.error(`[sign-manifest] ERROR: failed to parse manifest JSON: ${e}`);
-    process.exit(1);
+  console.log(`[sign-manifest] Course cert: ${opts.courseCertPath}`);
+  const cert = readJsonFile(opts.courseCertPath, 'Course certificate') as CourseCert;
+
+  const signed: Manifest = { ...unsigned, sig, course_cert: cert };
+
+  const rootPubkeyHex =
+    opts.rootPubkeyHex ?? loadKeypair(DEFAULT_ROOT_KEYPAIR_PATH, 'Root keypair').public_key_hex;
+
+  const chainResult = await verifyManifestChain(signed, rootPubkeyHex);
+  if (!chainResult.ok) {
+    die(
+      `Refusing to write: the manifest this tool just signed does not verify its own trust ` +
+        `chain (${JSON.stringify(chainResult.error)}).\n` +
+        'Common causes: manifest.course_id does not match course_cert.course_id, the course ' +
+        'keypair does not match the certificate, or --root-pubkey does not match the root key ' +
+        'that signed the certificate.',
+    );
   }
 
-  // Step 3: Strip existing sig field and build signing payload.
-  // The sig covers only the four content fields (PRD §4.1 / manifest.ts in log-core).
-  const { sig: _existingSig, ...payloadFields } = manifest;
-  const signingPayload = canonicalizeLib({
-    assignment_id: payloadFields.assignment_id,
-    semester: payloadFields.semester,
-    issued_at: payloadFields.issued_at,
-    files_under_review: payloadFields.files_under_review,
-  });
-
-  if (signingPayload === undefined) {
-    console.error('[sign-manifest] ERROR: canonicalize returned undefined');
-    process.exit(1);
+  const canonicalOutput = canonicalize(signed);
+  fs.writeFileSync(opts.manifestPath, canonicalOutput + '\n');
+  console.log(`[sign-manifest] Manifest signed and written to ${opts.manifestPath}`);
+  console.log(`[sign-manifest] sig (128 hex chars): ${sig}`);
+  console.log(`[sign-manifest] Chain verified: course_id=${chainResult.value.course_id}`);
+  if (!chainResult.value.window.in_window) {
+    console.log(
+      `[sign-manifest] WARNING: cert is out of its validity window at issued_at ` +
+        `(${chainResult.value.window.reason}). The recorder will still record (program spec §4); ` +
+        `re-mint the certificate if this is unexpected.`,
+    );
   }
-
-  console.log(`[sign-manifest] Signing payload: ${signingPayload}`);
-
-  // Step 4: Sign the UTF-8 bytes of the canonical JSON.
-  const payloadBytes = new TextEncoder().encode(signingPayload);
-  const sigHex = signMessage(payloadBytes, keypair.private_key_hex);
-
-  // Step 5: Attach sig and write back.
-  const signedManifest: ManifestJson = {
-    ...payloadFields,
-    sig: sigHex,
-  };
-
-  const canonicalOutput = canonicalizeLib(signedManifest);
-  if (canonicalOutput === undefined) {
-    console.error('[sign-manifest] ERROR: canonicalize returned undefined for output');
-    process.exit(1);
-  }
-  fs.writeFileSync(manifestPath, canonicalOutput + '\n');
-  console.log(`[sign-manifest] Manifest signed and written to ${manifestPath}`);
-  console.log(`[sign-manifest] sig (128 hex chars): ${sigHex}`);
-  console.log('\n[sign-manifest] PASTE THIS INTO packages/recorder/src/activation/course-keys.ts:');
-  console.log(`  COURSE_PUBLIC_KEY_HEX = '${keypair.public_key_hex}'`);
 }
 
-main().catch((e: unknown) => {
-  console.error('[sign-manifest] Fatal error:', e);
-  process.exit(1);
-});
+// Only run when invoked directly (not when imported by tests).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((e: unknown) => {
+    console.error('[sign-manifest] Fatal error:', e);
+    process.exit(1);
+  });
+}

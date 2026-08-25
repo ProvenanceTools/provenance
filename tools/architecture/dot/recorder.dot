@@ -21,6 +21,7 @@ digraph recorder {
     h_term [label="terminal\nshell integration, when available"]
     h_git  [label="git\nbuilt-in API · Git4Idea · external — may be absent"]
     h_win  [label="window\nfocus · selection · extension activation"]
+    h_prov [label=".provenance/ directory watcher\nONE watcher on the DIRECTORY, not one per file, and\ndistinct from the files_under_review watchers.\nCreated BEFORE session.start is chained, and whether\nit could be created IS witness_capture — no second,\nthrowaway probe that could disagree with the wiring.\nCallbacks enqueue a basename and return —\nno I/O, no hashing, no parsing on the callback"]
   }
 
   /* ── detection ── */
@@ -37,8 +38,11 @@ digraph recorder {
                fillcolor="#241a0c" color="#F97316"]
     cmp       [label="on-disk hash ==\nexpected hash?" shape=diamond fillcolor="#1c1712"
                color="#F97316" fontsize=9 height=0.85 width=1.7]
-    explain   [label="explained by a\nformatter or git event?" shape=diamond fillcolor="#1c1712"
-               color="#F97316" fontsize=9 height=0.85 width=1.8]
+    explain   [label="does the live mark explain\nthis PATH?\none mark · 2 s window · a Set of up to\n64 distinct paths, not a single slot —\nso one git pull explains every file it\nrewrote, not just the first.\nKEPT, not a bridge: it is the only\nmitigation for a solo, 1.x or unenrolled\nscope. Where content disagrees,\nCONTENT WINS." shape=diamond
+               fillcolor="#1c1712" color="#F97316" fontsize=8.5 height=2.4 width=3.4]
+
+    drain     [label="peer-observation drain\nevery 100 entries and at dispose — never on the\nwatcher callback. An unchanged file is NOT\nre-emitted. Own files excluded by name.\nA LOCAL read failure (EACCES/EIO) is a fact about\nTHIS machine, not the partner's file: emit nothing.\nAn unreadable chain ⇒ state unparseable, with all\nthree chain fields null.\nNever rename, rewrite or delete a foreign file."
+               fontsize=8.5]
   }
 
   /* ── pure transforms ── */
@@ -58,6 +62,14 @@ digraph recorder {
     bgcolor="#0e0b18" labeljust="l"
     node [fillcolor="#1e1830" color="#9d7bf5" fontsize=9.5]
 
+    polic [label="capture policy\nresolved once from the course-signed manifest\nselection_change · focus_change · terminal ·\nheartbeat_interval_ms — everything else is FLOOR"
+           fontsize=9]
+    cap   [label="§5.6 CAPABILITY REPORT — not a knob\ngit_capture · witness_capture · file_scope.\nResolved at activation, BEFORE seq 0 is chained,\nand OMITTED — never null — where it cannot be\nanswered. Never gated by policy, never a finding."
+           fillcolor="#241a0c" color="#F97316" fontsize=9]
+    gate  [label="captured under\nthis policy?" shape=diamond fillcolor="#0e0b18" fontsize=9
+           height=0.85 width=1.5]
+    drop  [label="dropped at the ONE choke point —\nand BEFORE chaining, so it consumes no seq.\nDropping after would leave a gap that\nvalidation check 4 reads as a deletion."
+           fillcolor="#15171d" color="#5d677d" fontcolor="#98a2b6" fontsize=9]
     env  [label="envelope\nseq · t · wall · kind · data"]
     jcs  [label="JCS canonicalize\nRFC 8785"]
     hash [label="hash = sha256(prev_hash ‖ canonical)"]
@@ -71,7 +83,9 @@ digraph recorder {
     bgcolor="#0a0f18" labeljust="l"
     node [fillcolor="#0d1c33" color="#4b90f7" fontsize=9.5]
 
-    atomic [label="atomic replace — WHOLE files only\n*.slog.meta · manifest.json · manifest.sig\ntemp → fsync → rename"]
+    atomic [label="atomic replace — WHOLE files only\n*.slog.meta · manifest.json · manifest.sig\nmanifest-<session_id>.json · .sig\ntemp → fsync → rename"]
+    roll   [label="ROLLING SEAL — rewritten, not written once\nmanifest-<session_id>.json + .sig, ONE session per file,\nsigned by that session's OWN ephemeral key.\nAt session start · on every checkpoint · once more at\ndispose, and ONLY that last one carries final: true.\nThe git path never runs seal — this IS its seal."
+            fillcolor="#0e2422" color="#17bfae" fontsize=9]
     disk   [label="*.slog\nappend-only, one handle open 'a'\nnever rewritten" shape=note]
     full   [label="write\nfailed?" shape=diamond fillcolor="#12161f" fontsize=9 height=0.75 width=1.2]
     degr   [label="recorder.degraded\nstop appending, tell the student\n— never partial-write"
@@ -95,10 +109,20 @@ digraph recorder {
 
   h_doc  -> expected [label="update model\nafter every edit" color="#F97316" style=dashed constraint=false]
   h_term -> tx
-  h_git  -> tx
+  h_git  -> tx [label="every git.event carrying a sha is labelled with its\nrepository's ROOT-COMMIT sha, derived once per\nrepository at wiring setup. Omitted — never null,\nnever guessed — on a shallow clone or any failure"]
   h_win  -> tx
+  h_prov -> drain [label="a basename on a Set,\nnothing more"]
+  h_git  -> cap [label="probeGitCapture — the SAME resolveGitApi\nthe wiring routes on, so the report and the\nbehaviour cannot drift apart" color="#F97316" style=dashed]
+  h_prov -> cap [label="could the ONE watcher\nbe created?" color="#F97316" style=dashed]
+  cap    -> tx  [label="rides in session.start at seq 0 — the WIRING that\nconsumes both signals only starts afterwards"
+                 color="#F97316"]
+  drain  -> tx [label="peer.observed — a FILE and a\nCHAIN POSITION. No student ref, no key,\nno git author, no path outside .provenance/"
+                color="#e8559c"]
 
-  tx -> env
+  tx -> gate
+  polic -> gate [label="one lookup in a frozen map —\ncheap enough for the firehose" color="#9d7bf5" style=dashed]
+  gate -> drop [label="no" color="#5d677d" style=dashed]
+  gate -> env  [label="yes" color="#9d7bf5"]
   env -> jcs
   jcs -> hash
   hash -> buf [label="hash only —\nnever sign here" color="#9d7bf5"]
@@ -109,4 +133,7 @@ digraph recorder {
   full -> disk   [label="no" color="#4b90f7"]
   full -> degr   [label="yes → drop\nthe buffer" color="#ff6b6b"]
   hash -> atomic [label="every 100:\nsigned checkpoint" color="#9d7bf5" style=dashed]
+  hash -> roll   [label="at session start, on every checkpoint,\nand once more at dispose — always AFTER\nthe peer drain, so the observations land in\nthe bytes this seal is about to commit to"
+                  color="#17bfae" style=dashed]
+  roll -> atomic [label="a PAIR commit — a signature and the payload\nit covers only mean anything together" color="#17bfae"]
 }

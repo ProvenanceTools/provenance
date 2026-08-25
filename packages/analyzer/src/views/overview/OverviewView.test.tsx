@@ -67,6 +67,27 @@ describe('OverviewView', () => {
     expect(screen.getByTestId('flag-dashboard-panel')).toBeInTheDocument();
   });
 
+  /**
+   * `/local` has no server, so it runs the coverage stage in the browser. The
+   * panel now takes the computed aggregate rather than a `Bundle`, and the
+   * failure mode of that change is silent: passing `null` here would still
+   * render a panel, just one saying "the server did not send them" — which is a
+   * lie on a route that has no server and holds the bundle itself.
+   */
+  it('computes real coverage facts for /local, never "not available"', () => {
+    mockUseBundle.mockReturnValue({
+      bundles: [makeMinimalBundle()],
+      index: makeMinimalIndex(),
+      validationReport: fixtureReport,
+      flags: fixtureFlags,
+    });
+
+    renderView();
+
+    expect(screen.getByTestId('submission-coverage-panel')).toBeInTheDocument();
+    expect(screen.queryByTestId('coverage-not-available')).toBeNull();
+  });
+
   it('renders nothing when index is null', () => {
     mockUseBundle.mockReturnValue({
       bundles: [makeMinimalBundle()],

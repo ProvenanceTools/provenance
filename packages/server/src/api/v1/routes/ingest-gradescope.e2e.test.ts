@@ -5,7 +5,8 @@
  * submission), drives the worker through pg-boss, and asserts:
  *   - the roster is populated from the metadata (no pre-existing roster needed),
  *   - a single-submitter submission is matched,
- *   - a group submission yields one submission per co-submitter (shared blob),
+ *   - a group submission yields ONE submission with both co-submitters as
+ *     contributors (D9) — not one row per co-submitter,
  *   - a folder with no bundle is reported as skipped.
  *
  * Mirrors ingest-e2e.test.ts: real pg-boss + Postgres + MinIO via testcontainers.
@@ -37,10 +38,12 @@ import {
   ingest_jobs,
   ingest_files,
   submissions,
+  submission_contributors,
 } from '../../../db/schema.js';
 import * as schema from '../../../db/schema.js';
 import { startWorker } from '../../../jobs/worker.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
+import { IngestJobSchema } from '@provenance/shared/api-schemas';
 import type { DrizzleDb } from '../../../db/client.js';
 
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
@@ -101,6 +104,18 @@ async function buildExportZip(): Promise<Uint8Array> {
   const buf = await outer.generateAsync({ type: 'arraybuffer' });
   return new Uint8Array(buf);
 }
+
+/**
+ * What `buildExportZip()` must report as skipped, on EVERY upload path.
+ *
+ * `submission_nobundle` carries no `.provenance/` at all, so it is the one
+ * folder that never becomes a submission. Asserted against the single-shot
+ * route's inline response AND against `GET /ingest/jobs/:jobId` for a job
+ * created by the chunked upload — the two must be indistinguishable.
+ */
+const EXPORT_ZIP_SKIPPED = [
+  { folder_key: 'submission_nobundle', scope_path: '', reason: 'no_manifest' },
+];
 
 describe('POST /ingest:gradescope (export → roster + worker)', () => {
   let pgContainer: StartedPostgreSqlContainer;
@@ -251,7 +266,7 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
         roster: { added: number; updated: number };
         bundles_processed: number;
         submissions_queued: number;
-        skipped: unknown[];
+        skipped: unknown;
       };
       expect(typeof completeBody.job_id).toBe('string');
       expect(completeBody.job_id.length).toBeGreaterThan(0);
@@ -259,12 +274,17 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
       expect(completeBody.roster).toEqual({ added: 0, updated: 0 });
       expect(completeBody.bundles_processed).toBe(0);
       expect(completeBody.submissions_queued).toBe(0);
+      // NOT `[]`. Nothing has been staged yet, so the honest answer is "unknown"
+      // — and `[]` here would read as "nothing was skipped", which is exactly
+      // the claim this route used to make falsely. Empty must mean empty.
+      expect(completeBody.skipped).toBeNull();
 
       const jobId = completeBody.job_id;
 
       // --- poll the job status until it reaches a terminal state ---
       const start = Date.now();
       let finalStatus: string | null = null;
+      let finalBody: unknown = null;
       while (Date.now() - start < 120_000) {
         const statusRes = await app.fetch(
           new Request(`http://localhost/semesters/${semesterId}/ingest/jobs/${jobId}`, {
@@ -274,11 +294,22 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
         const statusBody = (await statusRes.json()) as { status: string };
         if (['succeeded', 'partial', 'failed', 'cancelled'].includes(statusBody.status)) {
           finalStatus = statusBody.status;
+          finalBody = statusBody;
           break;
         }
         await new Promise((r) => setTimeout(r, 500));
       }
       expect(finalStatus).toBe('succeeded');
+
+      // The promise the 202's comment used to make and not keep. The job detail
+      // reports the SAME array the single-shot POST /ingest:gradescope inlines
+      // for this very export (see the sibling test asserting
+      // EXPORT_ZIP_SKIPPED on `body.skipped`) — so a consumer reading skip
+      // reasons cannot tell which upload mechanism was used, and provgate does
+      // not have to care.
+      const parsed = IngestJobSchema.safeParse(finalBody);
+      expect(parsed.success).toBe(true);
+      expect(parsed.success && parsed.data.skipped).toEqual(EXPORT_ZIP_SKIPPED);
     });
   });
 
@@ -373,7 +404,14 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
       expect(body.roster).toEqual({ added: 4, updated: 0 });
       expect(body.bundles_processed).toBe(2);
       expect(body.submissions_queued).toBe(3);
-      expect(body.skipped).toEqual([{ folder_key: 'submission_nobundle', reason: 'no_manifest' }]);
+      // REGRESSION GUARD: the flat Gradescope folder path is unchanged by the
+      // git-repo scope fan-out — one `.provenance/` per folder still yields one
+      // bundle at the root scope, and a non-bundle folder is still no_manifest.
+      //
+      // Shared with the chunked-upload test above, which asserts the SAME value
+      // on GET /ingest/jobs/:jobId for the SAME export. One constant, two upload
+      // mechanisms: that is the identical-shape guarantee, spelled out.
+      expect(body.skipped).toEqual(EXPORT_ZIP_SKIPPED);
 
       // Roster was populated from the metadata (all four submitters).
       const roster = await db
@@ -398,23 +436,20 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
       }
       expect(finalStatus).toBe('succeeded');
 
-      // All three files matched.
+      // All three files resolved, and none failed. Since D9 the two
+      // co-submitters of the group bundle carry byte-identical bytes, so ONE of
+      // them creates the submission and the other resolves as `duplicate`
+      // pointing at it — the artifact is not stored twice.
       const fileRows = await db
-        .select({ status: ingest_files.status, match_sid: ingest_files.match_sid })
+        .select({
+          status: ingest_files.status,
+          match_sid: ingest_files.match_sid,
+          submission_id: ingest_files.submission_id,
+          matched_student_id: ingest_files.matched_student_id,
+        })
         .from(ingest_files)
         .where(eq(ingest_files.ingest_job_id, body.job_id));
       expect(fileRows).toHaveLength(3);
-      expect(fileRows.every((f) => f.status === 'matched')).toBe(true);
-
-      // Three submissions; the two co-submitters share one blob.
-      const subs = await db
-        .select({
-          student_id: submissions.student_id,
-          blob_sha256: submissions.blob_sha256,
-        })
-        .from(submissions)
-        .where(eq(submissions.semester_id, semester!.id));
-      expect(subs).toHaveLength(3);
 
       const rosterBySid = new Map(
         (
@@ -424,15 +459,263 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
             .where(eq(roster_entries.semester_id, semester!.id))
         ).map((r) => [r.sid, r.id]),
       );
-      const subByStudent = new Map(subs.map((s) => [s.student_id, s.blob_sha256]));
-      // The pair (222, 333) share blob bytes; the solo (111) differs.
-      const pairBlobs = [
-        subByStudent.get(rosterBySid.get('222')!),
-        subByStudent.get(rosterBySid.get('333')!),
+
+      // The EXACT status multiset, not `every(matched || duplicate)`.
+      //
+      // That predicate is satisfied by three `matched` rows — which is the
+      // pre-0029 fan-out returning. This test is the one the cut-over itself
+      // repaired, and it was repaired into a spelling that stays green against
+      // the very regression it exists to catch. Its siblings were found later
+      // and pinned properly; this brings it up to the same bar.
+      expect([...fileRows.map((f) => f.status)].sort()).toEqual([
+        'duplicate',
+        'matched',
+        'matched',
+      ]);
+
+      // Each row resolves under ITS OWN student, not merely under someone.
+      // `every(matched_student_id !== null)` passes when a duplicate resolves
+      // under the WRONG partner's name, which loses a person just as surely as
+      // a null does — and does it silently, under a plausible-looking name.
+      for (const f of fileRows) {
+        expect(f.submission_id, `submission_id for sid ${f.match_sid}`).not.toBeNull();
+        expect(f.matched_student_id, `matched_student_id for sid ${f.match_sid}`).toBe(
+          rosterBySid.get(f.match_sid!),
+        );
+      }
+
+      // TWO submissions, not three: the solo, and ONE for the pair.
+      //
+      // This assertion replaces one that required three. The requirement
+      // underneath it — both co-submitters survive, and the pair's bytes are
+      // distinct from the solo's — is unchanged and is asserted below; what
+      // changed is the representation (D9). Three rows here would mean the
+      // fan-out is back, which under concurrency is exactly what happened
+      // before `createSubmission` re-checked dedup under an advisory lock.
+      const subs = await db
+        .select({ id: submissions.id, blob_sha256: submissions.blob_sha256 })
+        .from(submissions)
+        .where(eq(submissions.semester_id, semester!.id));
+      expect(subs).toHaveLength(2);
+
+      // The pair's submission is the one BOTH co-submitters contribute to.
+      const contribRows = await db
+        .select({
+          submission_id: submission_contributors.submission_id,
+          roster_entry_id: submission_contributors.roster_entry_id,
+        })
+        .from(submission_contributors)
+        .where(eq(submission_contributors.semester_id, semester!.id));
+
+      const bySubmission = new Map<string, string[]>();
+      for (const row of contribRows) {
+        const bucket = bySubmission.get(row.submission_id) ?? [];
+        bucket.push(row.roster_entry_id!);
+        bySubmission.set(row.submission_id, bucket);
+      }
+
+      const pairSubmissionId = [...bySubmission.entries()].find(([, ids]) => ids.length === 2)?.[0];
+      expect(pairSubmissionId).toBeTruthy();
+      expect(new Set(bySubmission.get(pairSubmissionId!))).toEqual(
+        new Set([rosterBySid.get('222')!, rosterBySid.get('333')!]),
+      );
+
+      // The solo is a separate submission with one contributor and other bytes.
+      const soloSubmissionId = [...bySubmission.entries()].find(
+        ([, ids]) => ids.length === 1 && ids[0] === rosterBySid.get('111'),
+      )?.[0];
+      expect(soloSubmissionId).toBeTruthy();
+      expect(soloSubmissionId).not.toBe(pairSubmissionId);
+
+      const blobById = new Map(subs.map((sub) => [sub.id, sub.blob_sha256]));
+      expect(blobById.get(soloSubmissionId!)).not.toBe(blobById.get(pairSubmissionId!));
+    });
+  });
+
+  /** Admin + session + semester + config, shared by the override cases below. */
+  async function seedForOverride(
+    client: { bucketUrl: string },
+    bucketName: string,
+  ): Promise<{ semester: { id: string }; sessionToken: string }> {
+    _setConfigForTest(
+      parseEnv({
+        NODE_ENV: 'test',
+        PUBLIC_BASE_URL: 'http://localhost:3000',
+        DATABASE_URL: pgContainer.getConnectionUri(),
+        OBJECT_STORAGE_ENDPOINT: client.bucketUrl.replace(`/${bucketName}`, ''),
+        OBJECT_STORAGE_BUCKET: bucketName,
+        OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
+        OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+        OBJECT_STORAGE_REGION: 'us-east-1',
+        GOOGLE_OAUTH_CLIENT_ID: 'client-id',
+        GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
+        AUTH_ALLOWED_HOSTED_DOMAINS: '["berkeley.edu"]',
+        AUTH_SUPERADMIN_EMAILS: '["admin@berkeley.edu"]',
+        AUTH_COOKIE_SIGNING_SECRET: 'test-signing-secret-for-e2e-tests-123456789',
+        SESSION_TTL_DAYS: '14',
+        INGEST_MAX_BUNDLE_BYTES: '52428800',
+        INGEST_MAX_BATCH_BYTES: '5368709120',
+        INGEST_MAX_BATCH_FILES: '10000',
+      }),
+    );
+
+    const userId = crypto.randomUUID();
+    await db.insert(users).values({
+      id: userId,
+      google_subject: `sub-${userId}`,
+      email: `admin-${userId}@berkeley.edu`,
+      display_name: 'Admin',
+    });
+    const sessionToken = `sess-${crypto.randomUUID().replace(/-/g, '')}`
+      .padEnd(43, 'x')
+      .slice(0, 43);
+    await db.insert(sessions).values({
+      id: sessionToken,
+      user_id: userId,
+      expires_at: new Date(Date.now() + 14 * 86400_000),
+    });
+    const [course] = await db
+      .insert(courses)
+      .values({ name: 'CS 61A', slug: `cs61a-${crypto.randomUUID().slice(0, 8)}` })
+      .returning();
+    const [semester] = await db
+      .insert(semesters)
+      .values({
+        course_id: course!.id,
+        term: 'fa',
+        year: 2026,
+        slug: `fa2026-${crypto.randomUUID().slice(0, 8)}`,
+        display_name: 'Fall 2026',
+        filename_convention: '^(?<assignment_id>[a-z0-9_-]+)[-_](?<sid>\\d{6,12})\\.zip$',
+      })
+      .returning();
+    await db.insert(memberships).values({
+      user_id: userId,
+      semester_id: semester!.id,
+      role: 'admin',
+      granted_by: userId,
+    });
+    return { semester: { id: semester!.id }, sessionToken };
+  }
+
+  // -------------------------------------------------------------------------
+  // Per-request override via the scope_* query params
+  //
+  // This route's body is multipart/form-data reserved for the archive, so the
+  // override cannot ride a JSON field — it travels as three flat query params
+  // that `ingestScopeFromQuery` folds into the same IngestScopeConfig the JSON
+  // routes take. These cover that folding AND the HTTP wiring; the resolution
+  // semantics themselves are covered in repo-scopes.test.ts.
+  // -------------------------------------------------------------------------
+
+  it('scope_* query params override the assignment defaults for the batch', async () => {
+    await withTestMinio(async ({ client, bucketName }) => {
+      const { semester, sessionToken } = await seedForOverride(client, bucketName);
+      workerStop = await startWorker();
+
+      const formData = new FormData();
+      formData.append(
+        'archive',
+        new Blob([(await buildExportZip()).buffer as ArrayBuffer], { type: 'application/zip' }),
+        'assignment_8046601_export.zip',
+      );
+
+      // Every folder in this export is a classic flat bundle at the root, so
+      // declaring bundle_zip must change nothing — the point is that a VALID
+      // override is accepted and threaded, not that it alters this export.
+      const res = await createV1App().fetch(
+        new Request(
+          `http://localhost/semesters/${semester.id}` +
+            `/ingest:gradescope?scope_mode=bundle_zip&scope_on_multiple=error`,
+          {
+            method: 'POST',
+            headers: { Cookie: `__Host-prov_sess=${sessionToken}` },
+            body: formData,
+          },
+        ),
+      );
+
+      expect(res.status).toBe(202);
+      const body = (await res.json()) as {
+        bundles_processed: number;
+        skipped: Array<{ reason: string }>;
+      };
+      expect(body.bundles_processed).toBe(2);
+      expect(body.skipped.map((s) => s.reason)).toEqual(['no_manifest']);
+    });
+  });
+
+  it('a repo_scoped override whose glob matches nothing fails every folder, legibly', async () => {
+    await withTestMinio(async ({ client, bucketName }) => {
+      const { semester, sessionToken } = await seedForOverride(client, bucketName);
+
+      const formData = new FormData();
+      formData.append(
+        'archive',
+        new Blob([(await buildExportZip()).buffer as ArrayBuffer], { type: 'application/zip' }),
+        'assignment_8046601_export.zip',
+      );
+
+      const res = await createV1App().fetch(
+        new Request(
+          `http://localhost/semesters/${semester.id}` +
+            `/ingest:gradescope?scope_mode=repo_scoped&scope_path_glob=${encodeURIComponent('nope/**')}`,
+          {
+            method: 'POST',
+            headers: { Cookie: `__Host-prov_sess=${sessionToken}` },
+            body: formData,
+          },
+        ),
+      );
+
+      // 200, not 202: nothing was stageable, so there is no job — the roster
+      // is still upserted. Every bundle folder reports the mismatch.
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        job_id: string | null;
+        bundles_processed: number;
+        skipped: Array<{ folder_key: string; reason: string }>;
+      };
+      expect(body.job_id).toBeNull();
+      expect(body.bundles_processed).toBe(0);
+      expect(body.skipped.filter((s) => s.reason === 'submission_type_mismatch')).toHaveLength(2);
+    });
+  });
+
+  it('rejects a malformed scope override with 400, before reading the body', async () => {
+    await withTestMinio(async ({ client, bucketName }) => {
+      const { semester, sessionToken } = await seedForOverride(client, bucketName);
+      const app = createV1App();
+
+      const cases = [
+        // repo_scoped with no glob selects nothing — a typo that would silently
+        // drop a cohort, so it is refused rather than degraded here.
+        'scope_mode=repo_scoped',
+        // a glob is meaningless for the other modes
+        `scope_mode=repo_whole&scope_path_glob=${encodeURIComponent('x/**')}`,
+        // the pre-0026 spelling is not part of the API
+        'scope_mode=path&scope_path_glob=x',
+        'scope_mode=nonsense',
+        // a scope_* param with no scope_mode would otherwise be ignored outright
+        `scope_path_glob=${encodeURIComponent('proj2/**')}`,
       ];
-      expect(pairBlobs[0]).toBeTruthy();
-      expect(pairBlobs[0]).toBe(pairBlobs[1]);
-      expect(subByStudent.get(rosterBySid.get('111')!)).not.toBe(pairBlobs[0]);
+
+      for (const query of cases) {
+        const formData = new FormData();
+        formData.append(
+          'archive',
+          new Blob([new Uint8Array([1, 2, 3])], { type: 'application/zip' }),
+          'x.zip',
+        );
+        const res = await app.fetch(
+          new Request(`http://localhost/semesters/${semester.id}/ingest:gradescope?${query}`, {
+            method: 'POST',
+            headers: { Cookie: `__Host-prov_sess=${sessionToken}` },
+            body: formData,
+          }),
+        );
+        expect(res.status, `query: ${query}`).toBe(400);
+      }
     });
   });
 });

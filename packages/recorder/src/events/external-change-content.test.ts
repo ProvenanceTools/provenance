@@ -106,4 +106,17 @@ describe('buildExternalChangeContent', () => {
     expect(result.new_content).toBe('');
     expect(result.new_content_size).toBe(0);
   });
+
+  // --- the size cap is the ONLY thing that suppresses content ---------------
+
+  it('takes exactly one argument — there is no capture-policy knob for content', () => {
+    // The `inline_content` policy key was removed; see paste-payload.test.ts for
+    // the reasoning. Pinning the arity means reintroducing a suppression
+    // parameter fails here rather than silently re-enabling the knob.
+    expect(buildExternalChangeContent).toHaveLength(1);
+  });
+
+  it('inlines content unconditionally below the cap', () => {
+    expect(buildExternalChangeContent('hello').new_content).toBe('hello');
+  });
 });

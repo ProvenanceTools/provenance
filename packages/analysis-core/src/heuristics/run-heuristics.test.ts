@@ -268,7 +268,11 @@ const SNAPSHOT_CONFIG_OVERRIDE = {
 
 describe('runHeuristics — snapshot fixture', () => {
   it('produces the expected flag set on a fixture with one of each trigger', async () => {
-    const largePasteContent = 'x'.repeat(600); // high severity
+    // 619 chars over 20 lines. Multi-line deliberately: this stands in for a
+    // pasted solution.py, and `paste_is_solution` measures coverage of the
+    // final file in LINES with a 10-line floor, so a 600-char single line is
+    // not a fixture for the thing this file claims to model.
+    const largePasteContent = Array.from({ length: 20 }, () => 'x'.repeat(30)).join('\n');
     const { index, bundle } = await buildAndIndex({
       sessions: [
         {
@@ -363,25 +367,47 @@ describe('runHeuristics — snapshot fixture', () => {
 
     // Snapshot: assert flag count and heuristic-severity pairs are stable.
     const summary = flags.map((f) => ({ heuristic: f.heuristic, severity: f.severity }));
-    // Verify expected count: 6 total flags
+    // The six flags this fixture produces, named. Asserted EXACTLY (sorted, so
+    // this pins the set rather than `runHeuristics`'s sort order) rather than
+    // through `arrayContaining` plus a bare `toHaveLength(6)`.
+    //
+    // That pairing is what let a wrong comment stand here for months: it
+    // enumerated five flags against a count of six, claimed
+    // `low_typing_high_output` fired on file.py only because "solution.py is
+    // tainted by large paste", and `arrayContaining` is a SUBSET match so the
+    // second one was invisible to it. solution.py is not tainted — the paste is
+    // inline and under the recorder's cap, so it replays — and the heuristic
+    // fires once per file, as it is documented to.
+    //
     // - chain_broken(1): hash chain integrity failure
-    // - large_paste(1): solution.py 600-char paste
+    // - large_paste(1): solution.py 619-char / 20-line paste
     // - external_edits(1): helper.py external change, unexplained
-    // - low_typing_high_output(1): file.py only (solution.py is tainted by large paste)
-    //   file.py: typed 1 char, pasted 4 chars → ratio=5 → high severity
-    // - paste_is_solution(1): solution.py 600-char paste matches 100% of final content
+    // - low_typing_high_output(2): ONE PER FILE.
+    //   file.py: typed 1 char, pasted 4 chars → ratio 5 → high.
+    //   solution.py: the 619-char paste over an empty file → infinite ratio → high.
+    // - paste_is_solution(1): solution.py paste covers 100% of the final content (20/20 lines)
+    //
     // Phase 17 heuristics do not fire on this fixture (no AI tool events, no clock.skew,
     // no heartbeats, single session, extension_hash suppressed via config override above).
-    expect(summary).toEqual(
-      expect.arrayContaining([
+    //
+    // The fixture is SINGLE-SESSION, so no contributor gate is reachable from it
+    // and this count encodes nothing about collaboration. A multi-contributor
+    // fixture must never carry a whole-suite count — see
+    // `contributor-scope-boundary.test.ts`, which asserts per heuristic.
+    const sortKey = (f: { heuristic: string; severity: string }): string =>
+      `${f.heuristic}:${f.severity}`;
+    expect([...summary].map(sortKey).sort()).toEqual(
+      [
         { heuristic: 'chain_broken', severity: 'high' },
-        { heuristic: 'large_paste', severity: 'high' },
         { heuristic: 'external_edits', severity: 'medium' },
+        { heuristic: 'large_paste', severity: 'high' },
+        { heuristic: 'low_typing_high_output', severity: 'high' },
         { heuristic: 'low_typing_high_output', severity: 'high' },
         { heuristic: 'paste_is_solution', severity: 'high' },
-      ]),
+      ]
+        .map(sortKey)
+        .sort(),
     );
-    expect(flags).toHaveLength(6);
 
     // IDs are all unique
     const ids = flags.map((f) => f.id);

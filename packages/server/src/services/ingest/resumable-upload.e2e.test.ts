@@ -32,8 +32,6 @@ import {
   memberships,
   roster_entries,
   ingest_jobs,
-  ingest_files,
-  submissions,
 } from '../../db/schema.js';
 import * as schema from '../../db/schema.js';
 import { startWorker } from '../../jobs/worker.js';
@@ -45,6 +43,7 @@ import {
   completeResumableUpload,
   resolveChunkBytes,
 } from './resumable-upload.js';
+import { expectSoloPlusPairEndState } from '../../../test/helpers/gradescope-group-shape.js';
 import type { DrizzleDb } from '../../db/client.js';
 
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
@@ -237,24 +236,19 @@ describe('resumable upload (create → part → complete → ingest)', () => {
       }
       expect(finalStatus).toBe('succeeded');
 
-      const fileRows = await db
-        .select({ status: ingest_files.status })
-        .from(ingest_files)
-        .where(eq(ingest_files.ingest_job_id, jobId));
-      expect(fileRows).toHaveLength(3);
-      expect(fileRows.every((f) => f.status === 'matched')).toBe(true);
-
-      const subs = await db
-        .select({ student_id: submissions.student_id })
-        .from(submissions)
-        .where(eq(submissions.semester_id, semester!.id));
-      expect(subs).toHaveLength(3);
-
       const roster = await db
         .select({ sid: roster_entries.sid })
         .from(roster_entries)
         .where(eq(roster_entries.semester_id, semester!.id));
       expect(new Set(roster.map((r) => r.sid))).toEqual(new Set(['111', '222', '333']));
+
+      // "The same end state" is the entire point of this test, so it asserts it
+      // with the SAME function the direct and staged paths use — not a
+      // hand-copied subset of it, which is how this assertion came to be a
+      // weaker `.every(status === 'matched')` over three fanned-out rows in the
+      // first place. Post-D9: matched/matched/duplicate, TWO submissions, and
+      // both co-submitters as contributors on the shared one.
+      await expectSoloPlusPairEndState(db, semester!.id, jobId);
     });
   });
 });

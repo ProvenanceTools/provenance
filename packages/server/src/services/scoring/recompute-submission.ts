@@ -76,12 +76,16 @@ import type { DrizzleDb } from '../../db/client.js';
 import { withTransaction } from '../../db/client.js';
 import type { StorageClient } from '../storage/client.js';
 import type { ServerHeuristicConfig } from '../heuristics/config.js';
+import { resolvePerFlag } from '../heuristics/config.js';
 import { reconstructBundleFromDb } from '../heuristics/reconstruct-bundle.js';
 import { runValidation } from '@provenance/analysis-core/validation/run-validation.js';
 import { runAndStoreValidation } from '../ingest/validation.js';
+import { configuredValidationOptions } from '../../config/root-key.js';
 import { computeAndStoreStats } from '../ingest/stats.js';
 import { computeScore } from './compute.js';
 import { computeFlagCounts, computeTopFlags } from './denorm.js';
+import { finalizeContributors } from '../contributors/finalize.js';
+import { existingSubmitterRosterIds } from '../contributors/store-contributors.js';
 
 // ---------------------------------------------------------------------------
 // Threshold forwarding: ServerHeuristicConfig.per_flag[id].thresholds →
@@ -110,6 +114,7 @@ const HEURISTIC_ID_TO_V2_KEY: Readonly<Record<string, keyof HeuristicConfig>> = 
   low_typing_high_output: 'lowTypingHighOutput',
   paste_is_solution: 'pasteIsSolution',
   mass_external_replacement: 'massExternalReplacement',
+  no_intermediate_errors: 'noIntermediateErrors',
   time_to_first_save_anomaly: 'timeToFirstSaveAnomaly',
   idle_then_complete: 'idleThenComplete',
   paste_matches_known_source: 'pasteMatchesKnownSource',
@@ -147,12 +152,15 @@ export type RecomputeResult = {
 };
 
 // ---------------------------------------------------------------------------
-// Internal: translate Flag[] to DB rows (same logic as run-per-submission.ts)
+// Translate Flag[] to DB rows (same logic as run-per-submission.ts)
+//
+// Exported for unit testing — see recompute-submission.test.ts, which pins the
+// missing-per_flag-entry behaviour without needing a container.
 // ---------------------------------------------------------------------------
 
 type FlagRow = typeof flags.$inferInsert;
 
-function translateFlagsToRows(
+export function translateFlagsToRows(
   rawFlags: ReturnType<typeof runHeuristics>,
   index: ReturnType<typeof buildIndex>,
   submissionId: string,
@@ -164,10 +172,15 @@ function translateFlagsToRows(
   const scoreInputs: Array<{ severity: string; score_contribution: number }> = [];
 
   for (const flag of rawFlags) {
-    const perFlagCfg = config.per_flag[flag.heuristic];
+    // A missing per_flag entry means the stored config predates this flag id,
+    // NOT that staff disabled it — resolvePerFlag supplies the enabled default
+    // and is the same function ingest uses, so the two paths cannot disagree.
+    // This line used to read `if (!perFlagCfg || !perFlagCfg.enabled) continue`,
+    // which silently erased every flag the config had never listed.
+    const perFlagCfg = resolvePerFlag(config, flag.heuristic);
 
     // PRD §10.3: disabled heuristics contribute zero and are not stored.
-    if (!perFlagCfg || !perFlagCfg.enabled) {
+    if (!perFlagCfg.enabled) {
       continue;
     }
 
@@ -281,9 +294,10 @@ export async function recomputeSubmission(
   //
   // simulate = dry-run: compute the report but persist nothing.
   // -------------------------------------------------------------------------
+  const validationOptions = configuredValidationOptions();
   const validationReport = simulate
-    ? await runValidation(bundle)
-    : await runAndStoreValidation(db, submissionId, bundle);
+    ? await runValidation(bundle, validationOptions)
+    : await runAndStoreValidation(db, submissionId, bundle, validationOptions);
 
   // -------------------------------------------------------------------------
   // Step 2: Build EventIndex and run heuristics.
@@ -373,6 +387,24 @@ export async function recomputeSubmission(
         top_flags: computeTopFlags(flagRows),
       })
       .where(eq(submissions.id, submissionId));
+
+    // 5f: contributor stage (D9/D14). The flags were just DELETEd and
+    // reinserted with fresh ids and a default `contributor_key`, so every
+    // per-contributor score is now stale — a partner would keep a score from
+    // flags that no longer exist. Same function ingest calls, so the two paths
+    // cannot drift (which `resolvePerFlag` exists because they once did).
+    //
+    // Existing SUBMITTERS are read back and passed in rather than re-derived:
+    // the roster side of attribution is not recoverable from the bundle, so
+    // rebuilding from the bundle alone would drop every co-submitter who never
+    // recorded, and their submission would disappear from their rollup.
+    //
+    // Note the bundle HERE is stamped: it came from `loadSubmissionIndex`,
+    // which calls `establishBundleContributors`. That is the pre-existing
+    // asymmetry with ingest (which runs heuristics on an unstamped bundle) and
+    // this change neither introduces nor widens it.
+    const submitterRosterIds = await existingSubmitterRosterIds(tx, submissionId);
+    await finalizeContributors(tx, submissionId, semesterId, bundle, submitterRosterIds);
   });
 
   return { score_total, score_max_severity, flag_count };

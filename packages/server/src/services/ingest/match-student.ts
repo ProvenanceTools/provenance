@@ -73,6 +73,38 @@ export type RosterResolver = (semesterId: string, sid: string) => Promise<string
  *   - `{ matched: true, studentId, assignmentIdStr, filenameCapture }` on success.
  *   - `{ matched: false, reason }` when no match is possible.
  */
+/**
+ * Resolve JUST the submitter a filename names, with no bundle and no assignment.
+ *
+ * {@link matchStudent} needs a parsed manifest, but only for the ASSIGNMENT
+ * fallback — the student comes from the regex `sid` capture and the roster,
+ * neither of which the bundle is involved in. Phase 2 of the pipeline runs
+ * BEFORE the parse and needs exactly the student half: a byte-identical
+ * duplicate has to attach its submitter as a contributor, and on the filename
+ * path there is no `match_sid` hint to attach.
+ *
+ * Split out rather than duplicated so the two callers cannot disagree about who
+ * a filename names. `matchStudent` calls it; a divergence would mean phase 2
+ * attaching one student and phase 4 matching another for one file.
+ *
+ * Returns `null` for every failure — no regex match, no `sid`, sid not on the
+ * roster. The caller decides what an unresolvable submitter means; at phase 2 it
+ * means the duplicate is recorded with no contributor, which is what happens
+ * today for a file that phase 4 would have rejected anyway.
+ */
+export async function resolveSubmitterFromFilename(
+  semesterId: string,
+  filenameConvention: string,
+  originalFilename: string,
+  resolveRoster: RosterResolver,
+): Promise<string | null> {
+  const parsed = parseFilenameWithConvention(filenameConvention, originalFilename);
+  if (parsed === null) return null;
+  const { sid } = parsed;
+  if (sid === undefined) return null;
+  return resolveRoster(semesterId, sid);
+}
+
 export async function matchStudent(
   semesterId: string,
   filenameConvention: string,

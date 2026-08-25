@@ -72,17 +72,18 @@ vi.mock('vscode', () => {
 // Imports after vi.mock
 // ---------------------------------------------------------------------------
 
-import { startFsWatcher } from './fs-watcher.js';
+import { startFsWatcher, watcherPatternFor, relativePathOf } from './fs-watcher.js';
+import type { FsExternalChangeData } from './fs-watcher.js';
 import { ExpectedContentRegistry } from '../state/expected-content-registry.js';
 import { ExplanationTagger } from '../events/explanation-tags.js';
-import { sha256Hex } from '@provenance/log-core';
+import { sha256Hex, matchesScopeEntry } from '@provenance/log-core';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function makeRegistry(filesUnderReview: string[]) {
-  return new ExpectedContentRegistry(filesUnderReview);
+  return new ExpectedContentRegistry({ track: filesUnderReview, ignore: [], attachments: [] });
 }
 
 // Flush all pending microtasks / Promises
@@ -101,7 +102,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py', 'utils.py'],
+      scope: { track: ['hw.py', 'utils.py'], ignore: [], attachments: [] },
       registry,
       emit: vi.fn(),
       getLastDocChangeAt: () => -Infinity,
@@ -119,7 +120,7 @@ describe('startFsWatcher', () => {
 
     const disposable = startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit: vi.fn(),
       getLastDocChangeAt: () => -Infinity,
@@ -144,7 +145,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       // Last doc.change was 100ms ago; tolerance is default 250ms → within tolerance
@@ -176,7 +177,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       // Last doc.change was 5 seconds ago — way outside tolerance
@@ -222,7 +223,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       // Last doc.change is ancient (VS Code's autosave delay defaults to 1000ms,
@@ -282,7 +283,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       // Well outside the timing tolerance on both anchors, so only the
@@ -371,7 +372,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit: vi.fn(),
       getLastDocChangeAt: () => -Infinity,
@@ -403,7 +404,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -431,7 +432,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -466,7 +467,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -502,7 +503,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -530,12 +531,12 @@ describe('startFsWatcher', () => {
   it('onDidCreate: file appears with no prior baseline → emits operation:create + seeds registry', async () => {
     capturedWatchers.length = 0;
     const newContent = 'def fresh(): return 1\n';
-    const registry = new ExpectedContentRegistry(['hw.py']);
+    const registry = new ExpectedContentRegistry({ track: ['hw.py'], ignore: [], attachments: [] });
     const emit = vi.fn();
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -573,13 +574,13 @@ describe('startFsWatcher', () => {
   it('onDidCreate: file already in registry with same hash → no emit (race with doc.open)', async () => {
     capturedWatchers.length = 0;
     const content = 'already there\n';
-    const registry = new ExpectedContentRegistry(['hw.py']);
+    const registry = new ExpectedContentRegistry({ track: ['hw.py'], ignore: [], attachments: [] });
     registry.getOrCreate('hw.py', content);
     const emit = vi.fn();
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -601,13 +602,13 @@ describe('startFsWatcher', () => {
     capturedWatchers.length = 0;
     const seeded = 'old skeleton\n';
     const disk = 'completely different content\n';
-    const registry = new ExpectedContentRegistry(['hw.py']);
+    const registry = new ExpectedContentRegistry({ track: ['hw.py'], ignore: [], attachments: [] });
     registry.getOrCreate('hw.py', seeded);
     const emit = vi.fn();
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -631,13 +632,13 @@ describe('startFsWatcher', () => {
   it('onDidDelete: registered file → emits operation:delete + clears registry', () => {
     capturedWatchers.length = 0;
     const content = 'about to vanish\n';
-    const registry = new ExpectedContentRegistry(['hw.py']);
+    const registry = new ExpectedContentRegistry({ track: ['hw.py'], ignore: [], attachments: [] });
     registry.getOrCreate('hw.py', content);
     const emit = vi.fn();
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -671,13 +672,13 @@ describe('startFsWatcher', () => {
 
   it('onDidDelete: untracked file → still emits delete with empty old_hash', () => {
     capturedWatchers.length = 0;
-    const registry = new ExpectedContentRegistry(['hw.py']);
+    const registry = new ExpectedContentRegistry({ track: ['hw.py'], ignore: [], attachments: [] });
     // No getOrCreate — file was never opened in VS Code.
     const emit = vi.fn();
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -706,7 +707,7 @@ describe('startFsWatcher', () => {
     capturedWatchers.length = 0;
     const original = 'original\n';
     const replacement = 'replacement\n';
-    const registry = new ExpectedContentRegistry(['hw.py']);
+    const registry = new ExpectedContentRegistry({ track: ['hw.py'], ignore: [], attachments: [] });
     registry.getOrCreate('hw.py', original);
     const emit = vi.fn();
 
@@ -714,7 +715,7 @@ describe('startFsWatcher', () => {
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -752,13 +753,13 @@ describe('startFsWatcher', () => {
     capturedWatchers.length = 0;
     const originalContent = 'def hello(): pass\n';
     const newContent = 'def hello(): return 42\n';
-    const registry = new ExpectedContentRegistry(['hw.py']);
+    const registry = new ExpectedContentRegistry({ track: ['hw.py'], ignore: [], attachments: [] });
     registry.getOrCreate('hw.py', originalContent);
     const emit = vi.fn();
 
     startFsWatcher({
       assignmentRoot: '/workspace',
-      filesUnderReview: ['hw.py'],
+      scope: { track: ['hw.py'], ignore: [], attachments: [] },
       registry,
       emit,
       getLastDocChangeAt: () => -Infinity,
@@ -775,5 +776,99 @@ describe('startFsWatcher', () => {
     await flushPromises();
     expect(emit).toHaveBeenCalledOnce();
     expect((emit.mock.calls[0]![0] as { operation: string }).operation).toBe('modify');
+  });
+
+  it('does not emit for a path the editor glob admits but the matcher rejects', async () => {
+    // 'src/**' is handed to VS Code as a coarse pre-filter. If the editor
+    // delivers something outside our own matcher — a different glob dialect, a
+    // case-insensitive filesystem — we must stay silent. Design spec §4.2.
+    capturedWatchers.length = 0;
+    const scope = { track: ['src/'], ignore: ['*.class'], attachments: [] };
+    const registry = new ExpectedContentRegistry(scope);
+    const emitted: FsExternalChangeData[] = [];
+
+    startFsWatcher({
+      assignmentRoot: '/workspace',
+      scope,
+      registry,
+      emit: (d) => emitted.push(d),
+      getLastDocChangeAt: () => -Infinity,
+      getLastSaveAt: () => -Infinity,
+      getNow: () => 1000,
+      readFile: vi.fn().mockResolvedValue('compiled'),
+    });
+
+    const watcher = getWatchers().find(
+      (w) => (w.pattern as { pattern: string }).pattern === 'src/**',
+    );
+    watcher?.createHandler?.({ fsPath: '/workspace/src/A.class' });
+
+    await flushPromises();
+    expect(emitted).toEqual([]);
+  });
+});
+
+describe('watcherPatternFor', () => {
+  it('widens a directory entry to a recursive editor glob', () => {
+    expect(watcherPatternFor('src/')).toBe('src/**');
+  });
+
+  it('widens a suffix entry to any depth', () => {
+    expect(watcherPatternFor('*.java')).toBe('**/*.java');
+  });
+
+  it('leaves an exact path alone', () => {
+    expect(watcherPatternFor('Makefile')).toBe('Makefile');
+  });
+});
+
+describe('relativePathOf', () => {
+  it('strips the assignment root and normalises separators', () => {
+    expect(relativePathOf('/ws', { fsPath: '/ws/src/Main.java' })).toBe('src/Main.java');
+    expect(relativePathOf('/ws/', { fsPath: '/ws/src/Main.java' })).toBe('src/Main.java');
+    expect(relativePathOf('C:\\ws', { fsPath: 'C:\\ws\\src\\Main.java' })).toBe('src/Main.java');
+  });
+
+  it('tolerates a case divergence in the root prefix (the Windows drive letter)', () => {
+    // VS Code does not promise that `uri.fsPath` and the string the workspace
+    // folder was opened with agree on CASE — on Windows the drive letter
+    // routinely diverges. When they did not, this used to return the FULL
+    // ABSOLUTE PATH, which resolves to 'unscoped' and silently suppressed the
+    // fs.external_change emit, losing external-change detection for the whole
+    // session.
+    expect(relativePathOf('C:\\ws', { fsPath: 'c:\\ws\\src\\Main.java' })).toBe('src/Main.java');
+    expect(relativePathOf('/Users/A/ws', { fsPath: '/users/a/ws/Main.java' })).toBe('Main.java');
+  });
+
+  it('returns null — never the absolute path — for a URI outside the root', () => {
+    // Returning the absolute path was worse than useless. `/elsewhere/X.java`
+    // still ENDS with `.java`, so a `*.java` suffix rule MATCHES it, and the
+    // recorder would emit an event whose `path` is an absolute location on the
+    // student machine that joins against nothing downstream.
+    expect(matchesScopeEntry('/elsewhere/X.java', '*.java')).toBe(true);
+    expect(relativePathOf('/ws', { fsPath: '/elsewhere/X.java' })).toBeNull();
+  });
+
+  it('suppresses the emit for a URI outside the assignment root', async () => {
+    capturedWatchers.length = 0;
+    const registry = makeRegistry(['*.java']);
+    registry.getOrCreate('X.java', 'old');
+    const emit = vi.fn();
+
+    startFsWatcher({
+      assignmentRoot: '/workspace',
+      scope: { track: ['*.java'], ignore: [], attachments: [] },
+      registry,
+      emit,
+      getLastDocChangeAt: () => -Infinity,
+      getLastSaveAt: () => -Infinity,
+      getNow: () => 10000,
+      readFile: vi.fn().mockResolvedValue('new'),
+    });
+
+    getWatchers()[0]?.changeHandler?.({ fsPath: '/elsewhere/X.java' });
+
+    await flushPromises();
+    expect(emit).not.toHaveBeenCalled();
   });
 });

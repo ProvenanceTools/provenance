@@ -302,3 +302,87 @@ describe('EventSidebar — wall time and terminal summary', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Contributor marker — opt-in, lane mode only (split-replay-lanes design §4/§7).
+//
+// The main describe block above never passes `contributorHueBySession`, so
+// its assertions prove the omitted-prop path renders exactly what it did
+// before this prop existed — that's the "strictly opt-in" requirement, not
+// re-asserted here.
+// ---------------------------------------------------------------------------
+
+describe('EventSidebar — contributor marker (opt-in)', () => {
+  function eventFor(globalIdx: number, sessionId: string): IndexedEvent {
+    return {
+      sessionId,
+      seq: globalIdx,
+      globalIdx,
+      wall: '2026-01-01T00:00:00.000Z',
+      t: globalIdx * 100,
+      kind: 'doc.change',
+      payload: null,
+    } as IndexedEvent;
+  }
+
+  // A: mapped, B: mapped (different hue), C: no entry in the map at all —
+  // the "unmapped session" case.
+  const THREE_SESSIONS: IndexedEvent[] = [
+    eventFor(0, 'sessA'),
+    eventFor(1, 'sessB'),
+    eventFor(2, 'sessC'),
+  ];
+
+  const HUE_A = 'rgba(59, 130, 246, 0.9)'; // blue-500, contributor-palette's first cycle hue
+  const HUE_B = 'rgba(139, 92, 246, 0.9)'; // violet-500, second cycle hue
+
+  it('renders no marker for any row when the prop is omitted', () => {
+    render(<EventSidebar events={THREE_SESSIONS} currentGlobalIdx={-1} onSeek={vi.fn()} />);
+    expect(screen.queryAllByTestId(/^sidebar-row-contributor-/)).toHaveLength(0);
+  });
+
+  it("carries contributor A's hue, contributor B's hue, and no marker at all for the unmapped session", async () => {
+    const hueBySession = new Map([
+      ['sessA', HUE_A],
+      ['sessB', HUE_B],
+      // 'sessC' deliberately absent — no contributor entry.
+    ]);
+    render(
+      <EventSidebar
+        events={THREE_SESSIONS}
+        currentGlobalIdx={-1}
+        onSeek={vi.fn()}
+        contributorHueBySession={hueBySession}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-row-contributor-0')).toBeInTheDocument();
+    });
+    const markerA = screen.getByTestId('sidebar-row-contributor-0');
+    const markerB = screen.getByTestId('sidebar-row-contributor-1');
+    expect(markerA.style.backgroundColor).toBe(HUE_A);
+    expect(markerB.style.backgroundColor).toBe(HUE_B);
+    expect(markerA).toHaveAttribute('aria-hidden', 'true');
+    expect(markerB).toHaveAttribute('aria-hidden', 'true');
+
+    // No default/fallback colour for a session absent from the map — no
+    // marker element at all for that row.
+    expect(screen.queryByTestId('sidebar-row-contributor-2')).toBeNull();
+  });
+
+  it('does not change the row height the virtualizer sizes on', async () => {
+    const hueBySession = new Map([['sessA', HUE_A]]);
+    render(
+      <EventSidebar
+        events={THREE_SESSIONS}
+        currentGlobalIdx={-1}
+        onSeek={vi.fn()}
+        contributorHueBySession={hueBySession}
+      />,
+    );
+    await waitFor(() => {
+      const row = screen.getByTestId('sidebar-row-0'); // carries the marker
+      expect(row.style.height).toBe('36px'); // ROW_HEIGHT
+    });
+  });
+});

@@ -557,3 +557,277 @@ describe('POST /semesters/:semesterId/assignments', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// ingest_scope — the per-assignment persisted default, over the API
+//
+// This column has existed since migration 0023 but no route could write it, so
+// provgate could only configure anything by writing Postgres directly. These
+// cover the read+write surface it actually uses.
+// ---------------------------------------------------------------------------
+
+describe('assignments ingest_scope — the persisted declared submission type', () => {
+  /** Boilerplate every case below shares: admin + session + semester. */
+  async function seedAdmin(db: DrizzleDb) {
+    const admin = await insertUser(db, { email: 'admin@berkeley.edu' });
+    const sessionId = await insertSession(db, admin.id);
+    const course = await insertCourse(db);
+    const semester = await insertSemester(db, course.id);
+    await insertMembership(db, admin.id, semester.id, 'admin', admin.id);
+    return { admin, sessionId, semester };
+  }
+
+  function patch(semesterId: string, assignmentId: string, sessionId: string, body: unknown) {
+    return new Request(`http://localhost/semesters/${semesterId}/assignments/${assignmentId}`, {
+      method: 'PATCH',
+      headers: { Cookie: `__Host-prov_sess=${sessionId}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('defaults to self_identifying, and reports it on the summary', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      try {
+        const { sessionId, semester } = await seedAdmin(db);
+        const a = await insertAssignment(db, semester.id);
+
+        const res = await createV1App().fetch(
+          patch(semester.id, a.id, sessionId, { label: 'untouched-scope' }),
+        );
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { assignment: { ingest_scope: unknown } };
+        // The column default, surfaced verbatim — this is what "an existing
+        // assignment behaves as before" looks like from the API.
+        expect(body.assignment.ingest_scope).toEqual({
+          mode: 'self_identifying',
+          on_multiple: 'ingest_all',
+        });
+      } finally {
+        _testDb = null;
+      }
+    });
+  });
+
+  it('PATCH writes each declared type and reads it straight back', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      try {
+        const { sessionId, semester } = await seedAdmin(db);
+        const a = await insertAssignment(db, semester.id);
+        const app = createV1App();
+
+        const declarations = [
+          { mode: 'bundle_zip', on_multiple: 'ingest_all' },
+          { mode: 'repo_whole', on_multiple: 'error' },
+          { mode: 'repo_scoped', path_glob: 'proj2/**', on_multiple: 'ingest_all' },
+          { mode: 'self_identifying', on_multiple: 'ingest_all' },
+        ];
+
+        for (const ingest_scope of declarations) {
+          const res = await app.fetch(patch(semester.id, a.id, sessionId, { ingest_scope }));
+          expect(res.status).toBe(200);
+          const body = (await res.json()) as { assignment: { ingest_scope: unknown } };
+          expect(body.assignment.ingest_scope).toEqual(ingest_scope);
+
+          const [row] = await db.select().from(assignments).where(eq(assignments.id, a.id));
+          expect(row!.ingest_scope).toEqual(ingest_scope);
+        }
+      } finally {
+        _testDb = null;
+      }
+    });
+  });
+
+  it('replaces ingest_scope wholesale rather than merging — no stale path_glob survives', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      try {
+        const { sessionId, semester } = await seedAdmin(db);
+        const a = await insertAssignment(db, semester.id, {
+          ingest_scope: { mode: 'repo_scoped', path_glob: 'proj2/**', on_multiple: 'ingest_all' },
+        });
+        const app = createV1App();
+
+        const res = await app.fetch(
+          patch(semester.id, a.id, sessionId, {
+            ingest_scope: { mode: 'repo_whole', on_multiple: 'ingest_all' },
+          }),
+        );
+        expect(res.status).toBe(200);
+        const [row] = await db.select().from(assignments).where(eq(assignments.id, a.id));
+        // A merge would have left `proj2/**` behind, silently scoping a repo
+        // that the operator just declared to be whole.
+        expect(row!.ingest_scope).toEqual({ mode: 'repo_whole', on_multiple: 'ingest_all' });
+      } finally {
+        _testDb = null;
+      }
+    });
+  });
+
+  it('rejects a repo_scoped with no path_glob — a glob-less scope selects nothing', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      try {
+        const { sessionId, semester } = await seedAdmin(db);
+        const a = await insertAssignment(db, semester.id);
+
+        const res = await createV1App().fetch(
+          patch(semester.id, a.id, sessionId, {
+            ingest_scope: { mode: 'repo_scoped', on_multiple: 'ingest_all' },
+          }),
+        );
+        expect(res.status).toBe(400);
+
+        // Nothing was written.
+        const [row] = await db.select().from(assignments).where(eq(assignments.id, a.id));
+        expect(row!.ingest_scope).toEqual({
+          mode: 'self_identifying',
+          on_multiple: 'ingest_all',
+        });
+      } finally {
+        _testDb = null;
+      }
+    });
+  });
+
+  it("rejects the pre-0026 'path' spelling and an unknown mode at the API boundary", async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      try {
+        const { sessionId, semester } = await seedAdmin(db);
+        const a = await insertAssignment(db, semester.id);
+        const app = createV1App();
+
+        for (const mode of ['path', 'nonsense']) {
+          const res = await app.fetch(
+            patch(semester.id, a.id, sessionId, {
+              ingest_scope: { mode, path_glob: 'proj2/**', on_multiple: 'ingest_all' },
+            }),
+          );
+          expect(res.status).toBe(400);
+        }
+      } finally {
+        _testDb = null;
+      }
+    });
+  });
+
+  it('a pre-0026 row stored as mode=path still reads back as repo_scoped', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      try {
+        const { sessionId, semester } = await seedAdmin(db);
+        // Exactly what migration 0023 could produce and 0026 rewrites. Written
+        // straight to the column, bypassing the API, to stand in for a row that
+        // predates the rename — proving the SERVER, not the rewrite, is what
+        // keeps such a row working.
+        const a = await insertAssignment(db, semester.id, {
+          ingest_scope: { mode: 'path', path_glob: 'proj2/**', on_multiple: 'error' },
+        });
+
+        const res = await createV1App().fetch(
+          patch(semester.id, a.id, sessionId, { label: 'legacy' }),
+        );
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { assignment: { ingest_scope: unknown } };
+        expect(body.assignment.ingest_scope).toEqual({
+          mode: 'repo_scoped',
+          path_glob: 'proj2/**',
+          on_multiple: 'error',
+        });
+      } finally {
+        _testDb = null;
+      }
+    });
+  });
+
+  it('POST /assignments declares the scope at creation time (provgate mapping)', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      try {
+        const { sessionId, semester } = await seedAdmin(db);
+
+        const res = await createV1App().fetch(
+          new Request(`http://localhost/semesters/${semester.id}/assignments`, {
+            method: 'POST',
+            headers: {
+              Cookie: `__Host-prov_sess=${sessionId}`,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+              assignment_id_str: 'proj2',
+              label: 'Project 2',
+              ingest_scope: {
+                mode: 'repo_scoped',
+                path_glob: 'proj2/**',
+                on_multiple: 'ingest_all',
+              },
+            }),
+          }),
+        );
+        expect(res.status).toBe(201);
+        const body = (await res.json()) as { assignment: { id: string; ingest_scope: unknown } };
+        expect(body.assignment.ingest_scope).toEqual({
+          mode: 'repo_scoped',
+          path_glob: 'proj2/**',
+          on_multiple: 'ingest_all',
+        });
+
+        const [row] = await db
+          .select()
+          .from(assignments)
+          .where(eq(assignments.id, body.assignment.id));
+        expect(row!.ingest_scope).toEqual({
+          mode: 'repo_scoped',
+          path_glob: 'proj2/**',
+          on_multiple: 'ingest_all',
+        });
+      } finally {
+        _testDb = null;
+      }
+    });
+  });
+
+  it('POST without ingest_scope leaves the column DEFAULT in place', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      try {
+        const { sessionId, semester } = await seedAdmin(db);
+
+        const res = await createV1App().fetch(
+          new Request(`http://localhost/semesters/${semester.id}/assignments`, {
+            method: 'POST',
+            headers: {
+              Cookie: `__Host-prov_sess=${sessionId}`,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({ assignment_id_str: 'hw9' }),
+          }),
+        );
+        expect(res.status).toBe(201);
+        const body = (await res.json()) as { assignment: { ingest_scope: unknown } };
+        expect(body.assignment.ingest_scope).toEqual({
+          mode: 'self_identifying',
+          on_multiple: 'ingest_all',
+        });
+      } finally {
+        _testDb = null;
+      }
+    });
+  });
+
+  it('an empty PATCH body is still rejected now that a third field exists', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      try {
+        const { sessionId, semester } = await seedAdmin(db);
+        const a = await insertAssignment(db, semester.id);
+        const res = await createV1App().fetch(patch(semester.id, a.id, sessionId, {}));
+        expect(res.status).toBe(400);
+      } finally {
+        _testDb = null;
+      }
+    });
+  });
+});

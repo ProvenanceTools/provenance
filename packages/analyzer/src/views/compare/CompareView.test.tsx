@@ -26,6 +26,7 @@ import { CompareView } from './CompareView.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import type { ReactNode } from 'react';
 import type { CrossFlag } from '@provenance/analysis-core/heuristics/cross/types.js';
+import type { SameScopeExclusion } from '@provenance/analysis-core/coverage/cross-scope.js';
 
 // Wire SHA-512 override so ed25519 works in jsdom.
 ed.hashes.sha512 = sha512;
@@ -254,7 +255,10 @@ function makeCrossFlag(partial: Partial<CrossFlag> = {}): CrossFlag {
   };
 }
 
-function makeStubContext(crossFlags: CrossFlag[]): BundleContextValue {
+function makeStubContext(
+  crossFlags: CrossFlag[],
+  crossScopeExclusions: SameScopeExclusion[] = [],
+): BundleContextValue {
   return {
     bundles: [
       {
@@ -283,12 +287,17 @@ function makeStubContext(crossFlags: CrossFlag[]): BundleContextValue {
     validationReport: null,
     flags: [],
     crossFlags,
+    crossScopeExclusions,
     status: 'loaded',
     loadingStage: null,
     loadError: null,
     partialLoadErrors: [],
     loadBundleFile: vi.fn(),
     loadBundleFiles: vi.fn(),
+    pendingScopes: null,
+    beginLoad: async () => {},
+    chooseScopes: async () => {},
+    cancelChoice: () => {},
     clearBundle: vi.fn(),
   };
 }
@@ -583,5 +592,97 @@ describe('CompareView — selectedIds auto-sync', () => {
     for (const cb of checkboxes) {
       expect((cb as HTMLInputElement).checked).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Same-scope exclusions (spec S20)
+//
+// The fix that stops `paste_shared_across_students` firing on every honest
+// partner pair also has to be VISIBLE. A grader reading "no cross-submission
+// findings" must be able to tell a searched comparison from a withheld one;
+// the assertion that the flag is absent is only honest if the reason is stated
+// somewhere the same grader will see it.
+// ---------------------------------------------------------------------------
+
+describe('CompareView - same-scope exclusions', () => {
+  beforeEach(() => {
+    mockUseBundleEnabled = true;
+  });
+  afterEach(() => {
+    mockUseBundleEnabled = false;
+    mockUseBundleReturn = null;
+  });
+
+  const partnerExclusion: SameScopeExclusion = {
+    reason: 'same_repository_lineage',
+    bundleIds: ['bundle-a', 'bundle-b'],
+    sourceFilenames: ['student-a.zip', 'student-b.zip'],
+    sharedCommits: ['repository:assumed-single ' + 'ab'.repeat(20)],
+    sharedSessions: [],
+    excludedPairCount: 1,
+  };
+
+  it('states an excluded pair as a fact, with the commits that proved it', () => {
+    mockUseBundleReturn = makeStubContext([], [partnerExclusion]);
+
+    render(
+      <MemoryRouter>
+        <CompareView />
+      </MemoryRouter>,
+    );
+
+    const panel = screen.getByTestId('cross-scope-exclusions');
+    expect(panel).toBeTruthy();
+    expect(panel.textContent).toContain('student-a.zip');
+    expect(panel.textContent).toContain('student-b.zip');
+    expect(panel.textContent).toContain('Same repository lineage');
+    expect(panel.textContent).toContain('1 comparison not applicable');
+    // The evidence itself, not just the claim.
+    expect(screen.getByTestId('cross-scope-exclusion-commits').textContent).toContain(
+      'ab'.repeat(20),
+    );
+  });
+
+  it('renders nothing when no pair was excluded', () => {
+    // A solo cohort must not grow an empty frame implying something was hidden.
+    mockUseBundleReturn = makeStubContext([]);
+
+    render(
+      <MemoryRouter>
+        <CompareView />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByTestId('cross-scope-exclusions')).toBeNull();
+  });
+
+  it('still explains the exclusion when only part of the group is selected', () => {
+    // Deselecting a member must not silently remove the explanation for the
+    // pair that is still on screen.
+    const threeWay: SameScopeExclusion = {
+      reason: 'same_repository_lineage',
+      bundleIds: ['bundle-a', 'bundle-b', 'bundle-z'],
+      sourceFilenames: ['student-a.zip', 'student-b.zip', 'student-z.zip'],
+      sharedCommits: ['repository:assumed-single ' + 'cd'.repeat(20)],
+      sharedSessions: [],
+      excludedPairCount: 3,
+    };
+    // Only bundle-a and bundle-b are loaded in the stub, so bundle-z is not
+    // selected - exactly the partial case.
+    mockUseBundleReturn = makeStubContext([], [threeWay]);
+
+    render(
+      <MemoryRouter>
+        <CompareView />
+      </MemoryRouter>,
+    );
+
+    const panel = screen.getByTestId('cross-scope-exclusions');
+    expect(panel.textContent).toContain('student-a.zip');
+    expect(panel.textContent).toContain('student-b.zip');
+    // Rescoped to the pair actually on screen, not the whole lineage.
+    expect(panel.textContent).not.toContain('student-z.zip');
+    expect(panel.textContent).toContain('1 comparison not applicable');
   });
 });

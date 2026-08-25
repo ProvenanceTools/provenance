@@ -1,6 +1,6 @@
 // NDJSON serialization
-export { serializeEntry, parseEntries } from './ndjson.js';
-export type { ParseError } from './ndjson.js';
+export { serializeEntry, parseEntries, parseEntriesToleratingTornTail } from './ndjson.js';
+export type { ParseError, TornTail, TolerantParse } from './ndjson.js';
 
 // Buffer policy
 export { shouldFlush, DEFAULT_BUFFER_POLICY } from './buffer-policy.js';
@@ -19,6 +19,29 @@ export type {
   ValidationReport,
 } from './bundle.js';
 
+// Rolling seal — per-session manifest-<session_id>.json (git-native submission)
+export {
+  ROLLING_MANIFEST_FORMAT_VERSION,
+  rollingManifestFilenames,
+  parseRollingManifestFilename,
+  validateRollingSessionManifest,
+  describeRollingManifestError,
+  isFinalRollingSeal,
+} from './rolling-manifest.js';
+export type { RollingSessionManifest, RollingManifestError } from './rolling-manifest.js';
+
+// The `.gitattributes` all three recorders write into `.provenance/`, so the
+// bytes git must not rewrite have exactly one definition. See git-attributes.ts.
+export {
+  PROVENANCE_GITATTRIBUTES_FILENAME,
+  PROVENANCE_GITATTRIBUTES_CONTENT,
+  looksLikeItDisablesEolTranslation,
+} from './git-attributes.js';
+
+// Prefix digests — reading a rolling seal's log commitment as the PREFIX
+// commitment it actually is. See prefix-digest.ts.
+export { findSha256PrefixLength } from './prefix-digest.js';
+
 // Bundle manifest signing (shared by recorder seal + seed tooling)
 export { signBundleManifest } from './bundle-sign.js';
 export type { SignedBundleManifest } from './bundle-sign.js';
@@ -36,8 +59,165 @@ export { signCheckpoint, verifyCheckpoint } from './checkpoint-signer.js';
 export type { Checkpoint } from './checkpoint-signer.js';
 
 // Assignment manifest (.provenance-manifest / provenance-manifest)
-export { parseManifest, verifyManifest, signManifest } from './manifest.js';
-export type { Manifest, ManifestError } from './manifest.js';
+export {
+  parseManifest,
+  parseManifestValue,
+  verifyManifest,
+  signManifest,
+  verifyManifestChain,
+  manifestFormatVersion,
+  scopeFromManifest,
+  MANIFEST_FORMAT_VERSION_LEGACY,
+  MANIFEST_FORMAT_VERSION_2,
+} from './manifest.js';
+export type {
+  Manifest,
+  ManifestError,
+  ManifestChainError,
+  ManifestChainOk,
+  ManifestCollaboration,
+  ManifestSubmission,
+  ManifestScope,
+} from './manifest.js';
+
+// Course certificate (root → course key, Manifest 2.0 trust chain)
+export {
+  parseCourseCert,
+  verifyCourseCert,
+  signCourseCert,
+  checkCertWindow,
+  buildCourseCertSignedPayload,
+  parseIsoInstantMs,
+} from './course-cert.js';
+export type { CourseCert, CourseCertError, CertWindowStatus } from './course-cert.js';
+
+// Enrollment cert + token (course → enrollment key → student key, S2 identity chain)
+export {
+  parseEnrollmentCert,
+  parseEnrollmentToken,
+  signEnrollmentCert,
+  signEnrollmentToken,
+  signSessionPubkey,
+  verifyEnrollmentCert,
+  verifyEnrollmentToken,
+  verifySessionPubkeySig,
+  verifyIdentityChain,
+  checkTokenWindow,
+  checkEnrollmentCertWindow,
+  buildEnrollmentCertSignedPayload,
+  buildEnrollmentTokenSignedPayload,
+  buildSessionPubkeyBindingPayload,
+  ENROLLMENT_FORMAT_VERSION,
+  SESSION_PUBKEY_BINDING_PURPOSE,
+} from './enrollment.js';
+export type {
+  EnrollmentCert,
+  EnrollmentError,
+  IdentityChainError,
+  IdentityChainOk,
+} from './enrollment.js';
+
+// Institution cert + student credential (root → institution key → student key).
+// The CURRENT identity chain; `enrollment.ts` above is the legacy course-scoped
+// one, kept live forever for archived bundles.
+export {
+  parseInstitutionCert,
+  parseStudentCredential,
+  signInstitutionCert,
+  signStudentCredential,
+  signStudentSessionBinding,
+  verifyInstitutionCert,
+  verifyStudentCredential,
+  verifyStudentSessionBinding,
+  checkInstitutionCertWindow,
+  checkCredentialWindow,
+  buildInstitutionCertSignedPayload,
+  buildStudentCredentialSignedPayload,
+  buildStudentSessionBindingPayload,
+  INSTITUTION_IDENTITY_FORMAT_VERSION,
+  STUDENT_SESSION_BINDING_PURPOSE,
+} from './institution.js';
+export type { InstitutionCert, StudentCredential, InstitutionError } from './institution.js';
+
+// Student master secret + key derivation (S2).
+// `deriveStudentKey*` is the current global derivation; `deriveCourseKey*` is the
+// legacy per-course one, retained for archived material.
+export {
+  deriveCourseKeySeed,
+  deriveCourseKeypair,
+  deriveStudentKeySeed,
+  deriveStudentKeypair,
+  generateStudentMasterSecret,
+  STUDENT_KEY_HKDF_INFO_PREFIX,
+  STUDENT_KEY_HKDF_INFO,
+  STUDENT_KEY_HKDF_SALT,
+  STUDENT_KEY_SEED_BYTES,
+  STUDENT_MASTER_SECRET_BYTES,
+} from './student-keys.js';
+export type { StudentCourseKeypair } from './student-keys.js';
+
+// Capture policy (professor-facing capture controls)
+export {
+  resolveCapturePolicy,
+  isEventKindCaptured,
+  DEFAULT_CAPTURE_POLICY,
+  FLOOR_EVENT_KINDS,
+  POLICY_GATED_EVENT_KINDS,
+  HEARTBEAT_INTERVAL_MIN_MS,
+  HEARTBEAT_INTERVAL_MAX_MS,
+} from './policy.js';
+export type { CapturePolicy, CapturePolicyBlock } from './policy.js';
+
+// Path scope (design spec 2026-08-22 §3) — the single matcher for scope entries
+export {
+  validateScopeEntry,
+  isExactEntry,
+  matchesScopeEntry,
+  matchesAnyScopeEntry,
+  isHardExcluded,
+  resolvePathRole,
+  HARD_EXCLUDED_PREFIXES,
+  HARD_EXCLUDED_PATHS,
+} from './path-scope.js';
+export type { ScopeEntryProblem, ResolvedScope, PathRole } from './path-scope.js';
+
+// Peer witnessing (program spec §7 mechanism 2 / collaboration spec §5.5)
+export {
+  validatePeerObservedPayload,
+  describePeerObservedShapeError,
+  PEER_OBSERVED_STATES,
+} from './peer-observed.js';
+export type { PeerObservedShapeError } from './peer-observed.js';
+
+// The git.event repository discriminator — root-commit sha (decision D12)
+export { readRepositoryDiscriminator, REPOSITORY_DISCRIMINATOR_FIELD } from './git-event.js';
+export type { RepositoryDiscriminatorRead, RepositoryDiscriminatorProblem } from './git-event.js';
+
+// The three session.start capability reports (collaboration spec §5.6)
+export {
+  GIT_CAPTURE_FIELD,
+  WITNESS_CAPTURE_FIELD,
+  FILE_SCOPE_FIELD,
+  GIT_CAPTURE_VALUES,
+  WITNESS_CAPTURE_VALUES,
+  readGitCapture,
+  readWitnessCapture,
+  readFileScope,
+  buildFileScope,
+  describeGitCapture,
+  describeWitnessCapture,
+  describeCapabilityValueProblem,
+  describeFileScopeProblem,
+} from './session-capabilities.js';
+export type {
+  GitCaptureCapability,
+  WitnessCaptureCapability,
+  GitCaptureRead,
+  WitnessCaptureRead,
+  FileScopeRead,
+  CapabilityValueProblem,
+  FileScopeProblem,
+} from './session-capabilities.js';
 
 // Events
 export type {
@@ -47,7 +227,11 @@ export type {
   Position,
   Range,
   DocChangeDelta,
+  HostInfo,
+  EnrollmentToken,
+  SessionIdentity,
   SessionStartPayload,
+  SessionFileScope,
   SessionHeartbeatPayload,
   SessionResumedPayload,
   SessionEndPayload,
@@ -69,6 +253,7 @@ export type {
   ChainBrokenPayload,
   RecorderDegradedPayload,
   RecorderRecoveredFromCorruptionPayload,
+  PeerObservedPayload,
 } from './events.js';
 
 // Envelope

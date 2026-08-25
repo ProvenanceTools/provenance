@@ -21,6 +21,8 @@
 import {
   buildKindNgramSet,
   NGRAM_SIZE,
+  observedCommitKeysOf,
+  recordedSessionKeysOf,
   REPRESENTATIVE_EVENT_COUNT,
 } from '@provenance/analysis-core/heuristics/cross/features.js';
 import type {
@@ -28,6 +30,8 @@ import type {
   CrossPasteFeature,
 } from '@provenance/analysis-core/heuristics/cross/types.js';
 import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
+import type { Bundle } from '@provenance/analysis-core/loader/types.js';
+import { resolveBundleCapturePolicy } from '@provenance/analysis-core/manifest/bundle-manifest.js';
 
 export type ExtractedCrossFeatures = {
   features: CrossSubmissionFeatures;
@@ -52,6 +56,24 @@ export function extractCrossFeaturesFromIndex(
   index: EventIndex,
   submissionId: string,
   bundleId: string,
+  /**
+   * The parsed bundle the index came from, used only to read the recorded
+   * capture policy. Optional so callers holding an index alone keep working;
+   * absent means "nothing disabled", which is the truth for every 1.x bundle.
+   *
+   * editing_pattern_clone needs this: a course that switches a gated event kind
+   * off shrinks the kind alphabet the fingerprint is built from, which inflates
+   * Jaccard similarity across the whole cohort at once.
+   *
+   * It is also where BOTH same-scope exclusion keys come from (spec S20): the
+   * observed commit DAG is walked over the bundle's `git.event`s, which the
+   * EventIndex alone does not carry the session grouping for. A caller with no
+   * bundle therefore gets neither `observedCommitKeys` nor
+   * `recordedSessionKeys`, which reads as "never
+   * computed" and suppresses nothing — the direction that fails toward
+   * comparing rather than toward silence.
+   */
+  bundle?: Bundle,
 ): ExtractedCrossFeatures {
   const ordered = index.ordered;
 
@@ -95,6 +117,20 @@ export function extractCrossFeaturesFromIndex(
     kindNgrams,
     eventCount: ordered.length,
     representativeSeqKeys,
+    ...(bundle === undefined
+      ? {}
+      : {
+          disabledCaptureSignals: resolveBundleCapturePolicy(bundle).disabledSignals,
+          // The SAME derivation the browser path uses — imported, never
+          // reimplemented, so the two cannot drift into disagreeing about which
+          // pairs are one repository.
+          observedCommitKeys: observedCommitKeysOf(bundle),
+          // The second same-scope key, imported from the same module for the
+          // same reason. This one is what covers an honest partner pair whose
+          // recorders never observed a commit — a shared `.provenance/` on a
+          // host with no git integration, or commits made from a terminal.
+          recordedSessionKeys: recordedSessionKeysOf(bundle),
+        }),
   };
 
   return { features, globalIdxBySeqKey };

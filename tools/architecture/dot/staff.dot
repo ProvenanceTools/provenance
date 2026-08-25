@@ -50,9 +50,9 @@ digraph staff {
     fontcolor="#e8559c" color="#4a1b35" penwidth=1.5 style=rounded
     bgcolor="#150a10" labeljust="l"
     node [fillcolor="#2a0f1e" color="#e8559c" fontsize=9]
-    t1 [label="overview\nranked flags + headline stats"]
-    t2 [label="timeline\nevery event on a scrubable axis"]
-    t3 [label="replay\nwatch the file being written; external changes\nare framed in place, then the view returns\nto the caret"]
+    t1 [label="overview\nranked flags + headline stats\n+ the assignment-manifest card:\ncourse, cert validity, trust-chain verdict,\nand which signals the COURSE switched off"]
+    t2 [label="timeline\nevery event on a scrubable axis, ordered by ≺\nrather than by wall clock — one useServerScope\nhook feeds this tab and replay alike, off\nSubmissionSummary.contributor_stamp"]
+    t3 [label="replay\nwatch the file being written; external changes\nare framed in place, then the view returns\nto the caret. Same scope as the timeline, so two\npartners' concurrent work is never linearized"]
     t4 [label="validation\nthe 8 checks, with the failing seq"]
     t5 [label="source\nreconstructed content with per-line provenance"]
   }
@@ -66,7 +66,7 @@ digraph staff {
     node [fillcolor="#0d2416" color="#3fbf62" fontsize=9.5]
     judge [label="is the flag class\nfiring on ordinary work?" shape=diamond fillcolor="#12161f"
            fontsize=9 height=0.95 width=2.2]
-    tune  [label="/tuning — 25 flag weights\n(0.0–2.0) + on/off, not thresholds"]
+    tune  [label="/tuning — 29 flag weights\n(0.0–2.0) + on/off, not thresholds"]
     recomp[label="enqueue cohort recompute\nre-parses each bundle, RE-RUNS validation,\nthen re-runs heuristics against it" fontsize=9]
   }
 

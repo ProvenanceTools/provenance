@@ -289,6 +289,69 @@ describe('integrityFlagsFromReport — Phase 17 extended checks', () => {
 });
 
 // ---------------------------------------------------------------------------
+// flagOverride — checkpoint_chain_valid's tail-ambiguous seq_absent
+// ---------------------------------------------------------------------------
+
+describe('integrityFlagsFromReport — flagOverride', () => {
+  it('uses flagOverride severity/confidence/description instead of CHECK_META when present', () => {
+    const report: ValidationReport = {
+      ...makePassReport(),
+      overall: 'fail',
+      bundleDetections: [
+        {
+          id: 'checkpoint_chain_valid',
+          label: 'Signed session checkpoints agree with the log',
+          status: 'fail',
+          detail: 'a validly signed checkpoint names seq 6, but no entry with that seq is present',
+          supportingSeqs: [{ sessionId: 's1', seq: 6 }],
+          flagOverride: {
+            severity: 'low',
+            confidence: 0.5,
+            description: 'dual reading: honest crash or truncation, undecidable from the log',
+          },
+        },
+      ],
+    };
+
+    const flags = integrityFlagsFromReport(report);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.heuristic).toBe('checkpoint_chain_valid');
+    // CHECK_META's table entry for checkpoint_chain_valid is 'high'/1.0 —
+    // flagOverride must win over it, not merely append to it.
+    expect(flags[0]!.severity).toBe('low');
+    expect(flags[0]!.confidence).toBe(0.5);
+    expect(flags[0]!.description).toBe(
+      'dual reading: honest crash or truncation, undecidable from the log',
+    );
+  });
+
+  it('falls back to CHECK_META when a checkpoint_chain_valid failure carries no flagOverride', () => {
+    const report: ValidationReport = {
+      ...makePassReport(),
+      overall: 'fail',
+      bundleDetections: [
+        {
+          id: 'checkpoint_chain_valid',
+          label: 'Signed session checkpoints agree with the log',
+          status: 'fail',
+          detail:
+            'a validly signed checkpoint swears the entry at seq 3 hashes to X, but it hashes to Y',
+          supportingSeqs: [{ sessionId: 's1', seq: 3 }],
+        },
+      ],
+    };
+
+    const flags = integrityFlagsFromReport(report);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.severity).toBe('high');
+    expect(flags[0]!.confidence).toBe(1.0);
+    expect(flags[0]!.description).toBe(
+      'a validly signed checkpoint swears the entry at seq 3 hashes to X, but it hashes to Y',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Check 8: submitted_code_match
 // ---------------------------------------------------------------------------
 

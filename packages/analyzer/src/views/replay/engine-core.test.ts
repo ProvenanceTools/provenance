@@ -10,6 +10,10 @@ import { createEngine, MAX_IDLE_GAP_MS } from './engine-core.js';
 import { buildBundleClock } from './bundle-clock.js';
 import type { EventIndex, IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import type { EventKind } from '@provenance/log-core';
+import { buildObservedDag } from '@provenance/analysis-core/git/observed-dag.js';
+import { buildEventOrdering } from '@provenance/analysis-core/order/happens-before.js';
+import type { SessionContributor } from '@provenance/analysis-core/identity/types.js';
+import type { ReconstructionScope } from '@provenance/analysis-core/index/reconstruct-segments.js';
 
 // ---------------------------------------------------------------------------
 // Minimal EventIndex builder for tests
@@ -669,5 +673,133 @@ describe('createEngine', () => {
       expect(state.virtualT).toBe(1);
       expect(state.currentGlobalIdx).toBe(0);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Concurrency (Tier 2.2, spec §6 Rule 4)
+// ---------------------------------------------------------------------------
+
+describe('replay never linearizes concurrency', () => {
+  function twoContributorScope(index: EventIndex): ReconstructionScope {
+    const contributor = (sessionId: string, ref: string): SessionContributor => ({
+      kind: 'attributed',
+      sessionId,
+      contributorKey: `attributed:2.0:course:c1:${ref}`,
+      studentRef: ref,
+      identityVersion: '2.0',
+      scope: 'course',
+      scopeId: 'c1',
+      studentPubkey: 'pk',
+      certWindow: { in_window: true },
+      credentialWindow: { in_window: true },
+    });
+    const contributorBySession = new Map<string, SessionContributor>([
+      ['sessA', contributor('sessA', 'alice')],
+      ['sessB', contributor('sessB', 'bob')],
+    ]);
+    // No commit observations and no session link: the relation orders these two
+    // neither way, which is the honest answer and exactly what replay must
+    // refuse on.
+    //
+    // The events MUST be handed to the relation. An ordering built over empty
+    // sessions answers `'unknown'` for every ref — "we have no record" — which
+    // is a different fact from `'concurrent'` and would make this test pass for
+    // the wrong reason.
+    const source = {
+      sessions: [...index.bySessionId].map(([sessionId, events]) => ({
+        sessionId,
+        events: events.map((e) => ({ seq: e.seq, kind: e.kind, data: e.payload })),
+      })),
+    } as unknown as Parameters<typeof buildObservedDag>[0];
+    return {
+      index,
+      contributorBySession,
+      ordering: buildEventOrdering({
+        source,
+        dag: buildObservedDag(source),
+        contributors: contributorBySession,
+      }),
+    };
+  }
+
+  const divergent = () =>
+    buildIndex([
+      makeDocChangeEvent(0, 'hw.py', 'ALICE', 'sessA'),
+      makeDocChangeEvent(1, 'hw.py', 'BOB', 'sessB'),
+    ]);
+
+  it('reports the file as ambiguous instead of picking a branch', () => {
+    const index = divergent();
+    const engine = createEngine(index, twoContributorScope(index));
+    engine.seek(1);
+
+    expect(engine.ambiguousFiles().get('hw.py')).toBe('concurrent');
+  });
+
+  it('serves empty content rather than one branch, or an interleaving of both', () => {
+    const index = divergent();
+    const engine = createEngine(index, twoContributorScope(index));
+    engine.seek(1);
+
+    const content = engine.getFileStates().get('hw.py')?.content ?? null;
+    expect(content).toBe('');
+    // The interleaving is what a wall-clock replay produces; it never existed.
+    expect(content).not.toContain('ALICE');
+    expect(content).not.toContain('BOB');
+  });
+
+  it('retains the branches rather than only their shape', () => {
+    const index = divergent();
+    const engine = createEngine(index, twoContributorScope(index));
+    engine.seek(1);
+
+    const ambiguity = engine.fileAmbiguity().get('hw.py');
+    expect(ambiguity?.kind).toBe('concurrent');
+    if (ambiguity?.kind !== 'concurrent') throw new Error('expected concurrent');
+
+    // Both lineages survive, each with its own replayed content. They were
+    // being computed and discarded before Tier 5.3; the UI cannot show what the
+    // engine has already thrown away.
+    expect(ambiguity.branches).toHaveLength(2);
+    const contents = ambiguity.branches.map((b) => b.value.content).sort();
+    expect(contents).toEqual(['ALICE', 'BOB']);
+    expect(ambiguity.branches.map((b) => b.contributor.kind)).toEqual(['attributed', 'attributed']);
+  });
+
+  it('still serves an EMPTY file state, so no branch can reach the editor', () => {
+    const index = divergent();
+    const engine = createEngine(index, twoContributorScope(index));
+    engine.seek(1);
+
+    // The branches travel on `fileAmbiguity()` only. `getFileStates()` — what
+    // the Monaco pane reads — must stay empty, or one lineage would be shown as
+    // though it were the file.
+    expect(engine.getFileStates().get('hw.py')?.content).toBe('');
+    expect(engine.fileAmbiguity().get('hw.py')?.kind).toBe('concurrent');
+  });
+
+  it('keeps ambiguousFiles() and fileAmbiguity() agreeing on which files are ambiguous', () => {
+    const index = divergent();
+    const engine = createEngine(index, twoContributorScope(index));
+    engine.seek(1);
+
+    expect([...engine.ambiguousFiles().keys()]).toEqual([...engine.fileAmbiguity().keys()]);
+    for (const [path, kind] of engine.ambiguousFiles()) {
+      expect(engine.fileAmbiguity().get(path)?.kind).toBe(kind);
+    }
+  });
+
+  it('a single-contributor bundle reports nothing ambiguous', () => {
+    const index = buildIndex([
+      makeDocChangeEvent(0, 'hw.py', 'A', 'sess1'),
+      makeDocChangeEvent(1, 'hw.py', 'B', 'sess1'),
+    ]);
+    const engine = createEngine(index);
+    engine.seek(1);
+
+    expect(engine.ambiguousFiles().size).toBe(0);
+    expect(engine.fileAmbiguity().size).toBe(0);
+    expect(engine.getFileStates().get('hw.py')?.content).not.toBe('');
   });
 });

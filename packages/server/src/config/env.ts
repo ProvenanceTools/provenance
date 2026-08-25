@@ -47,6 +47,36 @@ const jsonStringArray = z.string().transform((v, ctx) => {
   return parsed as string[];
 });
 
+/**
+ * A JSON object literal, kept as its raw string.
+ *
+ * Unlike {@link jsonStringArray} the failure message never quotes the value:
+ * the only consumer is `PROVENANCE_INSTITUTION_KEY`, which carries a private
+ * key, and a config error is printed to stderr on a failed boot.
+ */
+const jsonObjectStr = z
+  .string()
+  .optional()
+  .transform((v) => v ?? '{}')
+  .superRefine((v, ctx) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(v);
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Expected a JSON object (value withheld: it carries private keys)',
+      });
+      return;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Expected a JSON object (value withheld: it carries private keys)',
+      });
+    }
+  });
+
 // ---------------------------------------------------------------------------
 // Raw schema (all strings, as they arrive from process.env)
 // ---------------------------------------------------------------------------
@@ -100,11 +130,13 @@ const rawEnvSchema = z.object({
   /**
    * Number of ingest_file jobs the worker processes concurrently (pg-boss
    * batchSize for the INGEST_FILE queue). Each in-flight job holds ~1 DB pool
-   * connection during its transaction, so keep INGEST_CONCURRENCY comfortably
-   * below DATABASE_POOL_MAX (leave headroom for pg-boss's own polling
-   * connections). Different files are independent submissions; ordering is only
-   * enforced within a submission, so concurrency is safe. Raise this together
-   * with DATABASE_POOL_MAX for the large semester import.
+   * connection during its transaction, so keep INGEST_CONCURRENCY, together
+   * with INGEST_STAGE_CONCURRENCY and RECOMPUTE_MAX_PARALLEL, comfortably
+   * below DATABASE_POOL_MAX (leave headroom for HTTP request handling, the
+   * other pg-boss queues, and pg-boss's own polling connections — see
+   * config/pool-margin.ts). Different files are independent submissions;
+   * ordering is only enforced within a submission, so concurrency is safe.
+   * Raise this together with DATABASE_POOL_MAX for the large semester import.
    */
   INGEST_CONCURRENCY: intStr(4),
   /**
@@ -118,7 +150,9 @@ const rawEnvSchema = z.object({
    * Default 1 = serial, in-process (unchanged; no threads spawned). Raise it
    * toward the core count to speed big-export staging. Each in-flight stage
    * briefly holds a DB connection for its row insert (the pool threads do not),
-   * so keep INGEST_STAGE_CONCURRENCY + INGEST_CONCURRENCY within DATABASE_POOL_MAX.
+   * so keep INGEST_STAGE_CONCURRENCY + INGEST_CONCURRENCY + RECOMPUTE_MAX_PARALLEL
+   * within DATABASE_POOL_MAX — startWorker() warns at boot (never fails) when
+   * that margin gets thin; see config/pool-margin.ts.
    */
   INGEST_STAGE_CONCURRENCY: intStr(1),
   /**
@@ -128,6 +162,16 @@ const rawEnvSchema = z.object({
    * many-small-bundle imports.
    */
   INGEST_POLLING_INTERVAL_MS: intStr(500),
+  /**
+   * batchSize for the RECOMPUTE_SUBMISSION pg-boss queue (jobs/recompute.ts):
+   * how many submissions a recompute batch recomputes concurrently. Jobs that
+   * happen to target the SAME submission id are still run one after another
+   * within a batch — only distinct submissions run in parallel — so raising
+   * this does not risk two concurrent writers racing on one submission's rows.
+   * Like INGEST_CONCURRENCY, each in-flight recompute holds ~1 DB pool
+   * connection — see the INGEST_STAGE_CONCURRENCY comment above for the
+   * combined DATABASE_POOL_MAX budget across all three concurrency knobs.
+   */
   RECOMPUTE_MAX_PARALLEL: intStr(4),
   BLOB_DOWNLOAD_URL_TTL_SECONDS: intStr(300),
   ROSTER_CSV_MAX_BYTES: intStr(10485760),
@@ -158,6 +202,50 @@ const rawEnvSchema = z.object({
   SOCKET_PATH: z.string().optional(),
   // Directory of the built analyzer SPA served from the same origin as the API.
   PUBLIC_DIR: z.string().min(1).default('./public'),
+  /**
+   * Hex ed25519 ROOT public key of the Manifest 2.0 trust chain (program spec
+   * §2). Used by validation check 2 to verify a bundle's `course_cert` offline.
+   *
+   * Optional: an unset key makes check 2 report `skipped` for 2.0 bundles
+   * rather than guessing, and is ignored entirely for 1.0/1.1 bundles, which
+   * carry no chain to walk. Empty string means "not configured".
+   */
+  PROVENANCE_ROOT_PUBLIC_KEY_HEX: z
+    .string()
+    .regex(/^([0-9a-f]{64})?$/, 'must be 64 lowercase hex chars, or empty')
+    .default(''),
+  /**
+   * The server's INSTITUTION key material — identity `format_version` 2.1.
+   *
+   * A single JSON object (there is one institution key, not one per semester):
+   *
+   *   { "private_key_hex": "<64 hex>", "cert": { … } }
+   *
+   * where `cert` is the `institution_cert` signed offline by the ROOT key.
+   *
+   * **This is the highest-value secret the server holds**, and since the
+   * retirement of the per-semester `PROVENANCE_ENROLLMENT_KEYS` it is the only
+   * private key here at all. The institution private key can mint a credential
+   * binding ANY public key to ANY `student_ref` at that institution — i.e.
+   * forge attribution — for as long as the certificate's window runs, and
+   * unlike the retired enrollment key its blast radius is the whole institution rather
+   * than one course. It still cannot sign a manifest (that needs the offline
+   * course key) and cannot reach another institution (`institution_id` is
+   * inside both signed payloads and every verifier cross-checks them).
+   *
+   * Same handling as the enrollment keys and for the same reason: the
+   * environment, never Postgres, because database dumps travel (nightly
+   * backups, the restore drill in `docs/admin-guide.md` §7).
+   *
+   * Only the shape is checked here, and the failure message deliberately does
+   * NOT echo the value. Certificate shape, version, and the fact that the
+   * private key actually matches `cert.institution_pubkey` are validated in
+   * `config/institution-keys.ts`, which never logs either half.
+   *
+   * Unset means "this deployment issues no student credentials", a legitimate
+   * state for any deployment that has not adopted 2.1 identity.
+   */
+  PROVENANCE_INSTITUTION_KEY: jsonObjectStr,
   // Storage quota watched by the hourly quota-check cron (default 1 TiB).
   STORAGE_QUOTA_BYTES: intStr(1099511627776),
   STORAGE_QUOTA_WARN_PCT: intStr(80),

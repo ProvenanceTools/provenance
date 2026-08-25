@@ -28,6 +28,25 @@
  * @monaco-editor/react calls model.setValue(), which resets the viewport to the
  * top. Re-revealing when the content changes undoes that reset even when the
  * caret coordinates happen to be unchanged.
+ *
+ * ## `verticalOnly` — lane panes follow vertically, never horizontally
+ *
+ * A split-lane pane is a fraction of the single pane's width (up to three
+ * lanes side by side). A caret at a column that sits comfortably inside the
+ * single pane's ~full-width viewport can sit well past a narrow lane's right
+ * edge, and `revealPositionInCenterIfOutsideViewport` centers on that COLUMN
+ * as well as the line — scrolling the pane far enough right that every visible
+ * line starts mid-statement, off the left edge. Manual QA on the split-lanes
+ * feature caught exactly this (see the design doc's defect writeup).
+ *
+ * `verticalOnly` switches the reveal call to
+ * `revealLineInCenterIfOutsideViewport(lineNumber, scrollType)` — a Monaco API
+ * that takes a line number only, never a column, so it cannot itself introduce
+ * horizontal scroll. It still reveals the line vertically "if outside the
+ * viewport", so a caret genuinely off the bottom/top still scrolls into view;
+ * what changes is that the horizontal scroll position is left exactly where
+ * the reader (or the previous reveal) put it. Default `false`: the single pane
+ * keeps `revealPositionInCenterIfOutsideViewport`, unchanged.
  */
 
 import { useEffect } from 'react';
@@ -58,6 +77,12 @@ type FollowCursorProps = {
   externalChange?: MonacoPositionLiteral | null;
   /** Content of the shown file. A change means the model was replaced. */
   content: string;
+  /**
+   * Follow vertically only, leaving horizontal scroll alone unless the target
+   * is outside the viewport entirely. See the module header. Default `false`
+   * — the single pane's behaviour is unchanged.
+   */
+  verticalOnly?: boolean;
 };
 
 export function FollowCursor({
@@ -65,6 +90,7 @@ export function FollowCursor({
   selection,
   externalChange = null,
   content,
+  verticalOnly = false,
 }: FollowCursorProps) {
   // Reveal whichever target is active. Deriving it here (rather than revealing
   // in two effects) is what makes the return trip work: when `externalChange`
@@ -75,12 +101,18 @@ export function FollowCursor({
 
   useEffect(() => {
     if (editor === null || lineNumber === null || column === null) return;
-    editor.revealPositionInCenterIfOutsideViewport({ lineNumber, column }, SCROLL_TYPE_IMMEDIATE);
+    if (verticalOnly) {
+      // No column argument exists to pass — that is the point. See the
+      // module header, "verticalOnly".
+      editor.revealLineInCenterIfOutsideViewport(lineNumber, SCROLL_TYPE_IMMEDIATE);
+    } else {
+      editor.revealPositionInCenterIfOutsideViewport({ lineNumber, column }, SCROLL_TYPE_IMMEDIATE);
+    }
     // Depend on the primitive coordinates, not the object: `selection` and
     // `externalChange` are freshly built each render, so an object dep would
     // re-reveal on every render and fight a reviewer scrolling while paused.
     // `content` is intentionally in the dep list: see the file header.
-  }, [editor, lineNumber, column, content]);
+  }, [editor, lineNumber, column, content, verticalOnly]);
 
   return null;
 }

@@ -63,6 +63,7 @@ function makeBundle(): Bundle {
 
   return {
     id: 'bundle-id-1',
+    droppedArtifacts: [],
     manifest: {
       format_version: '1.0',
       assignment_id: 'hw1',
@@ -76,6 +77,10 @@ function makeBundle(): Bundle {
         sessionId: 'sess-abc',
         events: events as readonly HashedEnvelope[],
         meta: {} as import('@provenance/log-core').SlogMeta,
+        slogSha256: 'a'.repeat(64),
+        slogSha256Lf: null,
+        tornTail: null,
+        metaSha256: 'b'.repeat(64),
         firstEvent: events[0] as HashedEnvelope<'session.start'> & {
           data: import('@provenance/log-core').SessionStartPayload;
         },
@@ -198,8 +203,34 @@ describe('generatePdf', () => {
     const index = makeIndex([makeEvent(5, 'sess-abc', 3, 'paste', 'hw1.py')]);
     const flags = [makeFlag('f1', 'high', ['sess-abc:3'])];
     await generatePdf(makeInput({ flags, index }));
-    // globalIdx=5, so upToGlobalIdx=6
-    expect(screenshotReplayAt).toHaveBeenCalledWith(index, 'hw1.py', 6);
+    // globalIdx=5, so upToGlobalIdx=6. The first argument is now a
+    // ReconstructionScope rather than the bare index (Tier 2.2) — the scope is
+    // what knows who each session belongs to, which is what decides whether
+    // there is a single file state to screenshot at all. The index it wraps is
+    // still the one we passed in.
+    expect(screenshotReplayAt).toHaveBeenCalledWith(
+      expect.objectContaining({ index }),
+      'hw1.py',
+      6,
+    );
+  });
+
+  /**
+   * `null` means reconstruction had no single truth at that position. The PDF
+   * must render the flag WITHOUT a picture rather than embed a screenshot of one
+   * arbitrarily chosen branch — that image would leave the tool captioned as
+   * evidence.
+   */
+  it('omits the image when screenshotReplayAt returns null', async () => {
+    const { generatePdf } = await import('./findings-pdf.js');
+    const { screenshotReplayAt } = await import('./screenshot.js');
+    vi.mocked(screenshotReplayAt).mockResolvedValueOnce(null);
+    const index = makeIndex([makeEvent(5, 'sess-abc', 3, 'paste', 'hw1.py')]);
+    const flags = [makeFlag('f1', 'high', ['sess-abc:3'])];
+    const result = await generatePdf(makeInput({ flags, index }));
+    // The export still succeeds; it just carries no screenshot for that flag.
+    expect(result).toBeDefined();
+    expect(screenshotReplayAt).toHaveBeenCalled();
   });
 
   it('skips screenshot when supporting seq has no file attribute', async () => {

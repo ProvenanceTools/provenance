@@ -95,7 +95,7 @@ The extension activates only when the workspace is recognized as an assignment. 
     "sig": "<ed25519 signature over the above fields>"
   }
   ```
-- The extension ships the course's public key embedded in its source. If the signature doesn't verify, the extension does nothing (no recording, no UI noise). This prevents the extension from quietly recording on any folder that happens to contain a file named `.provenance-manifest`.
+- The extension ships the **root** public key embedded in its source — not a course key. At Manifest 2.0 the course's authority comes from a root-signed `course_cert` that travels inline in the manifest, so one build serves every course; a 1.x manifest's payload signature is checked against an optional grandfathered course key instead (`PROVENANCE_LEGACY_COURSE_PUBLIC_KEY_HEX`). If the chain doesn't verify, the extension does nothing (no recording, no UI noise). This prevents the extension from quietly recording on any folder that happens to contain a file named `.provenance-manifest`.
 
 The extension does **not** activate on arbitrary workspaces, and does **not** record anything outside the assignment folder. This is a deliberate privacy constraint: the recorder watches one folder and shuts up everywhere else.
 
@@ -254,13 +254,13 @@ Constraints:
 
 ### 4.8 Failure modes
 
-| Failure                                      | Behavior                                                                                                                                                   |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Disk full                                    | Surface a notification; switch to a tiny in-memory ring buffer for critical events only; emit `recorder.degraded` event                                    |
-| Log file corrupted on startup                | Quarantine (rename to `.corrupt`), start a new session, emit `recorder.recovered_from_corruption` event in the new session referencing the quarantined one |
-| Extension crashes                            | VS Code will reload it; on reload, we open a new session, link it to the previous via the `prev_session_id` field, and continue                            |
-| Course public key signature fails            | Don't activate; log nothing                                                                                                                                |
-| User uninstalls the extension mid-assignment | We can't prevent this. The submission bundle will be missing or incomplete; the Analyzer flags this at upload time. Course policy decides the consequence. |
+| Failure                                                                   | Behavior                                                                                                                                                   |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Disk full                                                                 | Surface a notification; switch to a tiny in-memory ring buffer for critical events only; emit `recorder.degraded` event                                    |
+| Log file corrupted on startup                                             | Quarantine (rename to `.corrupt`), start a new session, emit `recorder.recovered_from_corruption` event in the new session referencing the quarantined one |
+| Extension crashes                                                         | VS Code will reload it; on reload, we open a new session, link it to the previous via the `prev_session_id` field, and continue                            |
+| Manifest trust chain fails to verify against the embedded root public key | Don't activate; log nothing                                                                                                                                |
+| User uninstalls the extension mid-assignment                              | We can't prevent this. The submission bundle will be missing or incomplete; the Analyzer flags this at upload time. Course policy decides the consequence. |
 
 ---
 

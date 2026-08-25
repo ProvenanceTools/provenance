@@ -27,7 +27,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createEngine } from './engine-core.js';
-import type { EngineHandle, ReplayState } from './engine-core.js';
+import { soloReconstructionScope } from '@provenance/analysis-core/index/reconstruct-segments.js';
+import type { ReconstructionScope } from '@provenance/analysis-core/index/reconstruct-segments.js';
+import type { AmbiguousReconstruction, EngineHandle, ReplayState } from './engine-core.js';
 import type { FileReplayState } from '@provenance/analysis-core/index/reconstruct-file-provenance.js';
 import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
 import type { Seam } from './bundle-clock.js';
@@ -45,6 +47,18 @@ export type UseReplayEngineResult = {
   files: string[];
   /** Session boundaries in the stream. Empty for a single-session bundle. */
   seams: readonly Seam[];
+  /**
+   * Files with no single content at the current playhead, and which kind of no
+   * it is. Their `fileStates` entry is empty rather than one branch's content
+   * (Tier 2.2, spec §6 Rule 4). Always empty for a single-contributor bundle.
+   */
+  ambiguousFiles: ReadonlyMap<string, 'concurrent' | 'unknown'>;
+  /**
+   * The same files as {@link ambiguousFiles}, carrying the evidence: for a
+   * `concurrent` file, every live branch with its contributor and its own
+   * content, so the UI can show them side by side instead of only refusing.
+   */
+  fileAmbiguity: ReadonlyMap<string, AmbiguousReconstruction>;
   play(speed?: number): void;
   pause(): void;
   step(n?: number): void;
@@ -59,6 +73,20 @@ export type UseReplayEngineOptions = {
    * by that. Defaults to the engine's own default (off).
    */
   skipIdle?: boolean;
+  /**
+   * The reconstruction scope for `index`. Supplying it lets replay tell a file
+   * whose content at the playhead has no single truth from one that simply has
+   * none (Tier 2.2, spec §6 Rule 4).
+   *
+   * Takes the SCOPE rather than the `Bundle` it used to take, because only the
+   * `/local` route has a bundle: the server-backed tab pages event rows and
+   * builds the identical scope from them plus the summary's contributor stamp
+   * (`useServerScope`). Omitted, the engine takes a solo scope — the behaviour
+   * that predates this, and correct for every single-contributor submission.
+   *
+   * The caller must memoize it; the engine is rebuilt whenever it changes.
+   */
+  scope?: ReconstructionScope | null | undefined;
 };
 
 /**
@@ -72,6 +100,7 @@ export function useReplayEngine(
   options: UseReplayEngineOptions = {},
 ): UseReplayEngineResult {
   const skipIdle = options.skipIdle ?? false;
+  const scope = options.scope ?? null;
 
   // Engine handle lives in a ref so we don't re-create it on every render.
   const engineRef = useRef<EngineHandle | null>(null);
@@ -98,6 +127,12 @@ export function useReplayEngine(
     skipIdle,
   }));
   const [fileStates, setFileStates] = useState<Map<string, FileReplayState>>(new Map());
+  const [ambiguousFiles, setAmbiguousFiles] = useState<
+    ReadonlyMap<string, 'concurrent' | 'unknown'>
+  >(new Map());
+  const [fileAmbiguity, setFileAmbiguity] = useState<ReadonlyMap<string, AmbiguousReconstruction>>(
+    new Map(),
+  );
   const [files, setFiles] = useState<string[]>([]);
   const [seams, setSeams] = useState<readonly Seam[]>([]);
 
@@ -122,18 +157,22 @@ export function useReplayEngine(
         skipIdle: skipIdleRef.current,
       });
       setFileStates(new Map());
+      setAmbiguousFiles(new Map());
+      setFileAmbiguity(new Map());
       setFiles([]);
       setSeams([]);
       return;
     }
 
-    const engine = createEngine(index);
+    const engine = createEngine(index, scope ?? soloReconstructionScope(index));
     engineRef.current = engine;
     speedRef.current = engine.getState().speed;
     engine.setSkipIdle(skipIdleRef.current);
 
     setReplayState(engine.getState());
     setFileStates(engine.getFileStates());
+    setAmbiguousFiles(new Map(engine.ambiguousFiles()));
+    setFileAmbiguity(new Map(engine.fileAmbiguity()));
     setFiles(engine.getFiles());
     setSeams(engine.seams());
 
@@ -144,7 +183,7 @@ export function useReplayEngine(
         rafRef.current = null;
       }
     };
-  }, [index]);
+  }, [index, scope]);
 
   // ---------------------------------------------------------------------------
   // Helper: sync React state from the engine after a mutation.
@@ -152,6 +191,8 @@ export function useReplayEngine(
   const syncFromEngine = useCallback((engine: EngineHandle) => {
     setReplayState(engine.getState());
     setFileStates(engine.getFileStates());
+    setAmbiguousFiles(new Map(engine.ambiguousFiles()));
+    setFileAmbiguity(new Map(engine.fileAmbiguity()));
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -276,7 +317,18 @@ export function useReplayEngine(
   // Stable result object (avoids unnecessary re-renders in consumers).
   // ---------------------------------------------------------------------------
   return useMemo(
-    () => ({ state: replayState, fileStates, files, seams, play, pause, step, seek }),
-    [replayState, fileStates, files, seams, play, pause, step, seek],
+    () => ({
+      state: replayState,
+      fileStates,
+      files,
+      seams,
+      ambiguousFiles,
+      fileAmbiguity,
+      play,
+      pause,
+      step,
+      seek,
+    }),
+    [replayState, fileStates, files, seams, ambiguousFiles, fileAmbiguity, play, pause, step, seek],
   );
 }

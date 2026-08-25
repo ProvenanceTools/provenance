@@ -17,7 +17,10 @@
  *                   content was recorded — pre-v1.1 recorders, or files that
  *                   opened larger than the 64KB inline limit)
  *   finalLength   = chars in reconstructed final content
- *   deltaLength   = finalLength - startLength
+ *   mergedInChars = chars of the final content that a git merge delivered from
+ *                   a provably different verified contributor's recorded work
+ *                   (Tier 3.1; always 0 for a solo bundle)
+ *   deltaLength   = finalLength - startLength - mergedInChars
  *
  *   If deltaLength <= 0:  no flag. Either the file shrank (refactoring,
  *                         deletion-heavy editing) or stayed the same size.
@@ -27,6 +30,22 @@
  * Emits one Flag per offending file. The ratio is computed per file (not at
  * the bundle level) because different files may have very different ratios
  * for legitimate reasons.
+ *
+ * ## Tier 3.1 — a `git pull` is not this student's output
+ *
+ * A pull rewrites the file with nobody typing: `charsTyped = 0`, the file grows
+ * by however much the partner wrote, and the ratio is infinite. That fired at
+ * HIGH severity with confidence 1.0 on an honest puller — the "no false
+ * accusations" row, in a shape a student cannot avoid.
+ *
+ * The fix is subtraction, not suppression: characters the content test proves
+ * git delivered from a **provably different verified contributor's** recorded
+ * work are removed from the numerator, and everything else about the file is
+ * evaluated exactly as before. A student who pulls their partner's work and then
+ * pastes a solution into the same file still fires — the pasted characters are
+ * not merged-in ones. See `merged-in-content.ts` for why this is not decision
+ * D16's timing hole (nothing here reads a clock or a recorder tag) and why a
+ * solo bundle is byte-for-byte unaffected.
  *
  * Skips any file whose reconstruction is tainted (reconstructFile set
  * tainted=true due to fs.external_change or a large paste over the recorder's inline cap with no
@@ -46,6 +65,24 @@
  *     confidence proportional to deltaLength / minCharsForConfidence.
  *   - deltaLength <= 0                     → no flag.
  *   - tainted reconstruction               → skip.
+ *
+ * ## Capture-policy audit (program spec §4)
+ *
+ * This heuristic reads `doc.open`, and is NOT policy-gated. `doc.open` is on the
+ * hard floor — no `policy.capture` key can switch it off, precisely because
+ * `doc.open.content` is the reconstruction seed. But the reasoning below is
+ * worth keeping even so, because it is what makes this heuristic robust to
+ * `doc.open` simply being MISSING (a 1.x recorder that never opened the file, a
+ * truncated log), which no policy rule prevents.
+ *
+ * `doc.open.content` is both the heuristic's `startLength` anchor AND the seed
+ * `reconstructFile` starts from. Removing it therefore removes the skeleton
+ * from BOTH sides of `finalLength - startLength`, so the ratio is unchanged:
+ * a 600-char skeleton the recorder never saw is absent from the final
+ * reconstruction too. There is no inflation to guard against, and gating would
+ * only delete real detections. (A gate here would also be strictly harmful in
+ * the other direction: with `doc.open` gone, taint can never be re-anchored,
+ * so affected files are skipped by the `reconstructionTainted` check anyway.)
  */
 
 import type { EventIndex } from '../index/event-index.js';
@@ -53,7 +90,9 @@ import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic, Severity } from './types.js';
 import type { HeuristicConfig } from './config.js';
 import { computeStats } from '../index/stats.js';
-import { reconstructFile } from '../index/reconstruct-file.js';
+import { establishedReplayState } from './reconstruction-gate.js';
+import { externalChangeClassificationFor } from '../index/classify-external-changes.js';
+import { mergedInCharCount } from './merged-in-content.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -73,10 +112,12 @@ function clamp(v: number, min: number, max: number): number {
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
   const { minRatio, highRatio, minCharsForConfidence } = config.lowTypingHighOutput;
 
-  const bundleStats = computeStats(index);
+  const bundleStats = computeStats(index, bundle);
+  // Tier 3.1. Empty for a solo bundle — the pass does not run there.
+  const { gitMergeIn } = externalChangeClassificationFor(bundle, index);
 
   const flags: Flag[] = [];
   let flagIndex = 0;
@@ -87,8 +128,13 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
 
     const charsTyped = fileStats.charsTyped;
 
-    // Get the reconstructed final content length.
-    const reconstruction = reconstructFile(index, filePath);
+    // Tier 2.2: `null` when two contributors' edits are unordered here, so
+    // there is no single final length to divide by. `reconstructionTainted`
+    // above already catches this (computeStats sets it alongside
+    // `reconstructionAmbiguity`); the explicit check is what keeps the skip true
+    // if that coupling is ever loosened.
+    const reconstruction = establishedReplayState(index, bundle, filePath);
+    if (reconstruction === null) continue;
     const finalLength = reconstruction.content.length;
 
     // If final content is empty, there's nothing to flag.
@@ -110,7 +156,13 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
       }
     }
 
-    const deltaLength = finalLength - startLength;
+    // Tier 3.1: characters git delivered from a partner's recorded work are not
+    // this student's output, so they leave the numerator. Zero unless the scope
+    // is collaborative AND the content test proved the match, so a solo bundle
+    // computes exactly the number it computed before.
+    const mergedInChars = mergedInCharCount(reconstruction, gitMergeIn);
+
+    const deltaLength = finalLength - startLength - mergedInChars;
 
     // If the file did not grow, there's no "high output" to explain. This is
     // the key fix: a student who opens a 500-char skeleton and adds 50 chars
@@ -158,12 +210,19 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
       description:
         `Output-to-typing ratio of ${ratioStr}× in ${filePath}: ` +
         `${deltaLength} chars added (final ${finalLength}, started ${startLength}) ` +
-        `vs ${charsTyped} chars typed.`,
+        `vs ${charsTyped} chars typed.` +
+        // R1: the discount is stated, not silent. A grader reading the numbers
+        // must be able to see why they do not add up to the file's size.
+        (mergedInChars > 0
+          ? ` ${mergedInChars} chars of the final content arrived by git merge from a ` +
+            `partner's recorded work and are not counted as this student's output.`
+          : ''),
       detail: {
         filePath,
         charsTyped,
         startLength,
         finalLength,
+        mergedInChars,
         deltaLength,
         ratio: isFinite(ratio) ? ratio : null,
         tainted: false,

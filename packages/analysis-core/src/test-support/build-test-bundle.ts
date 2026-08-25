@@ -8,13 +8,14 @@
 
 import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha2.js';
-import { bytesToHex } from '@noble/hashes/utils.js';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import JSZip from 'jszip';
 import {
   chainEntry,
   sha256Hex,
   canonicalize,
   serializeEntry,
+  rollingManifestFilenames,
   GENESIS_PREV_HASH,
 } from '@provenance/log-core';
 import type { BundleManifest, SlogMeta } from '@provenance/log-core';
@@ -66,9 +67,176 @@ export type SubmissionFileSpec = {
   manifestSha256Override?: string;
 };
 
+/**
+ * Build a ROLLING-sealed bundle (program spec §8) — `manifest-<session_id>.json`
+ * + `.sig` per session instead of a single `manifest.json`.
+ *
+ * When this is set, each session gets its OWN ed25519 keypair (a classic bundle
+ * keeps sharing one, unchanged) and each session's rolling manifest is signed by
+ * that session's own key — which is the property the reader has to enforce.
+ */
+export type RollingSealSpec = {
+  /**
+   * Also emit the classic `manifest.json` + `manifest.sig`, producing a bundle
+   * that carries BOTH seal shapes.
+   */
+  alsoClassic?: boolean;
+  /**
+   * Make the `alsoClassic` manifest **stale**: mint its `slog_sha256` for one
+   * session over only the first `entries` log entries, as if the classic seal
+   * had been taken at that moment and the session had gone on recording.
+   *
+   * Without this, `alsoClassic: true` mints the classic manifest over the SAME
+   * final bytes as the rolling seals, so the classic digest is never stale and
+   * the both-shapes bundle a real student produces is not constructible here.
+   *
+   * That student is easy to find. `commands/seal.ts` writes `manifest.json` +
+   * `manifest.sig` INTO `.provenance/` and never removes them, so anyone who
+   * runs "Prepare Submission Bundle" once — curiosity, a ZIP-submitted sibling
+   * assignment, a mixed cohort — and then keeps working and pushes ships a
+   * stale classic manifest alongside live rolling seals.
+   *
+   * Only the `.slog` digest is staled; the `.slog.meta` digest stays current,
+   * because this builder has no snapshot of the sidecar as it stood at that
+   * entry. The `.slog` mismatch is what the accusation was built on, so the
+   * shape is faithful where it matters and is called out where it is not.
+   */
+  staleClassicAfterEntries?: { sessionIndex: number; entries: number };
+  /**
+   * Mark each session's rolling seal FINAL — the seal the recorder writes at
+   * `dispose()` over a log that will not grow again. A final seal commits to the
+   * WHOLE file, so an append to it fails `log_bytes_match`; a non-final one
+   * commits to a prefix and honest later growth is not a finding.
+   *
+   * **Defaults to `true`**, because that is what this builder actually
+   * constructs: every session's digests are taken over its FINISHED `.slog` and
+   * `.slog.meta`, which is a state only `dispose()` can seal. Defaulting to
+   * non-final would have the builder emit a manifest whose own contents
+   * contradict its claim — a seal signed mid-session that somehow already knows
+   * the finished bytes.
+   *
+   * Set `false` for the mid-session shape: a seal signed while its session was
+   * still running. Note that on its own that only changes the CLAIM, not the
+   * digests — to get a genuinely unattested tail, tamper the `.slog` afterwards
+   * (as `verify-log-bytes.test.ts` does) or drive the real writer, as
+   * `tools/recorder-seal-conformance.test.ts` does.
+   */
+  final?: boolean;
+  tamper?: {
+    /** Session indices whose `manifest-<id>.sig` is omitted (unsigned manifest). */
+    omitSigFor?: number[];
+    /** Session indices whose `manifest-<id>.json` is omitted (stray sig). */
+    omitJsonFor?: number[];
+    /** Session indices whose rolling seal is omitted entirely (unsealed session). */
+    omitSealFor?: number[];
+    /**
+     * Emit a rolling seal naming a session id that has no `.slog` in the bundle.
+     * The manifest is a copy of session 0's with the id swapped, signed by
+     * session 0's key.
+     */
+    extraSealForSessionId?: string;
+    /**
+     * A SIDEWAYS COPY: write `manifestOfSessionIndex`'s manifest content under
+     * `sessionIndex`'s filenames, signed with `sessionIndex`'s OWN key.
+     *
+     * This is the adversarial case the filename ↔ session_id binding exists for:
+     * the signature verifies (right key, right bytes), so only
+     * `validateRollingSessionManifest(manifest, sessionIdFromFilename)` can catch
+     * it.
+     */
+    sidewaysCopyFor?: { sessionIndex: number; manifestOfSessionIndex: number };
+    /** Sign one session's rolling manifest with a DIFFERENT session's key. */
+    signWithKeyOf?: { sessionIndex: number; keyOfSessionIndex: number };
+    /** Replace one session's `manifest-<id>.json` with arbitrary text. */
+    replaceJsonFor?: { sessionIndex: number; text: string };
+    /** Override `assignment_id` in one session's rolling manifest. */
+    assignmentIdFor?: { sessionIndex: number; assignmentId: string };
+    /**
+     * Override `extension_hash` in one session's rolling manifest.
+     *
+     * Not tampering: a student who updates their recorder mid-assignment
+     * produces exactly this. Named alongside the tamper options because it
+     * shares their "patch one session's manifest" plumbing.
+     */
+    extensionHashFor?: { sessionIndex: number; extensionHash: string };
+  };
+  /**
+   * Override, per session, the `sha256` that session's ROLLING manifest records
+   * for a given `submission_files` path. Keyed by path; a path not named keeps
+   * the hash computed from the file's real bytes.
+   *
+   * NOT tampering, and deliberately not under `tamper`. A rolling seal records
+   * the on-disk state of every file under review AS OF THAT SESSION'S last
+   * checkpoint — including files that session never touched — so two sessions
+   * recording concurrently against one repo legitimately seal DIFFERENT hashes
+   * for the same path, and whichever of them stopped recording first
+   * legitimately carries the staler one. Every other option here mints the SAME
+   * `submission_files` into every rolling manifest, which makes the union's
+   * merge order unobservable and left the concurrent shape unbuildable.
+   */
+  submissionShaFor?: Array<{ sessionIndex: number; shas: Record<string, string> }>;
+};
+
 export type BuildBundleOpts = {
   assignmentId?: string;
   semester?: string;
+  /**
+   * Run git's end-of-line filter over the `.slog` bytes, the way a real
+   * repository does.
+   *
+   * Deliberately NOT under `tamper`. Nothing here is tampering: git rewrites
+   * these bytes on its own, under `core.autocrlf=true`, `core.eol=crlf`, or a
+   * `.gitattributes` carrying `* text=auto eol=crlf` — and the git submission
+   * path has no seal step to re-hash the result, so the analyzer receives the
+   * rewritten file with the pre-rewrite digest still signed beside it. Filing it
+   * under `tamper` would teach exactly the wrong thing about a shape that
+   * belongs to honest students.
+   *
+   * The repo had NO CRLF `.slog` fixture at all, which is why a maximum-severity
+   * false accusation on the flagship git path survived every suite. Both
+   * directions are offered because both are reachable and only one of them is
+   * recoverable — see `loader/line-endings.ts`.
+   */
+  gitLineEndings?: {
+    /**
+     * `archive_crlf` (default) — the recorder sealed over LF and the delivered
+     * working tree carries CRLF. What a checkout under `eol=crlf` produces, and
+     * the direction the loader can undo and prove benign.
+     *
+     * `seal_crlf` — the reverse: the rolling seal was taken over bytes git had
+     * already widened (it re-reads the `.slog` from disk), and git's clean
+     * filter then normalized the committed blob back to LF. NOT recoverable by
+     * hashing, so this direction must still fail — and must still be described
+     * without asserting that a benign cause is impossible.
+     */
+    direction?: 'archive_crlf' | 'seal_crlf';
+    /** Session build indexes to affect. Defaults to every session. */
+    sessionIndexes?: number[];
+  };
+  /**
+   * Emit a rolling seal (program spec §8) rather than / as well as the classic
+   * `manifest.json`. See {@link RollingSealSpec}.
+   */
+  rollingSeal?: RollingSealSpec;
+  /**
+   * Pin the ed25519 keypair used to sign the manifest, as a hex-encoded 32-byte
+   * seed. Opt-in only — omit this and you get the existing behavior (a fresh
+   * random keypair per call, via `ed.utils.randomSecretKey()`), which is what
+   * most callers want (e.g. tests that build two bundles and expect them to
+   * carry distinct pubkeys). Pass this when a caller needs the SAME bundle
+   * bytes across repeated builds — e.g. `tools/export-conformance-vectors.ts`'s
+   * golden bundle, which is committed as a fixture in sibling repos and must
+   * not churn every time someone re-runs the exporter.
+   */
+  sessionPrivkeyHex?: string;
+  /**
+   * Pin the mtime JSZip embeds for every file in the built ZIP. Opt-in only —
+   * JSZip defaults to `new Date()` per `zip.file()` call when no `date` option
+   * is given, which is nondeterministic across runs and would defeat
+   * `sessionPrivkeyHex`'s byte-for-byte reproducibility goal for the ZIP output
+   * (the JSON manifest sidecar has no such field and doesn't need this).
+   */
+  zipFileDate?: Date;
   /**
    * Submission files to include (makes this a 1.1 bundle).
    * If undefined, the manifest is 1.0 and no submission_files are present.
@@ -77,6 +245,15 @@ export type BuildBundleOpts = {
   sessions?: Array<{
     /** Defaults to a deterministic UUID based on session index. */
     sessionId?: string;
+    /**
+     * The uuid in the `.slog` FILENAME, when a test needs to control it.
+     *
+     * Defaults to a value that DIFFERS from `sessionId`, because that is what
+     * production does — see {@link fakeLogFileUuid} for why the default is not
+     * `sessionId`. Pass `fileUuid: sessionId` to opt back into the old
+     * same-value shape, and say in the test why that is what it means to assert.
+     */
+    fileUuid?: string;
     /** Additional events after session.start; defaults to 5. */
     eventCount?: number;
     /** Optional explicit wall timestamps for events (starting from session.start). */
@@ -85,6 +262,15 @@ export type BuildBundleOpts = {
     machineId?: string;
     /** Override session.start.data.recorder.extension_id (recorder identity). Defaults to 'provenance.recorder'. */
     extensionId?: string;
+    /**
+     * Shallow-merged into `session.start.data` before the entry is chained.
+     *
+     * This is how a test builds a Manifest 2.0 bundle: set
+     * `{ format_version: '2.0', manifest, manifest_sig: manifest.sig, host }`.
+     * The merge happens BEFORE chaining, so the resulting bundle is chain- and
+     * signature-consistent (unlike the `tamper.*` options, which patch after).
+     */
+    sessionStart?: Record<string, unknown>;
     /**
      * If true, append a doc.save event at the end whose sha256 matches the
      * in-memory content built by the doc.change events. Used for check 7 tests.
@@ -105,12 +291,56 @@ export type BuildBundleOpts = {
     omitManifest?: boolean;
     omitSig?: boolean;
     omitAllSlogs?: boolean;
-    /** Omit one session's .slog.meta — produces orphaned_slog error. */
+    /**
+     * Omit one session's .slog.meta, keeping its .slog.
+     *
+     * No longer an error: the loader's read-side orphan guard DROPS the
+     * unpairable log and reports it on `Bundle.droppedArtifacts`. Only a bundle
+     * left with no analysable session at all still fails (`no_sessions`).
+     */
     omitOneSlogMeta?: boolean;
-    /** Omit one session's .slog (while keeping its .meta) — produces orphaned_meta error. */
+    /**
+     * Omit one session's .slog while keeping its .meta — the shape a
+     * crash-recovery quarantine leaves in a git-submitted `.provenance/`.
+     *
+     * No longer an error: the loader drops the stranded sidecar (and that
+     * session's rolling seal) and reports both. See
+     * `loader/orphan-guard-git-path.test.ts`.
+     */
     omitOneSlog?: boolean;
     addStrayFile?: { name: string; content: string };
     corruptNdjsonAtLine?: { sessionIndex: number; line: number };
+    /**
+     * Append a TORN final line to one session's `.slog`: a fragment of a real
+     * entry, with **no trailing newline**.
+     *
+     * This is what a power cut, a full disk, or an OS kill part-way through a
+     * flush leaves behind — under the log's completely NORMAL name, so none of
+     * the `.corrupt-` / `.tmp` / zero-byte patterns the unzipper drops can
+     * match it. It is the only corruption shape an honest student can produce
+     * without doing anything at all.
+     *
+     * Applied LAST, after every other tamper and after the digests the manifest
+     * commits to were taken, because that is the faithful ordering: the seal
+     * was signed while the log was healthy and the tear happened afterwards.
+     * A test that wants the reverse — a classic `seal` run over an already-torn
+     * file — passes `resealAfterTear`.
+     */
+    tornTail?: {
+      sessionIndex: number;
+      /**
+       * The partial bytes to append. Defaults to the first half of the `.slog`'s
+       * own last line, which is a genuine prefix of a genuine entry.
+       */
+      fragment?: string;
+      /**
+       * Re-take this session's `slog_sha256` over the TORN bytes, so the
+       * manifest (classic and rolling alike) commits to the file as it is
+       * archived. Models the classic path, where `seal` reads whatever is on
+       * disk. Default false: the seal predates the tear.
+       */
+      resealAfterTear?: boolean;
+    };
     /**
      * Mutate the hash field of one or more entries (by 0-based entryIndex
      * within the session) to break the hash chain at those points.
@@ -163,6 +393,31 @@ export type BuiltBundle = {
   manifest: BundleManifest;
   /** Hex-encoded ed25519 private key used to sign the manifest. */
   sessionPrivkeyHex: string;
+  /**
+   * LOGICAL session ids in build order (index 0 = first session spec) —
+   * `session.start.data.session_id`. This is what a rolling seal is named after
+   * (`manifest-<session_id>.json`), what the manifest's `sessions[].session_id`
+   * carries, and what per-session check details quote.
+   *
+   * It is NOT what the `.slog` file is called. See {@link BuiltBundle.logFileIds}.
+   */
+  sessionIds: string[];
+  /**
+   * The `.slog` FILENAME uuids in build order — what `session-<uuid>.slog` and
+   * `session-<uuid>.slog.meta` are actually named in the ZIP.
+   *
+   * Deliberately DIFFERENT from {@link BuiltBundle.sessionIds} unless a spec
+   * pins `fileUuid`, because that is what production does. A test that wants to
+   * reach into the ZIP for a session's log must index this, not `sessionIds` —
+   * the two used to be the same value, which is why crossing them went
+   * undetected all the way into a false accusation against real students.
+   */
+  logFileIds: string[];
+  /**
+   * The per-session rolling manifests actually emitted, keyed by session id.
+   * Empty unless `rollingSeal` was requested.
+   */
+  rollingManifests: Map<string, BundleManifest>;
 };
 
 // ---------------------------------------------------------------------------
@@ -173,6 +428,44 @@ export type BuiltBundle = {
 function fakeUuid(index: number): string {
   const hex = index.toString(16).padStart(8, '0');
   return `${hex}-0000-4000-8000-000000000000`;
+}
+
+/**
+ * The uuid in a session's `.slog` FILENAME — deliberately DIFFERENT from the
+ * logical `session.start.data.session_id` that {@link fakeUuid} produces.
+ *
+ * ## The fixture rule this encodes
+ *
+ * In production these are two independently minted uuids: the writer names the
+ * file `session-${randomUUID()}.slog` (`session-registry.ts`) while the logical
+ * id is `recorderContext.session_id`. Every fixture in this repo used to spell
+ * both with the same value, so a bundle in which they were CONFUSED was
+ * indistinguishable from one in which they were handled correctly — and a
+ * fixture that cannot distinguish two ids cannot fail on crossing them.
+ *
+ * It cost a maximum-severity false accusation to learn that: `parse-bundle.ts`
+ * keyed its rolling-seal → files map by the filename uuid and looked it up by
+ * the logical id, so prefix coverage came out empty for every git submission and
+ * `log_bytes_match` accused every honest student whose last seal was non-final.
+ * Not one test noticed, because in every fixture the lookup hit.
+ *
+ * So the default DIFFERS. A test that genuinely needs them equal must say so
+ * with `fileUuid: <the same value>`, which is a visible, reviewable claim.
+ */
+function fakeLogFileUuid(index: number): string {
+  const hex = index.toString(16).padStart(8, '0');
+  return `${hex}-0000-4000-8000-f11e00000000`;
+}
+
+/**
+ * git's smudge filter, exactly: widen every LF to CRLF, idempotently.
+ *
+ * The first replace collapses any CRLF already present so the second cannot
+ * produce `\r\r\n` — which is what a naive `\n` → `\r\n` does when run over
+ * text that is already widened, and is not a state git ever produces.
+ */
+function toCrlf(text: string): string {
+  return text.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
 }
 
 /** ISO timestamp offset from a base epoch for deterministic walls. */
@@ -198,6 +491,7 @@ async function buildSession(opts: {
   events?: EventSpec[];
   machineId?: string;
   extensionId?: string;
+  sessionStart?: Record<string, unknown>;
 }): Promise<{ slogText: string; metaJson: string }> {
   const {
     sessionId,
@@ -211,6 +505,7 @@ async function buildSession(opts: {
     events: explicitEvents,
     machineId,
     extensionId,
+    sessionStart,
   } = opts;
 
   const lines: string[] = [];
@@ -232,6 +527,7 @@ async function buildSession(opts: {
       vscode: { version: '1.90.0', commit: '', platform: 'darwin' },
       recorder: { version: '0.0.1', extension_id: extensionId ?? 'provenance.recorder' },
       session_pubkey: pubkeyHex,
+      ...(sessionStart ?? {}),
     },
   };
 
@@ -347,34 +643,58 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
   const sessionSpecs = opts?.sessions ?? [{}];
   const tamper = opts?.tamper ?? {};
 
-  // Generate one keypair shared across sessions (manifest sig is all that matters here).
-  const privkey = ed.utils.randomSecretKey();
+  const rollingSpec = opts?.rollingSeal;
+
+  // Generate one keypair shared across sessions (manifest sig is all that matters here),
+  // unless the caller pinned one via sessionPrivkeyHex (see BuildBundleOpts).
+  const privkey =
+    opts?.sessionPrivkeyHex !== undefined
+      ? hexToBytes(opts.sessionPrivkeyHex)
+      : ed.utils.randomSecretKey();
   const pubkey = await ed.getPublicKeyAsync(privkey);
   const pubkeyHex = bytesToHex(pubkey);
   const sessionPrivkeyHex = bytesToHex(privkey);
+
+  // A ROLLING-sealed bundle gets one keypair PER SESSION, because that is the
+  // real thing: each session signs its own manifest with its own ephemeral key,
+  // and in a shared 61B repo a partner's sessions carry a partner's keys. A
+  // classic bundle keeps the single shared keypair above, unchanged.
+  const perSessionKeys: Array<{ privkey: Uint8Array; pubkeyHex: string }> = [];
+  if (rollingSpec !== undefined) {
+    for (let i = 0; i < sessionSpecs.length; i++) {
+      const sk = ed.utils.randomSecretKey();
+      perSessionKeys.push({ privkey: sk, pubkeyHex: bytesToHex(await ed.getPublicKeyAsync(sk)) });
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // 1. Build each session's slog + meta.
   // ---------------------------------------------------------------------------
   type SessionData = {
+    /** Logical id: `session.start.data.session_id`. */
     sessionId: string;
+    /** The uuid in the `.slog` FILENAME. Different from `sessionId` by default. */
+    fileUuid: string;
     slogText: string;
     metaJson: string;
     slogSha256: string;
     metaSha256: string;
+    /** Write this session's `.slog` into the ZIP with CRLF terminators. */
+    archiveAsCrlf: boolean;
   };
 
   const sessions: SessionData[] = [];
   for (let i = 0; i < sessionSpecs.length; i++) {
     const spec = sessionSpecs[i]!;
     const sessionId = spec.sessionId ?? fakeUuid(i);
+    const fileUuid = spec.fileUuid ?? fakeLogFileUuid(i);
     const eventCount = spec.eventCount ?? 5;
     const walls = spec.walls;
 
     const { slogText, metaJson } = await buildSession({
       sessionId,
       sessionIndex: i,
-      pubkeyHex,
+      pubkeyHex: perSessionKeys[i]?.pubkeyHex ?? pubkeyHex,
       eventCount,
       ...(walls !== undefined ? { walls } : {}),
       assignmentId,
@@ -383,15 +703,42 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
       ...(spec.events !== undefined ? { events: spec.events } : {}),
       ...(spec.machineId !== undefined ? { machineId: spec.machineId } : {}),
       ...(spec.extensionId !== undefined ? { extensionId: spec.extensionId } : {}),
+      ...(spec.sessionStart !== undefined ? { sessionStart: spec.sessionStart } : {}),
     });
 
     sessions.push({
       sessionId,
+      fileUuid,
       slogText,
       metaJson,
       slogSha256: sha256Hex(slogText),
       metaSha256: sha256Hex(metaJson),
+      archiveAsCrlf: false,
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // 1b. Apply git's end-of-line filter.
+  //
+  // Ordering matters and mirrors reality. `archive_crlf` leaves the digests over
+  // the LF bytes the recorder actually wrote and widens only what goes into the
+  // archive, because that is what a checkout does to an already-sealed log.
+  // `seal_crlf` moves the DIGEST onto the widened bytes and archives the narrow
+  // ones, because there the recorder re-read a smudged working-tree file and
+  // git's clean filter then normalized the commit back.
+  // ---------------------------------------------------------------------------
+  if (opts?.gitLineEndings !== undefined) {
+    const direction = opts.gitLineEndings.direction ?? 'archive_crlf';
+    const targets = opts.gitLineEndings.sessionIndexes ?? sessions.map((_, i) => i);
+    for (const i of targets) {
+      const session = sessions[i];
+      if (session === undefined) continue;
+      if (direction === 'archive_crlf') {
+        session.archiveAsCrlf = true;
+      } else {
+        session.slogSha256 = sha256Hex(toCrlf(session.slogText));
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -550,6 +897,27 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
   }
 
   // ---------------------------------------------------------------------------
+  // 2c. Tear the final line — LAST, because every mutation above round-trips the
+  // `.slog` through `parseSlogLines`, which would either throw on the fragment
+  // or silently re-serialize it away.
+  // ---------------------------------------------------------------------------
+  if (tamper.tornTail !== undefined) {
+    const { sessionIndex, fragment, resealAfterTear } = tamper.tornTail;
+    const session = sessions[sessionIndex];
+    if (session !== undefined) {
+      const lines = session.slogText.split('\n').filter((l) => l !== '');
+      const last = lines[lines.length - 1] ?? '{"seq":0';
+      const torn = fragment ?? last.slice(0, Math.max(1, Math.floor(last.length / 2)));
+      // No trailing newline: that absence IS the tear. A flush that completed
+      // always ends the line.
+      session.slogText = session.slogText + torn;
+      if (resealAfterTear === true) {
+        session.slogSha256 = sha256Hex(session.slogText);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // 3. Build BundleManifest.
   //
   // If submissionFiles are specified, produce a 1.1 manifest with
@@ -574,6 +942,18 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
     }
   }
 
+  // The digest the CLASSIC manifest commits to for session `i`. Normally the
+  // finished log's, exactly as before. With `staleClassicAfterEntries` it is the
+  // digest of a PREFIX — the log as it stood when the classic seal was taken,
+  // after which the session went on recording. See `staleClassicAfterEntries`.
+  const stale = rollingSpec?.staleClassicAfterEntries;
+  const classicSlogShaFor = (i: number): string => {
+    const s = sessions[i]!;
+    if (stale === undefined || stale.sessionIndex !== i) return s.slogSha256;
+    const entries = s.slogText.split('\n').filter((l) => l !== '');
+    return sha256Hex(entries.slice(0, stale.entries).join('\n') + '\n');
+  };
+
   const manifest: BundleManifest =
     submissionFileSpecs !== undefined
       ? {
@@ -581,10 +961,10 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
           assignment_id: assignmentId,
           semester,
           extension_hash: 'a'.repeat(64),
-          sessions: sessions.map((s) => ({
+          sessions: sessions.map((s, i) => ({
             session_id: s.sessionId,
             prev_session_id: null,
-            slog_sha256: s.slogSha256,
+            slog_sha256: classicSlogShaFor(i),
             meta_sha256: s.metaSha256,
           })),
           submission_files: submissionEntries,
@@ -594,65 +974,206 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
           assignment_id: assignmentId,
           semester,
           extension_hash: 'a'.repeat(64),
-          sessions: sessions.map((s) => ({
+          sessions: sessions.map((s, i) => ({
             session_id: s.sessionId,
             prev_session_id: null,
-            slog_sha256: s.slogSha256,
+            slog_sha256: classicSlogShaFor(i),
             meta_sha256: s.metaSha256,
           })),
         };
 
   // ---------------------------------------------------------------------------
   // 4. Sign manifest.
+  //
+  // A rolling bundle's sessions have their own keys, so the shared `privkey`
+  // would match nothing. Sign the classic manifest with the LAST session's key,
+  // which is what the real seal command does (the active session signs).
   // ---------------------------------------------------------------------------
+  const classicSigningKey =
+    perSessionKeys.length > 0 ? perSessionKeys[perSessionKeys.length - 1]!.privkey : privkey;
   const canonicalManifest = canonicalize(manifest);
   const canonicalBytes = new TextEncoder().encode(canonicalManifest);
-  const sigBytes = await ed.signAsync(canonicalBytes, privkey);
+  const sigBytes = await ed.signAsync(canonicalBytes, classicSigningKey);
   const sigHex = bytesToHex(sigBytes);
+
+  // ---------------------------------------------------------------------------
+  // 4b. Build + sign the per-session ROLLING manifests (program spec §8).
+  //
+  // Each one covers exactly its own session and is signed by that session's own
+  // key. The tamper options deliberately produce the adversarial shapes the
+  // reader has to refuse.
+  // ---------------------------------------------------------------------------
+  const rollingManifests = new Map<string, BundleManifest>();
+  /** filename → text, applied to the zip below. */
+  const rollingFiles = new Map<string, string>();
+
+  if (rollingSpec !== undefined) {
+    const rTamper = rollingSpec.tamper ?? {};
+    // See RollingSealSpec.final: the digests below are taken over the FINISHED
+    // logs, which only a dispose()-time seal can honestly commit to.
+    const sealIsFinal = rollingSpec.final !== false;
+
+    /**
+     * `submission_files` as SESSION i's rolling seal recorded them: the shared
+     * entries, with any per-path override this session's seal was given.
+     */
+    const sealedSubmissionEntriesFor = (i: number): SubmissionEntry[] => {
+      const shas = rollingSpec.submissionShaFor?.find((o) => o.sessionIndex === i)?.shas;
+      if (shas === undefined) return submissionEntries;
+      return submissionEntries.map((e) =>
+        Object.prototype.hasOwnProperty.call(shas, e.path) ? { ...e, sha256: shas[e.path]! } : e,
+      );
+    };
+
+    /** Build session i's own rolling manifest. */
+    const rollingManifestFor = (i: number): BundleManifest => {
+      const s = sessions[i]!;
+      return {
+        format_version: '1.2',
+        assignment_id:
+          rTamper.assignmentIdFor?.sessionIndex === i
+            ? rTamper.assignmentIdFor.assignmentId
+            : assignmentId,
+        semester,
+        extension_hash:
+          rTamper.extensionHashFor?.sessionIndex === i
+            ? rTamper.extensionHashFor.extensionHash
+            : 'a'.repeat(64),
+        sessions: [
+          {
+            session_id: s.sessionId,
+            prev_session_id: null,
+            slog_sha256: s.slogSha256,
+            meta_sha256: s.metaSha256,
+          },
+        ],
+        // Per-session on-disk state. See RollingSealSpec.submissionShaFor for
+        // why two seals in one bundle may honestly disagree about a path.
+        submission_files: sealedSubmissionEntriesFor(i),
+        // Omitted, never written as `final: false` — a non-final rolling
+        // manifest must stay byte-identical to what 1.2 emitted before this
+        // field existed.
+        ...(sealIsFinal ? { final: true } : {}),
+      };
+    };
+
+    for (let i = 0; i < sessions.length; i++) {
+      if (rTamper.omitSealFor?.includes(i) === true) continue;
+
+      const sessionId = sessions[i]!.sessionId;
+      const names = rollingManifestFilenames(sessionId);
+
+      // A sideways copy: another session's manifest content under THIS session's
+      // filenames, signed with THIS session's own key. The signature is valid, so
+      // only the filename ↔ session_id binding can catch it.
+      const contentIndex =
+        rTamper.sidewaysCopyFor?.sessionIndex === i
+          ? rTamper.sidewaysCopyFor.manifestOfSessionIndex
+          : i;
+      const rolling = rollingManifestFor(contentIndex);
+      rollingManifests.set(sessionId, rolling);
+
+      const canonicalRolling = canonicalize(rolling);
+      const signingIndex =
+        rTamper.signWithKeyOf?.sessionIndex === i ? rTamper.signWithKeyOf.keyOfSessionIndex : i;
+      const rollingSigHex = bytesToHex(
+        await ed.signAsync(
+          new TextEncoder().encode(canonicalRolling),
+          perSessionKeys[signingIndex]!.privkey,
+        ),
+      );
+
+      if (rTamper.omitJsonFor?.includes(i) !== true) {
+        rollingFiles.set(
+          names.json,
+          rTamper.replaceJsonFor?.sessionIndex === i
+            ? rTamper.replaceJsonFor.text
+            : canonicalRolling,
+        );
+      }
+      if (rTamper.omitSigFor?.includes(i) !== true) {
+        rollingFiles.set(names.sig, rollingSigHex);
+      }
+    }
+
+    // A seal naming a session that has no .slog in this bundle.
+    if (rTamper.extraSealForSessionId !== undefined) {
+      const ghostId = rTamper.extraSealForSessionId;
+      const base = rollingManifestFor(0);
+      const ghost: BundleManifest = {
+        ...base,
+        sessions: [{ ...base.sessions[0]!, session_id: ghostId }],
+      };
+      const names = rollingManifestFilenames(ghostId);
+      const canonicalGhost = canonicalize(ghost);
+      rollingFiles.set(names.json, canonicalGhost);
+      rollingFiles.set(
+        names.sig,
+        bytesToHex(
+          await ed.signAsync(new TextEncoder().encode(canonicalGhost), perSessionKeys[0]!.privkey),
+        ),
+      );
+      rollingManifests.set(ghostId, ghost);
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // 5. Build ZIP, applying tamper mutations.
   // ---------------------------------------------------------------------------
   const zip = new JSZip();
+  // See BuildBundleOpts.zipFileDate: an empty options object here reproduces
+  // the prior behavior exactly (JSZip falls back to `new Date()` per file).
+  const zipOpts: { date?: Date } =
+    opts?.zipFileDate !== undefined ? { date: opts.zipFileDate } : {};
 
-  if (!tamper.omitManifest) {
-    zip.file('manifest.json', canonicalManifest);
+  // A rolling-sealed bundle has no classic manifest at all unless the test asks
+  // for the both-shapes case.
+  const emitClassic = rollingSpec === undefined || rollingSpec.alsoClassic === true;
+
+  if (emitClassic && !tamper.omitManifest) {
+    zip.file('manifest.json', canonicalManifest, zipOpts);
   }
-  if (!tamper.omitSig) {
-    zip.file('manifest.sig', sigHex);
+  if (emitClassic && !tamper.omitSig) {
+    zip.file('manifest.sig', sigHex, zipOpts);
+  }
+  for (const [name, text] of rollingFiles) {
+    zip.file(name, text, zipOpts);
   }
 
   if (!tamper.omitAllSlogs) {
     for (let i = 0; i < sessions.length; i++) {
       const s = sessions[i]!;
-      const slogName = `session-${s.sessionId}.slog`;
-      const metaName = `session-${s.sessionId}.slog.meta`;
+      // The FILENAME uuid, never the logical session id. See fakeLogFileUuid.
+      const slogName = `session-${s.fileUuid}.slog`;
+      const metaName = `session-${s.fileUuid}.slog.meta`;
 
       const isLastSession = i === sessions.length - 1;
 
-      // omitOneSlogMeta: omit meta for the last session → orphaned_slog error.
+      // omitOneSlogMeta: omit meta for the last session → an unpairable .slog,
+      // which the loader's orphan guard drops and reports (it used to be fatal).
       const skipMeta = tamper.omitOneSlogMeta === true && isLastSession;
-      // omitOneSlog: omit slog for the last session but keep its meta → orphaned_meta error.
+      // omitOneSlog: omit slog for the last session but keep its meta → a
+      // stranded sidecar, dropped and reported (it used to be fatal).
       const skipSlog = tamper.omitOneSlog === true && isLastSession;
 
       if (!skipSlog) {
-        zip.file(slogName, s.slogText);
+        zip.file(slogName, s.archiveAsCrlf ? toCrlf(s.slogText) : s.slogText, zipOpts);
       }
       if (!skipMeta) {
-        zip.file(metaName, s.metaJson);
+        zip.file(metaName, s.metaJson, zipOpts);
       }
     }
   }
 
   if (tamper.addStrayFile !== undefined) {
-    zip.file(tamper.addStrayFile.name, tamper.addStrayFile.content);
+    zip.file(tamper.addStrayFile.name, tamper.addStrayFile.content, zipOpts);
   }
 
   // Add submission file bytes at the zip root (1.1 bundles only).
   if (submissionFileSpecs !== undefined) {
     for (const spec of submissionFileSpecs) {
       if (spec.status === 'present' && spec.content !== undefined) {
-        zip.file(spec.path, spec.content);
+        zip.file(spec.path, spec.content, zipOpts);
       }
     }
   }
@@ -660,5 +1181,13 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
   const zipBuffer = await zip.generateAsync({ type: 'arraybuffer' });
   const blob = new Blob([zipBuffer], { type: 'application/zip' });
 
-  return { blob, zipBuffer, manifest, sessionPrivkeyHex };
+  return {
+    blob,
+    zipBuffer,
+    manifest,
+    sessionPrivkeyHex,
+    sessionIds: sessions.map((s) => s.sessionId),
+    logFileIds: sessions.map((s) => s.fileUuid),
+    rollingManifests,
+  };
 }

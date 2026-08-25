@@ -20,6 +20,10 @@
 import type { Bundle } from '../../loader/types.js';
 import type { EventIndex } from '../../index/event-index.js';
 import type { CrossSubmissionFeatures, CrossPasteFeature } from './types.js';
+import { resolveBundleCapturePolicy } from '../../manifest/bundle-manifest.js';
+import { buildObservedDag, commitNodeKey, observedCommits } from '../../git/observed-dag.js';
+import { sessionNodeKey } from '../../coverage/cross-scope.js';
+import type { ObservedDagSource } from '../../git/observed-dag.js';
 
 /** 3-gram size for the editing-pattern kind-stream fingerprint. */
 export const NGRAM_SIZE = 3;
@@ -41,6 +45,58 @@ export function buildKindNgramSet(kinds: readonly string[], n: number): Set<stri
     set.add(kinds.slice(i, i + n).join('|'));
   }
   return set;
+}
+
+/**
+ * The same-scope exclusion key (spec S20): every commit a session in this scope
+ * was OBSERVED at, as `(repository, sha)` node keys.
+ *
+ * Exported because the server builds `CrossSubmissionFeatures` on its own path
+ * and must produce the identical value — one derivation, two call sites, rather
+ * than two derivations that agree today.
+ *
+ * **Observed only, never witnessed-only**, and that narrowing is the difference
+ * between a fix and a course-wide outage: a witnessed-only sha is one that
+ * appears solely inside another commit's `parents`, which is exactly where a
+ * shared skeleton repository's history lives. Keying on ancestry would put every
+ * student who cloned the same starter into one lineage and switch
+ * cross-submission detection off for the whole cohort. See
+ * `coverage/cross-scope.ts` for the full rationale.
+ *
+ * Sorted, so the value is deterministic and diffable; the consumer treats it as
+ * a set.
+ */
+export function observedCommitKeysOf(source: ObservedDagSource): string[] {
+  const dag = buildObservedDag(source);
+  return observedCommits(dag)
+    .map((n) => commitNodeKey(n.repository, n.sha))
+    .sort();
+}
+
+/**
+ * The second same-scope exclusion key: every session this archive CARRIES,
+ * keyed by `(session_pubkey, session_id)`.
+ *
+ * Exported for the same reason {@link observedCommitKeysOf} is — the server
+ * builds `CrossSubmissionFeatures` on its own path and must produce the
+ * identical value from one derivation, not a second one that agrees today.
+ *
+ * A session whose `session.start` carries no usable `session_pubkey`
+ * contributes NOTHING rather than a degraded key. Absence is never a match:
+ * unioning on "neither of us could be identified" is the shape that suppresses
+ * detection between strangers. See `coverage/cross-scope.ts`.
+ *
+ * Sorted, so the value is deterministic and diffable; the consumer treats it as
+ * a set.
+ */
+export function recordedSessionKeysOf(bundle: Bundle): string[] {
+  const keys: string[] = [];
+  for (const session of bundle.sessions) {
+    const pubkey = session.firstEvent.data.session_pubkey;
+    if (typeof pubkey !== 'string' || pubkey === '') continue;
+    keys.push(sessionNodeKey(pubkey, session.sessionId));
+  }
+  return keys.sort();
 }
 
 /**
@@ -76,5 +132,8 @@ export function extractCrossFeatures(bundle: Bundle, index: EventIndex): CrossSu
     representativeSeqKeys: index.ordered
       .slice(0, REPRESENTATIVE_EVENT_COUNT)
       .map((e) => `${e.sessionId}:${e.seq}`),
+    disabledCaptureSignals: resolveBundleCapturePolicy(bundle).disabledSignals,
+    observedCommitKeys: observedCommitKeysOf(bundle),
+    recordedSessionKeys: recordedSessionKeysOf(bundle),
   };
 }
