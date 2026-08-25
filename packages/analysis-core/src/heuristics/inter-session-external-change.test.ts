@@ -26,6 +26,25 @@ async function buildAndIndex(opts: Parameters<typeof buildTestBundle>[0]) {
   return { index: buildIndex(result.value), bundle: result.value };
 }
 
+// Convenience: like sessionThat, but with explicit wall timestamps stamped
+// onto each of the 3 events (doc.open, doc.change, doc.save), in order. Used
+// by the overlap-suppression tests below, which need precise control over
+// each session's start/end wall time.
+function sessionThatAt(
+  file: string,
+  openContent: string,
+  appended: string,
+  walls: [string, string, string],
+): EventSpec[] {
+  const [openWall, changeWall, saveWall] = walls;
+  const [openEvent, changeEvent, saveEvent] = sessionThat(file, openContent, appended);
+  return [
+    { ...openEvent!, wall: openWall },
+    { ...changeEvent!, wall: changeWall },
+    { ...saveEvent!, wall: saveWall },
+  ];
+}
+
 // Convenience: build a session that opens `file` at `content`, types one
 // `appended` chunk at the end, then saves.
 function sessionThat(file: string, openContent: string, appended: string): EventSpec[] {
@@ -304,5 +323,111 @@ describe('inter_session_external_change — contributor scoping', () => {
     const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
     expect(flags).toHaveLength(1);
     expect(flags[0]!.detail!['contributor_comparison']).toBe('unknown');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Overlap suppression
+//
+// A negative or zero gap between sessionA's last event and sessionB's first
+// event is proof the two sessions were never sequential — a second recorder
+// was running the whole time sessionA's clock says it was "off". See the
+// "Scoped to non-overlapping pairs" header comment.
+// ---------------------------------------------------------------------------
+
+describe('inter_session_external_change — session overlap', () => {
+  const FINAL_A = 'def foo():\n    return 1\n';
+  const EXTERNALLY_EDITED = FINAL_A + 'print("oops")\n';
+
+  it('does NOT flag a pair whose sessions overlap in wall time, even though the file differs', async () => {
+    // Mirrors a real bundle: session B (23:41:08 → 23:48:58) is entirely
+    // NESTED inside session A (23:35:51 → 23:57:26). gap = bStart - aEnd =
+    // 23:41:08 - 23:57:26 = -978s, exactly the negative gap the bug report
+    // printed as "over a -978s gap" — proof the interval never existed.
+    const { index, bundle } = await buildAndIndex({
+      sessions: [
+        {
+          walls: ['2026-06-01T23:35:51.000Z'],
+          events: sessionThatAt('hw1.py', '', FINAL_A, [
+            '2026-06-01T23:36:00.000Z',
+            '2026-06-01T23:45:00.000Z',
+            '2026-06-01T23:57:26.000Z',
+          ]),
+        },
+        {
+          walls: ['2026-06-01T23:41:08.000Z'],
+          events: sessionThatAt('hw1.py', EXTERNALLY_EDITED, '\n', [
+            '2026-06-01T23:41:09.000Z',
+            '2026-06-01T23:45:30.000Z',
+            '2026-06-01T23:48:58.000Z',
+          ]),
+        },
+      ],
+    });
+    const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(0);
+  });
+
+  it('STILL flags a genuinely sequential pair (positive gap) with a differing file', async () => {
+    const { index, bundle } = await buildAndIndex({
+      sessions: [
+        {
+          walls: ['2026-06-01T10:00:00.000Z'],
+          events: sessionThatAt('hw1.py', '', FINAL_A, [
+            '2026-06-01T10:00:10.000Z',
+            '2026-06-01T10:00:20.000Z',
+            '2026-06-01T10:00:30.000Z',
+          ]),
+        },
+        {
+          walls: ['2026-06-01T10:05:30.000Z'],
+          events: sessionThatAt('hw1.py', EXTERNALLY_EDITED, '\n', [
+            '2026-06-01T10:05:31.000Z',
+            '2026-06-01T10:05:40.000Z',
+            '2026-06-01T10:05:50.000Z',
+          ]),
+        },
+      ],
+    });
+    const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(1);
+    // aEnd = 10:00:30, bStart = 10:05:30 → 300s gap, computed once and reused
+    // for the description text.
+    expect(flags[0]!.description).toContain('over a 300s gap');
+    expect(flags[0]!.detail!['gap_wall_ms']).toBe(300_000);
+  });
+
+  it('still compares a pair when the wall gap cannot be established, without fabricating a gap figure', async () => {
+    // sessionA's last event carries an unparseable wall (a malformed timezone
+    // suffix, not a garbage string, so it still sorts into the right position
+    // lexicographically among real ISO timestamps). Date.parse of it is NaN,
+    // so the gap is null — "cannot establish" — which must NOT suppress the
+    // pair (null is not evidence of overlap) and must NOT print a fabricated
+    // "0s gap" either.
+    const { index, bundle } = await buildAndIndex({
+      sessions: [
+        {
+          walls: ['2026-06-01T09:59:50.000Z'],
+          events: sessionThatAt('hw1.py', '', FINAL_A, [
+            '2026-06-01T10:00:00.000Z',
+            '2026-06-01T10:00:10.000Z',
+            '2026-06-01T10:00:20.000X', // malformed timezone designator -> Date.parse = NaN
+          ]),
+        },
+        {
+          walls: ['2026-06-01T10:01:00.000Z'],
+          events: sessionThatAt('hw1.py', EXTERNALLY_EDITED, '\n', [
+            '2026-06-01T10:01:01.000Z',
+            '2026-06-01T10:01:10.000Z',
+            '2026-06-01T10:01:20.000Z',
+          ]),
+        },
+      ],
+    });
+    const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.detail!['gap_wall_ms']).toBeNull();
+    expect(flags[0]!.description).not.toMatch(/\d+s gap/);
+    expect(flags[0]!.description).toContain('could not be established');
   });
 });

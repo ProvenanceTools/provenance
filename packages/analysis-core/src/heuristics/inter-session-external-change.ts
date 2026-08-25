@@ -30,6 +30,8 @@
  *   - Pre-v1.1 recorder: no `content` field on doc.open.
  *   - The two strings are equal (no divergence).
  *   - The two sessions belong to PROVEN-DIFFERENT contributors (see below).
+ *   - The two sessions OVERLAP in wall time (see "Scoped to non-overlapping
+ *     pairs" below) — the whole pair is skipped, not per-file.
  *
  * ## Scoped to one contributor's chain (Tier 3.2/3.3)
  *
@@ -78,6 +80,68 @@
  * dependency. It is not done here, and until it is, the honest position remains
  * to compare fewer pairs rather than to invent findings; the pairs dropped here
  * are only the ones that were never anything but false.
+ *
+ * ## Scoped to non-overlapping pairs
+ *
+ * A second, independent gate sits beside the contributor gate: a consecutive
+ * pair is only compared when sessionA's last event happened at or before
+ * sessionB's first event. When the two sessions overlap in wall time, no
+ * comparison is made and no flag is emitted for that pair, for any file.
+ *
+ * This is not noise suppression. It is the removal of a claim whose own stated
+ * basis is false:
+ *
+ *  1. The heuristic's entire premise is an INTERVAL during which no recorder
+ *     observed the working tree — "the recorder only emits `fs.external_change`
+ *     while a session is live", so a gap between sessions is a gap in
+ *     observation. Overlap is positive evidence that no such gap existed: a
+ *     second recorder was watching the whole time sessionA's clock says it was
+ *     "off". The finding's stated basis — "changed while the recorder was
+ *     off" — is not weakly supported here, it is false by construction. That
+ *     is a stronger reason to withhold it than "cannot attribute", which is
+ *     all the Tier 3.3 gate above establishes.
+ *
+ *  2. "Consecutive sessions" is a fiction once two machines are involved.
+ *     Sessions are ordered here by wall clock (`bySessionId` iteration order,
+ *     sorted by wall in `buildIndex`), and two independent machines' clocks are
+ *     not evidence of which one ran first — the identical principle that makes
+ *     `index/reconstruct-segments.ts` refuse to linearise a file with live,
+ *     unordered branches rather than hand a grader content that never existed
+ *     on any one disk (spec S16, L3: "two machines' clocks are not evidence").
+ *     When sessionA and sessionB overlap, "the end of one" and "the start of
+ *     the next" are not two sequential states of ONE working tree sampled in
+ *     order; they are two DIFFERENT trees sampled at two arbitrary moments that
+ *     happen to sort adjacently. Diffing them and calling the diff "what
+ *     happened in between" assumes the very ordering the overlap disproves.
+ *
+ *  3. Suppressing here loses nothing, because the overlap fact is not thrown
+ *     away — it is computed exactly once, structurally, by
+ *     `partitionSessionOverlaps` (`coverage/session-overlap.ts`) and surfaced
+ *     to a grader through the channel built for it: the submission overview's
+ *     Recording coverage panel (`CoveragePanel.tsx`) renders a "Concurrent
+ *     recording" statement for every pair of sessions proven to belong to two
+ *     different verified people — "Both are verified, and verified as
+ *     different people — this is what collaboration looks like, and not a
+ *     finding" — and a parallel "One contributor, two machines" statement when
+ *     it is one person on two enrolled machines. An overlap this heuristic
+ *     cannot yet attribute either way instead reaches a grader through
+ *     `multiple_sessions_overlap`, the heuristic that partition actually feeds
+ *     for the `judged` arm, hedged the same way this file's Tier 3.3 comment
+ *     hedges `'unknown'` pairs. Either way, the overlap is reported by the ONE
+ *     place in the codebase built to report it correctly. This heuristic
+ *     manufacturing a second, wrongly-premised claim about the same interval —
+ *     "the file changed while nobody was watching", over an interval where
+ *     someone demonstrably was — adds no coverage and only adds risk.
+ *
+ * The gap is computed once per (sessionA, sessionB) pair, before the per-file
+ * loop, and reused for both the suppression decision and the description text
+ * — a session pair does not overlap for some files and not others. When either
+ * endpoint's `wall` fails to parse, the gap is `null`: unlike a numeric gap,
+ * `null` is NOT evidence of overlap (or of anything else), so it does not
+ * suppress. The pair is still compared as before Tier 3.3/this change; only the
+ * description's gap figure is omitted rather than fabricated as `0s`, which is
+ * what a naive "parse failure defaults to 0" would print — and did, before this
+ * change made `null` a real state instead of a silent zero.
  */
 
 import type { EventIndex, IndexedEvent } from '../index/event-index.js';
@@ -134,6 +198,27 @@ function filesTouchedInSession(sessionEvents: IndexedEvent[]): Set<string> {
   return files;
 }
 
+/**
+ * Wall-clock gap, in ms, between sessionA's last event and sessionB's first
+ * event. Positive means sessionA ended before sessionB started (the ordinary
+ * case this heuristic is about). Zero or negative means the sessions overlap
+ * or touch — see the "Scoped to non-overlapping pairs" header comment.
+ *
+ * Returns `null`, not `0`, when either endpoint's `wall` cannot be parsed:
+ * `null` means "cannot establish", which must NOT be treated as evidence of
+ * overlap (a `<= 0` suppression rule would otherwise silently swallow every
+ * pair with a bad timestamp).
+ */
+function sessionGapMs(
+  sessionAEvents: IndexedEvent[],
+  sessionBEvents: IndexedEvent[],
+): number | null {
+  const aEnd = Date.parse(sessionAEvents[sessionAEvents.length - 1]!.wall);
+  const bStart = Date.parse(sessionBEvents[0]!.wall);
+  if (!Number.isFinite(aEnd) || !Number.isFinite(bStart)) return null;
+  return bStart - aEnd;
+}
+
 // ---------------------------------------------------------------------------
 // Heuristic
 // ---------------------------------------------------------------------------
@@ -165,6 +250,14 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
     const contribB = contributorOf(bundle, sessionBId);
     const comparison = compareContributors(contribA, contribB);
     if (comparison === 'different') continue;
+
+    // Overlap gate (see "Scoped to non-overlapping pairs" above): a gap of
+    // zero or less is proof the two sessions were not sequential, so the
+    // whole pair is skipped before any file is compared. A `null` gap
+    // ("cannot establish") is not proof of overlap and does NOT suppress —
+    // the pair is still compared, just without a gap figure in the text.
+    const gapMs = sessionGapMs(sessionAEvents, sessionBEvents);
+    if (gapMs !== null && gapMs <= 0) continue;
 
     const sessionALastIdx = sessionAEvents[sessionAEvents.length - 1]!.globalIdx;
     // upToGlobalIdx is exclusive — to include all of sessionA's events,
@@ -205,12 +298,14 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
       const supportingSeqs = [`${nextOpen.event.sessionId}:${nextOpen.event.seq}`];
       const id = `inter_session_external_change-${supportingSeqs[0]}-${flagIndex++}`;
 
-      // Wall-clock gap between sessionA end and sessionB start.
-      const gapMs = (() => {
-        const aEnd = Date.parse(sessionAEvents[sessionAEvents.length - 1]!.wall);
-        const bStart = Date.parse(sessionBEvents[0]!.wall);
-        return Number.isFinite(aEnd) && Number.isFinite(bStart) ? bStart - aEnd : 0;
-      })();
+      // gapMs was computed once for the whole (sessionA, sessionB) pair above
+      // (and already gated the pair on overlap before this loop started). A
+      // `null` gap means it could not be established, not that it was zero —
+      // print no figure rather than a fabricated "0s".
+      const gapClause =
+        gapMs === null
+          ? '; the wall-clock gap between sessions could not be established'
+          : ` over a ${Math.round(gapMs / 1000)}s gap`;
 
       flags.push({
         id,
@@ -221,7 +316,7 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
         supportingSeqs,
         description:
           `${file} differs between the end of one recorder session and the start ` +
-          `of the next (Δ ${lenDiff} chars over a ${Math.round(gapMs / 1000)}s gap).` +
+          `of the next (Δ ${lenDiff} chars${gapClause}).` +
           (comparison === 'same'
             ? ` Both sessions are attributed to the same verified contributor, so the file` +
               ` changed while that contributor's recorder was off.`
