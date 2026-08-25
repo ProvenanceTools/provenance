@@ -3,6 +3,8 @@
  *
  * Layout:
  *   [Step -1] [Play/Pause] [Step +1]  [scrub slider]  [event label]
+ *   (optional, only when `ribbons` is non-empty: contributor ribbons, stacked
+ *   directly beneath the slider)
  *
  * Scrub throttle:
  *   The slider's onValueChange fires on every pixel of drag. To avoid
@@ -13,6 +15,22 @@
  * Keyboard:
  *   Space → play/pause (on the play/pause button; handled by native button focus).
  *   Arrow keys → handled by Radix Slider natively.
+ *
+ * Contributor ribbons (optional, additive):
+ *   `ribbons` / `overlaps` are optional props consumed by split-replay-lanes
+ *   (design `docs/superpowers/specs/2026-08-24-split-replay-lanes-design.md`
+ *   §5). When omitted or empty, this component's render is byte-for-byte what
+ *   it was before those props existed — that is a hard requirement, not a
+ *   preference, because every caller that doesn't yet pass ribbons (and every
+ *   existing test) must see no difference. `ContributorRibbons` is rendered as
+ *   a plain in-flow block placed AFTER the `Slider` inside the same
+ *   `relative flex-1` wrapper the seam ticks already use. That wrapper isn't a
+ *   flex container itself, so the ribbons block simply stacks below the
+ *   slider in normal document flow and — critically — inherits that wrapper's
+ *   exact width, which is what makes its index-space geometry
+ *   (`left% = startGlobalIdx / sliderMax * 100`) line up with the seam ticks
+ *   without any extra measurement or a second source of truth for the track's
+ *   width. The seam ticks and their positioning math are untouched.
  */
 
 import { useCallback, useRef } from 'react';
@@ -27,6 +45,8 @@ import { Play, Pause, SkipBack, SkipForward } from 'lucide-react';
 import type { ReplayState } from './engine-core.js';
 import type { IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import { formatGap, type Seam } from './bundle-clock.js';
+import { ContributorRibbons, type RibbonRow } from './ContributorRibbons.js';
+import type { OverlapInterval } from './contributor-activity.js';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -43,6 +63,13 @@ type TransportBarProps = {
   events: readonly IndexedEvent[];
   /** Session boundaries, rendered as ticks. Empty for a single-session bundle. */
   seams?: readonly Seam[];
+  /**
+   * One ribbon row per contributor, rendered beneath the slider. Omitted or
+   * empty renders nothing — see the header comment's "Contributor ribbons".
+   */
+  ribbons?: readonly RibbonRow[];
+  /** Overlap intervals for the ribbon band. Ignored when `ribbons` is empty. */
+  overlaps?: readonly OverlapInterval[];
   onPlay(): void;
   onPause(): void;
   onStep(n: number): void;
@@ -57,6 +84,8 @@ export function TransportBar({
   state,
   events,
   seams = [],
+  ribbons,
+  overlaps,
   onPlay,
   onPause,
   onStep,
@@ -178,6 +207,9 @@ export function TransportBar({
                 title={`Session boundary — ${formatGap(seam.realGapMs)} offline`}
               />
             ))}
+          {ribbons !== undefined && ribbons.length > 0 && (
+            <ContributorRibbons rows={ribbons} overlaps={overlaps ?? []} sliderMax={sliderMax} />
+          )}
         </div>
 
         {/* Event label */}
