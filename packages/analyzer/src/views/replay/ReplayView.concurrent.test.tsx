@@ -709,6 +709,86 @@ describe('focus-away overlay, scoped to the lane that owns the playhead (defect 
 });
 
 // ---------------------------------------------------------------------------
+// Follow-up on defect 1: `currentFocusAwaySpan` itself scans the WHOLE bundle
+// unfiltered, so before this fix ANY contributor's `focus.change` could set or
+// clear the away state a lane shows. The defect-1 fix above only chose WHICH
+// lane may show an overlay (the caret-owning one) — it did not stop that
+// lane's overlay from being driven by a DIFFERENT contributor's evidence.
+//
+// This is worse than the original defect: an un-attributed whole-grid wash
+// was vague and wrong, but an overlay drawn inside one NAMED contributor's
+// lane, driven by someone else's `focus.change`, is a specific false
+// accusation against a person the evidence never implicated — exactly the
+// failure class this feature exists to prevent (see `ContributorSelect.tsx`'s
+// header comment).
+//
+// The fix: `laneFocusAway` (`ReplayView.tsx`) filters `currentFocusAwaySpan`
+// to the OWNING contributor's own session IDs. The single-pane path is
+// deliberately untouched — see the comment at that render site.
+// ---------------------------------------------------------------------------
+
+describe("focus-away overlay must not leak across contributors' lanes", () => {
+  it("shows bob's own lane the overlay at his own focus-lost event, but never leaks it into alice's lane once she owns the caret and never regains focus for him", async () => {
+    // bob (session index 0, chronologically first) tabs away and never
+    // regains focus. alice (session index 1, chronologically LAST) is still
+    // actively editing — no focus events of her own at all — so the default
+    // playhead (this bundle's very last event) lands inside HER session.
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'bob' },
+        text: 'BOB_LINE',
+        file: 'bob.py',
+        focusAwayReason: 'window',
+      },
+      { who: { studentRef: 'alice' }, text: 'ALICE_LINE', file: 'alice.py' },
+    ]);
+
+    const scope = reconstructionScopeFor(bundle, index);
+    const firstSession = [...index.bySessionId.keys()][0]!;
+    const bobFocusLostIdx = index.ordered.find((e) => e.kind === 'focus.change')!.globalIdx;
+    const lastIdx = index.ordered.length - 1;
+
+    function renderAt(eventIdx: number) {
+      return render(
+        <MemoryRouter initialEntries={[`/local/replay/${firstSession}?event=${eventIdx}`]}>
+          <ReplayInner
+            sessionId={firstSession}
+            index={index}
+            flags={[]}
+            sourceFilename="test.zip"
+            showHeader={false}
+            scope={scope}
+            contributors={bundle.contributors ?? null}
+          />
+        </MemoryRouter>,
+      );
+    }
+
+    // 1. At bob's own focus-lost event, HE owns the caret and his OWN lane
+    //    correctly shows the overlay — the correctly-attributed case, which
+    //    must keep working.
+    const first = renderAt(bobFocusLostIdx);
+    await screen.findByTestId('replay-lanes');
+    const overlayAtBob = await screen.findByTestId('focus-away-overlay');
+    const bobLane = overlayAtBob.closest('[data-testid="replay-lane"]');
+    expect(bobLane).not.toBeNull();
+    expect(within(bobLane as HTMLElement).getByTestId('replay-lane-file').textContent).toBe(
+      'bob.py',
+    );
+    first.unmount();
+
+    // 2. Later, alice's own session owns the caret. Bob's away state was
+    //    NEVER cleared (no regain event anywhere in the bundle), so an
+    //    unfiltered scan would still report "away" — and, per the defect-1
+    //    fix, would paint that inside ALICE's named lane. It must not: the
+    //    evidence is bob's, not hers.
+    renderAt(lastIdx);
+    await screen.findByTestId('replay-lanes');
+    expect(screen.queryByTestId('focus-away-overlay')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Manual-QA defect 2: lane panes must follow the caret vertically only.
 //
 // A lane pane is a fraction of the single pane's width, so centering

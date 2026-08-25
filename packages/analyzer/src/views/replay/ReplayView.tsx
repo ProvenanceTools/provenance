@@ -167,14 +167,24 @@ function ReplayHeader({ sourceFilename }: ReplayHeaderProps) {
 //    gutter colours, which are the same colours in every lane.
 //
 // `FocusAwayOverlay` IS mounted here, gated on `ownsCaret` exactly like the
-// caret and follow-cursor below it, for the same reason: it is driven by the
-// PLAYHEAD'S OWN SESSION's focus state, which belongs to one contributor.
-// Rendering it over every lane (the outer, whole-code-area placement this
-// component used before) would claim every contributor had tabbed away, on
-// the evidence of one of them. `ReplayLanes`' `replay-lane-pane` wrapper is
-// `position: relative`, so the overlay's `absolute inset-0` is confined to
-// THIS lane's content area — below its header and file strip, never over
-// them, and never reaching another lane's DOM subtree at all.
+// caret and follow-cursor below it, for the same reason: it must belong to
+// ONE contributor. Rendering it over every lane (the outer, whole-code-area
+// placement this component used before) would claim every contributor had
+// tabbed away, on the evidence of one of them. `ReplayLanes`' `replay-lane-pane`
+// wrapper is `position: relative`, so the overlay's `absolute inset-0` is
+// confined to THIS lane's content area — below its header and file strip,
+// never over them, and never reaching another lane's DOM subtree at all.
+//
+// `ownsCaret` alone is not enough, though: it says WHICH LANE may show an
+// overlay, not whose evidence that overlay is allowed to show. The
+// `focusAway` prop passed in here is `laneFocusAway` (`ReplayInner`) —
+// `currentFocusAwaySpan` FILTERED to the owning contributor's own session
+// IDs, not the unfiltered whole-bundle scan the single pane still uses. Pass
+// the unfiltered value here by mistake and a lane would show ownsCaret's
+// contributor drawn accurately, but be washed red by a DIFFERENT
+// contributor's `focus.change` — a false accusation with a name attached to
+// it, which is strictly worse than the un-attributed wash this component
+// replaced.
 //
 // The caret (`CursorMarker`) and the viewport-follow (`FollowCursor`) render
 // only when `ownsCaret` — design §7: "a stale caret drawn in another lane would
@@ -187,8 +197,10 @@ type LanePaneProps = {
   readonly ownsCaret: boolean;
   readonly events: readonly IndexedEvent[];
   readonly currentGlobalIdx: number;
-  /** The playhead's focus-away state, whole-bundle-derived. Only painted in
-   *  the lane that owns the caret — see the header above. */
+  /** The focus-away state, filtered to the OWNING contributor's own sessions
+   *  (`laneFocusAway` in `ReplayInner`) — never the unfiltered whole-bundle
+   *  scan. Only painted in the lane that owns the caret — see the header
+   *  above, and `currentFocusAwaySpan`'s header for why the filter matters. */
   readonly focusAway: FocusAwayState;
 };
 
@@ -494,6 +506,15 @@ export function ReplayInner({
     ? (contributors?.bySession.get(state.sessionId)?.contributorKey ?? null)
     : null;
 
+  // That contributor's own session IDs — the filter `currentFocusAwaySpan`
+  // needs so a lane's overlay can only ever be driven by ITS OWN
+  // contributor's `focus.change` events. See `laneFocusAway` below.
+  const activeContributorSessionIds = useMemo(() => {
+    if (activeContributorKey === null || contributors === null) return null;
+    const c = contributors.contributors.find((candidate) => candidate.key === activeContributorKey);
+    return c === undefined ? null : new Set(c.sessionIds);
+  }, [activeContributorKey, contributors]);
+
   // One ribbon row per contributor, in `BundleContributors.contributors` order
   // — the same order the lanes use, so a row and a lane line up.
   const ribbons = useMemo<readonly RibbonRow[] | undefined>(() => {
@@ -517,10 +538,39 @@ export function ReplayInner({
   // Focus-away overlay + auto-follow the edited file.
   // ---------------------------------------------------------------------------
 
-  // Whether the student is focused away from the window at the current playhead.
+  // Whether the student is focused away from the window at the current
+  // playhead, scanning the WHOLE bundle unfiltered — i.e. driven by whichever
+  // contributor's `focus.change` happens to be most recent, not necessarily
+  // the one whose session currently owns the playhead.
+  //
+  // This stays unfiltered ON PURPOSE, for the single-pane path only (see the
+  // single-pane render site below). It is a known, pre-existing inaccuracy —
+  // not the one this file fixes — and deliberately not touched here: changing
+  // what the overlay means for every existing single-pane submission is a
+  // product decision to make separately, not one to ride along inside the
+  // split-lanes work. `laneFocusAway` below is the lane-mode fix; this value
+  // is now used ONLY by the single-pane fallback.
   const focusAway = useMemo(
     () => currentFocusAwaySpan(bundleEvents, state.currentGlobalIdx),
     [bundleEvents, state.currentGlobalIdx],
+  );
+
+  // Lane mode's corrected version of the same fact, filtered to the
+  // caret-owning contributor's OWN sessions. Unfiltered, a lane's overlay
+  // could be driven by a DIFFERENT contributor's `focus.change` — and because
+  // lane mode draws the overlay inside one named contributor's lane (unlike
+  // the un-attributed single pane), that misattribution stops being merely
+  // imprecise and becomes a specific false accusation against someone the
+  // evidence never implicated. `LanePane` receives this instead of the
+  // unfiltered `focusAway` above; null whenever no contributor owns the
+  // caret, which `LanePane`'s `ownsCaret` gate already prevents it from
+  // showing anyway.
+  const laneFocusAway = useMemo(
+    () =>
+      activeContributorSessionIds === null
+        ? null
+        : currentFocusAwaySpan(bundleEvents, state.currentGlobalIdx, activeContributorSessionIds),
+    [bundleEvents, state.currentGlobalIdx, activeContributorSessionIds],
   );
 
   // The file being edited at the current playhead.
@@ -854,7 +904,7 @@ export function ReplayInner({
                       ownsCaret={ownsCaret}
                       events={bundleEvents}
                       currentGlobalIdx={state.currentGlobalIdx}
-                      focusAway={focusAway}
+                      focusAway={laneFocusAway}
                     />
                   )
                 }
@@ -916,7 +966,20 @@ export function ReplayInner({
           {/* Focus-away overlay — covers the code pane while the student is focused away.
               Single-pane only: in lane mode the overlay is painted per-lane, inside
               `LanePane`, scoped to whichever lane owns the playhead's caret (see the
-              `LanePane` header comment above). */}
+              `LanePane` header comment above).
+
+              This single-pane `focusAway` is still the UNFILTERED, whole-bundle scan
+              (`currentFocusAwaySpan(bundleEvents, ...)` with no session filter) — the
+              same inaccuracy lane mode had before it was scoped to `laneFocusAway`
+              above: a solo pane can be washed by evidence from a session other than
+              the one the playhead is currently in. That is a real bug, but it is NOT
+              fixed here, on purpose: the single pane has no per-contributor identity
+              on screen to misattribute TO (there is only ever one pane, unlabelled),
+              so the failure mode is imprecise rather than a false accusation against
+              a named person. Changing what this overlay means for every existing
+              single-pane submission is a product decision to make deliberately and
+              separately — not one that should ride along inside the split-lanes
+              fix. Known and deferred; not an oversight. */}
           {!showLaneGrid && focusAway !== null && <FocusAwayOverlay reason={focusAway.reason} />}
         </div>
 

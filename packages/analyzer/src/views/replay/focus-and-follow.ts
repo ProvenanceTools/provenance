@@ -9,14 +9,22 @@
  * Both functions are pure (no side effects, no React) and operate on a session's
  * chronologically-ordered events plus the playhead `currentGlobalIdx`.
  *
- * `currentEditedFile` also takes an optional `sessionIds` filter, added for the
- * split-lanes feature (`docs/superpowers/specs/2026-08-24-split-replay-lanes-design.md`
- * §4): "the file a CONTRIBUTOR is in" is the same predicate as "the file the
- * playhead is in", restricted to that contributor's sessions. Rather than a
- * second file-bearing-event predicate in `contributor-active-file.ts`, that
- * module delegates here — see its header for why. The optional third parameter
- * is additive: every existing call site and test passes two arguments and sees
+ * `currentEditedFile` and `currentFocusAwaySpan` both take an optional
+ * `sessionIds` filter, added for the split-lanes feature
+ * (`docs/superpowers/specs/2026-08-24-split-replay-lanes-design.md` §4/§7):
+ * "the file/focus-state a CONTRIBUTOR is in" is the same predicate as "the
+ * file/focus-state the playhead is in", restricted to that contributor's
+ * sessions. Rather than a second file-bearing-event predicate in
+ * `contributor-active-file.ts`, that module delegates to `currentEditedFile`
+ * — see its header for why. The optional third parameter on both functions is
+ * additive: every existing call site and test passes two arguments and sees
  * byte-identical behavior.
+ *
+ * `currentFocusAwaySpan`'s filter exists to fix a real misattribution, not
+ * just for symmetry: unfiltered, the "most recent focus.change across the
+ * WHOLE bundle" is one contributor's evidence bleeding into another's lane.
+ * See that function's header for the full story and why the single-pane call
+ * site deliberately still passes no filter.
  *
  * Recorder PRD §4.4 (focus.change), §4.2 (doc events).
  */
@@ -54,14 +62,32 @@ export type FocusAwayState = { reason: string | null } | null;
  *
  * `events` must be chronologically ordered (ascending `globalIdx`), as the per-
  * session event lists from the EventIndex are.
+ *
+ * `sessionIds`, when passed, restricts the scan to events whose `sessionId` is
+ * in the set — "was THIS CONTRIBUTOR focused away", for a split-lane's overlay.
+ * Omitted (the default), this scans the whole bundle unfiltered, which is
+ * exactly today's behavior: the single-pane call site passes no filter and
+ * must not change (see that call site for why).
+ *
+ * The filter matters more here than it does for `currentEditedFile`: an
+ * unfiltered scan doesn't just answer a slightly-too-broad question, it can
+ * name the WRONG PERSON. In lane mode the overlay is drawn inside one
+ * contributor's lane with their identity in the header right above it — if
+ * the away state came from a DIFFERENT contributor's `focus.change`, that
+ * lane accuses someone the evidence never implicated, which is the exact
+ * false-attribution failure this feature exists to prevent (see
+ * `ContributorSelect.tsx`'s header comment). A per-contributor lane must only
+ * ever be driven by that contributor's own sessions.
  */
 export function currentFocusAwaySpan(
   events: readonly IndexedEvent[],
   currentGlobalIdx: number,
+  sessionIds?: ReadonlySet<string>,
 ): FocusAwayState {
   let away: FocusAwayState = null;
   for (const e of events) {
     if (e.globalIdx > currentGlobalIdx) break;
+    if (sessionIds !== undefined && !sessionIds.has(e.sessionId)) continue;
     if (e.kind !== 'focus.change') continue;
     const p = e.payload as FocusChangePayload;
     away = p.gained ? null : { reason: p.reason ?? null };
