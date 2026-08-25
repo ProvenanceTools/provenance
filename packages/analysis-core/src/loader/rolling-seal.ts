@@ -306,11 +306,24 @@ export function reconcileRollingSealsWithSessions(
  * `bundle.rollingSeal.observedExtensionHashes`, and
  * `heuristics/extension-hash-mismatch.ts` checks all of them.
  *
- * `submission_files` is a last-writer-wins merge in `sessionOrder`. That matches
- * check 8's model: each rolling manifest records the on-disk state as of ITS
- * session's last checkpoint, so for a file touched across several sessions the
- * newest session's hash is the current truth — the same "last recorded hash
- * wins" rule `lastRecordedHashes` applies to events.
+ * `submission_files` is a last-writer-wins merge too, but NOT in `sessionOrder`
+ * — it gets its own order, and that distinction is the whole point of
+ * `sealRecency`. Each rolling manifest records the on-disk state as of ITS
+ * session's last checkpoint, so the hash that is current truth is the one from
+ * the seal WRITTEN last. `sessionOrder` sorts by session START, and a session
+ * that starts later can finish earlier: two students recording concurrently
+ * against one shared repo produce exactly that, and the earlier-finishing
+ * session's staler hashes then overwrite the fresher ones — for paths that
+ * session never even touched, since a rolling seal records every reviewed file's
+ * on-disk state and not just the ones it edited. `parse-bundle.ts` then finds
+ * the submitted bytes disagreeing with the union's own `sha256` and check 8
+ * short-circuits to "tampered bundle" against an honest group submission,
+ * without ever reaching its event-based comparison (which passes).
+ *
+ * So the merge runs over seal recency, and the scalar rules above keep reading
+ * `sessionOrder`. They are answering different questions — "which seal spoke
+ * last about this file" is not "which session came first" — and conflating them
+ * is what produced the false finding.
  *
  * @param seals        Seals that survived {@link validateRollingSeals}.
  * @param sessionOrder LOGICAL session ids oldest → newest, as the loader sorted
@@ -320,11 +333,34 @@ export function reconcileRollingSealsWithSessions(
  *   every git submission. Seals whose session is not in this list (no `.slog`)
  *   are appended after it in ascending id order, so the result is deterministic
  *   either way.
+ * @param sealRecency  When each session's seal was last rewritten, as epoch ms,
+ *   keyed by LOGICAL session id — supplied by the loader as the wall clock of
+ *   that session's LAST recorded event. See the note on cross-machine clocks
+ *   below. Used for the `submission_files` merge and nothing else. A session
+ *   absent from the map has unknown recency and keeps its `sessionOrder`
+ *   position, sorting after every session whose recency IS known; omitting the
+ *   argument entirely therefore reproduces the pre-recency merge exactly.
+ *
+ *   ## Why a wall clock is acceptable here, and only here
+ *
+ *   Two machines' clocks are not evidence of order — that caveat is why check 8
+ *   resolves cross-contributor states over `≺` instead of the clock, and it is
+ *   not softened by this. But there is no clock-independent signal for this
+ *   question in the data: a rolling manifest carries no seal timestamp, and two
+ *   sessions on two machines share no causal artifact in the bundle that would
+ *   order their seals. What the clock decides here is only WHICH RECORDED HASH
+ *   the union carries for a path — never, on its own, a finding. A skewed clock
+ *   can make the union carry a stale hash, which is precisely today's behaviour
+ *   and therefore cannot be worse than it; and bytes that match NO seal's
+ *   recorded hash still fail `hashOk` under every possible order, so genuine
+ *   tampering is caught whichever way this sorts. See
+ *   `loader/concurrent-rolling-seals.test.ts`.
  * @returns `null` when there is no seal to synthesize from.
  */
 export function synthesizeRollingUnionManifest(
   seals: readonly RollingSeal[],
   sessionOrder: readonly LogicalSessionId[],
+  sealRecency?: ReadonlyMap<LogicalSessionId, number>,
 ): { manifest: BundleManifest; defects: RollingSealDefect[] } | null {
   if (seals.length === 0) return null;
 
@@ -374,9 +410,33 @@ export function synthesizeRollingUnionManifest(
     }
   }
 
-  // Last-writer-wins merge over submission_files, in session order.
+  // Last-writer-wins merge over submission_files, in SEAL-RECENCY order —
+  // oldest seal first, so the freshest recorded hash per path is the one that
+  // survives. Deliberately not `ordered`, which is session-START order: see the
+  // `sealRecency` parameter docs for the concurrent-sessions case that
+  // separates the two, and for why a wall clock is an acceptable signal for
+  // this one decision.
+  //
+  // Sorting `ordered` rather than `seals` keeps every tie resolving the way it
+  // did before: the sort is stable, unknown recency sorts last (which is where
+  // the no-`.slog` tail already sat), and equal recency falls back to
+  // `sessionOrder`. With no map at all this is `ordered`, unchanged.
+  const fileMergeOrder =
+    sealRecency === undefined
+      ? ordered
+      : ordered
+          .map((seal, index) => ({ seal, index, at: sealRecency.get(seal.sessionId) }))
+          .sort((a, b) => {
+            if (a.at === undefined || b.at === undefined) {
+              if (a.at === b.at) return a.index - b.index;
+              return a.at === undefined ? 1 : -1;
+            }
+            return a.at === b.at ? a.index - b.index : a.at - b.at;
+          })
+          .map((entry) => entry.seal);
+
   const submissionFiles = new Map<string, SubmissionFileEntry>();
-  for (const seal of ordered) {
+  for (const seal of fileMergeOrder) {
     for (const f of seal.manifest.submission_files ?? []) {
       submissionFiles.set(f.path, f);
     }

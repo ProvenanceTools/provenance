@@ -160,6 +160,21 @@ export type RollingSealSpec = {
      */
     extensionHashFor?: { sessionIndex: number; extensionHash: string };
   };
+  /**
+   * Override, per session, the `sha256` that session's ROLLING manifest records
+   * for a given `submission_files` path. Keyed by path; a path not named keeps
+   * the hash computed from the file's real bytes.
+   *
+   * NOT tampering, and deliberately not under `tamper`. A rolling seal records
+   * the on-disk state of every file under review AS OF THAT SESSION'S last
+   * checkpoint — including files that session never touched — so two sessions
+   * recording concurrently against one repo legitimately seal DIFFERENT hashes
+   * for the same path, and whichever of them stopped recording first
+   * legitimately carries the staler one. Every other option here mints the SAME
+   * `submission_files` into every rolling manifest, which makes the union's
+   * merge order unobservable and left the concurrent shape unbuildable.
+   */
+  submissionShaFor?: Array<{ sessionIndex: number; shas: Record<string, string> }>;
 };
 
 export type BuildBundleOpts = {
@@ -998,6 +1013,18 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
     // logs, which only a dispose()-time seal can honestly commit to.
     const sealIsFinal = rollingSpec.final !== false;
 
+    /**
+     * `submission_files` as SESSION i's rolling seal recorded them: the shared
+     * entries, with any per-path override this session's seal was given.
+     */
+    const sealedSubmissionEntriesFor = (i: number): SubmissionEntry[] => {
+      const shas = rollingSpec.submissionShaFor?.find((o) => o.sessionIndex === i)?.shas;
+      if (shas === undefined) return submissionEntries;
+      return submissionEntries.map((e) =>
+        Object.prototype.hasOwnProperty.call(shas, e.path) ? { ...e, sha256: shas[e.path]! } : e,
+      );
+    };
+
     /** Build session i's own rolling manifest. */
     const rollingManifestFor = (i: number): BundleManifest => {
       const s = sessions[i]!;
@@ -1020,7 +1047,9 @@ export async function buildTestBundle(opts?: BuildBundleOpts): Promise<BuiltBund
             meta_sha256: s.metaSha256,
           },
         ],
-        submission_files: submissionEntries,
+        // Per-session on-disk state. See RollingSealSpec.submissionShaFor for
+        // why two seals in one bundle may honestly disagree about a path.
+        submission_files: sealedSubmissionEntriesFor(i),
         // Omitted, never written as `final: false` — a non-final rolling
         // manifest must stay byte-identical to what 1.2 emitted before this
         // field existed.

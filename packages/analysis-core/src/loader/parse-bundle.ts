@@ -324,9 +324,15 @@ export async function loadBundle(
   // Step 4b: Resolve the rolling seal against the sessions that actually parsed,
   // and synthesize the union manifest.
   //
-  // This has to happen after the sort: `submission_files` is merged in session
-  // order (oldest → newest), so the newest session's recorded hash for a file is
-  // the one the union carries. See synthesizeRollingUnionManifest.
+  // This has to happen after the sort: the union's scalars are taken from the
+  // FIRST session in that order, and seals with no `.slog` are appended after
+  // it. See synthesizeRollingUnionManifest.
+  //
+  // `submission_files` is the one part that is NOT merged in that order. It is
+  // merged by seal recency (below), because a session that STARTS later can END
+  // earlier — two students recording concurrently against one shared repo — and
+  // merging by start then lets the earlier-finishing session's stale hashes
+  // overwrite the fresher ones, which check 8 reads as a tampered bundle.
   // ---------------------------------------------------------------------------
   let rollingSeal: BundleRollingSeal | undefined;
   let unionManifest: BundleManifest | null = null;
@@ -342,10 +348,37 @@ export async function loadBundle(
       ),
     );
 
+    // When each session's rolling seal was last rewritten, as far as this bundle
+    // can establish it: the wall clock of that session's LAST recorded event.
+    //
+    // A rolling manifest carries no seal timestamp, so this is the tightest
+    // in-data proxy available. The writer rewrites the seal at session start, at
+    // every checkpoint and at `dispose()`, and it cannot be rewritten after the
+    // session stops recording — so the last event's wall is an upper bound on
+    // the seal's write time, and it moves with the session's activity the way
+    // the seal does. `synthesizeRollingUnionManifest` uses it for the
+    // `submission_files` merge and for nothing else; see the caveat about
+    // cross-machine clocks in its docstring.
+    //
+    // MAX rather than last-write: two `.slog` files can carry the same logical
+    // session id (a duplicated log — see step 3), and the later of the two is
+    // the one that bounds when that session stopped.
+    const sealRecency = new Map<LogicalSessionId, number>();
+    for (const session of parsedSessions) {
+      const lastEvent = session.events[session.events.length - 1];
+      if (lastEvent === undefined) continue;
+      const at = new Date(lastEvent.wall).getTime();
+      if (!Number.isFinite(at)) continue;
+      const id = asLogicalSessionId(session.sessionId);
+      const known = sealRecency.get(id);
+      if (known === undefined || at > known) sealRecency.set(id, at);
+    }
+
     const synthesized = synthesizeRollingUnionManifest(
       rollingValidation.seals,
       // LOGICAL ids, read out of each `.slog`'s session.start by parse-session.
       parsedSessions.map((s) => asLogicalSessionId(s.sessionId)),
+      sealRecency,
     );
     if (synthesized !== null) {
       unionManifest = synthesized.manifest;

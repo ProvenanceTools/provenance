@@ -868,6 +868,58 @@ describe('synthesizeRollingUnionManifest', () => {
     expect(reversed.manifest.sessions.map((s) => s.session_id)).toEqual(['b', 'a']);
   });
 
+  // The concurrent-sessions bug: `sessionOrder` is session-START order, and a
+  // session that starts later can finish earlier, so merging files in it lets a
+  // staler seal overwrite a fresher one. The end-to-end shape, and the proof
+  // that this does not weaken tamper detection, are in
+  // `loader/concurrent-rolling-seals.test.ts`.
+  it('merges submission_files by seal recency, not by session start', () => {
+    const a = seal('a', [['f.py', '1'.repeat(64)]]);
+    const b = seal('b', [['f.py', '2'.repeat(64)]]);
+
+    // b STARTS second (so `sessionOrder` puts it last) but STOPS first, so a's
+    // seal is the one that spoke last about f.py.
+    const recency = new Map([
+      [asLogicalSessionId('a'), Date.parse('2026-01-01T23:57:26.000Z')],
+      [asLogicalSessionId('b'), Date.parse('2026-01-01T23:48:58.000Z')],
+    ]);
+
+    const out = synthesizeRollingUnionManifest([a, b], order('a', 'b'), recency)!;
+    expect(out.manifest.submission_files).toEqual([
+      { path: 'f.py', status: 'present', sha256: '1'.repeat(64) },
+    ]);
+    // Everything the scalars and the session list derive still reads
+    // `sessionOrder`, untouched.
+    expect(out.manifest.sessions.map((s) => s.session_id)).toEqual(['a', 'b']);
+  });
+
+  it('keeps session order for the merge when recency agrees with it', () => {
+    const a = seal('a', [['f.py', '1'.repeat(64)]]);
+    const b = seal('b', [['f.py', '2'.repeat(64)]]);
+    const recency = new Map([
+      [asLogicalSessionId('a'), Date.parse('2026-01-01T23:20:00.000Z')],
+      [asLogicalSessionId('b'), Date.parse('2026-01-01T23:40:00.000Z')],
+    ]);
+    const out = synthesizeRollingUnionManifest([a, b], order('a', 'b'), recency)!;
+    expect(out.manifest.submission_files).toEqual([
+      { path: 'f.py', status: 'present', sha256: '2'.repeat(64) },
+    ]);
+  });
+
+  it('leaves a seal with unknown recency where session order put it', () => {
+    // A seal whose session has no `.slog` has no last event to date it by. It
+    // keeps the deterministic tail position it has always had rather than being
+    // guessed at either end.
+    const a = seal('a', [['f.py', '1'.repeat(64)]]);
+    const ghost = seal('z', [['f.py', '9'.repeat(64)]]);
+    const recency = new Map([[asLogicalSessionId('a'), Date.parse('2026-01-01T23:57:26.000Z')]]);
+    const out = synthesizeRollingUnionManifest([a, ghost], order('a'), recency)!;
+    expect(out.manifest.submission_files).toEqual([
+      { path: 'f.py', status: 'present', sha256: '9'.repeat(64) },
+    ]);
+    expect(out.manifest.sessions.map((s) => s.session_id)).toEqual(['a', 'z']);
+  });
+
   it('orders seals with no parsed session deterministically after the rest', () => {
     const out = synthesizeRollingUnionManifest(
       [seal('z', []), seal('a', []), seal('m', [])],
