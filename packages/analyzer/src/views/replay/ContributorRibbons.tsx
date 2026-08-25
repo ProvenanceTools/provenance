@@ -85,11 +85,19 @@ function pct(value: number, sliderMax: number): number {
  */
 const MIN_RUN_WIDTH_PX = 3;
 
-/** Neutral hatch — deliberately NOT any contributor's hue, since the band can
- *  cover more than two contributors and must not read as belonging to one. */
+/**
+ * Neutral hatch — deliberately NOT any contributor's hue, since the band can
+ * cover more than two contributors and must not read as belonging to one.
+ *
+ * Opacity is deliberately low: on a real bundle this band spans most of the
+ * track, and the ribbons underneath are the data a reader needs — the band is
+ * context. It must recede, not dominate, so both contributors' runs stay
+ * clearly readable through it. (Manual QA: the original 0.5/0.12 alphas
+ * visually buried the rows.)
+ */
 const OVERLAP_HATCH =
-  'repeating-linear-gradient(45deg, rgba(87, 83, 78, 0.5) 0px, rgba(87, 83, 78, 0.5) 3px, transparent 3px, transparent 7px)';
-const OVERLAP_WASH = 'rgba(87, 83, 78, 0.12)';
+  'repeating-linear-gradient(45deg, rgba(87, 83, 78, 0.16) 0px, rgba(87, 83, 78, 0.16) 3px, transparent 3px, transparent 7px)';
+const OVERLAP_WASH = 'rgba(87, 83, 78, 0.05)';
 
 // ---------------------------------------------------------------------------
 // Labels

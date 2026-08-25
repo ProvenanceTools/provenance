@@ -350,7 +350,11 @@ function LaneBody({ cell, contributorsByKey, palette, ownsCaret, renderPane }: L
           >
             {basename(cell.filePath)}
           </div>
-          <div className="min-h-0 flex-1 overflow-hidden" data-testid="replay-lane-pane">
+          {/* `relative`: the containing block for a caret-owning pane's
+              `FocusAwayOverlay` (`absolute inset-0`), so the wash and banner
+              stay inside THIS lane's content area — never over the header or
+              file strip above, and never reaching another lane's DOM at all. */}
+          <div className="relative min-h-0 flex-1 overflow-hidden" data-testid="replay-lane-pane">
             {renderPane({ cell, ownsCaret })}
           </div>
         </>
@@ -392,7 +396,9 @@ function LaneBody({ cell, contributorsByKey, palette, ownsCaret, renderPane }: L
           >
             One file, one recorded truth.
           </p>
-          <div className="min-h-0 flex-1 overflow-hidden" data-testid="replay-lane-pane">
+          {/* `relative`: see the `single` case above — the containing block for
+              a caret-owning pane's `FocusAwayOverlay`. */}
+          <div className="relative min-h-0 flex-1 overflow-hidden" data-testid="replay-lane-pane">
             {renderPane({ cell, ownsCaret })}
           </div>
         </>

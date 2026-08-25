@@ -15,10 +15,13 @@ import type { editor as MonacoEditorNS } from 'monaco-editor';
 
 function fakeEditor() {
   const revealPositionInCenterIfOutsideViewport = vi.fn();
+  const revealLineInCenterIfOutsideViewport = vi.fn();
   return {
     revealPositionInCenterIfOutsideViewport,
+    revealLineInCenterIfOutsideViewport,
   } as unknown as MonacoEditorNS.IStandaloneCodeEditor & {
     revealPositionInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
+    revealLineInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -161,5 +164,59 @@ describe('FollowCursor', () => {
     );
     rerender(<FollowCursor editor={ed} selection={cursorAt(9, 2)} content="x" />);
     expect(ed.revealPositionInCenterIfOutsideViewport).toHaveBeenCalledTimes(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // verticalOnly (split-lanes defect 2): a lane pane is a fraction of the
+  // single pane's width, so centering horizontally on the caret's column can
+  // scroll a narrow pane far enough right that every line starts off-screen.
+  // `verticalOnly` switches the reveal call to a LINE-only Monaco API that has
+  // no column argument to pass, so it cannot itself introduce horizontal
+  // scroll.
+  // ---------------------------------------------------------------------------
+
+  describe('verticalOnly', () => {
+    it('reveals via revealLineInCenterIfOutsideViewport, not the column-aware method', () => {
+      const ed = fakeEditor();
+      render(<FollowCursor editor={ed} selection={cursorAt(9, 40)} content="x" verticalOnly />);
+      expect(ed.revealLineInCenterIfOutsideViewport).toHaveBeenCalledTimes(1);
+      // 0-based line 9 -> Monaco line 10. No column argument at all.
+      expect(ed.revealLineInCenterIfOutsideViewport.mock.calls[0]).toEqual([10, 1]);
+      expect(ed.revealPositionInCenterIfOutsideViewport).not.toHaveBeenCalled();
+    });
+
+    it('defaults to the column-aware method when verticalOnly is omitted', () => {
+      // Unchanged behaviour for every existing caller (the single pane).
+      const ed = fakeEditor();
+      render(<FollowCursor editor={ed} selection={cursorAt(9, 40)} content="x" />);
+      expect(ed.revealPositionInCenterIfOutsideViewport).toHaveBeenCalledTimes(1);
+      expect(ed.revealLineInCenterIfOutsideViewport).not.toHaveBeenCalled();
+    });
+
+    it('still reveals the END of a selection under verticalOnly, matching the painted caret', () => {
+      const ed = fakeEditor();
+      render(
+        <FollowCursor
+          editor={ed}
+          selection={sel(
+            { start: { line: 1, character: 0 }, end: { line: 40, character: 5 } },
+            true,
+          )}
+          content="x"
+          verticalOnly
+        />,
+      );
+      expect(ed.revealLineInCenterIfOutsideViewport.mock.calls[0]![0]).toBe(41);
+    });
+
+    it('re-reveals vertically when the selection moves, same as the column-aware path', () => {
+      const ed = fakeEditor();
+      const { rerender } = render(
+        <FollowCursor editor={ed} selection={cursorAt(0, 0)} content="x" verticalOnly />,
+      );
+      rerender(<FollowCursor editor={ed} selection={cursorAt(120, 0)} content="x" verticalOnly />);
+      expect(ed.revealLineInCenterIfOutsideViewport).toHaveBeenCalledTimes(2);
+      expect(ed.revealLineInCenterIfOutsideViewport.mock.calls[1]![0]).toBe(121);
+    });
   });
 });

@@ -71,6 +71,7 @@ import { EventSidebar } from './EventSidebar.js';
 import { ColorLegend } from './ColorLegend.js';
 import { FocusAwayOverlay } from './FocusAwayOverlay.js';
 import { currentFocusAwaySpan, currentEditedFile } from './focus-and-follow.js';
+import type { FocusAwayState } from './focus-and-follow.js';
 import { CursorMarker } from './CursorMarker.js';
 import { FollowCursor } from './FollowCursor.js';
 import { currentSelection } from './cursor-position.js';
@@ -164,10 +165,16 @@ function ReplayHeader({ sourceFilename }: ReplayHeaderProps) {
 //  - `ColorLegend` is one absolutely-positioned overlay for the code area. It
 //    is mounted ONCE by the lane container, not per lane — it explains the
 //    gutter colours, which are the same colours in every lane.
-//  - `FocusAwayOverlay` stays a property of the whole code area, as today: it
-//    is driven by the playhead's own focus state, which belongs to one session,
-//    so drawing it over a lane whose contributor is not that session would
-//    claim that contributor had tabbed away.
+//
+// `FocusAwayOverlay` IS mounted here, gated on `ownsCaret` exactly like the
+// caret and follow-cursor below it, for the same reason: it is driven by the
+// PLAYHEAD'S OWN SESSION's focus state, which belongs to one contributor.
+// Rendering it over every lane (the outer, whole-code-area placement this
+// component used before) would claim every contributor had tabbed away, on
+// the evidence of one of them. `ReplayLanes`' `replay-lane-pane` wrapper is
+// `position: relative`, so the overlay's `absolute inset-0` is confined to
+// THIS lane's content area — below its header and file strip, never over
+// them, and never reaching another lane's DOM subtree at all.
 //
 // The caret (`CursorMarker`) and the viewport-follow (`FollowCursor`) render
 // only when `ownsCaret` — design §7: "a stale caret drawn in another lane would
@@ -180,9 +187,19 @@ type LanePaneProps = {
   readonly ownsCaret: boolean;
   readonly events: readonly IndexedEvent[];
   readonly currentGlobalIdx: number;
+  /** The playhead's focus-away state, whole-bundle-derived. Only painted in
+   *  the lane that owns the caret — see the header above. */
+  readonly focusAway: FocusAwayState;
 };
 
-function LanePane({ filePath, fileState, ownsCaret, events, currentGlobalIdx }: LanePaneProps) {
+function LanePane({
+  filePath,
+  fileState,
+  ownsCaret,
+  events,
+  currentGlobalIdx,
+  focusAway,
+}: LanePaneProps) {
   const [editor, setEditor] = useState<MonacoEditorNS.IStandaloneCodeEditor | null>(null);
 
   const handleMount = useCallback((ed: MonacoEditorNS.IStandaloneCodeEditor) => {
@@ -223,9 +240,11 @@ function LanePane({ filePath, fileState, ownsCaret, events, currentGlobalIdx }: 
             selection={selection}
             externalChange={externalChangeFocus}
             content={content}
+            verticalOnly
           />
         </>
       )}
+      {ownsCaret && focusAway !== null && <FocusAwayOverlay reason={focusAway.reason} />}
     </>
   );
 }
@@ -461,6 +480,14 @@ export function ReplayInner({
         : activeFilesAt(activeFileTimelines, state.currentGlobalIdx),
     [activeFileTimelines, state.currentGlobalIdx],
   );
+
+  // Mirrors the render guard below (`laneMode && contributors !== null &&
+  // activeFileByContributor !== null && palette !== null`) as a plain boolean,
+  // so the single-pane `FocusAwayOverlay` placement can ask "is the lane grid
+  // actually on screen" without re-narrowing three nullable values inline —
+  // narrowing that JSX ternary already does for `ReplayLanes`' props.
+  const showLaneGrid =
+    laneMode && contributors !== null && activeFileByContributor !== null && palette !== null;
 
   // Who owns the caret: the contributor whose session the playhead is inside.
   const activeContributorKey = laneMode
@@ -827,6 +854,7 @@ export function ReplayInner({
                       ownsCaret={ownsCaret}
                       events={bundleEvents}
                       currentGlobalIdx={state.currentGlobalIdx}
+                      focusAway={focusAway}
                     />
                   )
                 }
@@ -885,8 +913,11 @@ export function ReplayInner({
               No files under review in this session.
             </div>
           )}
-          {/* Focus-away overlay — covers the code pane while the student is focused away. */}
-          {focusAway !== null && <FocusAwayOverlay reason={focusAway.reason} />}
+          {/* Focus-away overlay — covers the code pane while the student is focused away.
+              Single-pane only: in lane mode the overlay is painted per-lane, inside
+              `LanePane`, scoped to whichever lane owns the playhead's caret (see the
+              `LanePane` header comment above). */}
+          {!showLaneGrid && focusAway !== null && <FocusAwayOverlay reason={focusAway.reason} />}
         </div>
 
         {/* Event sidebar — 30% width */}

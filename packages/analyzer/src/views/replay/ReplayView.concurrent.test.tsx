@@ -13,7 +13,7 @@
 
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import {
   buildIndex,
@@ -46,7 +46,19 @@ import { ReplayInner } from './ReplayView.js';
 
 // ---------------------------------------------------------------------------
 // Monaco mock — same shape as ReplayView.test.tsx.
+//
+// `revealSpies` is module-level so every Monaco instance mounted (up to three
+// in lane mode) shares the same two spies, letting a test ask "which reveal
+// METHOD got called" without needing to pick a single editor instance out of
+// several. That is exactly the defect-2 wiring question: does the caller pass
+// `verticalOnly` (→ `revealLineInCenterIfOutsideViewport`, no column) or not
+// (→ `revealPositionInCenterIfOutsideViewport`, column and all).
 // ---------------------------------------------------------------------------
+
+const revealSpies = {
+  position: vi.fn(),
+  line: vi.fn(),
+};
 
 vi.mock('@monaco-editor/react', () => ({
   default: ({
@@ -58,7 +70,9 @@ vi.mock('@monaco-editor/react', () => ({
   }) => {
     const editor = {
       deltaDecorations: (_o: string[], n: unknown[]) => n.map((_, i) => `id-${i}`),
-      revealPositionInCenterIfOutsideViewport: () => {},
+      revealPositionInCenterIfOutsideViewport: (...args: unknown[]) =>
+        revealSpies.position(...args),
+      revealLineInCenterIfOutsideViewport: (...args: unknown[]) => revealSpies.line(...args),
       getModel: () => null,
     };
     const monaco = { languages: { registerHoverProvider: () => ({ dispose: () => {} }) } };
@@ -97,6 +111,23 @@ function typed(text: string, file: string = FILE) {
   };
 }
 
+/** A `focus.change` losing focus — recorder PRD §4.4. */
+function focusLost(reason: string) {
+  return { kind: 'focus.change', data: { gained: false, reason } };
+}
+
+/** A `selection.change` at a bare cursor (no selection) — recorder PRD §4.2. */
+function cursorAt(line: number, character: number, file: string = FILE) {
+  return {
+    kind: 'selection.change',
+    data: {
+      path: file,
+      range: { start: { line, character }, end: { line, character } },
+      was_selection: false,
+    },
+  };
+}
+
 /**
  * A bundle of N sessions, each attributed to the named student, each typing one
  * distinctive string into the same file.
@@ -110,9 +141,26 @@ function typed(text: string, file: string = FILE) {
  * two partners in DIFFERENT files, which is the determinate side of the lane
  * grid (§4: two contributors, two files, two ordinary lanes) rather than the
  * refusal side. Same fixture, same cached keypairs; only the path moves.
+ *
+ * `focusAwayReason` is optional — pass it to append a `focus.change`
+ * (gained: false) as that contributor's SECOND event, chronologically after
+ * their typed edit. Used by the focus-away-overlay lane-scoping tests below;
+ * omitted (the default) every existing caller sees the same one-event session
+ * it always has.
+ *
+ * `selectionAfter` is likewise optional — appends a `selection.change` (a bare
+ * cursor, no selection) as that contributor's last event. Used by the
+ * follow-cursor lane-wiring test: it is what gives `FollowCursor` a non-null
+ * target to reveal.
  */
 async function buildScope(
-  specs: Array<{ who: { studentRef: string } | 'anonymous'; text: string; file?: string }>,
+  specs: Array<{
+    who: { studentRef: string } | 'anonymous';
+    text: string;
+    file?: string;
+    focusAwayReason?: string;
+    selectionAfter?: { line: number; character: number };
+  }>,
 ): Promise<{ bundle: Bundle; index: EventIndex }> {
   const k = await keys();
   const sessions = [];
@@ -120,7 +168,13 @@ async function buildScope(
     const spec = specs[i]!;
     const sk = await seededKeypair(0xa0 + i);
     sessions.push({
-      events: [typed(spec.text, spec.file ?? FILE)],
+      events: [
+        typed(spec.text, spec.file ?? FILE),
+        ...(spec.focusAwayReason !== undefined ? [focusLost(spec.focusAwayReason)] : []),
+        ...(spec.selectionAfter !== undefined
+          ? [cursorAt(spec.selectionAfter.line, spec.selectionAfter.character, spec.file ?? FILE)]
+          : []),
+      ],
       sessionStart: {
         session_pubkey: sk.pubkeyHex,
         ...(spec.who === 'anonymous'
@@ -587,6 +641,135 @@ describe('split lanes', () => {
       expect(screen.getByTestId('location-probe').textContent ?? '').toContain('split=1');
     });
     expect(screen.getByTestId('replay-lanes')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Manual-QA defect 1: the focus-away overlay must not wash the whole grid.
+//
+// It is driven by the playhead's own session, so it must be scoped to the
+// lane whose contributor owns that session — the same `ownsCaret` gate
+// `ReplayLanes` already computes for the caret and follow-cursor. A lane that
+// does not own the playhead gets neither the wash nor the banner, and the
+// banner must never sit over another lane's header (which is where it would
+// obscure that lane's contributor name and tone badge — the manual-QA repro).
+// ---------------------------------------------------------------------------
+
+describe('focus-away overlay, scoped to the lane that owns the playhead (defect 1)', () => {
+  it('paints the wash and banner only inside the owning lane, never over the other lane', async () => {
+    // bob first (session index 0, earlier) so alice (session index 1) is
+    // chronologically LAST — her focus-lost event becomes the bundle's final
+    // event, so the default (last-index) playhead lands inside HER session.
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE', file: 'bob.py' },
+      {
+        who: { studentRef: 'alice' },
+        text: 'ALICE_LINE',
+        file: 'alice.py',
+        focusAwayReason: 'window',
+      },
+    ]);
+
+    renderReplay(bundle, index);
+
+    await screen.findByTestId('replay-lanes');
+    const lanes = screen.getAllByTestId('replay-lane');
+    expect(lanes).toHaveLength(2);
+
+    // Exactly one overlay on screen — not zero, and not one per lane.
+    const overlay = await screen.findByTestId('focus-away-overlay');
+    expect(screen.getAllByTestId('focus-away-overlay')).toHaveLength(1);
+
+    // It lives inside a lane, not as a sibling of the whole grid.
+    const owningLane = overlay.closest('[data-testid="replay-lane"]');
+    expect(owningLane).not.toBeNull();
+
+    // It belongs to ALICE's lane — the contributor who actually tabbed away
+    // and whose session owns the playhead — not bob's.
+    const owningFile = within(owningLane as HTMLElement).getByTestId('replay-lane-file');
+    expect(owningFile.textContent).toBe('alice.py');
+
+    // Bob's lane is untouched: no overlay inside it, and the overlay is
+    // neither its sibling nor its ancestor.
+    const bobLane = lanes.find((l) => l !== owningLane)!;
+    expect(within(bobLane).queryByTestId('focus-away-overlay')).toBeNull();
+    expect(bobLane.contains(overlay)).toBe(false);
+    expect(overlay.contains(bobLane)).toBe(false);
+
+    // Confined to the content pane, below the header and file strip — the
+    // overlay must never be a descendant of the lane's own header.
+    expect(overlay.closest('[data-testid="replay-lane-pane"]')).not.toBeNull();
+    const header = owningLane!.querySelector('header');
+    expect(header !== null && header.contains(overlay)).toBe(false);
+    // And the contributor chip + tone badge in that header stay visible —
+    // the overlay isn't drawn over them.
+    const chip = within(header as HTMLElement).getByTestId(/replay-lane-chip-/);
+    expect(chip).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Manual-QA defect 2: lane panes must follow the caret vertically only.
+//
+// A lane pane is a fraction of the single pane's width, so centering
+// horizontally on the caret's column (`revealPositionInCenterIfOutsideViewport`)
+// can scroll every line's start off-screen. Monaco isn't exercisable in
+// jsdom, so what's tested is the WIRING: which reveal method gets called —
+// `revealLineInCenterIfOutsideViewport` (line only, never a column) for a lane
+// pane, `revealPositionInCenterIfOutsideViewport` (unchanged) for the single
+// pane.
+// ---------------------------------------------------------------------------
+
+describe('follow-cursor reveal: lane vs. single pane (defect 2)', () => {
+  it('a lane pane reveals the caret via the LINE-only method, never the column one', async () => {
+    revealSpies.position.mockClear();
+    revealSpies.line.mockClear();
+
+    // Same shape as the defect-1 fixture: alice's session is chronologically
+    // last, so the default playhead lands inside her session and only HER
+    // lane owns the caret.
+    const { bundle, index } = await buildScope([
+      { who: { studentRef: 'bob' }, text: 'BOB_LINE', file: 'bob.py' },
+      {
+        who: { studentRef: 'alice' },
+        text: 'ALICE_LINE',
+        file: 'alice.py',
+        selectionAfter: { line: 0, character: 40 },
+      },
+    ]);
+
+    renderReplay(bundle, index);
+    await screen.findByTestId('replay-lanes');
+
+    await waitFor(() => {
+      expect(revealSpies.line).toHaveBeenCalled();
+    });
+    expect(revealSpies.position).not.toHaveBeenCalled();
+    // Line-only: the first (and only) argument is a bare line number, never
+    // a `{ lineNumber, column }` object.
+    expect(revealSpies.line.mock.calls[0]![0]).toBe(1); // 0-based line 0 -> Monaco line 1
+  });
+
+  it('the single pane still reveals the caret via the column-aware method (unchanged)', async () => {
+    revealSpies.position.mockClear();
+    revealSpies.line.mockClear();
+
+    const { bundle, index } = await buildScope([
+      {
+        who: { studentRef: 'alice' },
+        text: 'ALICE_LINE',
+        selectionAfter: { line: 0, character: 40 },
+      },
+    ]);
+
+    renderReplay(bundle, index);
+    await screen.findByTestId('monaco-editor');
+
+    await waitFor(() => {
+      expect(revealSpies.position).toHaveBeenCalled();
+    });
+    expect(revealSpies.line).not.toHaveBeenCalled();
+    expect(revealSpies.position.mock.calls[0]![0]).toEqual({ lineNumber: 1, column: 41 });
   });
 });
 
