@@ -328,3 +328,42 @@ describe('GIT_SHA', () => {
     expect(env.GIT_SHA).toBeUndefined();
   });
 });
+
+describe('PROVENANCE_INSTITUTION_KEY', () => {
+  it('defaults to an empty object when absent', () => {
+    expect(parseEnv(VALID_BASE).PROVENANCE_INSTITUTION_KEY).toBe('{}');
+  });
+
+  it('passes a populated object through as its raw string', () => {
+    const raw = '{"private_key_hex":"ab","cert":{"institution_id":"berkeley"}}';
+    expect(
+      parseEnv({ ...VALID_BASE, PROVENANCE_INSTITUTION_KEY: raw }).PROVENANCE_INSTITUTION_KEY,
+    ).toBe(raw);
+  });
+
+  // Regression: unlike GIT_SHA above, an empty string here is REJECTED, not
+  // coerced. The schema's `.optional().transform(v => v ?? '{}')` only fires on
+  // `undefined`, and Compose's env_file turns a bare `PROVENANCE_INSTITUTION_KEY=`
+  // line into an empty string -- which reaches JSON.parse('') and throws, so the
+  // server refuses to boot. The deploy template must therefore COMMENT the line
+  // out rather than ship it bare, which is the opposite of the GIT_SHA guidance.
+  it('rejects an empty string, so a bare `=` line in .env cannot ship', () => {
+    expect(() => parseEnv({ ...VALID_BASE, PROVENANCE_INSTITUTION_KEY: '' })).toThrow();
+  });
+
+  it('rejects a JSON array', () => {
+    expect(() => parseEnv({ ...VALID_BASE, PROVENANCE_INSTITUTION_KEY: '[]' })).toThrow();
+  });
+
+  // The value carries a private key, and a config error prints to stderr on a
+  // failed boot -- so the message must never quote what was supplied.
+  it('never echoes the supplied value in its error message', () => {
+    const secret = '{"private_key_hex":"deadbeefcafe"';
+    try {
+      parseEnv({ ...VALID_BASE, PROVENANCE_INSTITUTION_KEY: secret });
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect(String(err)).not.toContain('deadbeefcafe');
+    }
+  });
+});
