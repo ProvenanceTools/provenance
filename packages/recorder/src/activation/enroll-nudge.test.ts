@@ -180,7 +180,10 @@ describe('shouldShowNudge', () => {
 
   it('never shows when the identity failed for a reason enrolling cannot fix', () => {
     expect(
-      shouldShowNudge({ sessions: [req(skipped({ kind: 'no_root_public_key' }))], state: 'unseen' }),
+      shouldShowNudge({
+        sessions: [req(skipped({ kind: 'no_root_public_key' }))],
+        state: 'unseen',
+      }),
     ).toBe(false);
   });
 
@@ -286,7 +289,10 @@ describe('a course that does not require enrollment', () => {
   // The status bar is ONE global item across every open assignment root, so a
   // course that waived enrollment must not speak for a course that did not.
   it('does not speak for a second course that DOES require enrollment', () => {
-    const sessions = [opt(noCredential()), req(skipped({ kind: 'not_enrolled', course_id: 'cs61b' }))];
+    const sessions = [
+      opt(noCredential()),
+      req(skipped({ kind: 'not_enrolled', course_id: 'cs61b' })),
+    ];
     expect(isUnenrolled(sessions)).toBe(true);
     expect(shouldShowNudge({ sessions, state: 'unseen' })).toBe(true);
   });

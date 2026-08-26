@@ -14,11 +14,7 @@ import type { Manifest } from './manifest.js';
 import { signCourseCert, verifyCourseCert } from './course-cert.js';
 import type { CourseCert } from './course-cert.js';
 import { canonicalize } from './canonical.js';
-import {
-  resolveCapturePolicy,
-  resolveEnrollmentPolicy,
-  DEFAULT_CAPTURE_POLICY,
-} from './policy.js';
+import { resolveCapturePolicy, resolveEnrollmentPolicy, DEFAULT_CAPTURE_POLICY } from './policy.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
