@@ -1,13 +1,13 @@
 import { defineConfig } from 'vitest/config';
 
 /**
- * Root config — covers ONLY the `tools/` suites.
+ * Root config — covers the `tools/` and `scripts/` suites.
  *
  * `npm run test` at the root is `npm run test --workspaces --if-present`, and
- * `tools/` is not a workspace (it has no package.json — deliberately, since it
- * spans several packages' dependency graphs). The `tools/*.test.ts` files were
- * therefore run by nothing at all; this config plus the root `test:tools` script
- * is what makes them execute.
+ * neither `tools/` nor `scripts/` is a workspace (no package.json — deliberately,
+ * since they span several packages' dependency graphs). Their `*.test.ts` files
+ * were therefore run by nothing at all; this config plus the root `test:tools`
+ * script is what makes them execute.
  *
  * Scoped with an explicit `include` on purpose. Without one, a bare `vitest` at
  * the repo root would walk into `packages/**` and pick up the server's
@@ -17,7 +17,7 @@ import { defineConfig } from 'vitest/config';
  */
 export default defineConfig({
   test: {
-    include: ['tools/**/*.test.ts'],
+    include: ['tools/**/*.test.ts', 'scripts/**/*.test.ts', 'scripts/**/*.test.mjs'],
     exclude: ['**/node_modules/**', '**/dist/**'],
     environment: 'node',
   },
