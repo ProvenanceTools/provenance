@@ -156,9 +156,11 @@ export {
 } from './student-keys.js';
 export type { StudentCourseKeypair } from './student-keys.js';
 
-// Capture policy (professor-facing capture controls)
+// Manifest policy block (professor-facing course controls: capture + enrollment)
 export {
   resolveCapturePolicy,
+  resolveEnrollmentPolicy,
+  DEFAULT_ENROLLMENT_POLICY,
   isEventKindCaptured,
   DEFAULT_CAPTURE_POLICY,
   FLOOR_EVENT_KINDS,
@@ -166,7 +168,7 @@ export {
   HEARTBEAT_INTERVAL_MIN_MS,
   HEARTBEAT_INTERVAL_MAX_MS,
 } from './policy.js';
-export type { CapturePolicy, CapturePolicyBlock } from './policy.js';
+export type { CapturePolicy, CapturePolicyBlock, EnrollmentPolicy } from './policy.js';
 
 // Path scope (design spec 2026-08-22 §3) — the single matcher for scope entries
 export {

@@ -14,6 +14,11 @@ import type { Manifest } from './manifest.js';
 import { signCourseCert, verifyCourseCert } from './course-cert.js';
 import type { CourseCert } from './course-cert.js';
 import { canonicalize } from './canonical.js';
+import {
+  resolveCapturePolicy,
+  resolveEnrollmentPolicy,
+  DEFAULT_CAPTURE_POLICY,
+} from './policy.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1236,5 +1241,94 @@ describe('Manifest 2.0 path scope fields', () => {
       ignore: [],
       attachments: [],
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// policy.enrollment — the course-signed "stop telling my students they are
+// un-enrolled" knob. Lives inside `policy` precisely so it needs no change to
+// any recorder's key-enumerating signed-payload builder; these tests pin that.
+// ---------------------------------------------------------------------------
+
+describe('policy.enrollment rides inside the verbatim policy block', () => {
+  it('signs, verifies, and chains with the key present', async () => {
+    const policy = {
+      capture: { selection_change: true },
+      enrollment: { required: false },
+    };
+    const { manifest, rootPubkeyHex } = await makeV2Manifest({ manifestOverrides: { policy } });
+
+    expect((await verifyManifest(manifest, await pub(COURSE_PRIV))).ok).toBe(true);
+    expect((await verifyManifestChain(manifest, rootPubkeyHex)).ok).toBe(true);
+  });
+
+  it('survives a parse round-trip unchanged, so the recorder reads what the course signed', async () => {
+    const policy = { enrollment: { required: false } };
+    const { manifest } = await makeV2Manifest({ manifestOverrides: { policy } });
+
+    const parsed = parseManifest(JSON.stringify(manifest));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.policy).toEqual(policy);
+    expect(resolveEnrollmentPolicy(parsed.value.policy)).toEqual({ required: false });
+  });
+
+  // This is the property that makes the knob a COURSE decision rather than a
+  // student one. A student who flips the bit in their own manifest invalidates
+  // the course signature, and the recorder refuses to activate.
+  it('is covered by the signature: flipping `required` breaks it', async () => {
+    const { manifest } = await makeV2Manifest({
+      manifestOverrides: { policy: { enrollment: { required: false } } },
+    });
+    const tampered: Manifest = { ...manifest, policy: { enrollment: { required: true } } };
+    expect((await verifyManifest(tampered, await pub(COURSE_PRIV))).ok).toBe(false);
+  });
+
+  it('is covered by the signature: adding the key to a manifest without it breaks it', async () => {
+    const { manifest } = await makeV2Manifest({
+      manifestOverrides: { policy: { capture: { terminal: true } } },
+    });
+    const tampered: Manifest = {
+      ...manifest,
+      policy: { capture: { terminal: true }, enrollment: { required: false } },
+    };
+    expect((await verifyManifest(tampered, await pub(COURSE_PRIV))).ok).toBe(false);
+  });
+
+  // The compatibility claim the whole design rests on: `enrollment` is not
+  // named by buildSignedPayload, it is carried by `policy` being passed through
+  // verbatim. A recorder that has never heard of the key computes byte-identical
+  // payload bytes and verifies the manifest fine — it just keeps nudging.
+  it('needs no change to buildSignedPayload: the bytes are the verbatim policy object', async () => {
+    const policy = { capture: { terminal: true }, enrollment: { required: false } };
+    const { manifest } = await makeV2Manifest({ manifestOverrides: { policy } });
+
+    const expected = canonicalize({
+      format_version: '2.0',
+      course_id: manifest.course_id,
+      assignment_id: manifest.assignment_id,
+      semester: manifest.semester,
+      issued_at: manifest.issued_at,
+      files_under_review: manifest.files_under_review,
+      ignore: manifest.ignore,
+      attachments: manifest.attachments,
+      collaboration: manifest.collaboration,
+      submission: manifest.submission,
+      scope: manifest.scope,
+      policy,
+    });
+    const sigOk = await ed.verifyAsync(
+      hexToBytes(manifest.sig),
+      new TextEncoder().encode(expected),
+      hexToBytes(await pub(COURSE_PRIV)),
+    );
+    expect(sigOk).toBe(true);
+  });
+
+  it('leaves the resolved capture policy alone', async () => {
+    const { manifest } = await makeV2Manifest({
+      manifestOverrides: { policy: { enrollment: { required: false } } },
+    });
+    expect(resolveCapturePolicy(manifest.policy)).toEqual(DEFAULT_CAPTURE_POLICY);
   });
 });

@@ -93,6 +93,51 @@ export type CapturePolicyBlock = {
     terminal?: boolean;
     heartbeat_interval_ms?: number;
   };
+  /**
+   * Whether this course requires its students to enrol (program spec §5).
+   *
+   * Not a capture knob — it governs nothing about what is recorded, and the
+   * bundle is byte-identical either way. It lives in the `policy` block anyway
+   * for two reasons: it is a professor-facing course setting, which is what this
+   * block is; and `policy` is the ONE signed manifest field passed to
+   * `canonicalize` verbatim in all three recorders, so a key added here rides
+   * into the signed payload without touching any recorder's key-enumerating
+   * payload builder. A new TOP-LEVEL manifest field would have to land in
+   * `manifest.ts`, provjet's `Manifest.kt`, and provnvim's `manifest.lua`
+   * simultaneously or signature verification would break wherever it had not.
+   *
+   * (This is why the type is still called `CapturePolicyBlock` while carrying a
+   * non-capture key. Renaming it to `ManifestPolicyBlock` is the honest fix and
+   * is deliberately not done here — the name is quoted in doc-comments across
+   * two sibling repos.)
+   *
+   * ## What `required: false` does, and what it emphatically does not
+   *
+   * It is COSMETIC. It suppresses the un-enrolled status-bar suffix and the
+   * enrollment nudge, and nothing else. A student who holds a credential still
+   * emits their `session.start.identity` block; the enrollment commands still
+   * work; no new skip reason exists; the event stream, hash chain, and seal are
+   * untouched. Un-enrolled was already a fully-supported, non-degraded state —
+   * all it costs is attribution, which is why a course that does no group work
+   * can switch the prompting off without losing anything it was using.
+   *
+   * Absent means `true`, permanently: every manifest ever issued carries no key
+   * here and every one of them means "required".
+   */
+  enrollment?: {
+    required?: boolean;
+  };
+};
+
+/** The resolved enrollment policy a recorder actually runs against. */
+export type EnrollmentPolicy = {
+  /**
+   * Does this course want its students told they are un-enrolled?
+   *
+   * `false` silences the status-bar suffix and the nudge. It does NOT stop an
+   * enrolled student's identity from being emitted — see the block type above.
+   */
+  required: boolean;
 };
 
 /** The resolved, fully-populated policy a recorder actually runs against. */
@@ -121,6 +166,18 @@ export const DEFAULT_CAPTURE_POLICY: CapturePolicy = {
   focus_change: true,
   terminal: true,
   heartbeat_interval_ms: 30_000,
+};
+
+/**
+ * Applied when the manifest carries no `policy.enrollment` block, and when
+ * `required` is absent or malformed.
+ *
+ * Required, because that is what every manifest issued before this key existed
+ * means, and because the safe reading of a garbled value is the status quo — a
+ * course that wrote nonsense here has not asked us to stop prompting.
+ */
+export const DEFAULT_ENROLLMENT_POLICY: EnrollmentPolicy = {
+  required: true,
 };
 
 /** Inclusive lower clamp for `heartbeat_interval_ms` (program spec §4). */
@@ -282,6 +339,38 @@ export function resolveCapturePolicy(block?: CapturePolicyBlock | unknown): Capt
     focus_change: resolveBool(c['focus_change'], DEFAULT_CAPTURE_POLICY.focus_change),
     terminal: resolveBool(c['terminal'], DEFAULT_CAPTURE_POLICY.terminal),
     heartbeat_interval_ms: resolveHeartbeatInterval(c['heartbeat_interval_ms']),
+  };
+}
+
+/**
+ * Resolve a manifest `policy` block into the effective {@link EnrollmentPolicy}.
+ *
+ * Total by construction, exactly like {@link resolveCapturePolicy}: every
+ * absent or malformed input resolves to {@link DEFAULT_ENROLLMENT_POLICY}, so
+ * this never fails and returns no `Result`. Takes `unknown` so it can be applied
+ * directly to untrusted parsed JSON.
+ *
+ * Note this reads the SAME block as `resolveCapturePolicy` and the two are
+ * independent: a course may set either without the other.
+ *
+ * **Do not call this on an unverified manifest.** Below 2.0 the `policy` block
+ * is not inside the signed payload, so a student could staple one on. The
+ * version gate lives in each recorder's manifest loader — see
+ * `resolveVerifiedEnrollmentPolicy` — not here, because this function is also
+ * used by readers that have already established the version.
+ */
+export function resolveEnrollmentPolicy(block?: CapturePolicyBlock | unknown): EnrollmentPolicy {
+  if (typeof block !== 'object' || block === null || Array.isArray(block)) {
+    return { ...DEFAULT_ENROLLMENT_POLICY };
+  }
+  const enrollment = (block as Record<string, unknown>)['enrollment'];
+  if (typeof enrollment !== 'object' || enrollment === null || Array.isArray(enrollment)) {
+    return { ...DEFAULT_ENROLLMENT_POLICY };
+  }
+  const e = enrollment as Record<string, unknown>;
+
+  return {
+    required: resolveBool(e['required'], DEFAULT_ENROLLMENT_POLICY.required),
   };
 }
 

@@ -5,6 +5,8 @@ import {
   DEFAULT_CAPTURE_POLICY,
   FLOOR_EVENT_KINDS,
   POLICY_GATED_EVENT_KINDS,
+  DEFAULT_ENROLLMENT_POLICY,
+  resolveEnrollmentPolicy,
   HEARTBEAT_INTERVAL_MIN_MS,
   HEARTBEAT_INTERVAL_MAX_MS,
 } from './policy.js';
@@ -280,5 +282,80 @@ describe('isEventKindCaptured', () => {
       'terminal.command',
       'terminal.open',
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveEnrollmentPolicy
+// ---------------------------------------------------------------------------
+
+describe('resolveEnrollmentPolicy', () => {
+  it('defaults to required — every manifest in existence carries no key and means "required"', () => {
+    expect(DEFAULT_ENROLLMENT_POLICY).toEqual({ required: true });
+  });
+
+  it('resolves an absent block to required', () => {
+    expect(resolveEnrollmentPolicy(undefined)).toEqual({ required: true });
+  });
+
+  it('resolves a block with no `enrollment` key to required', () => {
+    expect(resolveEnrollmentPolicy({ capture: { terminal: false } })).toEqual({ required: true });
+  });
+
+  it('resolves an `enrollment` object with no `required` key to required', () => {
+    expect(resolveEnrollmentPolicy({ enrollment: {} })).toEqual({ required: true });
+  });
+
+  it('honours an explicit false — the whole point of the key', () => {
+    expect(resolveEnrollmentPolicy({ enrollment: { required: false } })).toEqual({
+      required: false,
+    });
+  });
+
+  it('honours an explicit true', () => {
+    expect(resolveEnrollmentPolicy({ enrollment: { required: true } })).toEqual({ required: true });
+  });
+
+  it('is independent of the capture block — a course may set one and not the other', () => {
+    expect(
+      resolveEnrollmentPolicy({
+        capture: { selection_change: false },
+        enrollment: { required: false },
+      }),
+    ).toEqual({ required: false });
+    expect(resolveCapturePolicy({ enrollment: { required: false } })).toEqual(
+      DEFAULT_CAPTURE_POLICY,
+    );
+  });
+
+  // Malformed input resolves to REQUIRED, not to false. A course that wrote
+  // garbage here has not said "stop asking my students to enrol", and the safe
+  // reading of nonsense is the status quo.
+  it.each([
+    ['a string', { enrollment: 'no' }],
+    ['a number', { enrollment: 0 }],
+    ['null', { enrollment: null }],
+    ['an array', { enrollment: [] }],
+    ['a non-boolean `required`', { enrollment: { required: 'false' } }],
+    ['a null `required`', { enrollment: { required: null } }],
+    ['a numeric `required`', { enrollment: { required: 0 } }],
+  ])('resolves %s to required', (_label, block) => {
+    expect(resolveEnrollmentPolicy(block)).toEqual({ required: true });
+  });
+
+  it.each([
+    ['a string block', 'nope'],
+    ['a null block', null],
+    ['an array block', []],
+    ['a numeric block', 7],
+  ])('resolves %s to required', (_label, block) => {
+    expect(resolveEnrollmentPolicy(block)).toEqual({ required: true });
+  });
+
+  it('returns a fresh object each call — callers must not share mutable state', () => {
+    const a = resolveEnrollmentPolicy(undefined);
+    const b = resolveEnrollmentPolicy(undefined);
+    expect(a).not.toBe(b);
+    expect(a).not.toBe(DEFAULT_ENROLLMENT_POLICY);
   });
 });
