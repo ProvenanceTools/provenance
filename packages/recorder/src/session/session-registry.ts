@@ -62,7 +62,10 @@ import { computeExtensionHash } from '../commands/extension-hash.js';
 import { DiskFullHandler } from '../failure/disk-full-handler.js';
 import { makeAssignmentRelativePath } from './assignment-relative-path.js';
 import { resolveOwnerRoot } from './session-router.js';
-import { resolveVerifiedCapturePolicy } from '../activation/manifest-loader.js';
+import {
+  resolveVerifiedCapturePolicy,
+  resolveVerifiedEnrollmentPolicy,
+} from '../activation/manifest-loader.js';
 import type { LargeInsertCounter } from '../wiring/doc-wiring.js';
 
 // ---------------------------------------------------------------------------
@@ -105,6 +108,18 @@ export type ActiveSession = {
    * to decide the status bar wording and whether to offer the enrollment page.
    */
   identityOutcome: IdentityOutcome | undefined;
+  /**
+   * Does this root's course require its students to enrol?
+   *
+   * Resolved once here from the ALREADY-VERIFIED manifest, for the same reason
+   * `capturePolicy` is: nothing downstream may re-parse or re-verify a manifest.
+   * `activation/enroll-nudge.ts` reads it alongside `identityOutcome` so a course
+   * that waived enrollment cannot speak for one that did not — the status bar is
+   * a single global item across every open root.
+   *
+   * Always `true` for a 1.x manifest, whose `policy` block is unsigned.
+   */
+  enrollmentRequired: boolean;
   /** All VS Code subscriptions this session owns (doc-wiring, fs-watcher, heartbeat, etc). Disposed by dispose(). */
   ownDisposables: vscode.Disposable[];
   /** Most recent checkpoint write chain. dispose() awaits this so the final checkpoint isn't lost. */
@@ -262,6 +277,12 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   // a `policy` block stapled onto a 1.x manifest (where it is NOT signed) can never
   // be honoured.
   const capturePolicy = resolveVerifiedCapturePolicy(manifest);
+
+  // Step 3b-bis: and the course's enrollment policy, from the same verified
+  // manifest and under the same version gate. This one governs nothing about
+  // capture — the bundle is byte-identical either way — only whether an
+  // un-enrolled student is TOLD they are un-enrolled.
+  const enrollmentRequired = resolveVerifiedEnrollmentPolicy(manifest).required;
 
   // Step 3c: Generate the session keypair.
   const keypair = await generateSessionKeypair();
@@ -1066,6 +1087,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     sessionKeypair: { privateKey: keypair.privateKey, publicKeyHex: keypair.publicKeyHex },
     expectedContentRegistry,
     identityOutcome,
+    enrollmentRequired,
     ownDisposables,
     getPendingCheckpoint: () => pendingCheckpoint,
     dispose,

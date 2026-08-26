@@ -33,13 +33,16 @@ import {
   manifestFormatVersion,
   checkCertWindow,
   resolveCapturePolicy,
+  resolveEnrollmentPolicy,
   DEFAULT_CAPTURE_POLICY,
+  DEFAULT_ENROLLMENT_POLICY,
   MANIFEST_FORMAT_VERSION_2,
 } from '@provenance/log-core';
 import type {
   Manifest,
   ManifestChainError,
   CapturePolicy,
+  EnrollmentPolicy,
   CertWindowStatus,
   Result,
 } from '@provenance/log-core';
@@ -182,6 +185,24 @@ export function isManifest2(manifest: Manifest): boolean {
 export function resolveVerifiedCapturePolicy(manifest: Manifest): CapturePolicy {
   if (!isManifest2(manifest)) return { ...DEFAULT_CAPTURE_POLICY };
   return resolveCapturePolicy(manifest.policy);
+}
+
+/**
+ * The effective enrollment policy for a manifest that {@link loadAndVerifyManifest}
+ * has ALREADY verified.
+ *
+ * Same version gate, same reason, as {@link resolveVerifiedCapturePolicy}: below
+ * 2.0 the `policy` block is not inside the signed payload, so honouring one here
+ * would let a student waive their own course's enrollment prompting by editing a
+ * file they hold. The knob is a course decision or it is nothing. A 1.x manifest
+ * always resolves to {@link DEFAULT_ENROLLMENT_POLICY} — required, which is what
+ * every 1.x manifest has always meant.
+ *
+ * Never call this on a manifest that has not been verified.
+ */
+export function resolveVerifiedEnrollmentPolicy(manifest: Manifest): EnrollmentPolicy {
+  if (!isManifest2(manifest)) return { ...DEFAULT_ENROLLMENT_POLICY };
+  return resolveEnrollmentPolicy(manifest.policy);
 }
 
 /**

@@ -28,6 +28,19 @@
  * URL to a packaging bug would send the student somewhere that cannot help them,
  * and would bury the real fault. Those stay diagnostic.
  *
+ * ## A course may waive the whole thing
+ *
+ * `policy.enrollment.required: false` in the course-signed manifest turns this
+ * module off for that assignment root: no status-bar suffix, no notification.
+ * A course that does no group work has no use for attribution, and telling a
+ * first-week student their work is "not attributed" costs more than the
+ * attribution was worth.
+ *
+ * The waiver is per-ROOT and the status bar is one GLOBAL item, so both halves
+ * of {@link isUnenrolled} had to be split: "is anyone attributed" still reads
+ * every session, and only "does anyone still need to enrol" is filtered. The
+ * asymmetry is deliberate — see the comment on {@link isUnenrolled}.
+ *
  * ## No network, still
  *
  * Recorder PRD NG2 forbids the recorder making network calls during a session.
@@ -116,6 +129,20 @@ export function isUnenrolledSkip(reason: IdentitySkipReason): boolean {
 }
 
 /**
+ * One open assignment root, as this module needs to see it.
+ *
+ * `enrollmentRequired` is resolved from that root's ALREADY-VERIFIED manifest
+ * (`resolveVerifiedEnrollmentPolicy`), never from the raw file — below 2.0 the
+ * `policy` block is unsigned, and a student must not be able to waive their own
+ * course's prompting.
+ */
+export type EnrollmentSession = {
+  outcome: IdentityOutcome;
+  /** `policy.enrollment.required` for this root. Absent key means `true`. */
+  enrollmentRequired: boolean;
+};
+
+/**
  * Did any session on this machine successfully claim an identity?
  *
  * All-or-nothing on purpose. With several assignment roots open, a 2.1 credential
@@ -132,14 +159,27 @@ export function anyIdentityEmitted(outcomes: readonly IdentityOutcome[]): boolea
 /**
  * Should the student see "(not enrolled)" in the status bar?
  *
- * True only when no session emitted an identity AND at least one skipped for a
- * reason enrolling would fix. A machine whose keyring is broken reads as plain
- * "recording": the identity is missing, but "not enrolled" would be the wrong
- * diagnosis and the wrong instruction.
+ * True only when no session emitted an identity AND at least one root whose
+ * course REQUIRES enrollment skipped for a reason enrolling would fix. A machine
+ * whose keyring is broken reads as plain "recording": the identity is missing,
+ * but "not enrolled" would be the wrong diagnosis and the wrong instruction. A
+ * root whose course waived enrollment reads as plain "recording" too, because
+ * nothing is missing that its course asked for.
  */
-export function isUnenrolled(outcomes: readonly IdentityOutcome[]): boolean {
-  if (anyIdentityEmitted(outcomes)) return false;
-  return outcomes.some((o) => o.kind === 'skipped' && isUnenrolledSkip(o.reason));
+export function isUnenrolled(sessions: readonly EnrollmentSession[]): boolean {
+  // Reads EVERY session, waived ones included. Attribution is a property of the
+  // student, not of the root that produced it: a legacy 2.0 holder enrolled in
+  // one course and not another is attributed somewhere, and "not enrolled" would
+  // be false about them. Filtering here instead would resurrect exactly the
+  // misdiagnosis this module was written to prevent.
+  if (anyIdentityEmitted(sessions.map((s) => s.outcome))) return false;
+
+  // Reads only the roots whose course still asks for it. A course that waived
+  // enrollment has no claim on a status bar shared with a course that did not.
+  return sessions.some(
+    (s) =>
+      s.enrollmentRequired && s.outcome.kind === 'skipped' && isUnenrolledSkip(s.outcome.reason),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -190,11 +230,11 @@ export const NUDGE_MESSAGE =
  * and one more only if they showed intent and did not finish.
  */
 export function shouldShowNudge(input: {
-  outcomes: readonly IdentityOutcome[];
+  sessions: readonly EnrollmentSession[];
   state: NudgeState;
 }): boolean {
   if (input.state === 'done') return false;
-  return isUnenrolled(input.outcomes);
+  return isUnenrolled(input.sessions);
 }
 
 /**

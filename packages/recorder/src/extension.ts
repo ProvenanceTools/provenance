@@ -38,7 +38,7 @@ import {
   parseNudgeState,
   shouldShowNudge,
 } from './activation/enroll-nudge.js';
-import type { NudgeAction } from './activation/enroll-nudge.js';
+import type { EnrollmentSession, NudgeAction } from './activation/enroll-nudge.js';
 import { sealBundle, sealDroppedArtifacts } from './commands/seal.js';
 import { chooseSessionForSeal } from './commands/seal-selector.js';
 import { computeExtensionHash } from './commands/extension-hash.js';
@@ -306,7 +306,8 @@ let statusBar: vscode.StatusBarItem | null = null;
 
 /**
  * Render the enrollment state, and — at most twice in a student's life — say it
- * out loud.
+ * out loud. Silent entirely for a student whose only open roots belong to
+ * courses that signed `policy.enrollment.required: false`.
  *
  * Runs after every session has started, because only then is the answer known:
  * `identityOutcome` is per-session, and a student is un-enrolled only when NO
@@ -318,15 +319,20 @@ let statusBar: vscode.StatusBarItem | null = null;
  */
 async function reflectEnrollment(context: vscode.ExtensionContext): Promise<void> {
   try {
-    const outcomes = registry
+    // Sessions whose identity was never attempted (no `secrets` wired) are
+    // dropped: "we never asked" is not "they are not enrolled".
+    const sessions: EnrollmentSession[] = registry
       .all()
-      .map((s) => s.identityOutcome)
-      .filter((o): o is IdentityOutcome => o !== undefined);
+      .filter((s) => s.identityOutcome !== undefined)
+      .map((s) => ({
+        outcome: s.identityOutcome as IdentityOutcome,
+        enrollmentRequired: s.enrollmentRequired,
+      }));
 
-    if (statusBar !== null) setEnrollmentState(statusBar, isUnenrolled(outcomes));
+    if (statusBar !== null) setEnrollmentState(statusBar, isUnenrolled(sessions));
 
     const state = parseNudgeState(context.globalState.get(NUDGE_STATE_KEY));
-    if (!shouldShowNudge({ outcomes, state })) return;
+    if (!shouldShowNudge({ sessions, state })) return;
 
     // Modal-free and non-blocking by construction: `showWarningMessage` resolves
     // `undefined` when the student ignores or dismisses it, which is the same

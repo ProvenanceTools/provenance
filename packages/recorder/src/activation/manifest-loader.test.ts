@@ -16,6 +16,7 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 import {
   loadAndVerifyManifest,
   resolveVerifiedCapturePolicy,
+  resolveVerifiedEnrollmentPolicy,
   verifiedCertWindow,
 } from './manifest-loader.js';
 import { ROOT_PUBLIC_KEY_HEX, LEGACY_COURSE_PUBLIC_KEY_HEX } from './course-keys.js';
@@ -537,6 +538,73 @@ describe('loadAndVerifyManifest — Manifest 2.0 trust chain', () => {
       expect(result.value.format_version).toBe('1.0');
       expect(resolveVerifiedCapturePolicy(result.value)).toEqual(DEFAULT_CAPTURE_POLICY);
       expect(verifiedCertWindow(result.value)).toBeNull();
+    }
+  });
+
+  it('resolves the signed enrollment policy for a chain-verified 2.0 manifest', async () => {
+    const root = await keypair();
+    const course = await keypair();
+    const folder = await write(
+      await buildV2Manifest({
+        rootPrivkey: root.priv,
+        coursePrivkey: course.priv,
+        coursePubkeyHex: course.pub,
+        policy: { enrollment: { required: false } },
+      }),
+    );
+
+    const result = await loadAndVerifyManifest(folder, root.pub);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(resolveVerifiedEnrollmentPolicy(result.value)).toEqual({ required: false });
+      // Independent of capture: waiving enrollment changes nothing about what is
+      // recorded, and the bundle is byte-identical either way.
+      expect(resolveVerifiedCapturePolicy(result.value)).toEqual(DEFAULT_CAPTURE_POLICY);
+    }
+  });
+
+  it('defaults a 2.0 manifest with no enrollment block to required', async () => {
+    const root = await keypair();
+    const course = await keypair();
+    const folder = await write(
+      await buildV2Manifest({
+        rootPrivkey: root.priv,
+        coursePrivkey: course.priv,
+        coursePubkeyHex: course.pub,
+        policy: { capture: { terminal: false } },
+      }),
+    );
+
+    const result = await loadAndVerifyManifest(folder, root.pub);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(resolveVerifiedEnrollmentPolicy(result.value)).toEqual({ required: true });
+    }
+  });
+
+  it('ignores an enrollment waiver stapled onto a 1.x manifest', async () => {
+    // Same downgrade rule as the capture policy: at 1.x the `policy` block is
+    // outside the signed payload, so a student could waive their own course's
+    // prompting. The knob is a COURSE decision or it is nothing.
+    const { pubkeyHex, privkeyHex } = await generateTestKeypair();
+    const manifestData = {
+      assignment_id: 'hw03',
+      semester: 'fa26',
+      issued_at: '2026-09-15T00:00:00Z',
+      files_under_review: ['hw03.py'],
+    };
+    const sigHex = await signManifest(manifestData, privkeyHex);
+    const folder = await write({
+      ...manifestData,
+      sig: sigHex,
+      policy: { enrollment: { required: false } },
+    });
+
+    const result = await loadAndVerifyManifest(folder, pubkeyHex);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.format_version).toBe('1.0');
+      expect(resolveVerifiedEnrollmentPolicy(result.value)).toEqual({ required: true });
     }
   });
 
