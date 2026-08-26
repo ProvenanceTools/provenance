@@ -27,6 +27,35 @@
  *   but self-verification — and therefore this tool — will refuse to write the
  *   file.
  *
+ *   The `policy` block is the professor-facing course control, and it is signed:
+ *
+ *     "policy": {
+ *       "capture": {
+ *         "selection_change":      true,
+ *         "focus_change":          true,
+ *         "terminal":              true,
+ *         "heartbeat_interval_ms": 30000
+ *       },
+ *       "enrollment": { "required": true }
+ *     }
+ *
+ *   `capture` narrows what the recorder records; every other event kind is on
+ *   the floor and has no key at all (`log-core/policy.ts`). `enrollment.required`
+ *   is NOT a capture knob — set it `false` and the recorder stops telling
+ *   un-enrolled students they are un-enrolled: no "(not enrolled)" status bar,
+ *   no enrollment prompt. Recording is completely unaffected and the bundle is
+ *   byte-identical; what you give up is ATTRIBUTION, i.e. nothing in the
+ *   submission says who produced it. Reasonable for a course of solo
+ *   assignments; wrong for one with group work.
+ *
+ *   Every key in this block is optional and omitting one means its default
+ *   (capture on, 30s heartbeat, enrollment required) — so a manifest that
+ *   predates a key keeps working. This tool passes `policy` through VERBATIM
+ *   rather than rebuilding it from a known key set, which is what lets a course
+ *   use a key this tool has never heard of. Do not "tighten" that into an
+ *   enumeration: it would silently drop keys, producing a manifest that signs
+ *   cleanly and does not do what the course asked.
+ *
  * USAGE (1.0 — legacy, permanently supported)
  *   node --experimental-strip-types tools/sign-manifest.ts [manifestPath] --format 1.0 \
  *     [--course-keypair <path>]

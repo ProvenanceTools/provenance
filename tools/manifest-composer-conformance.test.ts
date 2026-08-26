@@ -85,6 +85,9 @@ const FORM_BASE = {
     focus_change: true,
     terminal: false,
     heartbeat_interval_ms: 45_000,
+    // Exercised as `false`: the interesting value, and the one whose bytes both
+    // ends must agree on.
+    enrollment_required: false,
   },
   // Not in sorted order either, for the same reason files_under_review isn't.
   ignore: ['*.class', 'build/', '.Ünicode-cache/'],

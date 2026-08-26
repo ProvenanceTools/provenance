@@ -226,6 +226,23 @@ describe('buildUnsignedManifest', () => {
     });
   });
 
+  // The pass-through is load-bearing, not incidental. `policy` is the one signed
+  // field with open-ended contents, and rebuilding it from a known key set here
+  // would silently drop any key this tool predates — yielding a manifest that
+  // signs cleanly and does not do what the course asked. `enrollment.required`
+  // is the first such key; it must survive untouched.
+  it('carries the whole policy block through verbatim, unknown keys included', () => {
+    const policy = {
+      capture: { terminal: true },
+      enrollment: { required: false },
+      future_knob: { nested: [1, 2] },
+    };
+    const result = buildUnsignedManifest('2.0', { ...v1Fields, ...v2Extra, policy });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.policy).toEqual(policy);
+  });
+
   it('rejects a 2.0 input missing policy', () => {
     const { policy: _drop, ...withoutPolicy } = v2Extra;
     const result = buildUnsignedManifest('2.0', { ...v1Fields, ...withoutPolicy });

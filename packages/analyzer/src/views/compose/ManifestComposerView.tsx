@@ -723,6 +723,48 @@ export function ManifestComposerView() {
                 />
               </div>
             </Section>
+
+            {/* ── Enrollment ────────────────────────────────────────────── */}
+            <Section
+              title="Enrollment"
+              subtitle="Whether the recorder asks your students to enrol. This changes nothing about what is recorded — the bundle is identical either way. It changes whether a submission says who produced it."
+            >
+              <div className="rounded border border-gray-200 p-3">
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={form.policy.enrollment_required}
+                    onChange={(e) => updatePolicy({ enrollment_required: e.target.checked })}
+                    data-testid="composer-enrollment-required"
+                  />
+                  <span>
+                    <span className="text-sm font-medium text-gray-900">
+                      Require enrollment{' '}
+                      <span className="font-mono text-xs text-gray-500">(enrollment.required)</span>
+                    </span>
+                    <span className="mt-0.5 block text-xs text-gray-600">
+                      Students who have not enrolled see “(not enrolled)” in the status bar and are
+                      offered the enrollment page once. Recording works either way.
+                    </span>
+                  </span>
+                </label>
+                {!form.policy.enrollment_required && (
+                  <p
+                    className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900"
+                    data-testid="composer-enrollment-cost"
+                  >
+                    <span className="font-semibold">What this costs: </span>
+                    Submissions carry no contributor. Nothing in the bundle says who produced it, so
+                    group work cannot be split between partners and a contested submission cannot be
+                    tied to a person by the recording alone. Everything else — the event stream, the
+                    hash chain, the seal, every validation check and heuristic — is unaffected. Turn
+                    this off for solo assignments where attribution buys you nothing, and the cost
+                    of confusing a first-week student is real.
+                  </p>
+                )}
+              </div>
+            </Section>
           </>
         )}
 

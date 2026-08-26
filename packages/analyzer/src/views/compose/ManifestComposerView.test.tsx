@@ -247,9 +247,21 @@ describe('ManifestComposerView', () => {
     for (const key of new Set(gated)) {
       expect(screen.getByTestId(`composer-policy-${key}`)).toBeTruthy();
     }
-    // The only checkboxes on the page are those knobs.
-    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
-    expect(checkboxes.length).toBe(POLICY_CAPTURE_TOGGLES.length);
+    // Every checkbox on the page is either one of those knobs or the enrollment
+    // control — which is deliberately NOT a capture knob: it governs attribution,
+    // not what is recorded. Asserting the exact testid set rather than a count
+    // keeps the real guarantee, which is that no FLOOR signal can ever acquire a
+    // switch here.
+    const testids = [...document.querySelectorAll('input[type="checkbox"]')].map((el) =>
+      el.getAttribute('data-testid'),
+    );
+    expect(testids.sort()).toEqual(
+      [
+        ...[...new Set(gated)].map((key) => `composer-policy-${key}`),
+        'composer-enrollment-required',
+      ].sort(),
+    );
+    expect(testids).toHaveLength(POLICY_CAPTURE_TOGGLES.length + 1);
   });
 
   it('explains what disabling a signal costs, only once it is disabled', () => {
@@ -367,7 +379,37 @@ describe('ManifestComposerView', () => {
         terminal: true,
         heartbeat_interval_ms: 30000,
       },
+      enrollment: { required: true },
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Enrollment
+  // -------------------------------------------------------------------------
+
+  it('requires enrollment by default', async () => {
+    const { cert } = await fixtures();
+    render(<ManifestComposerView />);
+    fillAssignment();
+    fireEvent.change(screen.getByTestId('composer-cert-input'), {
+      target: { files: [jsonFile('cert.json', cert.fileText)] },
+    });
+    await screen.findByTestId('composer-cert-summary');
+
+    expect(screen.getByTestId<HTMLInputElement>('composer-enrollment-required').checked).toBe(true);
+    // No warning until the course actually turns it off.
+    expect(screen.queryByTestId('composer-enrollment-cost')).toBeNull();
+  });
+
+  it('signs a manifest that waives enrollment, and says what it costs', async () => {
+    render(<ManifestComposerView />);
+    await fillValidV2Form();
+    fireEvent.click(screen.getByTestId('composer-enrollment-required'));
+
+    expect(screen.getByTestId('composer-enrollment-cost')).toBeInTheDocument();
+
+    const produced = await signAndReadBlob();
+    expect((produced['policy'] as { enrollment: unknown }).enrollment).toEqual({ required: false });
   });
 
   // -------------------------------------------------------------------------

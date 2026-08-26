@@ -22,10 +22,12 @@ import {
   canonicalize,
   parseManifest,
   resolveCapturePolicy,
+  resolveEnrollmentPolicy,
   signManifest,
   verifyManifestChain,
 } from '@provenance/log-core';
 import {
+  DEFAULT_POLICY_FORM,
   EMPTY_COMPOSER_FORM,
   MANIFEST_DOWNLOAD_FILENAME,
   POLICY_CAPTURE_TOGGLES,
@@ -101,8 +103,9 @@ describe('the policy floor', () => {
       focus_change: true,
       terminal: false,
       heartbeat_interval_ms: 60_000,
+      enrollment_required: true,
     });
-    expect(Object.keys(block)).toEqual(['capture']);
+    expect(Object.keys(block).sort()).toEqual(['capture', 'enrollment']);
     expect(Object.keys(block.capture ?? {}).sort()).toEqual([
       'focus_change',
       'heartbeat_interval_ms',
@@ -118,7 +121,48 @@ describe('the policy floor', () => {
       terminal: true,
       heartbeat_interval_ms: 45_000,
     };
-    expect(resolveCapturePolicy(buildPolicyBlock(policy))).toEqual(policy);
+    expect(
+      resolveCapturePolicy(buildPolicyBlock({ ...policy, enrollment_required: true })),
+    ).toEqual(policy);
+  });
+
+  it('emits the enrollment key always, both ways round', () => {
+    // Same reason the four capture keys are always emitted: three hand-written
+    // canonicalizers must agree, and "which optional keys were present" is a
+    // divergence risk. A course that left enrollment required has said so.
+    const base = {
+      selection_change: true,
+      focus_change: true,
+      terminal: true,
+      heartbeat_interval_ms: 30_000,
+    };
+    expect(buildPolicyBlock({ ...base, enrollment_required: true }).enrollment).toEqual({
+      required: true,
+    });
+    expect(buildPolicyBlock({ ...base, enrollment_required: false }).enrollment).toEqual({
+      required: false,
+    });
+  });
+
+  it('round-trips the enrollment knob through the recorder-side resolver', () => {
+    const base = {
+      selection_change: true,
+      focus_change: true,
+      terminal: true,
+      heartbeat_interval_ms: 30_000,
+    };
+    expect(
+      resolveEnrollmentPolicy(buildPolicyBlock({ ...base, enrollment_required: false })),
+    ).toEqual({ required: false });
+    expect(
+      resolveEnrollmentPolicy(buildPolicyBlock({ ...base, enrollment_required: true })),
+    ).toEqual({ required: true });
+  });
+
+  it('defaults the form to requiring enrollment', () => {
+    // The default must never be the silent one: a course opts OUT of attribution
+    // deliberately, it does not get opted out by a form default.
+    expect(DEFAULT_POLICY_FORM.enrollment_required).toBe(true);
   });
 
   it('cannot express a floor signal being off, even through the whole compose path', async () => {
@@ -130,6 +174,7 @@ describe('the policy floor', () => {
           focus_change: false,
           terminal: false,
           heartbeat_interval_ms: 5_000,
+          enrollment_required: true,
         },
       }),
       keypairFileText: course.fileText,
@@ -642,6 +687,7 @@ describe('validateComposerForm', () => {
             focus_change: true,
             terminal: true,
             heartbeat_interval_ms: ms,
+            enrollment_required: true,
           },
         }),
         cert.cert,
@@ -660,6 +706,7 @@ describe('validateComposerForm', () => {
             focus_change: true,
             terminal: true,
             heartbeat_interval_ms: ms,
+            enrollment_required: true,
           },
         }),
         cert.cert,
@@ -677,6 +724,7 @@ describe('validateComposerForm', () => {
           focus_change: true,
           terminal: true,
           heartbeat_interval_ms: Number.NaN,
+          enrollment_required: true,
         },
       }),
       cert.cert,

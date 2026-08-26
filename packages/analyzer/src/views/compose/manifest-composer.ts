@@ -99,6 +99,7 @@ import {
   verifyManifest,
   verifyManifestChain,
   DEFAULT_CAPTURE_POLICY,
+  DEFAULT_ENROLLMENT_POLICY,
   HEARTBEAT_INTERVAL_MAX_MS,
   HEARTBEAT_INTERVAL_MIN_MS,
   MANIFEST_FORMAT_VERSION_2,
@@ -193,6 +194,18 @@ export type PolicyForm = {
   readonly focus_change: boolean;
   readonly terminal: boolean;
   readonly heartbeat_interval_ms: number;
+  /**
+   * Whether the recorder asks this course's students to enrol.
+   *
+   * Not a capture toggle — it is deliberately absent from
+   * {@link POLICY_CAPTURE_TOGGLES}, because it costs the course no evidence. It
+   * changes nothing about what is recorded; the bundle is byte-identical either
+   * way. What it costs is ATTRIBUTION: nothing in the bundle says who produced
+   * it. That matters for group work and for a contested submission, and for
+   * nothing else — which is why a course running solo assignments can switch
+   * the prompting off and lose nothing it was using.
+   */
+  readonly enrollment_required: boolean;
 };
 
 export const DEFAULT_POLICY_FORM: PolicyForm = {
@@ -200,6 +213,9 @@ export const DEFAULT_POLICY_FORM: PolicyForm = {
   focus_change: DEFAULT_CAPTURE_POLICY.focus_change,
   terminal: DEFAULT_CAPTURE_POLICY.terminal,
   heartbeat_interval_ms: DEFAULT_CAPTURE_POLICY.heartbeat_interval_ms,
+  // Required by default, deliberately. A course opts OUT of attribution as a
+  // decision it makes; it must never be opted out by a form default.
+  enrollment_required: DEFAULT_ENROLLMENT_POLICY.required,
 };
 
 export type ComposerForm = {
@@ -403,7 +419,7 @@ export function validateComposerForm(
 /**
  * Build the policy block.
  *
- * All four keys are always emitted, even when they carry the default. The
+ * All five keys are always emitted, even when they carry the default. The
  * program spec's reason for a fixed key set at the manifest level applies here
  * too: three hand-written canonicalizers (JS, Kotlin, Lua) must agree, and
  * "which optional keys were present" is a divergence risk. It is also honest —
@@ -412,6 +428,12 @@ export function validateComposerForm(
  *
  * There is no path here that emits a key outside this set. That is what makes a
  * floor-disabling manifest unrepresentable rather than merely discouraged.
+ *
+ * `enrollment` sits beside `capture` rather than inside it: it governs nothing
+ * about what is captured, only whether the recorder tells an un-enrolled student
+ * so. It rides in the `policy` block because that is the one signed manifest
+ * field the three recorders canonicalize verbatim, so a recorder that predates
+ * the key still verifies the manifest and simply ignores it.
  */
 export function buildPolicyBlock(policy: PolicyForm): CapturePolicyBlock {
   return {
@@ -420,6 +442,9 @@ export function buildPolicyBlock(policy: PolicyForm): CapturePolicyBlock {
       focus_change: policy.focus_change,
       terminal: policy.terminal,
       heartbeat_interval_ms: policy.heartbeat_interval_ms,
+    },
+    enrollment: {
+      required: policy.enrollment_required,
     },
   };
 }
