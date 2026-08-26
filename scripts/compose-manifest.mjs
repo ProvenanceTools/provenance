@@ -67,6 +67,18 @@
  *   policy.focus_change      --no-focus-change / --capture-focus-change
  *   policy.terminal          --no-terminal / --capture-terminal
  *   policy.heartbeat_interval_ms  --heartbeat-interval-ms  (default: 30000)
+ *   policy.enrollment_required    --no-require-enrollment / --require-enrollment
+ *
+ * `--no-require-enrollment` (or `--require-enrollment false`) writes
+ * `policy.enrollment.required: false`, which stops the recorder telling
+ * un-enrolled students that they are un-enrolled: no "(not enrolled)" status
+ * bar, no enrollment prompt. Recording is UNAFFECTED — the event stream, hash
+ * chain, seal, validation checks and heuristics are identical either way, and a
+ * student who has enrolled still emits an identity block. What the course gives
+ * up is ATTRIBUTION: nothing in the submission says who produced it, so group
+ * work cannot be split between partners. Reasonable for solo assignments; wrong
+ * for a course with group projects. It is honoured only at format 2.0, and only
+ * by a recorder new enough to know the key (>= v2.0.1).
  *
  * Plus signing inputs (not signed fields): --course-keypair, --course-cert,
  * --root-pubkey (or the PROVENANCE_* env vars above).
@@ -86,6 +98,7 @@
  *     [--attachments 'logs/,*.log']               (default: empty)
  *     [--no-selection-change] [--no-focus-change] [--no-terminal]
  *     [--heartbeat-interval-ms 30000]             (default: 30000)
+ *     [--no-require-enrollment]                   (default: enrollment required)
  *     [--course-keypair <path>]   (default: PROVENANCE_COURSE_KEYPAIR_PATH, else .notes/dev-keypair.json)
  *     [--course-cert <path>]      (default: PROVENANCE_COURSE_CERT_PATH, else .notes/dev-course-cert.json)
  *     [--root-pubkey <64-hex>]    (default: PROVENANCE_ROOT_PUBLIC_KEY_HEX, else .notes/dev-root-keypair.json)
@@ -149,6 +162,7 @@ const {
   validateScopeEntry,
   isExactEntry,
   DEFAULT_CAPTURE_POLICY,
+  DEFAULT_ENROLLMENT_POLICY,
   HEARTBEAT_INTERVAL_MAX_MS,
   HEARTBEAT_INTERVAL_MIN_MS,
   MANIFEST_FORMAT_VERSION_2,
@@ -166,6 +180,9 @@ const DEFAULT_POLICY_FORM = {
   focus_change: DEFAULT_CAPTURE_POLICY.focus_change,
   terminal: DEFAULT_CAPTURE_POLICY.terminal,
   heartbeat_interval_ms: DEFAULT_CAPTURE_POLICY.heartbeat_interval_ms,
+  // Required by default, deliberately. A course opts OUT of attribution as a
+  // decision it makes; it must never be opted out by a CLI default.
+  enrollment_required: DEFAULT_ENROLLMENT_POLICY.required,
 };
 
 /** UTC, whole seconds — matches the browser composer's issuedAtFrom. */
@@ -190,6 +207,21 @@ export function parsePathListFlag(value) {
   return splitPathList(value.replaceAll(',', '\n'));
 }
 
+/**
+ * Build the policy block.
+ *
+ * This is a THIRD implementation of the same key set — the analyzer's
+ * `manifest-composer.ts` and `tools/sign-manifest.ts` are the others — and the
+ * byte-identity test in `compose-manifest.test.mjs` is what keeps them from
+ * drifting. Every key is emitted unconditionally, defaults included: "which
+ * optional keys were present" is exactly the divergence three hand-written
+ * canonicalizers (JS, Kotlin, Lua) must never have to agree about. Add a key
+ * here and you must add it there in the same change.
+ *
+ * `enrollment` sits beside `capture` rather than inside it because it governs
+ * nothing about what is captured — only whether the recorder tells an
+ * un-enrolled student so.
+ */
 export function buildPolicyBlock(policy) {
   return {
     capture: {
@@ -197,6 +229,9 @@ export function buildPolicyBlock(policy) {
       focus_change: policy.focus_change,
       terminal: policy.terminal,
       heartbeat_interval_ms: policy.heartbeat_interval_ms,
+    },
+    enrollment: {
+      required: policy.enrollment_required,
     },
   };
 }
@@ -270,6 +305,7 @@ const VALUE_FLAGS = new Set([
   '--capture-selection-change',
   '--capture-focus-change',
   '--capture-terminal',
+  '--require-enrollment',
 ]);
 
 const HELP_FLAGS = new Set(['--help', '-h']);
@@ -295,6 +331,7 @@ export function parseComposeArgs(argv) {
   let selectionChange;
   let focusChange;
   let terminal;
+  let requireEnrollment;
 
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
@@ -320,6 +357,10 @@ export function parseComposeArgs(argv) {
       terminal = false;
       continue;
     }
+    if (token === '--no-require-enrollment') {
+      requireEnrollment = false;
+      continue;
+    }
     if (VALUE_FLAGS.has(token)) {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith('--')) {
@@ -343,6 +384,10 @@ export function parseComposeArgs(argv) {
         const parsed = parseBoolFlag(token, value);
         if (!parsed.ok) return parsed;
         terminal = parsed.value;
+      } else if (token === '--require-enrollment') {
+        const parsed = parseBoolFlag(token, value);
+        if (!parsed.ok) return parsed;
+        requireEnrollment = parsed.value;
       } else {
         values[token] = value;
       }
@@ -376,6 +421,7 @@ export function parseComposeArgs(argv) {
     selectionChange,
     focusChange,
     terminal,
+    requireEnrollment,
     heartbeatIntervalMs: values['--heartbeat-interval-ms'],
     courseKeypairPath: values['--course-keypair'],
     courseCertPath: values['--course-cert'],
@@ -524,9 +570,7 @@ export function resolveComposeOptions(
   }
 
   const courseId =
-    format === MANIFEST_FORMAT_VERSION_2
-      ? (pickString(raw.courseId, config?.course_id) ?? '')
-      : '';
+    format === MANIFEST_FORMAT_VERSION_2 ? (pickString(raw.courseId, config?.course_id) ?? '') : '';
 
   if (format === MANIFEST_FORMAT_VERSION_2 && courseId.length === 0) {
     return err({ message: 'Missing required --course-id (or config.course_id) for format 2.0' });
@@ -571,6 +615,10 @@ export function resolveComposeOptions(
     focus_change: raw.focusChange ?? cfgPolicy?.focus_change ?? DEFAULT_POLICY_FORM.focus_change,
     terminal: raw.terminal ?? cfgPolicy?.terminal ?? DEFAULT_POLICY_FORM.terminal,
     heartbeat_interval_ms: heartbeatIntervalMs,
+    enrollment_required:
+      raw.requireEnrollment ??
+      cfgPolicy?.enrollment_required ??
+      DEFAULT_POLICY_FORM.enrollment_required,
   };
 
   const form = {
@@ -594,7 +642,8 @@ export function resolveComposeOptions(
     form,
     courseKeypairPath:
       raw.courseKeypairPath ?? env.PROVENANCE_COURSE_KEYPAIR_PATH ?? defaults.courseKeypairPath,
-    courseCertPath: raw.courseCertPath ?? env.PROVENANCE_COURSE_CERT_PATH ?? defaults.courseCertPath,
+    courseCertPath:
+      raw.courseCertPath ?? env.PROVENANCE_COURSE_CERT_PATH ?? defaults.courseCertPath,
     rootPubkeyHex: raw.rootPubkeyHex ?? env.PROVENANCE_ROOT_PUBLIC_KEY_HEX ?? null,
   });
 }
@@ -609,7 +658,7 @@ const USAGE = `Usage: node scripts/compose-manifest.mjs \\
   [--collaboration solo|group] [--submission bundle|git] [--scope directory|repo] \\
   [--ignore <paths>] [--attachments <paths>] \\
   [--no-selection-change] [--no-focus-change] [--no-terminal] \\
-  [--heartbeat-interval-ms <ms>] \\
+  [--heartbeat-interval-ms <ms>] [--no-require-enrollment] \\
   [--course-keypair <path>] [--course-cert <path>] [--root-pubkey <hex>] \\
   [--config <json>] [--preview]
 

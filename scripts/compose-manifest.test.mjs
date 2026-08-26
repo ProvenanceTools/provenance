@@ -21,6 +21,7 @@ import {
   parsePathListFlag,
   parseConfigObject,
   issuedAtFrom,
+  buildPolicyBlock,
 } from './compose-manifest.mjs';
 import { composeSignedManifest } from '../packages/analyzer/src/views/compose/manifest-composer.js';
 import {
@@ -159,6 +160,7 @@ describe('resolveComposeOptions', () => {
       focus_change: true,
       terminal: true,
       heartbeat_interval_ms: 30_000,
+      enrollment_required: true,
     });
   });
 
@@ -211,9 +213,9 @@ describe('resolveComposeOptions', () => {
   });
 
   it('rejects illegal enum values', () => {
-    expect(
-      resolveComposeOptions(baseRaw({ collaboration: 'pair' }), null, {}, FIXED_NOW).ok,
-    ).toBe(false);
+    expect(resolveComposeOptions(baseRaw({ collaboration: 'pair' }), null, {}, FIXED_NOW).ok).toBe(
+      false,
+    );
     expect(resolveComposeOptions(baseRaw({ submission: 'zip' }), null, {}, FIXED_NOW).ok).toBe(
       false,
     );
@@ -244,6 +246,9 @@ const FORM_BASE = {
     focus_change: true,
     terminal: false,
     heartbeat_interval_ms: 45_000,
+    // Exercised as `false`: the interesting value, and the one whose bytes the
+    // CLI and the browser composer must agree on.
+    enrollment_required: false,
   },
   ignore: ['*.class', 'build/'],
   attachments: ['logs/', '*.log'],
@@ -309,6 +314,7 @@ function runCli(extraArgs, outName) {
     '--no-terminal',
     '--heartbeat-interval-ms',
     String(FORM_BASE.policy.heartbeat_interval_ms),
+    '--no-require-enrollment',
     '--course-keypair',
     fx.keypairPath,
     '--course-cert',
@@ -456,5 +462,109 @@ describe('compose-manifest.mjs ↔ composeSignedManifest byte identity', () => {
     expect(result).toContain('--ignore');
     expect(result).toContain('--attachments');
     expect(result).toMatch(/Check out this provenance repo/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// policy.enrollment.required
+// ---------------------------------------------------------------------------
+
+describe('the enrollment knob', () => {
+  it('defaults to required — a course opts out deliberately, never by CLI default', () => {
+    const resolved = resolveComposeOptions(baseRaw(), null, {}, FIXED_NOW);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.value.form.policy.enrollment_required).toBe(true);
+  });
+
+  it('honours --no-require-enrollment', () => {
+    const parsed = parseComposeArgs(['--no-require-enrollment']);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.requireEnrollment).toBe(false);
+  });
+
+  it('honours --require-enrollment true|false', () => {
+    for (const [value, expected] of [
+      ['false', false],
+      ['no', false],
+      ['off', false],
+      ['true', true],
+      ['1', true],
+    ]) {
+      const parsed = parseComposeArgs(['--require-enrollment', value]);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      expect(parsed.value.requireEnrollment).toBe(expected);
+    }
+  });
+
+  it('rejects a non-boolean --require-enrollment', () => {
+    const parsed = parseComposeArgs(['--require-enrollment', 'maybe']);
+    expect(parsed.ok).toBe(false);
+  });
+
+  it('reads policy.enrollment_required from a config file', () => {
+    const config = parseConfigObject({
+      assignment_id: 'hw03',
+      semester: 'fa26',
+      files_under_review: ['hw03.py'],
+      course_id: 'berkeley-cs61a',
+      policy: { enrollment_required: false },
+    });
+    expect(config.ok).toBe(true);
+    if (!config.ok) return;
+
+    const resolved = resolveComposeOptions(
+      baseRaw({ filesUnderReview: undefined }),
+      config.value,
+      {},
+      FIXED_NOW,
+    );
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.value.form.policy.enrollment_required).toBe(false);
+  });
+
+  it('lets the flag override the config, like every other policy key', () => {
+    const config = parseConfigObject({
+      assignment_id: 'hw03',
+      semester: 'fa26',
+      files_under_review: ['hw03.py'],
+      course_id: 'berkeley-cs61a',
+      policy: { enrollment_required: false },
+    });
+    expect(config.ok).toBe(true);
+    if (!config.ok) return;
+
+    const resolved = resolveComposeOptions(
+      baseRaw({ filesUnderReview: undefined, requireEnrollment: true }),
+      config.value,
+      {},
+      FIXED_NOW,
+    );
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.value.form.policy.enrollment_required).toBe(true);
+  });
+
+  it('emits the key both ways round, so absence never means "waived"', () => {
+    const base = {
+      selection_change: true,
+      focus_change: true,
+      terminal: true,
+      heartbeat_interval_ms: 30_000,
+    };
+    expect(buildPolicyBlock({ ...base, enrollment_required: true }).enrollment).toEqual({
+      required: true,
+    });
+    expect(buildPolicyBlock({ ...base, enrollment_required: false }).enrollment).toEqual({
+      required: false,
+    });
+  });
+
+  it('writes policy.enrollment.required into the signed file', () => {
+    const written = JSON.parse(runCli([], 'enrollment.provenance-manifest'));
+    expect(written.policy.enrollment).toEqual({ required: false });
   });
 });
