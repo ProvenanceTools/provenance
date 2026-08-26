@@ -345,7 +345,8 @@ this file at the workspace root the students will open:
       "focus_change": true,
       "terminal": true,
       "heartbeat_interval_ms": 30000
-    }
+    },
+    "enrollment": { "required": true }
   }
 }
 ```
@@ -360,6 +361,9 @@ Field rules (enforced by `parseManifest` / `parseManifestValue` in
 - `course_id` — MUST equal the `course_id` inside the certificate you sign with, or the manifest will fail its own chain check (program spec §3 step 3).
 - `collaboration` / `submission` / `scope` — `"solo" | "group"`, `"bundle" | "git"`, `"directory" | "repo"`.
 - `policy.capture` — the professor-facing capture controls (program spec §4). A course can turn capture down; a student cannot turn it off, because this block is inside the course-signed payload. Omit keys you don't want to change from the default (everything on, 30s heartbeat).
+- `policy.enrollment.required` — defaults to `true`. Set it to `false` and the recorder stops telling un-enrolled students that they are un-enrolled: no `(not enrolled)` in the status bar, no enrollment prompt. **Recording is completely unaffected** — the event stream, hash chain, seal, every validation check and every heuristic are identical either way, and a student who _has_ enrolled still gets an identity block. What the course gives up is **attribution**: nothing in the submission says who produced it, so group work cannot be split between partners and a contested submission cannot be tied to a person by the recording alone. Reasonable for a course of solo assignments where the enrollment flow costs first-week students more than the attribution is worth; wrong for a course with group projects.
+
+  Two caveats. The knob only takes effect on recorders that ship support for it — an older build verifies the manifest fine and keeps prompting — so check the version table above before relying on it. And it is honoured only at `format_version: "2.0"`: at 1.x the `policy` block is outside the signed payload, so a student could otherwise waive their own course's prompting.
 
 Omit `sig` and `course_cert`; the signer adds both. (If you re-sign an already-signed manifest, the old `sig`/`course_cert` are stripped first.)
 
