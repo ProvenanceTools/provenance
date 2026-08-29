@@ -62,8 +62,8 @@ function stamp(contributors: Contributor[]): BundleContributors {
               scope: c.scope!,
               scopeId: c.scopeId!,
               studentPubkey: 'aa'.repeat(32),
-              certWindow: 'in_window',
-              credentialWindow: 'in_window',
+              certWindow: { in_window: true },
+              credentialWindow: { in_window: true },
             }
           : { kind: 'unattributed', sessionId, contributorKey: c.key },
       );

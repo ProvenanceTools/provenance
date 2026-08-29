@@ -16,8 +16,8 @@ function attributed(sessionId: string, studentRef: string): SessionContributor {
     scope: 'institution',
     scopeId: 'inst1',
     studentPubkey: 'aa'.repeat(32),
-    certWindow: 'in_window',
-    credentialWindow: 'in_window',
+    certWindow: { in_window: true },
+    credentialWindow: { in_window: true },
   };
 }
 
