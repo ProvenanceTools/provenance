@@ -10,7 +10,9 @@
  * file's header comment: "Nothing to choose between. One contributor is the
  * overwhelmingly common case (every solo submission), and it renders exactly
  * as it did before this control existed — no empty select, no '1 of 1'."
- * A submission with ≤1 contributor has nothing to split into lanes, and a
+ * A submission without two provably different contributors has nothing to split
+ * into lanes (`lane-mode.ts` — an UNSTAMPED bundle has one `Contributor` per
+ * session, which is a count, not a group), and a
  * toggle that is always visible but sometimes inert would misstate what
  * today's Replay tab can show. `null` is the ordinary case too, not an error:
  * the server-backed Replay tab builds its index from API rows and has no
@@ -29,6 +31,8 @@
 
 import type { BundleContributors } from '@provenance/analysis-core/identity/types.js';
 
+import { isLaneEligible } from './lane-mode.js';
+
 export type SplitLanesToggleProps = {
   /** The bundle's contributor stamp, or `null` — see the module header. */
   readonly contributors: BundleContributors | null;
@@ -42,7 +46,9 @@ export function SplitLanesToggle({ contributors, enabled, onToggle }: SplitLanes
   const laneCount = contributors?.contributors.length ?? 0;
 
   // Mirrors ContributorSelect's `options.length <= 1` guard — see module header.
-  if (laneCount <= 1) return null;
+  // Eligibility is `lane-mode.ts`'s question, NOT the raw contributor count:
+  // an unstamped bundle has one `Contributor` per session and is not a group.
+  if (!isLaneEligible(contributors)) return null;
 
   return (
     <button

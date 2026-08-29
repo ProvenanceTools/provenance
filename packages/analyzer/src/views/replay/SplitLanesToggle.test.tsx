@@ -4,7 +4,11 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import type { BundleContributors, Contributor } from '@provenance/analysis-core/identity/types.js';
+import type {
+  BundleContributors,
+  Contributor,
+  SessionContributor,
+} from '@provenance/analysis-core/identity/types.js';
 import { SplitLanesToggle } from './SplitLanesToggle.js';
 
 // ---------------------------------------------------------------------------
@@ -23,9 +27,50 @@ function attributedContributor(ref: string): Contributor {
   };
 }
 
-function stamp(contributors: Contributor[]): BundleContributors {
+function unattributedContributor(sessionId: string): Contributor {
   return {
-    bySession: new Map(),
+    key: `unattributed:${sessionId}`,
+    kind: 'unattributed',
+    studentRef: null,
+    identityVersion: null,
+    scope: null,
+    scopeId: null,
+    sessionIds: [sessionId],
+  };
+}
+
+/**
+ * `bySession` is DERIVED from `contributors` rather than left empty. The
+ * resolver can never produce a stamp that names contributors but maps no
+ * sessions, and lane eligibility (`lane-mode.ts`) reads `bySession` — the field
+ * carrying each session's `kind` — so an empty map here would make every case
+ * below vacuous rather than testing the control.
+ */
+function stamp(contributors: Contributor[]): BundleContributors {
+  const bySession = new Map<string, SessionContributor>();
+  for (const c of contributors) {
+    for (const sessionId of c.sessionIds) {
+      bySession.set(
+        sessionId,
+        c.kind === 'attributed'
+          ? {
+              kind: 'attributed',
+              sessionId,
+              contributorKey: c.key,
+              studentRef: c.studentRef!,
+              identityVersion: c.identityVersion!,
+              scope: c.scope!,
+              scopeId: c.scopeId!,
+              studentPubkey: 'aa'.repeat(32),
+              certWindow: 'in_window',
+              credentialWindow: 'in_window',
+            }
+          : { kind: 'unattributed', sessionId, contributorKey: c.key },
+      );
+    }
+  }
+  return {
+    bySession,
     contributors,
     rootKeyConfigured: true,
     counts: { attributed: 0, unverifiable: 0, unattributed: 0 },
@@ -42,6 +87,31 @@ describe('a submission with one contributor, or none at all', () => {
       <SplitLanesToggle contributors={null} enabled={true} onToggle={vi.fn()} />,
     );
     expect(container.firstChild).toBeNull();
+  });
+
+  /**
+   * Regression: an UNSTAMPED bundle resolves every session `unattributed`, and
+   * that key is per-session — so a solo student with five sessions produced five
+   * `Contributor` entries and the old `length > 1` gate showed "Split lanes · 5"
+   * and defaulted lanes ON. Downstream, the three-lane cap handed every lane to
+   * the first three sessions, which for this student held no document events at
+   * all: three idle lanes, no content, start to finish. See `lane-mode.ts`.
+   */
+  it('renders nothing for an unstamped solo bundle with five sessions', () => {
+    const { container } = render(
+      <SplitLanesToggle
+        contributors={stamp([
+          unattributedContributor('01ed01c1'),
+          unattributedContributor('cc60a059'),
+          unattributedContributor('ba57a7b6'),
+          unattributedContributor('40f50443'),
+          unattributedContributor('94143ee7'),
+        ])}
+        enabled={true}
+        onToggle={vi.fn()}
+      />,
+    );
+    expect(container.querySelector('[data-testid="split-lanes-toggle"]')).toBeNull();
   });
 
   it('renders nothing for a solo contributor', () => {

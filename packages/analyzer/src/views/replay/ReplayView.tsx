@@ -25,7 +25,8 @@
  *   ?speed=:n          — playback speed (written back on state change).
  *   ?skipIdle=0|1      — idle-gap compression. Defaults ON; only `0` opts out.
  *   ?split=0|1         — split contributor lanes. Absent defaults ON for a
- *                        multi-contributor bundle and OFF otherwise, and is
+ *                        bundle with two provably different contributors
+ *                        (`lane-mode.ts`) and OFF otherwise, and is
  *                        written back ONLY when a human touches the toggle —
  *                        see `handleSplitToggle` for why it is not mirrored on
  *                        every write-back the way `skipIdle` is.
@@ -54,6 +55,7 @@ import { ContributorSelect } from './ContributorSelect.js';
 import { SplitLanesToggle } from './SplitLanesToggle.js';
 import { ReplayLanes } from './ReplayLanes.js';
 import type { LaneCell } from './lane-groups.js';
+import { isLaneEligible } from './lane-mode.js';
 import { buildContributorPalette } from './contributor-palette.js';
 import { buildContributorActivity, RIBBON_IDLE_GAP_MS } from './contributor-activity.js';
 import { activeFilesAt, buildActiveFileTimelines } from './contributor-active-file.js';
@@ -396,17 +398,14 @@ export function ReplayInner({
   //
   // So the URL is the single source of truth and the fallback is recomputed
   // from current props: `'0'`/`'1'` mean an explicit human choice, which always
-  // wins in both directions, and absence means "on for more than one
-  // contributor" — the on-by-default behaviour change design §3 accepts
+  // wins in both directions, and absence means "on for a bundle with two
+  // provably different contributors" (`lane-mode.ts`, NOT the raw contributor
+  // count) — the on-by-default behaviour change design §3 accepts
   // knowingly. `handleSplitToggle` only writes the param; there is no setter
   // and nothing to keep in sync.
   const splitParam = searchParams.get('split');
   const split =
-    splitParam === '0'
-      ? false
-      : splitParam === '1'
-        ? true
-        : contributors !== null && contributors.contributors.length > 1;
+    splitParam === '0' ? false : splitParam === '1' ? true : isLaneEligible(contributors);
 
   const engine = useReplayEngine(index, { skipIdle, scope });
   const { state, fileStates, files, seams, fileAmbiguity, play, pause, step, seek } = engine;
@@ -457,7 +456,7 @@ export function ReplayInner({
   //    precomputed change points, not a scan (see `contributor-active-file.ts`).
   // ---------------------------------------------------------------------------
 
-  const laneMode = split && contributors !== null && contributors.contributors.length > 1;
+  const laneMode = split && isLaneEligible(contributors);
 
   const palette = useMemo(
     () => (contributors === null ? null : buildContributorPalette(contributors.contributors)),
