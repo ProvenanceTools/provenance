@@ -46,6 +46,8 @@ export const window = {
   state: { focused: true },
   // Notification surface used by the seal command and the inactive-workspace stub.
   showWarningMessage: (_message: string, ..._items: unknown[]) => Promise.resolve(undefined),
+  // Used by the seal command's success path.
+  showInformationMessage: (_message: string, ..._items: unknown[]) => Promise.resolve(undefined),
 };
 
 export const workspace = {
@@ -69,6 +71,13 @@ export const workspace = {
   getConfiguration: (_section?: string) => ({
     get: <T>(_key: string): T | undefined => undefined,
   }),
+  // Used by activate() to discover nested manifests. Default: nothing found;
+  // tests that exercise discovery inject `discoverManifests` through
+  // ActivateWiring instead of stubbing this.
+  findFiles: (_include: unknown, _exclude?: unknown) =>
+    Promise.resolve([] as readonly { fsPath: string }[]),
+  // Used by activate() to rescan when folders are added/removed.
+  onDidChangeWorkspaceFolders: (_handler: () => void) => noopDisposable,
 };
 
 export const extensions = {

@@ -48,7 +48,96 @@ export type PasteInterceptDeps = {
   registerCommand: (id: string, handler: () => Thenable<unknown>) => vscode.Disposable;
   executeCommand: (id: string, ...args: unknown[]) => Thenable<unknown>;
   getNow: () => number;
+  /**
+   * Shared owner of the ONE VS Code registration of
+   * {@link PASTE_INTERCEPT_COMMAND_ID}. Supply this whenever more than one
+   * session can be alive at once — see {@link createPasteInterceptRegistrar}.
+   *
+   * Omitted, each call registers the command for itself, which is correct for a
+   * lone session and for tests, and is what every existing caller relies on.
+   */
+  registrar?: PasteInterceptRegistrar;
+  /**
+   * Whether the paste being intercepted belongs to THIS session. Nested
+   * discovery means several assignment roots record concurrently, but a paste
+   * lands in exactly one document and so in exactly one session: counting it in
+   * all of them would inflate every other session's intercept count and make
+   * signal 3 (the reconciler) report paste.anomaly against a student who did
+   * nothing. Defaults to always-mine, which is exactly right when there is only
+   * one session.
+   */
+  isForThisSession?: () => boolean;
 };
+
+/**
+ * Owner of the single VS Code registration of {@link PASTE_INTERCEPT_COMMAND_ID},
+ * fanning invocations out to every subscribed session.
+ *
+ * `provenance.internal.pasteIntercept` is a KEYBINDING TARGET — course staff bind
+ * Cmd+V/Ctrl+V to it by name — so its id is fixed and global, while
+ * `startPasteIntercept` is called once per recording session. Registering it per
+ * session therefore threw
+ *
+ *     Error: command 'provenance.internal.pasteIntercept' already exists
+ *
+ * out of the SECOND session's startSession() as soon as nested manifest discovery
+ * let one opened course folder record more than one assignment. That throw
+ * propagated out of activate(), which is how students ended up with a status bar
+ * reading "Provenance: recording" and no working "Prepare Submission Bundle"
+ * command. This type makes the registration what it always was in reality: one
+ * per extension host, shared.
+ */
+export type PasteInterceptRegistrar = {
+  /**
+   * Register `onInvoked` to run when the paste command fires. Registers the VS
+   * Code command on the first subscriber and disposes it after the last one
+   * leaves, so a host that ends up with no sessions holds no command.
+   */
+  subscribe(onInvoked: () => void): vscode.Disposable;
+};
+
+/**
+ * Create a registrar owning one registration of {@link PASTE_INTERCEPT_COMMAND_ID}.
+ *
+ * The underlying `editor.action.clipboardPasteAction` runs EXACTLY ONCE per
+ * invocation no matter how many sessions are subscribed — the registrar performs
+ * it, not the subscribers. A subscriber that also pasted would paste once per
+ * open assignment.
+ */
+export function createPasteInterceptRegistrar(deps: {
+  registerCommand: (id: string, handler: () => Thenable<unknown>) => vscode.Disposable;
+  executeCommand: (id: string, ...args: unknown[]) => Thenable<unknown>;
+}): PasteInterceptRegistrar {
+  const subscribers = new Set<() => void>();
+  let registration: vscode.Disposable | null = null;
+
+  return {
+    subscribe(onInvoked: () => void): vscode.Disposable {
+      if (registration === null) {
+        registration = deps.registerCommand(PASTE_INTERCEPT_COMMAND_ID, async () => {
+          // Snapshot: a subscriber disposing during dispatch must not perturb
+          // the iteration.
+          for (const notify of [...subscribers]) notify();
+          return deps.executeCommand('editor.action.clipboardPasteAction');
+        });
+      }
+      subscribers.add(onInvoked);
+
+      let disposed = false;
+      return {
+        dispose: (): void => {
+          if (disposed) return;
+          disposed = true;
+          subscribers.delete(onInvoked);
+          if (subscribers.size === 0 && registration !== null) {
+            registration.dispose();
+            registration = null;
+          }
+        },
+      };
+    },
+  };
+}
 
 /** The VS Code command ID for the internal paste intercept. */
 export const PASTE_INTERCEPT_COMMAND_ID = 'provenance.internal.pasteIntercept';
@@ -58,15 +147,19 @@ export const PASTE_INTERCEPT_COMMAND_ID = 'provenance.internal.pasteIntercept';
  * handle that the doc-change handler can query.
  */
 export function startPasteIntercept(deps: PasteInterceptDeps): PasteIntercept {
-  const { registerCommand, executeCommand, getNow } = deps;
+  const { getNow } = deps;
+  // No registrar supplied: own the registration privately. Identical behaviour to
+  // before for a lone session, and for every existing test.
+  const registrar = deps.registrar ?? createPasteInterceptRegistrar(deps);
+  const isForThisSession = deps.isForThisSession ?? ((): boolean => true);
 
   let pasteExpectedAtMs: number | null = null;
   let _interceptCount = 0;
 
-  const commandDisposable = registerCommand(PASTE_INTERCEPT_COMMAND_ID, async () => {
+  const commandDisposable = registrar.subscribe(() => {
+    if (!isForThisSession()) return;
     pasteExpectedAtMs = getNow();
     _interceptCount++;
-    return executeCommand('editor.action.clipboardPasteAction');
   });
 
   return {

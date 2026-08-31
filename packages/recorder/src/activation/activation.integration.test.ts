@@ -19,7 +19,7 @@ import * as ed from '@noble/ed25519';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { FixedClock, parseEntries, validateChain, canonicalize } from '@provenance/log-core';
 import type { Manifest } from '@provenance/log-core';
-import { activateImpl, fallbackActivationMessage } from '../extension.js';
+import { activate, activateImpl, deactivate, fallbackActivationMessage } from '../extension.js';
 import type { ActivationError } from './manifest-loader.js';
 import { discoverManifests } from './manifest-discovery.js';
 import { startSession, SessionRegistry } from '../session/session-registry.js';
@@ -510,5 +510,176 @@ describe('multi-session discovery (nested manifests)', () => {
     });
     expect(found).toEqual([]);
     expect(skipped).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// activate() — the REAL entry point, through the ActivateWiring seam.
+//
+// Regression coverage for the production failure where students saw
+// "command 'provenance.prepareSubmissionBundle' not found" while the status bar
+// read "Provenance: recording" and a .provenance/ existed on disk. The cause was
+// registration ordering inside activate(): the seal command was registered only
+// after `await startSession(...)` had run for EVERY discovered root, with the
+// whole block under one catch. Any throw after startSession's opening
+// `mkdir(.provenance/)` therefore skipped registration permanently.
+//
+// The multi-session cases above deliberately hand-composed discoverManifests +
+// startSession "the same way activate() composes them" — and that replica did
+// not reproduce the ordering, which is exactly why this shipped. These cases
+// drive the real function instead.
+// ---------------------------------------------------------------------------
+
+describe('activate() command registration', () => {
+  const SEAL_ID = 'provenance.prepareSubmissionBundle';
+
+  type Registration = { id: string; handler: () => Promise<void> | void };
+  let registrations: Registration[];
+  let realRegisterCommand: typeof vscode.commands.registerCommand;
+
+  function makeContext(): import('vscode').ExtensionContext {
+    const store = new Map<string, unknown>();
+    return {
+      subscriptions: [] as import('vscode').Disposable[],
+      extensionPath: '/fake/ext',
+      extensionUri: { fsPath: '/fake/ext' },
+      secrets: undefined,
+      globalState: {
+        get: (key: string) => store.get(key),
+        update: (key: string, value: unknown) => {
+          store.set(key, value);
+          return Promise.resolve();
+        },
+      },
+    } as unknown as import('vscode').ExtensionContext;
+  }
+
+  function fakeFound(roots: string[]): { root: string; manifest: Manifest }[] {
+    return roots.map((root) => ({
+      root,
+      manifest: {
+        assignment_id: path.basename(root),
+        semester: 'fa26',
+        issued_at: '2026-01-01T00:00:00Z',
+        files_under_review: ['hw.py'],
+        sig: 'deadbeef',
+      } as unknown as Manifest,
+    }));
+  }
+
+  /** Minimally-shaped ActiveSession — enough for registry.add()/all()/disposeAll(). */
+  function fakeSession(root: string): Awaited<ReturnType<typeof startSession>> {
+    return {
+      assignmentRoot: root,
+      provenanceDir: path.join(root, '.provenance'),
+      ownDisposables: [] as import('vscode').Disposable[],
+      manifest: fakeFound([root])[0]!.manifest,
+      dispose: () => Promise.resolve(),
+    } as unknown as Awaited<ReturnType<typeof startSession>>;
+  }
+
+  const sealRegistrations = (): Registration[] => registrations.filter((r) => r.id === SEAL_ID);
+
+  beforeEach(() => {
+    registrations = [];
+    (vscode.workspace as unknown as { workspaceFolders: unknown }).workspaceFolders = [
+      makeWorkspaceFolder('/fake/ws'),
+    ];
+    realRegisterCommand = vscode.commands.registerCommand;
+    vscode.commands.registerCommand = ((id: string, handler: () => Promise<void> | void) => {
+      registrations.push({ id, handler });
+      return { dispose: () => undefined };
+    }) as typeof vscode.commands.registerCommand;
+  });
+
+  afterEach(async () => {
+    // Clears the module-level SessionRegistry that activate() writes into, so
+    // each case starts from an empty one.
+    await deactivate();
+    vscode.commands.registerCommand = realRegisterCommand;
+    vi.restoreAllMocks();
+    (vscode.workspace as unknown as { workspaceFolders: unknown }).workspaceFolders = undefined;
+  });
+
+  it('registers the seal command even when every session fails to start', async () => {
+    // The exact production shape: startSession throws after it has already
+    // created .provenance/ (e.g. a OneDrive-synced folder rejecting the .slog
+    // file handle). Before the fix this skipped registration entirely.
+    await activate(makeContext(), {
+      discoverManifests: () =>
+        Promise.resolve({ found: fakeFound(['/fake/ws/lab00']), skipped: [] }),
+      startSession: () => Promise.reject(new Error('EPERM: operation not permitted')),
+    });
+
+    expect(sealRegistrations()).toHaveLength(1);
+  });
+
+  it('does not claim "recording" when no session started', async () => {
+    const statusSpy = vi.spyOn(vscode.window, 'createStatusBarItem');
+    await activate(makeContext(), {
+      discoverManifests: () =>
+        Promise.resolve({ found: fakeFound(['/fake/ws/lab00']), skipped: [] }),
+      startSession: () => Promise.reject(new Error('EPERM')),
+    });
+
+    expect(statusSpy).not.toHaveBeenCalled();
+  });
+
+  it('one failing root does not stop the others from recording', async () => {
+    // The nested-discovery shape: a course folder opened at its root yields
+    // Homework/hw01, Labs/lab00, Projects/hog. Before the fix, a throw on the
+    // second abandoned the third AND skipped command registration for all.
+    const roots = ['/fake/ws/Homework/hw01', '/fake/ws/Labs/lab00', '/fake/ws/Projects/hog'];
+    const attempted: string[] = [];
+
+    await activate(makeContext(), {
+      discoverManifests: () => Promise.resolve({ found: fakeFound(roots), skipped: [] }),
+      startSession: (deps) => {
+        attempted.push(deps.assignmentRoot);
+        return deps.assignmentRoot === roots[1]
+          ? Promise.reject(new Error('EACCES'))
+          : Promise.resolve(fakeSession(deps.assignmentRoot));
+      },
+    });
+
+    // Root #3 was still attempted despite root #2 throwing.
+    expect(attempted).toEqual(roots);
+    expect(sealRegistrations()).toHaveLength(1);
+  });
+
+  it('registers the seal command exactly once when no manifest is found', async () => {
+    // Previously this path registered a separate inactive STUB under the same
+    // command id. With registration hoisted above discovery, a second
+    // registration here would throw "command already exists" in the real host.
+    await activate(makeContext(), {
+      discoverManifests: () => Promise.resolve({ found: [], skipped: [] }),
+    });
+
+    expect(sealRegistrations()).toHaveLength(1);
+
+    // And invoking it explains itself rather than failing.
+    const warnSpy = vi
+      .spyOn(vscode.window, 'showWarningMessage')
+      .mockResolvedValue(undefined as never);
+    await sealRegistrations()[0]!.handler();
+    expect(String(warnSpy.mock.calls[0]?.[0])).toContain('.provenance-manifest');
+  });
+
+  it('registers the seal command before any session is started', async () => {
+    // Ordering assertion, not just an outcome assertion: the command must exist
+    // by the time the first startSession runs, so a hang inside startSession
+    // cannot make the palette entry unusable either.
+    let registeredBeforeFirstStart = false;
+
+    await activate(makeContext(), {
+      discoverManifests: () =>
+        Promise.resolve({ found: fakeFound(['/fake/ws/lab00']), skipped: [] }),
+      startSession: (deps) => {
+        registeredBeforeFirstStart = sealRegistrations().length === 1;
+        return Promise.resolve(fakeSession(deps.assignmentRoot));
+      },
+    });
+
+    expect(registeredBeforeFirstStart).toBe(true);
   });
 });

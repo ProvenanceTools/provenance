@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { startPasteIntercept, PASTE_INTERCEPT_COMMAND_ID } from './paste-command-intercept.js';
+import {
+  createPasteInterceptRegistrar,
+  startPasteIntercept,
+  PASTE_INTERCEPT_COMMAND_ID,
+} from './paste-command-intercept.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -147,5 +151,135 @@ describe('startPasteIntercept', () => {
     startPasteIntercept({ registerCommand, executeCommand, getNow: () => 0 });
     expect(registerCommand).toHaveBeenCalledOnce();
     expect(registerCommand).toHaveBeenCalledWith(PASTE_INTERCEPT_COMMAND_ID, expect.any(Function));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Shared registrar — regression coverage for the production crash
+//
+//   Error: command 'provenance.internal.pasteIntercept' already exists
+//     at registerCommand → startPasteIntercept → startSession → async activate
+//
+// The command id is a fixed keybinding target, but startPasteIntercept runs once
+// per session. Once nested manifest discovery let one opened course folder record
+// several assignment roots, the SECOND session threw out of activate() — which is
+// why students saw "Provenance: recording" with no working
+// "Prepare Submission Bundle" command.
+// ---------------------------------------------------------------------------
+
+describe('createPasteInterceptRegistrar', () => {
+  function makeHostDeps() {
+    const registered = new Map<string, () => Thenable<unknown>>();
+    const executed: string[] = [];
+    let registerCalls = 0;
+    let disposeCalls = 0;
+
+    return {
+      deps: {
+        registerCommand: (id: string, handler: () => Thenable<unknown>) => {
+          if (registered.has(id)) {
+            // Exactly what the real extension host does.
+            throw new Error(`command '${id}' already exists`);
+          }
+          registerCalls++;
+          registered.set(id, handler);
+          return {
+            dispose: () => {
+              disposeCalls++;
+              registered.delete(id);
+            },
+          };
+        },
+        executeCommand: (id: string, ..._args: unknown[]) => {
+          executed.push(id);
+          return Promise.resolve(undefined);
+        },
+      },
+      registered,
+      executed,
+      counts: () => ({ registerCalls, disposeCalls }),
+      trigger: () => {
+        const handler = registered.get(PASTE_INTERCEPT_COMMAND_ID);
+        if (handler === undefined) throw new Error('command not registered');
+        return handler();
+      },
+    };
+  }
+
+  it('a second session does not throw "already exists"', () => {
+    const host = makeHostDeps();
+    const registrar = createPasteInterceptRegistrar(host.deps);
+
+    expect(() => {
+      startPasteIntercept({ ...host.deps, getNow: () => 0, registrar });
+      startPasteIntercept({ ...host.deps, getNow: () => 0, registrar });
+      startPasteIntercept({ ...host.deps, getNow: () => 0, registrar });
+    }).not.toThrow();
+
+    expect(host.counts().registerCalls).toBe(1);
+  });
+
+  it('without the shared registrar a second session still throws (the shipped bug)', () => {
+    // Pins WHY the registrar exists. This is exactly what startSession used to do
+    // per session, and what the extension host did in response.
+    const host = makeHostDeps();
+    startPasteIntercept({ ...host.deps, getNow: () => 0 });
+    expect(() => startPasteIntercept({ ...host.deps, getNow: () => 0 })).toThrow(/already exists/);
+  });
+
+  it('notifies every subscribed session but pastes exactly once', async () => {
+    const host = makeHostDeps();
+    const registrar = createPasteInterceptRegistrar(host.deps);
+    const a = startPasteIntercept({ ...host.deps, getNow: () => 100, registrar });
+    const b = startPasteIntercept({ ...host.deps, getNow: () => 100, registrar });
+
+    await host.trigger();
+
+    expect(a.consumeIfPasteExpected(100)).toBe(true);
+    expect(b.consumeIfPasteExpected(100)).toBe(true);
+    // One keystroke must produce one paste, not one per open assignment.
+    expect(host.executed).toEqual(['editor.action.clipboardPasteAction']);
+  });
+
+  it('only the session owning the active editor counts the paste', async () => {
+    const host = makeHostDeps();
+    const registrar = createPasteInterceptRegistrar(host.deps);
+    const mine = startPasteIntercept({
+      ...host.deps,
+      getNow: () => 100,
+      registrar,
+      isForThisSession: () => true,
+    });
+    const theirs = startPasteIntercept({
+      ...host.deps,
+      getNow: () => 100,
+      registrar,
+      isForThisSession: () => false,
+    });
+
+    await host.trigger();
+
+    expect(mine.interceptCount).toBe(1);
+    // Counting it here too would inflate the other assignment's intercept count
+    // and make the reconciler raise paste.anomaly against an innocent student.
+    expect(theirs.interceptCount).toBe(0);
+    expect(theirs.consumeIfPasteExpected(100)).toBe(false);
+  });
+
+  it('releases the command only after the last session goes', () => {
+    const host = makeHostDeps();
+    const registrar = createPasteInterceptRegistrar(host.deps);
+    const a = startPasteIntercept({ ...host.deps, getNow: () => 0, registrar });
+    const b = startPasteIntercept({ ...host.deps, getNow: () => 0, registrar });
+
+    a.disposable.dispose();
+    expect(host.registered.has(PASTE_INTERCEPT_COMMAND_ID)).toBe(true);
+
+    b.disposable.dispose();
+    expect(host.registered.has(PASTE_INTERCEPT_COMMAND_ID)).toBe(false);
+    expect(host.counts().disposeCalls).toBe(1);
+
+    // And a later session can register again on the same registrar.
+    expect(() => startPasteIntercept({ ...host.deps, getNow: () => 0, registrar })).not.toThrow();
   });
 });

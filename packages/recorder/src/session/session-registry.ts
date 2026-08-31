@@ -46,7 +46,10 @@ import { ensureProvenanceGitAttributes } from '../io/git-attributes-writer.js';
 import { startHeartbeat } from '../events/heartbeat.js';
 import { startClockWatcher } from '../events/clock-watcher.js';
 import { startDocWiring } from '../wiring/doc-wiring.js';
-import { startPasteIntercept } from '../wiring/paste-command-intercept.js';
+import {
+  createPasteInterceptRegistrar,
+  startPasteIntercept,
+} from '../wiring/paste-command-intercept.js';
 import { startPasteReconciler } from '../events/paste-reconciler.js';
 import { startFsWatcher } from '../wiring/fs-watcher.js';
 import { ExplanationTagger } from '../events/explanation-tags.js';
@@ -224,6 +227,20 @@ export function defaultHeartbeatDeps(): HeartbeatVscodeDeps {
 // ---------------------------------------------------------------------------
 // startSession
 // ---------------------------------------------------------------------------
+
+/**
+ * The one host-wide owner of `provenance.internal.pasteIntercept`.
+ *
+ * Module scope because the VS Code command id is itself a host-wide resource:
+ * every session in this extension host shares this single registration and is
+ * fanned out to. It registers lazily on the first session and disposes itself
+ * once the last session's subscription goes, so a host with no sessions holds no
+ * command.
+ */
+const sharedPasteInterceptRegistrar = createPasteInterceptRegistrar({
+  registerCommand: (id, handler) => vscode.commands.registerCommand(id, handler),
+  executeCommand: (id, ...args) => vscode.commands.executeCommand(id, ...args),
+});
 
 /**
  * Start a single assignment-root session. The manifest has already been verified
@@ -771,10 +788,26 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   ownDisposables.push(clockWatcher);
 
   // Step 9: Start paste intercept command (PRD §4.3 signal 2).
+  //
+  // Subscribes to the ONE host-wide registration rather than registering the
+  // command itself. `provenance.internal.pasteIntercept` is a fixed keybinding
+  // target, so the per-session registration this used to do threw
+  // "command 'provenance.internal.pasteIntercept' already exists" out of the
+  // second session as soon as nested discovery started recording more than one
+  // assignment root — taking the rest of activation, including the seal
+  // command, down with it.
   const pasteIntercept = startPasteIntercept({
     registerCommand: (id, handler) => vscode.commands.registerCommand(id, handler),
     executeCommand: (id, ...args) => vscode.commands.executeCommand(id, ...args),
     getNow: () => clock.now(),
+    registrar: sharedPasteInterceptRegistrar,
+    // A paste lands in the active editor, and that editor belongs to exactly one
+    // assignment root. No active editor means nothing was pasted into, so no
+    // session claims it.
+    isForThisSession: () => {
+      const activePath = vscode.window.activeTextEditor?.document.uri.fsPath;
+      return activePath !== undefined && isOwnedByThisRoot(activePath);
+    },
   });
   ownDisposables.push(pasteIntercept.disposable);
 

@@ -305,6 +305,20 @@ const registry = new SessionRegistry();
 let statusBar: vscode.StatusBarItem | null = null;
 
 /**
+ * Why nothing is recording, when nothing is.
+ *
+ * The seal command is registered before discovery runs (see `activate`), so its
+ * handler can be invoked in a window where no session exists. This is what it
+ * explains to the student in that case — the same text the old inactive stub
+ * showed, now reachable without a second, competing registration of the same
+ * command id (`vscode.commands.registerCommand` throws on a duplicate id).
+ *
+ * Defaults to `no_manifest_file`: before discovery has finished, "we have not
+ * found an assignment here" is the honest answer.
+ */
+let inactiveReason: ActivationError = { kind: 'no_manifest_file' };
+
+/**
  * Render the enrollment state, and — at most twice in a student's life — say it
  * out loud. Silent entirely for a student whose only open roots belong to
  * courses that signed `policy.enrollment.required: false`.
@@ -366,7 +380,30 @@ async function reflectEnrollment(context: vscode.ExtensionContext): Promise<void
   }
 }
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+/**
+ * Seams `activate()` resolves through, so the real entry point is testable without
+ * the VS Code extension host. Production passes nothing and gets the real modules.
+ *
+ * This exists because `activate()` used to be untestable — the multi-session cases
+ * in `activation.integration.test.ts` hand-composed `discoverManifests` +
+ * `startSession` + `SessionRegistry` "the same way activate() composes them", and
+ * that replica did NOT reproduce the command-registration ordering. The ordering
+ * bug below (students seeing "command 'provenance.prepareSubmissionBundle' not
+ * found" while the status bar read "Provenance: recording") lived entirely in the
+ * gap between the replica and the real function.
+ */
+export type ActivateWiring = {
+  discoverManifests?: typeof discoverManifests;
+  startSession?: typeof startSession;
+};
+
+export async function activate(
+  context: vscode.ExtensionContext,
+  wiring: ActivateWiring = {},
+): Promise<void> {
+  const discover = wiring.discoverManifests ?? discoverManifests;
+  const start = wiring.startSession ?? startSession;
+
   // Registered FIRST, before the workspace guard and before any manifest is
   // discovered: a student must be able to import their identity secret on a new
   // machine, or paste an enrollment token, without a recording session already
@@ -399,8 +436,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const extensionDistPath = path.join(context.extensionPath, 'dist');
 
+  // Registered BEFORE any manifest is discovered and before any session starts.
+  //
+  // VS Code contributes the "Prepare Submission Bundle" palette entry statically,
+  // so the entry exists from install; only its HANDLER is ours to provide. This
+  // registration used to sit after the `await startSession(...)` loop below, which
+  // made the student's only way to submit hostage to every step that runs first:
+  // `startSession`'s first act is `mkdir(.provenance/)`, and any throw after that
+  // point (a OneDrive-synced folder rejecting the `.slog` file handle; one bad
+  // assignment folder among several discovered under an opened course directory)
+  // hit the outer catch, skipped registration entirely, and left the student with
+  // a status bar reading "Provenance: recording", a `.provenance/` on disk, and
+  // `command 'provenance.prepareSubmissionBundle' not found` — permanently, for
+  // the life of that window.
+  //
+  // Nothing here needs a session to exist: the handler resolves `registry` at
+  // INVOCATION time, and reports the inactive reason when the registry is empty.
+  // Registering it first makes the submit path structurally immune to every
+  // failure downstream of it.
+  registerSealCommand(context, extensionDistPath);
+
   try {
-    const { found, skipped } = await discoverManifests({
+    const { found, skipped } = await discover({
       workspaceFolders,
       findFiles: (include, exclude) =>
         Promise.resolve(vscode.workspace.findFiles(include, exclude)),
@@ -411,49 +468,79 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     if (found.length === 0) {
-      // No verified manifest anywhere — register the inactive stub once, using the
-      // first skip reason if any, else a synthetic no_manifest_file (mirrors the
-      // pre-nested-discovery single-root "nothing found" case).
-      const reason: ActivationError = skipped[0]?.error ?? { kind: 'no_manifest_file' };
-      registerInactiveStub(context.subscriptions, reason);
+      // No verified manifest anywhere. The seal command is already registered
+      // above; record WHY so its handler can explain itself rather than fail.
+      // Uses the first skip reason if any, else a synthetic no_manifest_file
+      // (mirrors the pre-nested-discovery single-root "nothing found" case).
+      inactiveReason = skipped[0]?.error ?? { kind: 'no_manifest_file' };
       return;
     }
 
-    if (found.length > 0) {
-      statusBar = createRecordingStatusBar(context.subscriptions);
-    }
-
+    // Per-root isolation. Nested discovery means one opened course folder can
+    // yield many assignment roots, and they are started sequentially — so an
+    // unhandled throw on root #2 used to abandon roots #3..n AND everything after
+    // the loop. A student who opens their whole course directory must not lose
+    // recording on every assignment because one folder is unwritable.
+    const failedRoots: string[] = [];
     for (const { root, manifest } of found) {
-      const session = await startSession({
-        assignmentRoot: root,
-        manifest,
-        extension,
-        vscodeVersion: vscode.version,
-        platform: `${process.platform}-${process.arch}`,
-        clock: new SystemClock(),
-        extensionDistPath,
-        secrets: context.secrets,
-        isOwnedByThisRoot: (fsPath: string) =>
-          resolveOwnerRoot(
-            fsPath,
-            found.map((f) => f.root),
-          ) === root,
-        // A repository root is an ANCESTOR of the assignment root it serves, so
-        // the containment predicate above can never match it — see
-        // isRepoOwnedByRoot and spec §3 S14(a).
-        isRepoOwnedByThisRoot: (repoRootFsPath: string) =>
-          isRepoOwnedByRoot(
-            repoRootFsPath,
-            root,
-            found.map((f) => f.root),
-          ),
-      });
-      context.subscriptions.push(...session.ownDisposables);
-      session.ownDisposables.length = 0;
-      registry.add(session);
+      try {
+        const session = await start({
+          assignmentRoot: root,
+          manifest,
+          extension,
+          vscodeVersion: vscode.version,
+          platform: `${process.platform}-${process.arch}`,
+          clock: new SystemClock(),
+          extensionDistPath,
+          secrets: context.secrets,
+          isOwnedByThisRoot: (fsPath: string) =>
+            resolveOwnerRoot(
+              fsPath,
+              found.map((f) => f.root),
+            ) === root,
+          // A repository root is an ANCESTOR of the assignment root it serves, so
+          // the containment predicate above can never match it — see
+          // isRepoOwnedByRoot and spec §3 S14(a).
+          isRepoOwnedByThisRoot: (repoRootFsPath: string) =>
+            isRepoOwnedByRoot(
+              repoRootFsPath,
+              root,
+              found.map((f) => f.root),
+            ),
+        });
+        context.subscriptions.push(...session.ownDisposables);
+        session.ownDisposables.length = 0;
+        registry.add(session);
+      } catch (e) {
+        failedRoots.push(root);
+        console.error(`[provenance] could not start recording for ${root}:`, e);
+      }
     }
 
-    registerSealCommand(context, extensionDistPath);
+    // Mounted only once at least one session is actually recording. Mounting it
+    // before the loop (as this used to) meant the status bar asserted
+    // "Provenance: recording" even when every session had failed to start —
+    // the single most misleading part of the failure students reported.
+    if (registry.all().length > 0) {
+      statusBar = createRecordingStatusBar(context.subscriptions);
+    } else {
+      inactiveReason = { kind: 'no_manifest_file' };
+    }
+
+    // A silent per-root failure is what let this ship. Say it out loud: the
+    // student is the only one who can move the folder off a syncing drive or
+    // tell staff, and they cannot do either if nothing tells them.
+    if (failedRoots.length > 0) {
+      void vscode.window.showWarningMessage(
+        `Provenance could not start recording for ${failedRoots.length} assignment folder(s): ` +
+          `${failedRoots.join(', ')}. ` +
+          (registry.all().length > 0
+            ? 'Recording continues for the others. '
+            : 'Nothing is being recorded. ') +
+          'If this folder is on OneDrive, iCloud, or Google Drive, move the course ' +
+          'folder to a local disk and reopen it. Otherwise contact course staff.',
+      );
+    }
 
     // After every session, never before: whether the student is enrolled is an
     // answer only `startSession` has.
@@ -491,24 +578,37 @@ async function rescan(
 
     for (const { root, manifest } of found) {
       if (registry.get(root) !== undefined) continue;
-      const session = await startSession({
-        assignmentRoot: root,
-        manifest,
-        extension,
-        vscodeVersion: vscode.version,
-        platform: `${process.platform}-${process.arch}`,
-        clock: new SystemClock(),
-        extensionDistPath,
-        secrets: context.secrets,
-        isOwnedByThisRoot: (fsPath: string) => resolveOwnerRoot(fsPath, allRoots) === root,
-        // See the activation call site: a repository root is an ancestor of the
-        // assignment root, which `resolveOwnerRoot` cannot express.
-        isRepoOwnedByThisRoot: (repoRootFsPath: string) =>
-          isRepoOwnedByRoot(repoRootFsPath, root, allRoots),
-      });
-      context.subscriptions.push(...session.ownDisposables);
-      session.ownDisposables.length = 0;
-      registry.add(session);
+      // Per-root isolation, for the same reason as the activation loop: a folder
+      // added to the workspace that cannot be recorded must not stop the folders
+      // added alongside it from being recorded.
+      try {
+        const session = await startSession({
+          assignmentRoot: root,
+          manifest,
+          extension,
+          vscodeVersion: vscode.version,
+          platform: `${process.platform}-${process.arch}`,
+          clock: new SystemClock(),
+          extensionDistPath,
+          secrets: context.secrets,
+          isOwnedByThisRoot: (fsPath: string) => resolveOwnerRoot(fsPath, allRoots) === root,
+          // See the activation call site: a repository root is an ancestor of the
+          // assignment root, which `resolveOwnerRoot` cannot express.
+          isRepoOwnedByThisRoot: (repoRootFsPath: string) =>
+            isRepoOwnedByRoot(repoRootFsPath, root, allRoots),
+        });
+        context.subscriptions.push(...session.ownDisposables);
+        session.ownDisposables.length = 0;
+        registry.add(session);
+      } catch (e) {
+        console.error(`[provenance] could not start recording for ${root}:`, e);
+      }
+    }
+
+    // A folder added after activation can be the first thing that records, in a
+    // window that mounted no status bar because nothing recorded at activation.
+    if (statusBar === null && registry.all().length > 0) {
+      statusBar = createRecordingStatusBar(context.subscriptions);
     }
 
     // A folder joining or leaving changes which sessions exist, and so can change
@@ -530,7 +630,11 @@ function registerSealCommand(context: vscode.ExtensionContext, extensionDistPath
     async () => {
       const sessions = registry.all();
       if (sessions.length === 0) {
-        void vscode.window.showWarningMessage('No session data to seal.');
+        // No session in this window. Registered before discovery, so this is
+        // also the path the old inactive stub served: explain WHY rather than
+        // emit a bare "No session data to seal.", which told a student whose
+        // folder simply was not an assignment nothing they could act on.
+        void vscode.window.showWarningMessage(fallbackActivationMessage(inactiveReason));
         return;
       }
 
