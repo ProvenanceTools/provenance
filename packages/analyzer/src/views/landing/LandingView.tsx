@@ -92,6 +92,16 @@ export function LandingView() {
         </section>
 
         <p className="mt-16 text-center text-sm text-gray-600">
+          Students:{' '}
+          <Link
+            to="/faq"
+            className="font-medium text-orange-700 underline underline-offset-2 hover:text-orange-800 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+          >
+            read the FAQ
+          </Link>
+          .
+        </p>
+        <p className="mt-3 text-center text-sm text-gray-600">
           Questions about Provenance?{' '}
           <a
             href={CONTACT_HREF}

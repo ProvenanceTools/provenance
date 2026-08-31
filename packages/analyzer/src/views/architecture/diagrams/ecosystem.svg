@@ -1,5 +1,5 @@
-<svg width="1935pt" height="904pt"
- viewBox="0.00 0.00 1935.00 904.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<svg width="1939pt" height="904pt"
+ viewBox="0.00 0.00 1939.00 904.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
 <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(21.6 882.6)">
 <title>ecosystem</title>
 <g id="clust1" class="cluster">
@@ -14,13 +14,13 @@
 </g>
 <g id="clust3" class="cluster">
 
-<path stroke-width="1.6" d="M312.42,-196C312.42,-196 1411.68,-196 1411.68,-196 1417.68,-196 1423.68,-202 1423.68,-208 1423.68,-208 1423.68,-531 1423.68,-531 1423.68,-537 1417.68,-543 1411.68,-543 1411.68,-543 312.42,-543 312.42,-543 306.42,-543 300.42,-537 300.42,-531 300.42,-531 300.42,-208 300.42,-208 300.42,-202 306.42,-196 312.42,-196" class="f-fmt s-fmt"/>
+<path stroke-width="1.6" d="M312.42,-196C312.42,-196 1418.43,-196 1418.43,-196 1424.43,-196 1430.43,-202 1430.43,-208 1430.43,-208 1430.43,-531 1430.43,-531 1430.43,-537 1424.43,-543 1418.43,-543 1418.43,-543 312.42,-543 312.42,-543 306.42,-543 300.42,-537 300.42,-531 300.42,-531 300.42,-208 300.42,-208 300.42,-202 306.42,-196 312.42,-196" class="f-fmt s-fmt"/>
 <text xml:space="preserve" text-anchor="middle" x="468.17" y="-529.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-fmt"> &#160;REPO 1 · provenance — the monorepo, npm workspace of six packages &#160;</text>
 </g>
 <g id="clust4" class="cluster">
 
-<path stroke-width="1.5" d="M1228.01,-698C1228.01,-698 1859.35,-698 1859.35,-698 1865.35,-698 1871.35,-704 1871.35,-710 1871.35,-710 1871.35,-841 1871.35,-841 1871.35,-847 1865.35,-853 1859.35,-853 1859.35,-853 1228.01,-853 1228.01,-853 1222.01,-853 1216.01,-847 1216.01,-841 1216.01,-841 1216.01,-710 1216.01,-710 1216.01,-704 1222.01,-698 1228.01,-698" class="f-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="1302.01" y="-839.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-tra"> &#160;REPO 4 · provgate — Python / uv &#160;</text>
+<path stroke-width="1.5" d="M1229.89,-698C1229.89,-698 1863.1,-698 1863.1,-698 1869.1,-698 1875.1,-704 1875.1,-710 1875.1,-710 1875.1,-841 1875.1,-841 1875.1,-847 1869.1,-853 1863.1,-853 1863.1,-853 1229.89,-853 1229.89,-853 1223.89,-853 1217.89,-847 1217.89,-841 1217.89,-841 1217.89,-710 1217.89,-710 1217.89,-704 1223.89,-698 1229.89,-698" class="f-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="1303.89" y="-839.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-tra"> &#160;REPO 4 · provgate — Python / uv &#160;</text>
 </g>
 
 <g id="node1" class="node">
@@ -45,38 +45,38 @@
 
 <g id="node13" class="node">
 <title>allow</title>
-<polygon stroke-width="1.3" points="1374.43,-283.11 1183.51,-283.11 1183.51,-240.9 1380.43,-240.9 1380.43,-277.11 1374.43,-283.11" class="f-fmt s-fmt"/>
-<polyline fill="none" stroke-width="1.3" points="1374.43,-283.11 1374.43,-277.11" class="s-fmt"/>
-<polyline fill="none" stroke-width="1.3" points="1380.43,-277.11 1374.43,-277.11" class="s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-268.07" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">known&#45;good&#45;extension&#45;hashes.json</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-258.32" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">refreshed by npm run update&#45;hashes after</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-248.57" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">every recorder release, in any language</text>
+<polygon stroke-width="1.3" points="1376.31,-283.11 1185.39,-283.11 1185.39,-240.9 1382.31,-240.9 1382.31,-277.11 1376.31,-283.11" class="f-fmt s-fmt"/>
+<polyline fill="none" stroke-width="1.3" points="1376.31,-283.11 1376.31,-277.11" class="s-fmt"/>
+<polyline fill="none" stroke-width="1.3" points="1382.31,-277.11 1376.31,-277.11" class="s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-268.07" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">known&#45;good&#45;extension&#45;hashes.json</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-258.32" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">refreshed by npm run update&#45;hashes after</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-248.57" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">every recorder release, in any language</text>
 </g>
 
 <g id="edge14" class="edge">
 
-<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M926.96,-155.84C949.36,-162.49 974.22,-172.19 994.26,-186 1016.1,-201.05 1008.99,-219.28 1032.26,-232 1075.46,-255.61 1129.08,-264.21 1175.47,-266.45" class="s-rec"/>
-<polygon stroke-width="1.15" points="1175.32,-268.55 1181.4,-266.7 1175.5,-264.35 1175.32,-268.55" class="a-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="1069.76" y="-258.37" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">adds its build hash</text>
+<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M926.96,-155.84C949.36,-162.49 974.22,-172.19 994.26,-186 1016.1,-201.05 1008.99,-219.29 1032.26,-232 1076.06,-255.92 1130.5,-264.49 1177.43,-266.64" class="s-rec"/>
+<polygon stroke-width="1.15" points="1177.08,-268.73 1183.15,-266.86 1177.24,-264.53 1177.08,-268.73" class="a-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="1069.76" y="-258.51" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">adds its build hash</text>
 </g>
 
 <g id="node18" class="node">
 <title>e2e</title>
-<polygon stroke-width="1.3" points="1412.68,-121.73 1145.26,-121.73 1145.26,-50.27 1418.68,-50.27 1418.68,-115.73 1412.68,-121.73" class="f-ana s-ana"/>
-<polyline fill="none" stroke-width="1.3" points="1412.68,-121.73 1412.68,-115.73" class="s-ana"/>
-<polyline fill="none" stroke-width="1.3" points="1418.68,-115.73 1412.68,-115.73" class="s-ana"/>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-106.7" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">AND each sibling repo runs its OWN end&#45;to&#45;end gate,</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-96.95" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">driving a bundle it really produced through the real</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-87.2" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">monorepo loadBundle + runValidation. The vectors prove the</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-77.45" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">PRIMITIVES agree; only this proves a whole archive is</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-67.7" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">acceptable. All three exist, and every one has caught a</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-57.95" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">defect its own repo&#39;s suite asserted was impossible.</text>
+<polygon stroke-width="1.3" points="1414.56,-121.73 1147.14,-121.73 1147.14,-50.27 1420.56,-50.27 1420.56,-115.73 1414.56,-121.73" class="f-ana s-ana"/>
+<polyline fill="none" stroke-width="1.3" points="1414.56,-121.73 1414.56,-115.73" class="s-ana"/>
+<polyline fill="none" stroke-width="1.3" points="1420.56,-115.73 1414.56,-115.73" class="s-ana"/>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-106.7" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">AND each sibling repo runs its OWN end&#45;to&#45;end gate,</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-96.95" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">driving a bundle it really produced through the real</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-87.2" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">monorepo loadBundle + runValidation. The vectors prove the</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-77.45" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">PRIMITIVES agree; only this proves a whole archive is</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-67.7" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">acceptable. All three exist, and every one has caught a</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-57.95" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">defect its own repo&#39;s suite asserted was impossible.</text>
 </g>
 
 <g id="edge23" class="edge">
 
-<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M926.97,-130.56C958.23,-124.36 997.2,-117.12 1032.26,-112 1066.25,-107.04 1102.99,-102.66 1137.53,-98.98" class="s-ana"/>
-<polygon stroke-width="1.15" points="1137.39,-101.11 1143.13,-98.39 1136.94,-96.93 1137.39,-101.11" class="a-ana s-ana"/>
+<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M926.96,-130.55C958.23,-124.34 997.2,-117.1 1032.26,-112 1066.81,-106.97 1104.18,-102.55 1139.24,-98.85" class="s-ana"/>
+<polygon stroke-width="1.15" points="1139.21,-100.96 1144.96,-98.25 1138.77,-96.79 1139.21,-100.96" class="a-ana s-ana"/>
 </g>
 
 <g id="node3" class="node">
@@ -116,15 +116,15 @@
 
 <g id="edge15" class="edge">
 
-<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M918.23,-59.94C943.34,-70.66 972.76,-86.28 994.26,-107 1019.19,-131.03 1005.75,-152.73 1032.26,-175 1072.9,-209.15 1127.8,-230.22 1175.68,-243.04" class="s-rec"/>
-<polygon stroke-width="1.15" points="1174.98,-245.03 1181.31,-244.52 1176.04,-240.97 1174.98,-245.03" class="a-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="1069.76" y="-220.17" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">adds its tree hash</text>
+<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M918.23,-59.94C943.34,-70.66 972.76,-86.28 994.26,-107 1019.19,-131.03 1005.73,-152.76 1032.26,-175 1073.38,-209.47 1128.98,-230.59 1177.36,-243.36" class="s-rec"/>
+<polygon stroke-width="1.15" points="1176.73,-245.37 1183.07,-244.83 1177.78,-241.3 1176.73,-245.37" class="a-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="1069.76" y="-220.34" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">adds its tree hash</text>
 </g>
 
 <g id="edge24" class="edge">
 
-<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M918.29,-45.81C966.94,-49.59 1042.17,-55.85 1107.26,-63 1117.11,-64.08 1127.28,-65.26 1137.51,-66.5" class="s-ana"/>
-<polygon stroke-width="1.15" points="1137.02,-68.55 1143.23,-67.2 1137.53,-64.39 1137.02,-68.55" class="a-ana s-ana"/>
+<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M918.29,-45.83C966.93,-49.63 1042.17,-55.89 1107.26,-63 1117.69,-64.14 1128.46,-65.38 1139.29,-66.68" class="s-ana"/>
+<polygon stroke-width="1.15" points="1138.86,-68.75 1145.07,-67.38 1139.37,-64.58 1138.86,-68.75" class="a-ana s-ana"/>
 </g>
 
 <g id="node6" class="node">
@@ -193,96 +193,96 @@
 
 <g id="edge16" class="edge">
 
-<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M920.16,-491.34C944.58,-485.77 972.83,-476.23 994.26,-460 1019.12,-441.17 1010.17,-423.02 1032.26,-401 1060.28,-373.06 1077.91,-379.55 1107.26,-353 1127.44,-334.75 1122.86,-320.45 1145.26,-305 1155.9,-297.66 1167.86,-291.52 1180.16,-286.4" class="s-rec"/>
-<polygon stroke-width="1.15" points="1180.6,-288.48 1185.4,-284.31 1179.05,-284.58 1180.6,-288.48" class="a-rec s-rec"/>
+<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M920.16,-491.34C944.58,-485.77 972.83,-476.23 994.26,-460 1019.12,-441.17 1010.17,-423.02 1032.26,-401 1060.28,-373.06 1077.91,-379.55 1107.26,-353 1127.44,-334.75 1122.83,-320.41 1145.26,-305 1155.96,-297.65 1167.98,-291.51 1180.34,-286.39" class="s-rec"/>
+<polygon stroke-width="1.15" points="1180.81,-288.46 1185.62,-284.3 1179.26,-284.56 1180.81,-288.46" class="a-rec s-rec"/>
 <text xml:space="preserve" text-anchor="middle" x="1069.76" y="-402.21" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">adds its VSIX hash</text>
 </g>
 
 <g id="node14" class="node">
 <title>tgates</title>
-<polygon stroke-width="1.3" points="1885.85,-588.11 1625.18,-588.11 1625.18,-515.89 1891.85,-515.89 1891.85,-582.11 1885.85,-588.11" class="f-rec s-rec"/>
-<polyline fill="none" stroke-width="1.3" points="1885.85,-588.11 1885.85,-582.11" class="s-rec"/>
-<polyline fill="none" stroke-width="1.3" points="1891.85,-582.11 1885.85,-582.11" class="s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="1758.52" y="-573.08" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">tools/ — COMPOSITION GATES</text>
-<text xml:space="preserve" text-anchor="middle" x="1758.52" y="-563.33" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">no package.json, so it is the ONE place allowed to span</text>
-<text xml:space="preserve" text-anchor="middle" x="1758.52" y="-553.58" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">both dependency graphs and drive a real producer through</text>
-<text xml:space="preserve" text-anchor="middle" x="1758.52" y="-543.83" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">a real consumer: recorder&#45;seal, enrollment&#45;paste, and the</text>
-<text xml:space="preserve" text-anchor="middle" x="1758.52" y="-534.08" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">browser&#45;composer ↔ sign&#45;manifest.ts byte&#45;identity gate.</text>
-<text xml:space="preserve" text-anchor="middle" x="1758.52" y="-523.58" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">Run by npm run test:tools, NOT by npm run test.</text>
+<polygon stroke-width="1.3" points="1889.6,-588.11 1628.93,-588.11 1628.93,-515.89 1895.6,-515.89 1895.6,-582.11 1889.6,-588.11" class="f-rec s-rec"/>
+<polyline fill="none" stroke-width="1.3" points="1889.6,-588.11 1889.6,-582.11" class="s-rec"/>
+<polyline fill="none" stroke-width="1.3" points="1895.6,-582.11 1889.6,-582.11" class="s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="1762.27" y="-573.08" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">tools/ — COMPOSITION GATES</text>
+<text xml:space="preserve" text-anchor="middle" x="1762.27" y="-563.33" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">no package.json, so it is the ONE place allowed to span</text>
+<text xml:space="preserve" text-anchor="middle" x="1762.27" y="-553.58" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">both dependency graphs and drive a real producer through</text>
+<text xml:space="preserve" text-anchor="middle" x="1762.27" y="-543.83" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">a real consumer: recorder&#45;seal, enrollment&#45;paste, and the</text>
+<text xml:space="preserve" text-anchor="middle" x="1762.27" y="-534.08" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">browser&#45;composer ↔ sign&#45;manifest.ts byte&#45;identity gate.</text>
+<text xml:space="preserve" text-anchor="middle" x="1762.27" y="-523.58" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">Run by npm run test:tools, NOT by npm run test.</text>
 </g>
 
 <g id="edge22" class="edge">
 
-<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M898.34,-517.61C948.39,-546.4 1050.66,-600.84 1145.26,-624 1336.19,-670.74 1396.39,-689.31 1587.18,-642 1626.43,-632.27 1666.6,-611.66 1698.06,-592.61" class="s-rec"/>
-<polygon stroke-width="1.15" points="1699.14,-594.41 1703.16,-589.48 1696.94,-590.83 1699.14,-594.41" class="a-rec s-rec"/>
+<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M898.34,-517.61C948.38,-546.42 1050.65,-600.87 1145.26,-624 1337.83,-671.07 1398.52,-689.71 1590.93,-642 1630.18,-632.27 1670.35,-611.66 1701.81,-592.61" class="s-rec"/>
+<polygon stroke-width="1.15" points="1702.89,-594.41 1706.91,-589.48 1700.69,-590.83 1702.89,-594.41" class="a-rec s-rec"/>
 </g>
 
 <g id="node10" class="node">
 <title>server</title>
-<path stroke-width="1.3" d="M1344.06,-482C1344.06,-482 1219.89,-482 1219.89,-482 1213.89,-482 1207.89,-476 1207.89,-470 1207.89,-470 1207.89,-458 1207.89,-458 1207.89,-452 1213.89,-446 1219.89,-446 1219.89,-446 1344.06,-446 1344.06,-446 1350.06,-446 1356.06,-452 1356.06,-458 1356.06,-458 1356.06,-470 1356.06,-470 1356.06,-476 1350.06,-482 1344.06,-482" class="f-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-464.73" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">server</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-454.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">Hono · Drizzle · pg&#45;boss · S3</text>
+<path stroke-width="1.3" d="M1345.93,-482C1345.93,-482 1221.76,-482 1221.76,-482 1215.76,-482 1209.76,-476 1209.76,-470 1209.76,-470 1209.76,-458 1209.76,-458 1209.76,-452 1215.76,-446 1221.76,-446 1221.76,-446 1345.93,-446 1345.93,-446 1351.93,-446 1357.93,-452 1357.93,-458 1357.93,-458 1357.93,-470 1357.93,-470 1357.93,-476 1351.93,-482 1345.93,-482" class="f-srv s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-464.73" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">server</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-454.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">Hono · Drizzle · pg&#45;boss · S3</text>
 </g>
 
 <g id="edge6" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M948.5,-359.66C964.24,-365.46 980.2,-372.52 994.26,-381 1014.19,-393.01 1011.55,-406.41 1032.26,-417 1084.18,-443.54 1149.09,-455.19 1199.58,-460.26" class="s-fmt"/>
-<polygon stroke-width="1.15" points="1199.33,-462.35 1205.51,-460.83 1199.73,-458.17 1199.33,-462.35" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="1069.76" y="-444.59" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">same schemas</text>
+<path fill="none" stroke-width="1.15" d="M948.5,-359.66C964.24,-365.46 980.2,-372.52 994.26,-381 1014.19,-393.01 1011.54,-406.42 1032.26,-417 1084.87,-443.85 1150.72,-455.48 1201.71,-460.46" class="s-fmt"/>
+<polygon stroke-width="1.15" points="1201.22,-462.52 1207.39,-460.99 1201.61,-458.34 1201.22,-462.52" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="1069.76" y="-444.72" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">same schemas</text>
 </g>
 
 <g id="node11" class="node">
 <title>analyzer</title>
-<path stroke-width="1.3" d="M1403.68,-387.86C1403.68,-387.86 1160.26,-387.86 1160.26,-387.86 1154.26,-387.86 1148.26,-381.86 1148.26,-375.86 1148.26,-375.86 1148.26,-338.14 1148.26,-338.14 1148.26,-332.14 1154.26,-326.14 1160.26,-326.14 1160.26,-326.14 1403.68,-326.14 1403.68,-326.14 1409.68,-326.14 1415.68,-332.14 1415.68,-338.14 1415.68,-338.14 1415.68,-375.86 1415.68,-375.86 1415.68,-381.86 1409.68,-387.86 1403.68,-387.86" class="f-uix s-uix"/>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-372.35" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">analyzer</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-362.6" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">React / Vite SPA — staff triage, plus two routes</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-352.85" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">that are not triage at all: /compose/manifest signs a</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-343.1" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">course manifest in the BROWSER, and /enroll is the one</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-333.35" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">route a STUDENT can reach</text>
+<path stroke-width="1.3" d="M1410.43,-387.86C1410.43,-387.86 1157.26,-387.86 1157.26,-387.86 1151.26,-387.86 1145.26,-381.86 1145.26,-375.86 1145.26,-375.86 1145.26,-338.14 1145.26,-338.14 1145.26,-332.14 1151.26,-326.14 1157.26,-326.14 1157.26,-326.14 1410.43,-326.14 1410.43,-326.14 1416.43,-326.14 1422.43,-332.14 1422.43,-338.14 1422.43,-338.14 1422.43,-375.86 1422.43,-375.86 1422.43,-381.86 1416.43,-387.86 1410.43,-387.86" class="f-uix s-uix"/>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-372.35" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">analyzer</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-362.6" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">React / Vite SPA — staff triage, plus three routes</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-352.85" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">that are not triage at all: /compose/manifest signs a</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-343.1" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">course manifest in the BROWSER, and /enroll and /faq are</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-333.35" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">the two routes a STUDENT can reach</text>
 </g>
 
 <g id="edge7" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M973.29,-339.52C1015.06,-340.41 1063.43,-341.81 1107.26,-344 1117.94,-344.53 1128.97,-345.17 1140.07,-345.86" class="s-fmt"/>
-<polygon stroke-width="1.15" points="1139.9,-347.96 1146.02,-346.24 1140.17,-343.76 1139.9,-347.96" class="a-fmt s-fmt"/>
+<path fill="none" stroke-width="1.15" d="M973.29,-339.54C1015.06,-340.43 1063.43,-341.83 1107.26,-344 1117.09,-344.49 1127.22,-345.06 1137.42,-345.68" class="s-fmt"/>
+<polygon stroke-width="1.15" points="1137.01,-347.76 1143.12,-346.04 1137.27,-343.57 1137.01,-347.76" class="a-fmt s-fmt"/>
 <text xml:space="preserve" text-anchor="middle" x="1069.76" y="-345.21" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">same schemas</text>
 </g>
 
 <g id="edge4" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M970.23,-274.85C979.07,-280.65 987.29,-287.33 994.26,-295 1030.45,-334.84 990.82,-375.65 1032.26,-410 1045.21,-420.73 1090.75,-416.82 1107.26,-420 1140.49,-426.4 1176.85,-435.31 1207.67,-443.43" class="s-ana"/>
-<polygon stroke-width="1.15" points="1206.95,-445.42 1213.29,-444.92 1208.03,-441.36 1206.95,-445.42" class="a-ana s-ana"/>
+<path fill="none" stroke-width="1.15" d="M970.23,-274.85C979.07,-280.65 987.29,-287.33 994.26,-295 1030.45,-334.84 990.82,-375.65 1032.26,-410 1045.21,-420.73 1090.75,-416.84 1107.26,-420 1140.84,-426.42 1177.58,-435.33 1208.74,-443.46" class="s-ana"/>
+<polygon stroke-width="1.15" points="1208.1,-445.46 1214.44,-444.95 1209.17,-441.4 1208.1,-445.46" class="a-ana s-ana"/>
 </g>
 
 <g id="edge5" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M984.3,-274.9C1000.39,-279.71 1016.72,-284.52 1032.26,-289 1072.45,-300.58 1116.43,-312.76 1156.09,-323.57" class="s-ana"/>
-<polygon stroke-width="1.15" points="1155.42,-325.56 1161.76,-325.11 1156.52,-321.51 1155.42,-325.56" class="a-ana s-ana"/>
+<path fill="none" stroke-width="1.15" d="M984.29,-274.93C1000.39,-279.73 1016.72,-284.54 1032.26,-289 1072.64,-300.59 1116.83,-312.76 1156.71,-323.54" class="s-ana"/>
+<polygon stroke-width="1.15" points="1156.08,-325.55 1162.42,-325.08 1157.18,-321.49 1156.08,-325.55" class="a-ana s-ana"/>
 </g>
 
 <g id="node16" class="node">
 <title>gapi</title>
-<path stroke-width="1.3" d="M1851.35,-742C1851.35,-742 1665.68,-742 1665.68,-742 1659.68,-742 1653.68,-736 1653.68,-730 1653.68,-730 1653.68,-718 1653.68,-718 1653.68,-712 1659.68,-706 1665.68,-706 1665.68,-706 1851.35,-706 1851.35,-706 1857.35,-706 1863.35,-712 1863.35,-718 1863.35,-718 1863.35,-730 1863.35,-730 1863.35,-736 1857.35,-742 1851.35,-742" class="f-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="1758.52" y="-724.73" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">provenance/</text>
-<text xml:space="preserve" text-anchor="middle" x="1758.52" y="-714.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">HTTP client — three public behaviours only</text>
+<path stroke-width="1.3" d="M1855.1,-742C1855.1,-742 1669.43,-742 1669.43,-742 1663.43,-742 1657.43,-736 1657.43,-730 1657.43,-730 1657.43,-718 1657.43,-718 1657.43,-712 1663.43,-706 1669.43,-706 1669.43,-706 1855.1,-706 1855.1,-706 1861.1,-706 1867.1,-712 1867.1,-718 1867.1,-718 1867.1,-730 1867.1,-730 1867.1,-736 1861.1,-742 1855.1,-742" class="f-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="1762.27" y="-724.73" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">provenance/</text>
+<text xml:space="preserve" text-anchor="middle" x="1762.27" y="-714.98" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">HTTP client — three public behaviours only</text>
 </g>
 
 <g id="edge17" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M1331.78,-485.62C1359.1,-498.03 1393.6,-514.25 1423.68,-530 1538.28,-590.03 1669.83,-669.81 1727.63,-705.44" class="s-tra"/>
-<polygon stroke-width="1.15" points="1332.92,-483.83 1326.58,-483.26 1331.18,-487.65 1332.92,-483.83" class="a-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="1521.93" y="-636.62" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">public HTTP API only —</text>
-<text xml:space="preserve" text-anchor="middle" x="1521.93" y="-627.62" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">provgate holds no Provenance code,</text>
-<text xml:space="preserve" text-anchor="middle" x="1521.93" y="-618.62" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">database or storage</text>
+<path fill="none" stroke-width="1.15" d="M1336.06,-485.65C1364.25,-497.96 1399.65,-514.05 1430.43,-530 1544.83,-589.27 1675.3,-669.78 1732.19,-705.55" class="s-tra"/>
+<polygon stroke-width="1.15" points="1336.99,-483.77 1330.65,-483.3 1335.32,-487.62 1336.99,-483.77" class="a-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="1525.68" y="-636.08" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">public HTTP API only —</text>
+<text xml:space="preserve" text-anchor="middle" x="1525.68" y="-627.08" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">provgate holds no Provenance code,</text>
+<text xml:space="preserve" text-anchor="middle" x="1525.68" y="-618.08" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">database or storage</text>
 </g>
 
 <g id="edge21" class="edge">
 
-<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M1401.78,-388.48C1458.9,-405.22 1527.71,-427.77 1587.18,-454 1623.9,-470.2 1662.84,-492.2 1694.21,-511.25" class="s-rec"/>
-<polygon stroke-width="1.15" points="1693.08,-513.03 1699.29,-514.36 1695.27,-509.44 1693.08,-513.03" class="a-rec s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="1521.93" y="-473.21" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the composer is signed&#45;format code</text>
-<text xml:space="preserve" text-anchor="middle" x="1521.93" y="-464.21" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">in a UI package — a unit test cannot</text>
-<text xml:space="preserve" text-anchor="middle" x="1521.93" y="-455.21" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">catch it drifting from the CLI</text>
+<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M1404.4,-388.4C1461.87,-405.12 1531.1,-427.68 1590.93,-454 1627.81,-470.23 1666.91,-492.34 1698.34,-511.45" class="s-rec"/>
+<polygon stroke-width="1.15" points="1697.23,-513.23 1703.44,-514.57 1699.42,-509.65 1697.23,-513.23" class="a-rec s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="1525.68" y="-473.21" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the composer is signed&#45;format code</text>
+<text xml:space="preserve" text-anchor="middle" x="1525.68" y="-464.21" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">in a UI package — a unit test cannot</text>
+<text xml:space="preserve" text-anchor="middle" x="1525.68" y="-455.21" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">catch it drifting from the CLI</text>
 </g>
 
 <g id="edge9" class="edge">
@@ -303,50 +303,50 @@
 
 <g id="node19" class="node">
 <title>rule</title>
-<polygon stroke-width="1.3" points="1395.81,-602.98 1162.14,-602.98 1162.14,-551.02 1401.81,-551.02 1401.81,-596.98 1395.81,-602.98" class="f-rec s-rec"/>
-<polyline fill="none" stroke-width="1.3" points="1395.81,-602.98 1395.81,-596.98" class="s-rec"/>
-<polyline fill="none" stroke-width="1.3" points="1401.81,-596.98 1395.81,-596.98" class="s-rec"/>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-587.95" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">A format change is a cross&#45;repo, signature&#45;affecting,</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-578.2" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">test&#45;vector&#45;pinned decision owned by the monorepo.</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-568.45" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">It is never made unilaterally in a sibling repo to make</text>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-558.7" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">an implementation easier.</text>
+<polygon stroke-width="1.3" points="1397.68,-602.98 1164.01,-602.98 1164.01,-551.02 1403.68,-551.02 1403.68,-596.98 1397.68,-602.98" class="f-rec s-rec"/>
+<polyline fill="none" stroke-width="1.3" points="1397.68,-602.98 1397.68,-596.98" class="s-rec"/>
+<polyline fill="none" stroke-width="1.3" points="1403.68,-596.98 1397.68,-596.98" class="s-rec"/>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-587.95" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">A format change is a cross&#45;repo, signature&#45;affecting,</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-578.2" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">test&#45;vector&#45;pinned decision owned by the monorepo.</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-568.45" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">It is never made unilaterally in a sibling repo to make</text>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-558.7" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">an implementation easier.</text>
 </g>
 
 <g id="edge20" class="edge">
 
-<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M935.78,-438.6C955.02,-444.61 975.73,-451.86 994.26,-460 1065.18,-491.14 1073.05,-518.98 1145.26,-547 1148.23,-548.15 1151.26,-549.27 1154.33,-550.34" class="s-rec"/>
-<polygon stroke-width="1.15" points="1153.56,-552.3 1159.91,-552.23 1154.9,-548.32 1153.56,-552.3" class="a-rec s-rec"/>
+<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M935.78,-438.6C955.02,-444.61 975.73,-451.86 994.26,-460 1065.18,-491.14 1073.01,-519.09 1145.26,-547 1148.87,-548.4 1152.57,-549.73 1156.31,-551.02" class="s-rec"/>
+<polygon stroke-width="1.15" points="1155.58,-552.98 1161.93,-552.87 1156.89,-549 1155.58,-552.98" class="a-rec s-rec"/>
 </g>
 
 <g id="node15" class="node">
 <title>gsync</title>
-<path stroke-width="1.3" d="M1327.93,-796C1327.93,-796 1236.01,-796 1236.01,-796 1230.01,-796 1224.01,-790 1224.01,-784 1224.01,-784 1224.01,-772 1224.01,-772 1224.01,-766 1230.01,-760 1236.01,-760 1236.01,-760 1327.93,-760 1327.93,-760 1333.93,-760 1339.93,-766 1339.93,-772 1339.93,-772 1339.93,-784 1339.93,-784 1339.93,-790 1333.93,-796 1327.93,-796" class="f-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="1281.97" y="-773.85" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">sync/ · store/ · notify/</text>
+<path stroke-width="1.3" d="M1329.81,-796C1329.81,-796 1237.89,-796 1237.89,-796 1231.89,-796 1225.89,-790 1225.89,-784 1225.89,-784 1225.89,-772 1225.89,-772 1225.89,-766 1231.89,-760 1237.89,-760 1237.89,-760 1329.81,-760 1329.81,-760 1335.81,-760 1341.81,-766 1341.81,-772 1341.81,-772 1341.81,-784 1341.81,-784 1341.81,-790 1335.81,-796 1329.81,-796" class="f-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="1283.85" y="-773.85" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">sync/ · store/ · notify/</text>
 </g>
 
 <g id="edge18" class="edge">
 
-<path fill="none" stroke-width="1.15" d="M1340.21,-771.49C1415.65,-762.9 1549.99,-747.61 1645.87,-736.7" class="s-edge"/>
-<polygon stroke-width="1.15" points="1645.83,-738.82 1651.56,-736.06 1645.36,-734.65 1645.83,-738.82" class="a-edge s-edge"/>
+<path fill="none" stroke-width="1.15" d="M1342.31,-771.49C1418.17,-762.89 1553.35,-747.57 1649.64,-736.65" class="s-edge"/>
+<polygon stroke-width="1.15" points="1649.63,-738.77 1655.36,-736 1649.16,-734.59 1649.63,-738.77" class="a-edge s-edge"/>
 </g>
 
 <g id="node17" class="node">
 <title>gweb</title>
-<path stroke-width="1.3" stroke-dasharray="5,2" d="M1832.98,-827.11C1832.98,-827.11 1684.06,-827.11 1684.06,-827.11 1678.06,-827.11 1672.06,-821.11 1672.06,-815.11 1672.06,-815.11 1672.06,-796.89 1672.06,-796.89 1672.06,-790.89 1678.06,-784.89 1684.06,-784.89 1684.06,-784.89 1832.98,-784.89 1832.98,-784.89 1838.98,-784.89 1844.98,-790.89 1844.98,-796.89 1844.98,-796.89 1844.98,-815.11 1844.98,-815.11 1844.98,-821.11 1838.98,-827.11 1832.98,-827.11" class="f-road s-road"/>
-<text xml:space="preserve" text-anchor="middle" x="1758.52" y="-812.08" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">web/</text>
-<text xml:space="preserve" text-anchor="middle" x="1758.52" y="-802.33" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">reserved: a second frontend reusing</text>
-<text xml:space="preserve" text-anchor="middle" x="1758.52" y="-792.58" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">store and sync unchanged</text>
+<path stroke-width="1.3" stroke-dasharray="5,2" d="M1836.73,-827.11C1836.73,-827.11 1687.81,-827.11 1687.81,-827.11 1681.81,-827.11 1675.81,-821.11 1675.81,-815.11 1675.81,-815.11 1675.81,-796.89 1675.81,-796.89 1675.81,-790.89 1681.81,-784.89 1687.81,-784.89 1687.81,-784.89 1836.73,-784.89 1836.73,-784.89 1842.73,-784.89 1848.73,-790.89 1848.73,-796.89 1848.73,-796.89 1848.73,-815.11 1848.73,-815.11 1848.73,-821.11 1842.73,-827.11 1836.73,-827.11" class="f-road s-road"/>
+<text xml:space="preserve" text-anchor="middle" x="1762.27" y="-812.08" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">web/</text>
+<text xml:space="preserve" text-anchor="middle" x="1762.27" y="-802.33" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">reserved: a second frontend reusing</text>
+<text xml:space="preserve" text-anchor="middle" x="1762.27" y="-792.58" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">store and sync unchanged</text>
 </g>
 
 <g id="edge19" class="edge">
 
-<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M1340.21,-781.38C1420.5,-786.11 1567.49,-794.79 1663.84,-800.47" class="s-road"/>
-<polygon stroke-width="1.15" points="1663.71,-802.57 1669.82,-800.83 1663.95,-798.38 1663.71,-802.57" class="a-road s-road"/>
+<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M1342.31,-781.38C1423.12,-786.13 1571.23,-794.83 1667.95,-800.52" class="s-road"/>
+<polygon stroke-width="1.15" points="1667.55,-802.6 1673.66,-800.85 1667.8,-798.4 1667.55,-802.6" class="a-road s-road"/>
 </g>
 
 <g id="edge25" class="edge">
 
-<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M1144.93,-105.45C1106.46,-115.11 1065.93,-129.51 1032.26,-151 1009.91,-165.27 1016.15,-182.03 994.26,-197 993.17,-197.74 992.07,-198.48 990.95,-199.19" class="s-ana"/>
+<path fill="none" stroke-width="1.15" stroke-dasharray="5,2" d="M1146.76,-105.06C1107.71,-114.71 1066.47,-129.21 1032.26,-151 1009.89,-165.24 1016.15,-182.03 994.26,-197 993.17,-197.74 992.07,-198.48 990.95,-199.19" class="s-ana"/>
 <polygon stroke-width="1.15" points="989.94,-197.35 985.92,-202.28 992.13,-200.94 989.94,-197.35" class="a-ana s-ana"/>
 <text xml:space="preserve" text-anchor="middle" x="1069.76" y="-161.21" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the REAL loader and</text>
 <text xml:space="preserve" text-anchor="middle" x="1069.76" y="-152.21" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the REAL 8 checks</text>

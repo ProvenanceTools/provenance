@@ -44,7 +44,7 @@ digraph ecosystem {
     server [label="server\nHono · Drizzle · pg-boss · S3"
             fillcolor="#0d1c33" color="#4b90f7" fontsize=9.5]
 
-    analyzer[label="analyzer\nReact / Vite SPA — staff triage, plus two routes\nthat are not triage at all: /compose/manifest signs a\ncourse manifest in the BROWSER, and /enroll is the one\nroute a STUDENT can reach"
+    analyzer[label="analyzer\nReact / Vite SPA — staff triage, plus three routes\nthat are not triage at all: /compose/manifest signs a\ncourse manifest in the BROWSER, and /enroll and /faq are\nthe two routes a STUDENT can reach"
             fillcolor="#2a0f1e" color="#e8559c" fontsize=9.5]
 
     vectors[label="conformance vectors\nexported from log-core's test vectors"

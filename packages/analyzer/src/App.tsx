@@ -4,6 +4,7 @@
  * Route structure (v3 + /local standalone v2 routes):
  *
  *   /                  → public LandingView (no auth)
+ *   /faq               → public FaqView (no auth, STUDENT-facing)
  *   /login             → LoginView (no auth required)
  *   /enroll            → RequireAuth + EnrollView (STUDENT-facing, no AppShell)
  *   /home              → RequireAuth + AppShell + HomeView
@@ -123,6 +124,7 @@ const ManifestComposerView = lazy(() =>
   })),
 );
 const ArchitectureView = lazy(() => import('./views/architecture/ArchitectureView.js'));
+const FaqView = lazy(() => import('./views/faq/FaqView.js').then((m) => ({ default: m.FaqView })));
 const EnrollView = lazy(() =>
   import('./views/enroll/EnrollView.js').then((m) => ({ default: m.EnrollView })),
 );
@@ -494,6 +496,10 @@ export function App() {
 
         {/* ── public architecture documentation ──────────────────────────── */}
         <Route path="/architecture" element={<ArchitectureView />} />
+
+        {/* Public student FAQ. Unauthenticated by design: students have no
+            analyzer account, so RequireAuth would lock out the whole audience. */}
+        <Route path="/faq" element={<FaqView />} />
 
         {/* ── public landing page ──────────────────────────────────────────── */}
         <Route path="/" element={<LandingView />} />

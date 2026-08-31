@@ -164,12 +164,18 @@ digraph master {
 
   /* The one time a STUDENT's browser talks to the server. The RECORDER still
      never does — /enroll is a page, not a recorder code path. */
-  enroll [label="/enroll — the ONLY student-reachable route\ninstitution-scoped: no course, no semester in the path.\nThe student PASTES a public key; no private material is\ngenerated, received or transmitted here."
+  enroll [label="/enroll — the only student route that WRITES\ninstitution-scoped: no course, no semester in the path.\nThe student PASTES a public key; no private material is\ngenerated, received or transmitted here."
           fillcolor="#2a0f1e" color="#e8559c" fontsize=9]
+
+  /* The second student-reachable route. Read-only and auth-free: the audience
+     has no analyzer account, so RequireAuth would lock out everyone it is for. */
+  faq [label="/faq — student FAQ, PUBLIC and read-only\nno auth, no server call, no account. Copy lives in\nfaq-content.ts; per-question anchors are published URLs\nstaff paste into course announcements."
+       fillcolor="#2a0f1e" color="#e8559c" fontsize=9]
 
   /* ─────────── EDGES ─────────── */
   stu   -> edt    [label="types"]
   stu   -> enroll [label="ONCE, in a browser —\nthe student's only server contact" color="#e8559c" style=dashed]
+  stu   -> faq    [label="any time — no sign-in,\nno server contact at all" color="#e8559c" style=dotted]
   enroll -> api   [label="POST /identity/credential\nno semester in the path" color="#e8559c" style=dashed]
   enroll -> sstart [label="credential imported into the recorder;\nevery session after this is offline"
                     color="#F97316" style=dashed constraint=false]

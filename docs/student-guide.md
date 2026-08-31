@@ -4,6 +4,8 @@ For some assignments this term you'll record your work with the **Provenance Rec
 
 The recorder only runs inside assignment folders your course has authorized. In every other folder it does nothing — no recording, no network requests, and no change to how your editor behaves. Setup takes a few minutes, and you only do it once per computer.
 
+Common questions — what it can and can't see, whether your normal workflow is a problem, what happens if something looks odd — are answered in the [student FAQ](student-faq.md).
+
 > **What gets recorded?** Inside the assignment folder only: your edits, pastes, saves, terminal commands, and editor focus. Everything stays on your computer until you hand it in. The complete, itemized list is on the [extension's Marketplace page](https://marketplace.visualstudio.com/items?itemName=itsgeagle.provenance-recorder#what-it-records).
 
 ### Pick your editor
