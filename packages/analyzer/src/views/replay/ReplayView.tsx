@@ -67,6 +67,8 @@ import { TransportBar } from './TransportBar.js';
 import { SpeedControl } from './SpeedControl.js';
 import { SkipIdleToggle } from './SkipIdleToggle.js';
 import { JumpControls } from './JumpControls.js';
+import { GoToTime } from './GoToTime.js';
+import { DownloadSnapshot } from './DownloadSnapshot.js';
 import { GutterDecorations } from './GutterDecorations.js';
 import { LineHoverProvider } from './LineHoverProvider.js';
 import { EventSidebar } from './EventSidebar.js';
@@ -429,6 +431,11 @@ export function ReplayInner({
 
   // Total event count for the bundle (passed to TransportBar).
   const eventCount = index?.ordered.length ?? 0;
+
+  // Wall of the event the playhead sits on, for the snapshot filename. Indexing
+  // `ordered` directly is safe by build-index's invariant `ordered[i].globalIdx
+  // === i`; undefined before the first event or past the end.
+  const currentWall = index?.ordered[state.currentGlobalIdx]?.wall;
 
   // The whole bundle's events, across every session. Replay is not scoped to a
   // session: the sidebar, jump targets, focus-away spans, and edited-file
@@ -1048,6 +1055,28 @@ export function ReplayInner({
         contributors recording concurrently — describe the submission, not the
         replay.
       */}
+
+      {/* Point-in-time strip: seek to a wall-clock instant, and save the file as
+          it stood there.
+
+          DownloadSnapshot is hidden in lane mode for the same reason FileTabs is
+          (design §7): with a pane per contributor there is no single "the file"
+          on screen, so a button offering to save "the" one would have to pick a
+          lane silently. */}
+      <div
+        className="shrink-0 flex flex-wrap items-start justify-between gap-4 border-t bg-background px-4 py-2"
+        data-testid="point-in-time-strip"
+      >
+        <GoToTime events={bundleEvents} onSeek={handleJumpSeek} />
+        {!laneMode && (
+          <DownloadSnapshot
+            filePath={resolvedFile}
+            content={content}
+            wall={currentWall}
+            ambiguity={ambiguity?.kind}
+          />
+        )}
+      </div>
 
       {/* Jump controls strip */}
       <div className="shrink-0">
