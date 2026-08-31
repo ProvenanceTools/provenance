@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatDuration, formatWall, summarizeTerminalCommand } from './format.js';
+import { formatDuration, formatWall, formatWallTitle, summarizeTerminalCommand } from './format.js';
 
 describe('formatDuration', () => {
   it('returns 0s for zero', () => {
@@ -30,13 +30,39 @@ describe('formatDuration', () => {
 });
 
 describe('formatWall', () => {
-  it('renders HH:MM:SS.mmm for a valid ISO wall', () => {
-    expect(formatWall('2026-01-01T12:34:56.789Z')).toMatch(/^\d{2}:\d{2}:\d{2}\.\d{3}$/);
+  it('renders MM-DD HH:MM:SS.mmm for a valid ISO wall', () => {
+    expect(formatWall('2026-01-01T12:34:56.789Z')).toMatch(
+      /^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/,
+    );
+  });
+
+  it('renders the local calendar date, not the UTC one', () => {
+    // Asserted against the same Date the formatter sees, so this holds in any
+    // TZ the suite runs in — a fixed expected string would only pass in one.
+    const d = new Date('2026-01-01T12:34:56.789Z');
+    const expected =
+      String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    expect(formatWall('2026-01-01T12:34:56.789Z').slice(0, 5)).toBe(expected);
+  });
+
+  it('distinguishes two events at the same clock time on different days', () => {
+    expect(formatWall('2026-01-01T12:34:56.789Z')).not.toBe(formatWall('2026-01-02T12:34:56.789Z'));
   });
 
   it('returns an em dash for unparseable wall', () => {
     expect(formatWall('not-a-date')).toBe('—');
     expect(formatWall('')).toBe('—');
+  });
+});
+
+describe('formatWallTitle', () => {
+  it('renders the full local date-time for a valid ISO wall', () => {
+    const wall = '2026-01-01T12:34:56.789Z';
+    expect(formatWallTitle(wall)).toBe(new Date(wall).toLocaleString());
+  });
+
+  it('passes unparseable input through rather than hiding it', () => {
+    expect(formatWallTitle('not-a-date')).toBe('not-a-date');
   });
 });
 

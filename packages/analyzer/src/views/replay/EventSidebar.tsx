@@ -36,7 +36,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { cn } from '@/lib/utils';
 import type { IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import type { EventKind } from '@provenance/log-core';
-import { formatWall, summarizeTerminalCommand } from '@/lib/format.js';
+import { formatWall, formatWallTitle, summarizeTerminalCommand } from '@/lib/format.js';
 import { formatGap, type Seam } from './bundle-clock.js';
 
 // ---------------------------------------------------------------------------
@@ -175,8 +175,11 @@ function SidebarRow({ event, isCurrent, onSeek, style, contributorHue }: Sidebar
       {/* seq */}
       <span className="w-10 shrink-0 font-mono text-muted-foreground">#{event.seq}</span>
 
-      {/* wall time */}
-      <span className="w-[72px] shrink-0 font-mono text-[10px] text-muted-foreground">
+      {/* wall time — date included; see formatWall */}
+      <span
+        className="w-[112px] shrink-0 font-mono text-[10px] text-muted-foreground"
+        title={formatWallTitle(event.wall)}
+      >
         {formatWall(event.wall)}
       </span>
 

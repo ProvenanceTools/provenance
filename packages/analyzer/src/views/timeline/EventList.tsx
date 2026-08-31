@@ -13,7 +13,7 @@
 import { useRef, useEffect, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { cn } from '@/lib/utils';
-import { formatWall, summarizeTerminalCommand } from '@/lib/format.js';
+import { formatWall, formatWallTitle, summarizeTerminalCommand } from '@/lib/format.js';
 import type { IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import type { EventKind } from '@provenance/log-core';
 import type { OrderBreak } from './presentation-order.js';
@@ -314,8 +314,11 @@ function EventRowBody({
       {/* seq */}
       <span className="w-12 shrink-0 font-mono text-muted-foreground">#{event.seq}</span>
 
-      {/* wall time */}
-      <span className="w-28 shrink-0 font-mono text-muted-foreground">
+      {/* wall time — date included; see formatWall */}
+      <span
+        className="w-36 shrink-0 font-mono text-muted-foreground"
+        title={formatWallTitle(event.wall)}
+      >
         {formatWall(event.wall)}
       </span>
 
