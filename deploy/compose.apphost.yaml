@@ -20,7 +20,7 @@
 # burst (bursty, near-idle otherwise). See docs/admin-guide.md.
 #
 # Memory: mem_limit caps each container to a fair share of the shared apphost
-# box (~21 GB total for Provenance here: 8 workers x 2 GB + Postgres + api).
+# box (~25 GB total for Provenance here: 8 workers x 2.5 GB + Postgres + api).
 # The cap is set by the staging replica's peak (main thread + INGEST_STAGE_
 # CONCURRENCY worker threads each holding one bundle). NODE_OPTIONS bounds V8's heap so a
 # process can't size itself against the box's full physical RAM. mem_limit
@@ -76,10 +76,16 @@ services:
     env_file: .env
     environment:
       BLOB_STORAGE_FS_ROOT: /data
-      # Bounds V8 heap under the 2 GB mem_limit, leaving ~500 MB for buffers and
-      # the staging pool's worker-thread heaps. Raise this (and mem_limit below)
-      # if you routinely ingest very large bundles.
-      NODE_OPTIONS: '--max-old-space-size=1536'
+      # Bounds V8 heap under the 2.5 GB mem_limit, leaving ~500 MB for buffers
+      # and the staging pool's worker-thread heaps. Raise this (and mem_limit
+      # below) if you routinely ingest very large bundles.
+      #
+      # 1536 was not enough for the cross-flag sweep at 4740 submissions (Fall
+      # 2026): the process aborted mid-sweep and pg-boss re-dispatched the job to
+      # the next worker on lease expiry, so one job restarted the fleet. The sweep
+      # now streams features per assignment group, which cut peak to the largest
+      # single assignment; this is headroom on top of that, not the fix.
+      NODE_OPTIONS: '--max-old-space-size=2048'
       # fs/NFS blob syscalls per ingest job (2 reads + 1 write + 1 delete,
       # full-bundle buffered) go through libuv's threadpool; lift it off 4.
       UV_THREADPOOL_SIZE: '16'
@@ -109,10 +115,11 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-    # 8 replicas x 2g = 16 GB workers; sized for the staging replica's peak (main
-    # thread + INGEST_STAGE_CONCURRENCY worker threads, each holding one bundle).
-    mem_limit: 2g
-    memswap_limit: 2g
+    # 8 replicas x 2560m = 20 GB workers; sized for the staging replica's peak
+    # (main thread + INGEST_STAGE_CONCURRENCY worker threads, each holding one
+    # bundle) and for the cross-flag sweep's 2048 MB heap plus buffers.
+    mem_limit: 2560m
+    memswap_limit: 2560m
     restart: unless-stopped
   postgres:
     image: postgres:16
