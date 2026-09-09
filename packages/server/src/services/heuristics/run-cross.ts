@@ -319,21 +319,37 @@ export async function runAndStoreCrossHeuristics(
   }
 
   // -------------------------------------------------------------------------
-  // Step 3: Extract compact cross-features from DB for each submission.
+  // Steps 3 + 4: per assignment group, extract compact cross-features, run the
+  // heuristics on that group, then release the features before the next group.
   //
-  // We stream each submission's events and reduce them to CrossSubmissionFeatures
-  // (paste records + a bounded kind-stream fingerprint) rather than holding full
-  // Bundles + EventIndices for the whole semester in memory at once — the latter
-  // OOM'd the worker on large cohorts (see extract-cross-features-from-db.ts).
+  // We reduce each submission to CrossSubmissionFeatures (paste records + a
+  // bounded kind-stream fingerprint) rather than holding full Bundles +
+  // EventIndices for the whole semester at once (see extract-cross-features.ts).
+  //
+  // The extract and analyse halves are FUSED deliberately. Extracting every group
+  // up front and analysing afterwards kept one CrossSubmissionFeatures per
+  // submission in the SEMESTER live at once, while `runCrossAnalysis` only ever
+  // reads one group — so peak memory scaled with the whole cohort and grew with
+  // every assignment ingested. At 4740 submissions that exceeded the worker's
+  // 1536 MB heap and aborted the process mid-sweep, which pg-boss reclaimed on
+  // expiry and re-dispatched, turning one poison job into a worker restart loop.
+  // Fused, the live feature set is the largest SINGLE assignment.
+  //
+  // Each group is independent: a bundle in assignment A is never in the same
+  // `features` array as one in assignment B, so no heuristic can pair them and
+  // no repository-lineage partition spans the two.
   //
   // Maintain a Map<bundleId, submissionId> so we can translate CrossFlag.bundleIds
   // (which use the synthetic bundleId) back to submission UUIDs, and a
   // Map<bundleId, Map<seqKey, globalIdx>> for the supporting-seq translation that
-  // formerly used each bundle's EventIndex.bySeq.
+  // formerly used each bundle's EventIndex.bySeq. Both are bounded per submission
+  // (pastes + the leading representatives) and are read after the loop, so they
+  // stay semester-wide.
   // -------------------------------------------------------------------------
   const bundleIdToSubmissionId = new Map<string, string>();
   const globalIdxBySeqKeyByBundle = new Map<string, Map<string, number>>();
-  const featuresByGroup: CrossSubmissionFeatures[][] = [];
+  const crossFlags: CrossFlag[] = [];
+  const crossExclusions: SameScopeExclusion[] = [];
 
   for (const submissionIds of comparableGroups) {
     const features: CrossSubmissionFeatures[] = [];
@@ -350,19 +366,7 @@ export async function runAndStoreCrossHeuristics(
       bundleIdToSubmissionId.set(bundleId, submissionId);
       globalIdxBySeqKeyByBundle.set(bundleId, globalIdxBySeqKey);
     }
-    featuresByGroup.push(features);
-  }
 
-  // -------------------------------------------------------------------------
-  // Step 4: Run cross-heuristics, once per assignment.
-  //
-  // Each call is independent: a bundle in assignment A is never in the same
-  // `features` array as one in assignment B, so no heuristic can pair them and
-  // no repository-lineage partition spans the two.
-  // -------------------------------------------------------------------------
-  const crossFlags: CrossFlag[] = [];
-  const crossExclusions: SameScopeExclusion[] = [];
-  for (const features of featuresByGroup) {
     // BOTH halves of the pass. The exclusions are not a second computation on
     // the side — recomputing them separately is exactly how the browser and the
     // server drifted into disagreeing about whether a grader gets told why a
@@ -370,6 +374,8 @@ export async function runAndStoreCrossHeuristics(
     const { flags, exclusions } = runCrossAnalysis(features, undefined);
     for (const f of flags) crossFlags.push(f);
     for (const e of exclusions) crossExclusions.push(e);
+    // `features` leaves scope here, so this group's feature set is collectable
+    // before the next group is extracted.
   }
 
   // -------------------------------------------------------------------------

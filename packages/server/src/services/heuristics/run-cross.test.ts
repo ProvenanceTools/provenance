@@ -18,7 +18,7 @@
  * events table.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { eq, count } from 'drizzle-orm';
 import { withTestDb } from '../../../test/helpers/db.js';
 import { withTestMinio } from '../../../test/helpers/minio.js';
@@ -49,6 +49,43 @@ import { DEFAULT_SERVER_CONFIG } from './config.js';
 import type { PerFlagEntry, ServerHeuristicConfig } from './config.js';
 import type { DrizzleDb } from '../../db/client.js';
 import type { StorageClient } from '../storage/client.js';
+
+// ---------------------------------------------------------------------------
+// Streaming probe (memory regression, 2026-09)
+//
+// Pass-through wrappers that record the ORDER of bundle loads vs cross-analysis
+// calls. Inert unless `recording` is set, so every other test in this file runs
+// against the real implementations unchanged.
+// ---------------------------------------------------------------------------
+const streamProbe = vi.hoisted(() => ({ recording: false, events: [] as string[] }));
+
+vi.mock('../bundle/load-index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../bundle/load-index.js')>();
+  return {
+    ...actual,
+    loadSubmissionIndex: (...args: Parameters<typeof actual.loadSubmissionIndex>) => {
+      if (streamProbe.recording) streamProbe.events.push('load');
+      return actual.loadSubmissionIndex(...args);
+    },
+  };
+});
+
+vi.mock(
+  '@provenance/analysis-core/heuristics/cross/run-cross-heuristics.js',
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import('@provenance/analysis-core/heuristics/cross/run-cross-heuristics.js')
+      >();
+    return {
+      ...actual,
+      runCrossAnalysis: (...args: Parameters<typeof actual.runCrossAnalysis>) => {
+        if (streamProbe.recording) streamProbe.events.push('analyze');
+        return actual.runCrossAnalysis(...args);
+      },
+    };
+  },
+);
 
 beforeEach(() => {
   _resetBundleIndexCacheForTest();
@@ -1249,5 +1286,97 @@ describe('translateExclusionsToRows', () => {
     // disagrees with the list beside it is worse than no count.
     expect(rows[0]!.submission_ids).toHaveLength(2);
     expect(rows[0]!.excluded_pair_count).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Memory: features stream per assignment group (2026-09 regression)
+//
+// Extraction used to fill a `featuresByGroup` array for the WHOLE semester
+// before any analysis ran, while runCrossAnalysis only ever reads one group. At
+// 4740 submissions that exceeded the worker's 1536 MB heap and aborted the
+// process mid-sweep; pg-boss reclaimed the job on expiry and re-dispatched it,
+// so one poison job became a worker restart loop. The fix fuses the two loops so
+// a group's features are released before the next group is extracted.
+// ---------------------------------------------------------------------------
+
+describe('runAndStoreCrossHeuristics — memory', () => {
+  it('analyses each assignment group before extracting the next', async () => {
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        // Two assignments, two submissions each: both groups are comparable, so
+        // the sweep must make two runCrossAnalysis calls.
+        const {
+          submissionId: a1,
+          semesterId,
+          assignmentId,
+          ingestJobId,
+        } = await seedSubmissionWithSemester(db);
+
+        const a2 = await seedSecondSubmissionInSemester(db, {
+          semesterId,
+          sidPrefix: 'a2',
+          displayName: 'A Two',
+          assignmentId,
+          sourceFilename: 'hw1-a2.zip',
+          ingestJobId,
+        });
+
+        const [second] = await db
+          .insert(assignments)
+          .values({ semester_id: semesterId, assignment_id_str: 'hw2', label: 'HW2' })
+          .returning();
+
+        const b1 = await seedSecondSubmissionInSemester(db, {
+          semesterId,
+          sidPrefix: 'b1',
+          displayName: 'B One',
+          assignmentId: second!.id,
+          sourceFilename: 'hw2-b1.zip',
+          ingestJobId,
+        });
+        const b2 = await seedSecondSubmissionInSemester(db, {
+          semesterId,
+          sidPrefix: 'b2',
+          displayName: 'B Two',
+          assignmentId: second!.id,
+          sourceFilename: 'hw2-b2.zip',
+          ingestJobId,
+        });
+
+        for (const id of [a1, a2, b1, b2]) {
+          await putPasteBundle(db, client, id, {
+            sha256: 'streaming-sha',
+            content: SHARED_PASTE_CONTENT,
+          });
+        }
+
+        streamProbe.events.length = 0;
+        streamProbe.recording = true;
+        try {
+          await runAndStoreCrossHeuristics(db, client, semesterId);
+        } finally {
+          streamProbe.recording = false;
+        }
+
+        expect(
+          streamProbe.events.filter((e) => e === 'load'),
+          'one load per submission',
+        ).toHaveLength(4);
+        expect(
+          streamProbe.events.filter((e) => e === 'analyze'),
+          'one pass per group',
+        ).toHaveLength(2);
+
+        // The regression itself: with extraction and analysis split into two
+        // sequential loops every load precedes every analyse, and the semester's
+        // whole feature set is live at the peak. Streaming per group means at
+        // least one analysis completes before the final submission is loaded.
+        expect(
+          streamProbe.events.indexOf('analyze'),
+          'a group must be analysed before the last submission is loaded',
+        ).toBeLessThan(streamProbe.events.lastIndexOf('load'));
+      });
+    });
   });
 });
