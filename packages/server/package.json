@@ -37,6 +37,7 @@
     "busboy": "^1.6.0",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.7.11",
+    "js-yaml": "^4.1.0",
     "jszip": "^3.10.1",
     "nodemailer": "^8.0.7",
     "oslo": "^1.2.1",
@@ -45,7 +46,6 @@
     "pino": "^9.7.0",
     "pino-http": "^10.4.0",
     "postgres": "^3.4.9",
-    "yaml": "^2.9.0",
     "yauzl": "^3.4.0",
     "zod": "^3.25.28"
   },
@@ -53,6 +53,7 @@
     "@testcontainers/minio": "^12.0.0",
     "@testcontainers/postgresql": "^12.0.0",
     "@types/busboy": "^1.5.4",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
     "@types/yauzl": "^3.4.0",
     "drizzle-kit": "^0.31.10",

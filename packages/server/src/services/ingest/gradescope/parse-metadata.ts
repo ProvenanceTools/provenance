@@ -14,10 +14,21 @@
  * (analyzer PRD §9.2). Submitters without an sid are dropped (cannot be matched
  * or rostered).
  *
+ * Gradescope's autograder output reaches us through Psych's quoted-scalar
+ * emitter, which wraps long values across lines and, when the value ends in
+ * trailing newlines, writes the closing quote on its own line at column 0. That
+ * output is what libyaml reads back, so we parse with js-yaml rather than a
+ * strict parser that treats the dedented terminator as a missing one.
+ *
  * Pure function — no I/O. The caller reads the file bytes.
  */
 
-import { parse as parseYaml } from 'yaml';
+// js-yaml (libyaml lineage), NOT the `yaml` package: Psych emits multi-line
+// single-quoted scalars whose closing quote lands at column 0, below the parent
+// node's indentation (see the autograder-output note above). A spec-strict
+// parser rejects that terminator as missing; js-yaml accepts it, as Psych does.
+// v4's `load` uses the safe default schema — no `!!js/*` construction.
+import { load as parseYaml } from 'js-yaml';
 
 // ---------------------------------------------------------------------------
 // Types

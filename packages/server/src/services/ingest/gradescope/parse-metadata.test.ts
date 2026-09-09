@@ -103,6 +103,35 @@ submission_1:
     expect(res.value.submissions.map((s) => s.folderKey)).toEqual(['submission_1']);
   });
 
+  // Regression: Gradescope's autograder emits a "Correct Assignment Check" test
+  // whose output ends in trailing newlines. Ruby's Psych serializes that as a
+  // multi-line single-quoted scalar and places the CLOSING quote at column 0 —
+  // below the parent node's indentation. libyaml/Psych round-trips this, but a
+  // spec-strict parser reads the terminator as absent and reports the scalar as
+  // unclosed ("Missing closing 'quote"). A real Fall 2026 CS 61A export carried
+  // 3653 of these across all 1573 submissions, failing every ingest.
+  it('parses a Psych multi-line quoted scalar whose closing quote sits at column 0', () => {
+    const yaml =
+      'submission_423401597:\n' +
+      '  :submitters:\n' +
+      "  - :sid: '3042946091'\n" +
+      '  :results:\n' +
+      '    tests:\n' +
+      '    - name: Correct Assignment Check\n' +
+      "      output: 'Don''t worry about this test, it just checks that you submitted the\n" +
+      '        correct assignment.\n' +
+      '\n' +
+      "'\n" +
+      '      status: passed\n';
+
+    const res = parseSubmissionMetadata(yaml);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.value.submissions).toEqual([
+      { folderKey: 'submission_423401597', submitters: [{ sid: '3042946091' }] },
+    ]);
+  });
+
   it('returns unexpected_shape for a non-mapping document', () => {
     const res = parseSubmissionMetadata('- just\n- a\n- list\n');
     expect(res.ok).toBe(false);
