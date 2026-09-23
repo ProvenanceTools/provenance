@@ -455,6 +455,15 @@ describe('startSession', () => {
     await drainPoll(POLL);
     expect(rotations).toEqual([]);
 
+    // ABANDONED, not merely deferred (design §3.2). Degraded is one-way, so a
+    // rotation that is still "pending" is one that waits forever while pretending it
+    // might happen. A minute later, with the quiet window long since open, there must
+    // still be nothing — and no poll left running to produce it.
+    clock.advance(60_000);
+    await drainPoll(POLL);
+    await drainPoll(POLL);
+    expect(rotations).toEqual([]);
+
     await session.dispose();
   });
 

@@ -851,21 +851,31 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
    */
   function evaluateRotation(): void {
     if (rotationRequested) return;
-    // DEGRADED NEVER ROTATES — asserted here, at the commit point, not inferred
-    // from the entry path.
+    // DEGRADED ABANDONS A ROTATION; IT DOES NOT DEFER IT (design §3.2).
     //
-    // "The degraded branch returns before the checkpoint branch" only ever covered
-    // `onEntry`. The idle poll is a SECOND, independent trigger that never passes
-    // through it: arm the rotation mid-burst, let the disk fill, and the student's
-    // pause while reading the disk-full notification IS the quiet window the gate
-    // waits for. The poll would then commit a rotation with the byte counter frozen
-    // at threshold — tearing the predecessor down and sealing it `final: true` while
-    // its `session.end` went to the ring buffer instead of the log, and starting a
-    // successor onto a disk that is still full. A bundle sealed final whose log is
-    // missing its own terminal `session.end` is an evidence-integrity problem.
+    // Here, at the SINGLE POINT OF COMMIT that both triggers pass through, never at
+    // the individual call sites — guarding call sites is how this hole arose. The
+    // property "a degraded session never rotates" was structural on the ENTRY path
+    // only (`onEntry` returns before the checkpoint branch); the idle poll is a
+    // second, independent trigger that never passes through it, and a third trigger
+    // added later would repeat the mistake. Arm mid-burst, let the disk fill, and the
+    // student's pause while reading the error notification IS the quiet window the
+    // gate waits for — so the poll would commit with the byte counter frozen at
+    // threshold, tearing the predecessor down and sealing it `final: true` while its
+    // `session.end` went to the in-memory ring rather than the log. A bundle sealed
+    // final whose log lacks its own terminal `session.end` is an evidence-integrity
+    // problem, which is worse than anything rotation was meant to solve.
     //
-    // `degraded` is one-way, so this is terminal for the session: stop the poll too
-    // rather than spin for the rest of the editor's life.
+    // ABANDON, not defer: the poll is stopped and `rotationArmed` is deliberately
+    // LEFT SET, so `armRotation` cannot start another one. `degraded` is one-way —
+    // nothing clears it without a restart — so a deferred rotation would wait forever
+    // while pretending it might still happen.
+    //
+    // Accepted consequence (§3.2, a behavioural choice shared by all three ports): a
+    // degraded session's log can exceed ROTATE_AT_BYTES and, in the extreme, GitHub's
+    // 50 MB warning. A degraded session writes almost nothing so it barely grows, and
+    // an oversized log is recoverable whereas a falsely-`final` seal is not. There is
+    // deliberately no second ceiling to compensate.
     if (diskFullHandler.degraded) {
       clearIdleTimer();
       return;
