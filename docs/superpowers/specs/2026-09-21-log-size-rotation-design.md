@@ -85,11 +85,11 @@ state (not degraded, not sealing).
 against the first `doc.open` content for that file in session B. All three recorders source the
 catch-up `doc.open` content from the live buffer, not from disk:
 
-| Recorder  | Source                                                                  |
-| --------- | ----------------------------------------------------------------------- |
-| VS Code   | `document.getText()` (`packages/recorder/src/wiring/doc-wiring.ts`)     |
-| JetBrains | `Document` snapshot under a read action (`wiring/EdtCatchUp.kt`)        |
-| Neovim    | `nvim_buf_get_lines` (`lua/provenance/recorder/wiring/doc_wiring.lua`)  |
+| Recorder  | Source                                                                 |
+| --------- | ---------------------------------------------------------------------- |
+| VS Code   | `document.getText()` (`packages/recorder/src/wiring/doc-wiring.ts`)    |
+| JetBrains | `Document` snapshot under a read action (`wiring/EdtCatchUp.kt`)       |
+| Neovim    | `nvim_buf_get_lines` (`lua/provenance/recorder/wiring/doc_wiring.lua`) |
 
 The analyzer's reconstruction likewise includes unsaved edits, so the two sides are equal —
 including for dirty buffers — and the heuristic does not fire.

@@ -62,75 +62,75 @@ Read `packages/analysis-core/src/heuristics/inter-session-external-change.test.t
 Append inside the existing top-level `describe('inter_session_external_change', ...)`:
 
 ```ts
-  // A rotation (the recorder hit ROTATE_AT_BYTES and started a fresh session
-  // in the same scope) leaves no time window in which anything could edit the
-  // file, and the successor's catch-up doc.open carries the live BUFFER
-  // content — so the seam must produce no flag. See
-  // docs/superpowers/specs/2026-09-21-log-size-rotation-design.md §3.3.
-  it('emits no flags across a rotation seam', async () => {
-    const finalA = 'def foo():\n    return 1\n';
-    const { index, bundle } = await buildAndIndex({
-      sessions: [
-        {
-          sessionId: 'aaaaaaaa-0000-4000-8000-000000000001',
-          events: [
-            ...sessionThat('hw1.py', '', finalA),
-            { kind: 'session.end', data: { reason: 'rotate' } },
-          ],
-        },
-        {
-          sessionId: 'aaaaaaaa-0000-4000-8000-000000000002',
-          sessionStart: { prev_session_id: 'aaaaaaaa-0000-4000-8000-000000000001' },
-          events: sessionThat('hw1.py', finalA, '    # more\n'),
-        },
-      ],
-    });
-    const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
-    expect(flags).toHaveLength(0);
+// A rotation (the recorder hit ROTATE_AT_BYTES and started a fresh session
+// in the same scope) leaves no time window in which anything could edit the
+// file, and the successor's catch-up doc.open carries the live BUFFER
+// content — so the seam must produce no flag. See
+// docs/superpowers/specs/2026-09-21-log-size-rotation-design.md §3.3.
+it('emits no flags across a rotation seam', async () => {
+  const finalA = 'def foo():\n    return 1\n';
+  const { index, bundle } = await buildAndIndex({
+    sessions: [
+      {
+        sessionId: 'aaaaaaaa-0000-4000-8000-000000000001',
+        events: [
+          ...sessionThat('hw1.py', '', finalA),
+          { kind: 'session.end', data: { reason: 'rotate' } },
+        ],
+      },
+      {
+        sessionId: 'aaaaaaaa-0000-4000-8000-000000000002',
+        sessionStart: { prev_session_id: 'aaaaaaaa-0000-4000-8000-000000000001' },
+        events: sessionThat('hw1.py', finalA, '    # more\n'),
+      },
+    ],
   });
+  const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
+  expect(flags).toHaveLength(0);
+});
 
-  // The seam must also be clean when the buffer was DIRTY at rotation: session
-  // A's reconstruction includes the unsaved edit, and B's doc.open baseline is
-  // read from the buffer, so both sides carry it. A recorder that seeded B from
-  // disk instead would diverge here and produce a false accusation.
-  it('emits no flags across a rotation seam with an unsaved edit', async () => {
-    const saved = 'def foo():\n    return 1\n';
-    const unsaved = saved + '# typed but never saved\n';
-    const { index, bundle } = await buildAndIndex({
-      sessions: [
-        {
-          sessionId: 'bbbbbbbb-0000-4000-8000-000000000001',
-          events: [
-            { kind: 'doc.open', data: { path: 'hw1.py', content: saved } },
-            {
-              kind: 'doc.change',
-              data: {
-                path: 'hw1.py',
-                source: 'typed',
-                deltas: [
-                  {
-                    range: {
-                      start: { line: 2, character: 0 },
-                      end: { line: 2, character: 0 },
-                    },
-                    text: '# typed but never saved\n',
+// The seam must also be clean when the buffer was DIRTY at rotation: session
+// A's reconstruction includes the unsaved edit, and B's doc.open baseline is
+// read from the buffer, so both sides carry it. A recorder that seeded B from
+// disk instead would diverge here and produce a false accusation.
+it('emits no flags across a rotation seam with an unsaved edit', async () => {
+  const saved = 'def foo():\n    return 1\n';
+  const unsaved = saved + '# typed but never saved\n';
+  const { index, bundle } = await buildAndIndex({
+    sessions: [
+      {
+        sessionId: 'bbbbbbbb-0000-4000-8000-000000000001',
+        events: [
+          { kind: 'doc.open', data: { path: 'hw1.py', content: saved } },
+          {
+            kind: 'doc.change',
+            data: {
+              path: 'hw1.py',
+              source: 'typed',
+              deltas: [
+                {
+                  range: {
+                    start: { line: 2, character: 0 },
+                    end: { line: 2, character: 0 },
                   },
-                ],
-              },
+                  text: '# typed but never saved\n',
+                },
+              ],
             },
-            { kind: 'session.end', data: { reason: 'rotate' } },
-          ],
-        },
-        {
-          sessionId: 'bbbbbbbb-0000-4000-8000-000000000002',
-          sessionStart: { prev_session_id: 'bbbbbbbb-0000-4000-8000-000000000001' },
-          events: [{ kind: 'doc.open', data: { path: 'hw1.py', content: unsaved } }],
-        },
-      ],
-    });
-    const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
-    expect(flags).toHaveLength(0);
+          },
+          { kind: 'session.end', data: { reason: 'rotate' } },
+        ],
+      },
+      {
+        sessionId: 'bbbbbbbb-0000-4000-8000-000000000002',
+        sessionStart: { prev_session_id: 'bbbbbbbb-0000-4000-8000-000000000001' },
+        events: [{ kind: 'doc.open', data: { path: 'hw1.py', content: unsaved } }],
+      },
+    ],
   });
+  const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
+  expect(flags).toHaveLength(0);
+});
 ```
 
 - [ ] **Step 3: Run it**
@@ -181,7 +181,7 @@ git commit --no-gpg-sign -m "test(analysis-core): pin no-flag behaviour across a
 Four gaps in the current code have to be closed; none is optional:
 
 1. `dispose()` hardcodes `reason: 'deactivate'` (`session-registry.ts:1044`) → parameterize.
-2. `prevSessionId` is only set when recovery reports `previous_session_dangling` (`session-registry.ts:400-401`), i.e. a **crash**. A rotated session ends *cleanly*, so recovery will never link it → an explicit override is required. Do **not** touch `chain-recovery.ts`; rotation bypasses it.
+2. `prevSessionId` is only set when recovery reports `previous_session_dangling` (`session-registry.ts:400-401`), i.e. a **crash**. A rotated session ends _cleanly_, so recovery will never link it → an explicit override is required. Do **not** touch `chain-recovery.ts`; rotation bypasses it.
 3. `SessionWriter` has no cumulative byte counter — `bufferedBytes` is private and resets on every flush → add a running total.
 4. The rotation threshold must be injectable, following the existing `provenanceDirOverride` / `heartbeatDeps` "production default, test override" convention on `StartSessionDeps`.
 
@@ -211,22 +211,22 @@ Four gaps in the current code have to be closed; none is optional:
 In `packages/recorder/src/io/session-writer.test.ts`, following the file's existing `SessionWriter.open` + tmpdir pattern:
 
 ```ts
-  it('reports cumulative bytes appended across flushes', async () => {
-    const writer = await SessionWriter.open({ slogPath, clock });
-    expect(writer.bytesAppended).toBe(0);
-    writer.append(entryA);
-    const afterFirst = writer.bytesAppended;
-    expect(afterFirst).toBeGreaterThan(0);
-    await writer.flush();
-    // A flush resets the buffer, never the cumulative total.
-    expect(writer.bytesAppended).toBe(afterFirst);
-    writer.append(entryB);
-    expect(writer.bytesAppended).toBeGreaterThan(afterFirst);
-    await writer.dispose();
-    // The counter must equal the file's real size on disk.
-    const stat = await fs.stat(slogPath);
-    expect(writer.bytesAppended).toBe(stat.size);
-  });
+it('reports cumulative bytes appended across flushes', async () => {
+  const writer = await SessionWriter.open({ slogPath, clock });
+  expect(writer.bytesAppended).toBe(0);
+  writer.append(entryA);
+  const afterFirst = writer.bytesAppended;
+  expect(afterFirst).toBeGreaterThan(0);
+  await writer.flush();
+  // A flush resets the buffer, never the cumulative total.
+  expect(writer.bytesAppended).toBe(afterFirst);
+  writer.append(entryB);
+  expect(writer.bytesAppended).toBeGreaterThan(afterFirst);
+  await writer.dispose();
+  // The counter must equal the file's real size on disk.
+  const stat = await fs.stat(slogPath);
+  expect(writer.bytesAppended).toBe(stat.size);
+});
 ```
 
 Build `entryA` / `entryB` the way the neighbouring tests in that file build hashed envelopes (read them first).
@@ -282,72 +282,72 @@ git commit --no-gpg-sign -m "feat(recorder): expose cumulative bytes appended on
 In `packages/recorder/src/session/session-registry.test.ts`, inside `describe('startSession', ...)`, following the existing real-filesystem pattern (`tmpDir` from `beforeEach`, `signedManifest()`, `FixedClock`, and the round-trip assertion style of the test at lines 63-99):
 
 ```ts
-  it('requests a rotation once the log passes the threshold', async () => {
-    const rotations: string[] = [];
-    const session = await startSession({
-      assignmentRoot: tmpDir,
-      manifest: await signedManifest(),
-      extension: fakeExtension,
-      vscodeVersion: '1.90.0',
-      platform: 'darwin',
-      clock,
-      // A tiny threshold: a handful of real entries crosses it, so the test
-      // never writes 40 MiB.
-      rotateAtBytesOverride: 512,
-      requestRotation: (endedSessionId) => rotations.push(endedSessionId),
-    });
+it('requests a rotation once the log passes the threshold', async () => {
+  const rotations: string[] = [];
+  const session = await startSession({
+    assignmentRoot: tmpDir,
+    manifest: await signedManifest(),
+    extension: fakeExtension,
+    vscodeVersion: '1.90.0',
+    platform: 'darwin',
+    clock,
+    // A tiny threshold: a handful of real entries crosses it, so the test
+    // never writes 40 MiB.
+    rotateAtBytesOverride: 512,
+    requestRotation: (endedSessionId) => rotations.push(endedSessionId),
+  });
 
-    // The threshold is only READ at the checkpoint cadence (every 100 entries),
-    // so crossing it must not fire before the 100th entry.
-    for (let i = 0; i < 99; i++) {
-      session.sessionHost.emit('doc.save', { path: 'hw1.py', sha256: 'a'.repeat(64) });
-    }
-    expect(rotations).toEqual([]);
-
+  // The threshold is only READ at the checkpoint cadence (every 100 entries),
+  // so crossing it must not fire before the 100th entry.
+  for (let i = 0; i < 99; i++) {
     session.sessionHost.emit('doc.save', { path: 'hw1.py', sha256: 'a'.repeat(64) });
-    expect(rotations).toEqual([session.sessionId]);
+  }
+  expect(rotations).toEqual([]);
 
-    await session.dispose();
+  session.sessionHost.emit('doc.save', { path: 'hw1.py', sha256: 'a'.repeat(64) });
+  expect(rotations).toEqual([session.sessionId]);
+
+  await session.dispose();
+});
+
+it('writes the rotate reason and links the successor by prev_session_id', async () => {
+  const first = await startSession({
+    assignmentRoot: tmpDir,
+    manifest: await signedManifest(),
+    extension: fakeExtension,
+    vscodeVersion: '1.90.0',
+    platform: 'darwin',
+    clock,
+  });
+  const firstId = first.sessionId;
+  await first.dispose('rotate');
+
+  const second = await startSession({
+    assignmentRoot: tmpDir,
+    manifest: await signedManifest(),
+    extension: fakeExtension,
+    vscodeVersion: '1.90.0',
+    platform: 'darwin',
+    clock,
+    prevSessionIdOverride: firstId,
   });
 
-  it('writes the rotate reason and links the successor by prev_session_id', async () => {
-    const first = await startSession({
-      assignmentRoot: tmpDir,
-      manifest: await signedManifest(),
-      extension: fakeExtension,
-      vscodeVersion: '1.90.0',
-      platform: 'darwin',
-      clock,
-    });
-    const firstId = first.sessionId;
-    await first.dispose('rotate');
+  const firstEntries = parseEntries(await fs.readFile(first.slogPath, 'utf8'));
+  const lastFirst = firstEntries.at(-1)!;
+  expect(lastFirst.kind).toBe('session.end');
+  expect((lastFirst.data as { reason: string }).reason).toBe('rotate');
 
-    const second = await startSession({
-      assignmentRoot: tmpDir,
-      manifest: await signedManifest(),
-      extension: fakeExtension,
-      vscodeVersion: '1.90.0',
-      platform: 'darwin',
-      clock,
-      prevSessionIdOverride: firstId,
-    });
+  const secondEntries = parseEntries(await fs.readFile(second.slogPath, 'utf8'));
+  const start = secondEntries[0]!;
+  expect(start.kind).toBe('session.start');
+  expect((start.data as { prev_session_id: string | null }).prev_session_id).toBe(firstId);
+  // Each log is independently chain-valid — rotation does not span a chain.
+  expect(validateChain(firstEntries).ok).toBe(true);
+  expect(validateChain(secondEntries).ok).toBe(true);
+  expect(second.slogPath).not.toBe(first.slogPath);
 
-    const firstEntries = parseEntries(await fs.readFile(first.slogPath, 'utf8'));
-    const lastFirst = firstEntries.at(-1)!;
-    expect(lastFirst.kind).toBe('session.end');
-    expect((lastFirst.data as { reason: string }).reason).toBe('rotate');
-
-    const secondEntries = parseEntries(await fs.readFile(second.slogPath, 'utf8'));
-    const start = secondEntries[0]!;
-    expect(start.kind).toBe('session.start');
-    expect((start.data as { prev_session_id: string | null }).prev_session_id).toBe(firstId);
-    // Each log is independently chain-valid — rotation does not span a chain.
-    expect(validateChain(firstEntries).ok).toBe(true);
-    expect(validateChain(secondEntries).ok).toBe(true);
-    expect(second.slogPath).not.toBe(first.slogPath);
-
-    await second.dispose();
-  });
+  await second.dispose();
+});
 ```
 
 Match the file's existing construction of `fakeExtension` / deps exactly — read lines 35-99 first and reuse its helpers rather than inventing new ones. `parseEntries` and `validateChain` are already imported in that file.
@@ -405,9 +405,9 @@ Add to `StartSessionDeps` (after `provenanceDirOverride`, keeping the file's doc
 At `session-registry.ts:400-401`, replace the `prevSessionId` derivation with:
 
 ```ts
-  const prevSessionId: string | null =
-    deps.prevSessionIdOverride ??
-    (recovery.kind === 'previous_session_dangling' ? recovery.prevSessionId : null);
+const prevSessionId: string | null =
+  deps.prevSessionIdOverride ??
+  (recovery.kind === 'previous_session_dangling' ? recovery.prevSessionId : null);
 ```
 
 Keep the existing comment about dangling-only linkage and extend it to say the override exists for rotation. Add `sessionId: recorderContext.session_id` to the returned `ActiveSession` object and to the `ActiveSession` type (lines 90-132) if it is not already there.
@@ -417,21 +417,21 @@ Keep the existing comment about dangling-only linkage and extend it to say the o
 In `startSession`, alongside `const CHECKPOINT_INTERVAL = 100;` (line 670):
 
 ```ts
-  const rotateAtBytes = deps.rotateAtBytesOverride ?? ROTATE_AT_BYTES;
-  let rotationRequested = false;
+const rotateAtBytes = deps.rotateAtBytesOverride ?? ROTATE_AT_BYTES;
+let rotationRequested = false;
 ```
 
 Inside the `onEntry` closure's existing `if (entryCountSinceLastCheckpoint >= CHECKPOINT_INTERVAL) { ... }` block (line 694), after the existing checkpoint chain is assigned, add:
 
 ```ts
-        // Size rotation (PRD §4.6). Read INSIDE the checkpoint branch so the
-        // check costs one comparison per 100 entries, not one per keystroke —
-        // doc.change must stay under 1 ms p99 (§4.7). Requested at most once;
-        // the swap itself is extension.ts's job.
-        if (!rotationRequested && writer.bytesAppended >= rotateAtBytes) {
-          rotationRequested = true;
-          deps.requestRotation?.(recorderContext.session_id);
-        }
+// Size rotation (PRD §4.6). Read INSIDE the checkpoint branch so the
+// check costs one comparison per 100 entries, not one per keystroke —
+// doc.change must stay under 1 ms p99 (§4.7). Requested at most once;
+// the swap itself is extension.ts's job.
+if (!rotationRequested && writer.bytesAppended >= rotateAtBytes) {
+  rotationRequested = true;
+  deps.requestRotation?.(recorderContext.session_id);
+}
 ```
 
 Note the degraded path already `return`s above this (line 688-691), so a degraded session never rotates — which is the required behaviour, not an accident. Say so in the comment.
@@ -573,13 +573,13 @@ After the paragraph in `docs/prd.md` §4.6 that begins "Both files are written a
 In §4.7, append to the "Disk:" bullet:
 
 ```markdown
-  - No single `.slog` exceeds 40 MiB, because the session rotates at that size (§4.6). This bounds the per-file size independently of how long a session lives, which the 20 MB-per-4-hours figure does not.
+- No single `.slog` exceeds 40 MiB, because the session rotates at that size (§4.6). This bounds the per-file size independently of how long a session lives, which the 20 MB-per-4-hours figure does not.
 ```
 
 In the §4.8 failure table, add a row after the "Disk full" row:
 
 ```markdown
-| Log file approaching GitHub's file-size limit                              | At the next checkpoint, emit `session.end` (`reason: "rotate"`), seal, and start a new session linked by `prev_session_id` (§4.6)                            |
+| Log file approaching GitHub's file-size limit | At the next checkpoint, emit `session.end` (`reason: "rotate"`), seal, and start a new session linked by `prev_session_id` (§4.6) |
 ```
 
 - [ ] **Step 3: The diagram edge**
@@ -644,7 +644,7 @@ Port of Task 2, with the same four gaps plus one that is specific to this repo:
 2. `prevSessionIdFor` (`recorder/src/main/kotlin/dev/provenance/recorder/session/RecoveryLinkage.kt:15`) returns an id only for `RecoveryDecision.PreviousSessionDangling`. A rotated session ends cleanly → `PreviousSessionComplete` → null. Do **not** fake a `PreviousSessionDangling`; that would mislabel a clean end as a crash. Add an explicit override parameter instead.
 3. `SessionWriter` has no cumulative byte counter (`bufferedBytes` resets on flush).
 4. The threshold must be an overridable constructor default, mirroring `checkpointInterval: Int = CheckpointCadence.DEFAULT_INTERVAL`.
-5. **JetBrains-only trap:** `DocWiring` is *project*-scoped and its `seenPaths` dedup set is never reset while any session is live. With two or more assignment roots open, rotating one root would emit **no** `doc.open` baselines into the successor's log — the new `.slog` would have a reconstruction with no starting content. Fix it explicitly; do not rely on the registry transiently emptying in the single-root case.
+5. **JetBrains-only trap:** `DocWiring` is _project_-scoped and its `seenPaths` dedup set is never reset while any session is live. With two or more assignment roots open, rotating one root would emit **no** `doc.open` baselines into the successor's log — the new `.slog` would have a reconstruction with no starting content. Fix it explicitly; do not rely on the registry transiently emptying in the single-root case.
 
 **Files:**
 
