@@ -70,10 +70,12 @@
 
 <path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M1003.8,-250.51C991.92,-271.08 1000.89,-292.71 1030.71,-292.71 1057.03,-292.71 1067.11,-275.85 1060.93,-257.75" class="s-tra"/>
 <polygon stroke-width="1.2" points="1063.15,-257.12 1058.37,-252.16 1059.01,-259.02 1063.15,-257.12" class="a-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-320.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">log passes 40 MiB — session.end{rotate},</text>
-<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-311.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">seal, then a FRESH session.start carrying</text>
-<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-302.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">prev_session_id into a NEW log file. Keeps every</text>
-<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-293.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">file under GitHub&#39;s 100 MB push limit</text>
+<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-338.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">log passes 40 MiB — rotation ARMS but waits</text>
+<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-329.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">for a 2s quiet window (no doc.change/paste/</text>
+<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-320.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">fs.external_change) so the seam stays empty,</text>
+<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-311.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">then session.end{rotate}, seal, FRESH session.start</text>
+<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-302.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">carrying prev_session_id, NO chain recovery.</text>
+<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-293.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">48 MiB hard ceiling if never idle</text>
 </g>
 
 <g id="node5" class="node">
