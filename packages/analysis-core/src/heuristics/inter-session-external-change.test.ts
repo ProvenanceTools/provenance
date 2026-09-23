@@ -430,4 +430,74 @@ describe('inter_session_external_change — session overlap', () => {
     expect(flags[0]!.description).not.toMatch(/\d+s gap/);
     expect(flags[0]!.description).toContain('could not be established');
   });
+
+  // A rotation (the recorder hit ROTATE_AT_BYTES and started a fresh session
+  // in the same scope) leaves no time window in which anything could edit the
+  // file, and the successor's catch-up doc.open carries the live BUFFER
+  // content — so the seam must produce no flag. See
+  // docs/superpowers/specs/2026-09-21-log-size-rotation-design.md §3.3.
+  it('emits no flags across a rotation seam', async () => {
+    const finalA = 'def foo():\n    return 1\n';
+    const { index, bundle } = await buildAndIndex({
+      sessions: [
+        {
+          sessionId: 'aaaaaaaa-0000-4000-8000-000000000001',
+          events: [
+            ...sessionThat('hw1.py', '', finalA),
+            { kind: 'session.end', data: { reason: 'rotate' } },
+          ],
+        },
+        {
+          sessionId: 'aaaaaaaa-0000-4000-8000-000000000002',
+          sessionStart: { prev_session_id: 'aaaaaaaa-0000-4000-8000-000000000001' },
+          events: sessionThat('hw1.py', finalA, '    # more\n'),
+        },
+      ],
+    });
+    const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(0);
+  });
+
+  // The seam must also be clean when the buffer was DIRTY at rotation: session
+  // A's reconstruction includes the unsaved edit, and B's doc.open baseline is
+  // read from the buffer, so both sides carry it. A recorder that seeded B from
+  // disk instead would diverge here and produce a false accusation.
+  it('emits no flags across a rotation seam with an unsaved edit', async () => {
+    const saved = 'def foo():\n    return 1\n';
+    const unsaved = saved + '# typed but never saved\n';
+    const { index, bundle } = await buildAndIndex({
+      sessions: [
+        {
+          sessionId: 'bbbbbbbb-0000-4000-8000-000000000001',
+          events: [
+            { kind: 'doc.open', data: { path: 'hw1.py', content: saved } },
+            {
+              kind: 'doc.change',
+              data: {
+                path: 'hw1.py',
+                source: 'typed',
+                deltas: [
+                  {
+                    range: {
+                      start: { line: 2, character: 0 },
+                      end: { line: 2, character: 0 },
+                    },
+                    text: '# typed but never saved\n',
+                  },
+                ],
+              },
+            },
+            { kind: 'session.end', data: { reason: 'rotate' } },
+          ],
+        },
+        {
+          sessionId: 'bbbbbbbb-0000-4000-8000-000000000002',
+          sessionStart: { prev_session_id: 'bbbbbbbb-0000-4000-8000-000000000001' },
+          events: [{ kind: 'doc.open', data: { path: 'hw1.py', content: unsaved } }],
+        },
+      ],
+    });
+    const flags = interSessionExternalChangeHeuristic.run(index, bundle, cfg);
+    expect(flags).toHaveLength(0);
+  });
 });

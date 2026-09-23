@@ -232,6 +232,39 @@ describe('L1 — intra-contributor session chain', () => {
     ]);
     expect(compareEvents(o, ref(S1, 1), ref(S2, 1))).toBe('concurrent');
   });
+
+  it('honours a rotation seam as an L1 edge', () => {
+    // A recorder rotation ends session A with `session.end {reason:'rotate'}`
+    // and starts session B with `prev_session_id` = A's id. That back-pointer
+    // is honoured exactly like any other L1 link (happens-before.ts:669 reads
+    // `prev_session_id` off `session.start.data` regardless of why the prior
+    // session ended) — the 'rotate' reason string must not gate anything here.
+    // See docs/superpowers/specs/2026-09-21-log-size-rotation-design.md §3.3.
+    const contributors = new Map<string, SessionContributor>([
+      [S1, attributed(S1, 'alice')],
+      [S2, attributed(S2, 'alice')],
+    ]);
+    const rotateEnd = (seq: number): HashedEnvelope =>
+      ({
+        seq,
+        t: seq,
+        wall: '2026-01-01T00:00:00.000Z',
+        kind: 'session.end',
+        data: { reason: 'rotate' },
+        prev_hash: '0'.repeat(64),
+        hash: '1'.repeat(64),
+      }) as HashedEnvelope;
+    const o = build(
+      {
+        [S1]: [sessionStart(0, S1, null), edit(1), rotateEnd(2)],
+        [S2]: [sessionStart(0, S2, S1), edit(1)],
+      },
+      contributors,
+    );
+    expect(compareEvents(o, ref(S1, 2), ref(S2, 0))).toBe('before');
+    expect(compareEvents(o, ref(S1, 1), ref(S2, 1))).toBe('before');
+    expect(o.defects).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
