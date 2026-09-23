@@ -48,6 +48,10 @@ export const window = {
   showWarningMessage: (_message: string, ..._items: unknown[]) => Promise.resolve(undefined),
   // Used by the seal command's success path.
   showInformationMessage: (_message: string, ..._items: unknown[]) => Promise.resolve(undefined),
+  // Used by DiskFullHandler.notify. Without it, the first real degradation in any
+  // unit test throws from inside the handler rather than reporting the disk error,
+  // which makes degraded-path tests stub it by hand and restore it afterwards.
+  showErrorMessage: (_message: string, ..._items: unknown[]) => Promise.resolve(undefined),
 };
 
 export const workspace = {
