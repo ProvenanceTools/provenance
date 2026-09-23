@@ -481,10 +481,19 @@ function beginRotation(args: StartAndRegisterArgs, endedSessionId: string): Prom
  * `prev_session_id`.
  *
  * Dispose-then-start, NOT start-then-dispose: the old session's doc wiring is
- * only unsubscribed at the END of its teardown, so starting first would record
- * the same keystroke into both logs. Dropping the sub-second gap is safe —
- * the successor's catch-up doc.open re-reads the live buffer, so reconstruction
- * resynchronises and no divergence is flagged.
+ * only unsubscribed at the END of its teardown, so starting first would record the
+ * same keystroke into both logs, corrupting two reconstructions.
+ *
+ * The cost of ending first is that anything arriving inside the teardown window is
+ * dropped, and that drop is NOT harmless — an earlier version of this comment said
+ * it was. Design §3.3 (correction, 2026-09-23): `inter_session_external_change`
+ * compares a reconstruction of the predecessor's event stream against the
+ * successor's live-buffer `doc.open`, by exact string equality, so dropped content
+ * reports the student for editing outside the recorder. What makes the window safe
+ * is not this ordering but WHEN the rotation is requested: `startSession` only asks
+ * once nothing has mutated content for `ROTATE_IDLE_QUIET_MS`, so in the ordinary
+ * case the window is empty. `ROTATE_HARD_CEILING_BYTES` is the one path that
+ * rotates anyway and can still produce a false flag.
  *
  * If starting the successor fails (design §3.4), the predecessor is already
  * sealed and nothing recorded before the rotation is at risk — but this root is
@@ -805,11 +814,20 @@ async function rescan(
     // A root that is leaving must not have a rotation land on it afterwards
     // (design §3.2 item 3): the swap would re-register a session for a folder that
     // is no longer in the workspace.
-    for (const root of [...rotating.keys()]) {
-      if (resolveOwnerRoot(root, currentRoots) === null) {
-        abandonRotation(root);
-      }
+    //
+    // Marked AND awaited. Marking alone is not enough: `pruneToRoots` disposes the
+    // predecessor, and an unawaited rotation would be inside its own
+    // `await current.dispose('rotate')` at the same moment — two overlapping
+    // teardowns of one session, a second `rewriteRollingSeal({final: true})` over an
+    // already-final seal, and `session.end.reason` decided by whichever emit wins,
+    // so a rotation's own log could end up claiming `deactivate`.
+    const leaving = [...rotating.keys()].filter(
+      (root) => resolveOwnerRoot(root, currentRoots) === null,
+    );
+    for (const root of leaving) {
+      abandonRotation(root);
     }
+    await Promise.allSettled(leaving.map((root) => rotating.get(root)));
 
     // Stop sessions whose root left the workspace.
     await registry.pruneToRoots(currentRoots);
@@ -992,14 +1010,22 @@ export async function deactivate(): Promise<void> {
   // rotation is exactly how a session ends up registered after teardown with no
   // `session.end` written. `allSettled`: a rotation that throws must not stop the
   // rest of teardown — `rotate` already logs its own failures.
-  await Promise.allSettled([...rotating.values()]);
-  await registry.disposeAll();
-  // The disposables themselves belong to context.subscriptions, which VS Code
-  // tears down; drop only our bookkeeping so a re-activation starts clean.
-  contextOwnedDisposables.clear();
-  rotating.clear();
-  rotationsAbandoned.clear();
-  deactivating = false;
+  try {
+    await Promise.allSettled([...rotating.values()]);
+    await registry.disposeAll();
+  } finally {
+    // In a `finally` because the reset is not optional: if `disposeAll()` ever threw,
+    // leaving `deactivating` true and `rotating` populated would make every later
+    // rotation self-abort at its first `abandoned()` check, and the logs would then
+    // grow past the hard ceiling with nothing to stop them.
+    //
+    // The disposables themselves belong to context.subscriptions, which VS Code
+    // tears down; drop only our bookkeeping so a re-activation starts clean.
+    contextOwnedDisposables.clear();
+    rotating.clear();
+    rotationsAbandoned.clear();
+    deactivating = false;
+  }
 }
 
 /**

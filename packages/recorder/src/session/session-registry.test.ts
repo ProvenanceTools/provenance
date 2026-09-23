@@ -191,21 +191,48 @@ describe('startSession', () => {
    * capability/identity steps), so the boundary is derived from the log rather
    * than assumed to be 100 emits away.
    */
-  async function emitToNextCheckpoint(
-    session: ActiveSession,
-    kind: 'doc.save' | 'doc.change',
-  ): Promise<void> {
+  type EmitKind = 'doc.save' | 'doc.change' | 'paste' | 'fs.external_change';
+
+  /** Emit one event of `kind` through the live session host, as the wiring does. */
+  function emitOne(session: ActiveSession, kind: EmitKind): void {
+    switch (kind) {
+      case 'doc.save':
+        session.sessionHost.emit('doc.save', { path: 'hw1.py', sha256: 'a'.repeat(64) });
+        return;
+      case 'doc.change':
+        session.sessionHost.emit('doc.change', { path: 'hw1.py', deltas: [], source: 'typed' });
+        return;
+      case 'paste':
+        // The shape an INLINEABLE single-shot paste takes: kind `paste`, no
+        // accompanying doc.change (wiring/doc-wiring.ts) — which is exactly the hole
+        // a doc.change-only idle gate leaves open.
+        session.sessionHost.emit('paste', {
+          path: 'hw1.py',
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          length: 120,
+          sha256: 'b'.repeat(64),
+          content: 'x'.repeat(120),
+        });
+        return;
+      case 'fs.external_change':
+        session.sessionHost.emit('fs.external_change', {
+          path: 'hw1.py',
+          old_hash: 'c'.repeat(64),
+          new_hash: 'd'.repeat(64),
+          diff_size: 40,
+        });
+        return;
+    }
+  }
+
+  async function emitToNextCheckpoint(session: ActiveSession, kind: EmitKind): Promise<void> {
     await session.writer.flush();
     const parsed = parseEntries(await fs.readFile(session.slogPath, 'utf8'));
     if (!parsed.ok) throw new Error('slog did not parse');
     const written = parsed.value.length;
     const toGo = CHECKPOINT_INTERVAL - (written % CHECKPOINT_INTERVAL);
     for (let i = 0; i < toGo; i++) {
-      if (kind === 'doc.save') {
-        session.sessionHost.emit('doc.save', { path: 'hw1.py', sha256: 'a'.repeat(64) });
-      } else {
-        session.sessionHost.emit('doc.change', { path: 'hw1.py', deltas: [], source: 'typed' });
-      }
+      emitOne(session, kind);
     }
   }
 
@@ -215,6 +242,19 @@ describe('startSession', () => {
     while (!check() && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
+  }
+
+  /**
+   * Give the armed poll several real ticks to run.
+   *
+   * Every "no rotation yet" assertion must come AFTER this. The poll is a real
+   * `setInterval`, so asserting emptiness before it has had a chance to fire proves
+   * nothing at all — the assertion would hold even if the idle gate ignored the
+   * event under test entirely. (This is the vacuous-test trap the Neovim port hit
+   * with its deferred hand-off.)
+   */
+  async function drainPoll(pollMs: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, pollMs * 4));
   }
 
   it('arms the rotation at the threshold but waits for a quiet window', async () => {
@@ -242,6 +282,73 @@ describe('startSession', () => {
     // Requested at most once, however many further checkpoints go by.
     await emitToNextCheckpoint(session, 'doc.save');
     await emitToNextCheckpoint(session, 'doc.save');
+    expect(rotations).toEqual([session.sessionId]);
+
+    await session.dispose();
+  });
+
+  // Design §3.3: "content-mutating means doc.change, paste and fs.external_change —
+  // not doc.change alone". A gate on typing only opens while the student reads a web
+  // page, fires the rotation, and then drops their Cmd+V inside the teardown window;
+  // because a paste is large the resulting false inter_session_external_change is
+  // likely reported at HIGH severity. `fs.external_change` (formatter-on-save, git
+  // checkout) is the same flag in its worst form: a whole-file rewrite.
+  for (const kind of ['doc.change', 'paste', 'fs.external_change'] as const) {
+    it(`treats ${kind} as content-mutating: it resets the quiet window`, async () => {
+      const QUIET = 200;
+      const POLL = QUIET / 4;
+      const rotations: string[] = [];
+      const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+      const session = await startRotating(clock, rotations, {
+        rotateIdleQuietMsOverride: QUIET,
+        // The ceiling must not be what fires here, or the test would pass for the
+        // wrong reason.
+        rotateHardCeilingBytesOverride: 100 * 1024 * 1024,
+      });
+
+      // Armed, past the size threshold, and the poll is running.
+      await emitToNextCheckpoint(session, 'doc.change');
+      expect(session.writer.bytesAppended).toBeGreaterThan(512);
+      await drainPoll(POLL);
+      expect(rotations).toEqual([]);
+
+      // Long enough that the gate WOULD open — and then, in the same synchronous
+      // block so the poll cannot interleave, one event of the kind under test. A
+      // recorder that does not count this kind as content leaves the quiet window
+      // starting at 0 and rotates on the next tick.
+      clock.advance(1000);
+      emitOne(session, kind);
+
+      // One millisecond short of the window, measured from the event above.
+      clock.advance(QUIET - 1);
+      await drainPoll(POLL);
+      expect(rotations).toEqual([]);
+
+      // And it does open once the window really has elapsed, so the assertion above
+      // cannot be passing because rotation is broken outright.
+      clock.advance(1);
+      await waitFor(() => rotations.length > 0);
+      expect(rotations).toEqual([session.sessionId]);
+
+      await session.dispose();
+    });
+  }
+
+  it('does not let a non-content event hold a rotation off', async () => {
+    // The converse: saves, heartbeats, focus and selection changes do not change
+    // bytes in a file, so they must not defer a rotation indefinitely.
+    const QUIET = 200;
+    const rotations: string[] = [];
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const session = await startRotating(clock, rotations, { rotateIdleQuietMsOverride: QUIET });
+
+    await emitToNextCheckpoint(session, 'doc.change');
+    expect(rotations).toEqual([]);
+
+    clock.advance(QUIET);
+    // Saving is not typing.
+    emitOne(session, 'doc.save');
+    await waitFor(() => rotations.length > 0);
     expect(rotations).toEqual([session.sessionId]);
 
     await session.dispose();
@@ -300,6 +407,61 @@ describe('startSession', () => {
     expect(rotations).toEqual([]);
 
     await session.dispose();
+    clock.advance(10_000);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(rotations).toEqual([]);
+  });
+
+  it('arms no poll from the session.end entry written during teardown', async () => {
+    // dispose() clears the timer on its first line and THEN emits session.end, which
+    // still runs through onEntry (that is what `sealing` is for). If that entry lands
+    // on the 100-entry checkpoint boundary with the log over threshold, the checkpoint
+    // branch would arm a FRESH interval after teardown — a timer outliving its
+    // session, which then asks to rotate a sealed log.
+    const rotations: string[] = [];
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const session = await startRotating(clock, rotations, {
+      rotateIdleQuietMsOverride: 100,
+      // High enough that the first checkpoints leave the rotation unarmed.
+      rotateAtBytesOverride: 200_000,
+    });
+
+    // The arming must happen for the FIRST time on that session.end entry, or
+    // `rotationArmed` short-circuits and the test proves nothing. So: get to a
+    // boundary while still well under the threshold…
+    await emitToNextCheckpoint(session, 'doc.change');
+    expect(session.writer.bytesAppended).toBeLessThan(200_000);
+    expect(rotations).toEqual([]);
+
+    // …then park exactly one entry short of the next boundary while crossing the
+    // threshold, using fat pastes so few entries carry many bytes. Pastes are
+    // content-mutating, so the session is NOT quiet when teardown begins and nothing
+    // may fire during it.
+    await session.writer.flush();
+    const parsed = parseEntries(await fs.readFile(session.slogPath, 'utf8'));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const toGo = CHECKPOINT_INTERVAL - (parsed.value.length % CHECKPOINT_INTERVAL);
+    const fat = 'x'.repeat(4000);
+    for (let i = 0; i < toGo - 1; i++) {
+      session.sessionHost.emit('paste', {
+        path: 'hw1.py',
+        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+        length: fat.length,
+        sha256: 'b'.repeat(64),
+        content: fat,
+      });
+    }
+    // Over the threshold, still unarmed, still not quiet.
+    expect(session.writer.bytesAppended).toBeGreaterThan(200_000);
+    expect(rotations).toEqual([]);
+
+    // dispose()'s own session.end is now the hundredth entry since the last
+    // checkpoint, so it lands inside the checkpoint branch with the log over
+    // threshold — the exact shape that used to arm a post-teardown interval.
+    await session.dispose();
+
+    // Now make the (hypothetical) poll's condition true and give it many ticks.
     clock.advance(10_000);
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(rotations).toEqual([]);

@@ -1745,6 +1745,55 @@ describe('startDocWiring', () => {
     expect(emitters.emitDocOpen).toHaveBeenCalledOnce();
   });
 
+  it('the synthetic doc.open carries UNSAVED buffer content, not what is on disk', () => {
+    // Design §5 case 3, and the load-bearing half of size rotation (§3.3): the
+    // successor of a rotated pair takes its baseline from this synthetic doc.open,
+    // while `inter_session_external_change` takes the predecessor's side from a
+    // reconstruction of its event stream and compares the two by exact string
+    // equality. If this read came from DISK, every rotation with a dirty buffer
+    // would look like an out-of-recorder edit — the file on disk lacks edits the
+    // predecessor's reconstruction contains.
+    setMockWindowState({ focused: true });
+    const onDisk = 'def f():\n    pass\n';
+    const inBuffer = 'def f():\n    return 42  # typed, not yet saved\n';
+    const dirtyDoc = {
+      uri: { fsPath: '/workspace/src/hw.py', scheme: 'file' },
+      lineCount: 2,
+      // The buffer, exactly as vscode.TextDocument.getText() reports it.
+      getText: () => inBuffer,
+    };
+    setMockTextDocuments([dirtyDoc]);
+
+    const workspaceWithRoot: WorkspaceLike = {
+      asRelativePath: (uri) => {
+        const fsPath = (uri as { fsPath: string }).fsPath;
+        return fsPath.startsWith('/workspace/') ? fsPath.slice('/workspace/'.length) : fsPath;
+      },
+    };
+
+    const registry = new ExpectedContentRegistry({
+      track: ['src/hw.py'],
+      ignore: [],
+      attachments: [],
+    });
+    const emitters = makeEmitters();
+    startDocWiring({
+      workspace: workspaceWithRoot,
+      ...emitters,
+      filesUnderReview: ['src/hw.py'],
+      expectedContent: registry,
+      ...makeDefaultPasteDeps(),
+    });
+
+    expect(emitters.emitDocOpen).toHaveBeenCalledOnce();
+    const payload = emitters.emitDocOpen.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.content).toBe(inBuffer);
+    expect(payload.content).not.toBe(onDisk);
+    // And the hash commits to the buffer too, so the expected-content model starts
+    // from the same bytes the analyzer will reconstruct.
+    expect(payload.sha256).toBe(sha256Hex(inBuffer));
+  });
+
   // -------------------------------------------------------------------------
   // Recordability filter: scheme + in-workspace guard (PRD §4.1, §4.2)
   // -------------------------------------------------------------------------

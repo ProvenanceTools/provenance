@@ -100,19 +100,45 @@ export const ROTATE_AT_BYTES = 40 * 1024 * 1024;
 
 /**
  * Once {@link ROTATE_AT_BYTES} is crossed, wait for this much quiet — no
- * `doc.change` recorded — before actually rotating (design §3.3 mechanism 1).
+ * {@link ROTATE_QUIET_KINDS} event recorded — before rotating (design §3.3
+ * mechanism 1).
  *
  * The seam between a rotated pair is NOT free. `inter_session_external_change`
  * compares a reconstruction of the predecessor's event stream against the
  * successor's first `doc.open` content, which is a LIVE BUFFER read, by exact
- * string equality. A keystroke lost inside the teardown window is therefore in
- * the successor's baseline and missing from the predecessor's reconstruction, and
- * the heuristic reports at 0.85 confidence that the student edited the file
- * outside the recorder. Rotating only while the student is idle makes "nobody
- * typed during teardown" a property of WHEN we rotate rather than a hope about how
+ * string equality. Content lost inside the teardown window is therefore in the
+ * successor's baseline and missing from the predecessor's reconstruction, and the
+ * heuristic reports at 0.85 confidence that the student edited the file outside the
+ * recorder. Rotating only while nothing is mutating content makes "the file did not
+ * change during teardown" a property of WHEN we rotate rather than a hope about how
  * fast teardown is.
  */
 export const ROTATE_IDLE_QUIET_MS = 2000;
+
+/**
+ * The event kinds that reset the idle window: every kind that MUTATES file content
+ * (design §3.3 — "content-mutating means `doc.change`, `paste` and
+ * `fs.external_change`, not `doc.change` alone").
+ *
+ * `doc.change` alone is not enough, and the gap is not theoretical:
+ *
+ * - An inlineable single-shot paste is emitted as kind `paste`, not `doc.change`
+ *   (`wiring/doc-wiring.ts`), so a gate on typing alone opens while the student is
+ *   reading a web page, fires the rotation, and then loses their Cmd+V inside the
+ *   teardown window. A paste is large, so the resulting false flag likely clears
+ *   `highSeverityCharsChanged` and is reported at HIGH severity.
+ * - `fs.external_change` is a formatter-on-save or a `git checkout`: a whole-file
+ *   rewrite, i.e. the same false flag in its worst form.
+ *
+ * Only these three change bytes in a file. Heartbeats, focus and selection changes,
+ * saves, terminal and git events do not, so they must not hold a rotation off —
+ * a session that only saves and heartbeats is idle for this purpose.
+ */
+const ROTATE_QUIET_KINDS: ReadonlySet<string> = new Set([
+  'doc.change',
+  'paste',
+  'fs.external_change',
+]);
 
 /**
  * Rotate even without a quiet window once the log reaches this size (design §3.3).
@@ -793,15 +819,18 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   /** Size threshold crossed; waiting for a quiet window (design §3.3). */
   let rotationArmed = false;
   /**
-   * When the last `doc.change` was recorded, in `clock` time.
+   * When content was last mutated ({@link ROTATE_QUIET_KINDS}), in `clock` time.
    *
    * Seeded at session start so a session that crosses the threshold without the
-   * student ever typing is idle by definition. Written on the event path — one
-   * kind comparison per entry and one clock read per `doc.change`, no evaluation —
-   * because the p99 < 1 ms budget (PRD §4.7) binds there and nothing else does.
+   * file ever changing is idle by definition. Written on the event path — and
+   * ONLY while a rotation is armed, so an ordinary session pays a single boolean
+   * test per entry and nothing else; the p99 < 1 ms budget (PRD §4.7) binds there
+   * and nowhere else. No evaluation happens here, only the timestamp.
    */
-  let lastDocChangeAtMs = clock.now();
+  let lastContentChangeAtMs = clock.now();
   let idleTimer: ReturnType<typeof setInterval> | undefined;
+  /** Set by `dispose()`: no timer may be armed after teardown has begun. */
+  let disposed = false;
 
   function clearIdleTimer(): void {
     if (idleTimer !== undefined) {
@@ -824,7 +853,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     if (rotationRequested) return;
     const bytes = writer.bytesAppended;
     if (bytes < rotateAtBytes) return;
-    const quiet = clock.now() - lastDocChangeAtMs >= rotateIdleQuietMs;
+    const quiet = clock.now() - lastContentChangeAtMs >= rotateIdleQuietMs;
     if (!quiet && bytes < rotateHardCeilingBytes) return;
     rotationRequested = true;
     clearIdleTimer();
@@ -838,7 +867,12 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
    * has a shutdown path).
    */
   function armRotation(): void {
-    if (rotationArmed) return;
+    // `disposed` is checked, not just `rotationArmed`: `dispose()` clears the timer
+    // on its first line and THEN emits `session.end`, which still runs through
+    // `onEntry` (that is the point — see `sealing`). If that entry happens to land
+    // on the 100-entry boundary with the log over threshold and not yet quiet, this
+    // would otherwise create a fresh interval after teardown.
+    if (rotationArmed || disposed) return;
     rotationArmed = true;
     // A quarter of the quiet interval: fine-grained enough that the rotation
     // follows the pause closely, coarse enough to be free (one callback per 500 ms
@@ -866,16 +900,28 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
    * writer flushes, drains and seals (rotation, PRD §4.6, does not unsubscribe it
    * until teardown returns), so an ordinary keystroke inside that window would
    * raise an exception into a VS Code event listener on the student's machine.
-   * Design §3.2 specifies these events as dropped, and argues the drop is safe:
-   * the successor's catch-up `doc.open` re-reads the LIVE BUFFER, so its
-   * reconstruction starts from the true current content and the seam shows no
-   * divergence. A drop is invisible to the analyzer for that reason; noise on the
-   * student's screen would not be.
+   * Design §3.2 specifies these events as dropped; this is that drop.
    *
-   * What this can hide: any event kind at all, but only in the sub-second span
-   * after `session.end` has been written. Nothing is lost that a reader could
-   * otherwise have seen, because a log cannot legally continue past its own
-   * `session.end`.
+   * A DROP IS NOT FREE, and an earlier version of this comment claimed it was.
+   * Design §3.3 (correction, 2026-09-23) records why that was wrong:
+   * `inter_session_external_change` compares a RECONSTRUCTION of the predecessor's
+   * event stream against the successor's first `doc.open` content, which is a live
+   * buffer read, by exact string equality. So content dropped here is present on the
+   * successor's side and absent from the predecessor's, the two differ, and the
+   * student is reported at 0.85 confidence for editing the file outside the recorder.
+   * The drop is VISIBLE to the analyzer, and deliberately so — the negative control
+   * in `analysis-core` exists to keep it visible.
+   *
+   * That is why this flag is not the mitigation. The mitigation is WHEN we rotate:
+   * {@link ROTATE_IDLE_QUIET_MS} + {@link ROTATE_QUIET_KINDS} mean a rotation begins
+   * only after nothing has mutated content for two seconds, so in the ordinary case
+   * there is nothing in the window to drop. The one exception is
+   * {@link ROTATE_HARD_CEILING_BYTES}, which rotates a never-idle session anyway and
+   * can therefore still produce a false flag.
+   *
+   * What this can hide: any event kind at all, but only in the span after
+   * `session.end` has been written, and nothing a reader could otherwise have seen —
+   * a log cannot legally continue past its own `session.end`.
    */
   let sealing = false;
 
@@ -911,9 +957,11 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
       writer.append(entry);
       // The idle gate's only hot-path cost (design §3.3 mechanism 1): the WHEN,
       // never the whether. Evaluation happens at the checkpoint cadence and on the
-      // poll timer, not here.
-      if (entry.kind === 'doc.change') {
-        lastDocChangeAtMs = clock.now();
+      // poll timer, not here. `rotationArmed` is tested FIRST so an ordinary session
+      // — which is every session until it passes 40 MiB — pays one boolean and
+      // neither a Set lookup nor a clock read.
+      if (rotationArmed && ROTATE_QUIET_KINDS.has(entry.kind)) {
+        lastContentChangeAtMs = clock.now();
       }
       entryCountSinceLastCheckpoint++;
       if (entryCountSinceLastCheckpoint >= CHECKPOINT_INTERVAL) {
@@ -1274,7 +1322,10 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   async function dispose(reason: string = 'deactivate'): Promise<void> {
     // The rotation idle poll, if one is armed. First, and unconditionally: it is
     // the one background task this function owns directly rather than through
-    // ownDisposables, and it must not outlive the session that armed it.
+    // ownDisposables, and it must not outlive the session that armed it. `disposed`
+    // also stops `armRotation` creating a NEW one from the `session.end` entry that
+    // this function is about to write — see `armRotation`.
+    disposed = true;
     clearIdleTimer();
     // Final peer-witness drain, BEFORE session.end so the observations land
     // inside the session they belong to. Checkpoints fire every 100 entries, so
