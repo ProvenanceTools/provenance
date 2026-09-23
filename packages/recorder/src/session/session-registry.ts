@@ -87,8 +87,25 @@ export type HeartbeatVscodeDeps = {
   onDidChangeTextDocument: (handler: () => void) => vscode.Disposable;
 };
 
+/**
+ * Rotate a session once its `.slog` passes this size (PRD §4.6).
+ *
+ * `submission: 'git'` assignments commit `.provenance/` to a GitHub repo, and
+ * GitHub warns at 50 MB and REFUSES a push containing a file over 100 MB. A
+ * session now lives for the editor's lifetime, so an unrotated log can grow
+ * past that and leave the student unable to submit. 40 MiB keeps a whole
+ * 256 KB flush plus a few 64 KB payloads clear of the warning.
+ */
+export const ROTATE_AT_BYTES = 40 * 1024 * 1024;
+
 export type ActiveSession = {
   assignmentRoot: string;
+  /**
+   * This session's LOGICAL `session_id` — the one in `session.start`, which is
+   * also what a successor's `prev_session_id` names. NOT the uuid in the `.slog`
+   * filename: the two are deliberately different (see `recorder-context.ts`).
+   */
+  sessionId: string;
   manifest: Manifest;
   provenanceDir: string;
   slogPath: string;
@@ -127,8 +144,14 @@ export type ActiveSession = {
   ownDisposables: vscode.Disposable[];
   /** Most recent checkpoint write chain. dispose() awaits this so the final checkpoint isn't lost. */
   getPendingCheckpoint: () => Promise<void>;
-  /** Emits session.end, flushes the writer, drains the pending checkpoint, disposes metaWriter + ownDisposables, in that order. */
-  dispose: () => Promise<void>;
+  /**
+   * Emits session.end, flushes the writer, drains the pending checkpoint, disposes
+   * metaWriter + ownDisposables, in that order.
+   *
+   * `reason` is the `session.end` reason and defaults to `'deactivate'`. Size
+   * rotation (PRD §4.6) passes `'rotate'`; everything else takes the default.
+   */
+  dispose: (reason?: string) => Promise<void>;
 };
 
 export type StartSessionDeps = {
@@ -139,6 +162,23 @@ export type StartSessionDeps = {
   platform: string;
   clock: Clock;
   provenanceDirOverride?: string;
+  /**
+   * Force this session's `prev_session_id`, bypassing chain recovery.
+   *
+   * Recovery only links a DANGLING previous session (a crash). A rotation ends
+   * the previous session CLEANLY, so recovery reports `previous_session_complete`
+   * and would link nothing — the successor would look like an unrelated session.
+   * The rotation caller therefore passes the ended session's id here.
+   */
+  prevSessionIdOverride?: string;
+  /** Production default {@link ROTATE_AT_BYTES}; tests pass a tiny value. */
+  rotateAtBytesOverride?: number;
+  /**
+   * Called (at most once) when this session's log has passed the rotation
+   * threshold. The session does NOT rotate itself: it owns neither the registry
+   * nor its own deps. `extension.ts` supplies this and performs the swap.
+   */
+  requestRotation?: (endedSessionId: string) => void;
   heartbeatDeps?: HeartbeatVscodeDeps;
   extensionDistPath?: string;
   /**
@@ -397,8 +437,13 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   // The session it names is now guaranteed to be one of THIS contributor's, so
   // the back-pointer is a real intra-contributor chain link rather than "whoever
   // wrote last by wall clock" (program spec §7 mechanism 1).
+  //
+  // `prevSessionIdOverride` wins, and exists for exactly one caller: size
+  // rotation (PRD §4.6), whose predecessor ended CLEANLY and so is invisible to
+  // the dangling-only rule above. Recovery itself is untouched.
   const prevSessionId: string | null =
-    recovery.kind === 'previous_session_dangling' ? recovery.prevSessionId : null;
+    deps.prevSessionIdOverride ??
+    (recovery.kind === 'previous_session_dangling' ? recovery.prevSessionId : null);
 
   // Step 3c-quater: THE CAPABILITY REPORTS (collaboration spec §5.6).
   //
@@ -670,6 +715,8 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   const CHECKPOINT_INTERVAL = 100;
   let entryCountSinceLastCheckpoint = 0;
   let pendingCheckpoint: Promise<void> = Promise.resolve();
+  const rotateAtBytes = deps.rotateAtBytesOverride ?? ROTATE_AT_BYTES;
+  let rotationRequested = false;
 
   /**
    * PEER WITNESSING (program spec §7 mechanism 2). Forward reference: the
@@ -724,6 +771,20 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
           // session-start or dispose() rolls (see `rewriteRollingSeal`'s
           // docstring).
           .then(() => rewriteRollingSeal());
+
+        // Size rotation (PRD §4.6). Read INSIDE the checkpoint branch so the
+        // check costs one comparison per 100 entries, not one per keystroke —
+        // doc.change must stay under 1 ms p99 (§4.7). Requested at most once;
+        // the swap itself is extension.ts's job.
+        //
+        // A degraded (disk-full) session can never reach here: the degraded
+        // branch at the top of onEntry returns before the append. That is the
+        // required behaviour — there is no point rotating a log we cannot write
+        // — so no second guard is added for it.
+        if (!rotationRequested && writer.bytesAppended >= rotateAtBytes) {
+          rotationRequested = true;
+          deps.requestRotation?.(recorderContext.session_id);
+        }
       }
     },
   });
@@ -1024,11 +1085,14 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
    * pending checkpoint, dispose the metaWriter, then dispose ownDisposables in LIFO
    * order. Each step is best-effort so a failure in one does not skip the rest.
    *
+   * `reason` becomes `session.end.reason` and defaults to `'deactivate'`, which is
+   * what every caller but size rotation (PRD §4.6, `'rotate'`) passes.
+   *
    * Note: when extension.ts hands ownDisposables to VS Code's context.subscriptions
    * (single-root case), it empties this array so the LIFO teardown here is a no-op —
    * VS Code disposes those first, matching the historical ordering.
    */
-  async function dispose(): Promise<void> {
+  async function dispose(reason: string = 'deactivate'): Promise<void> {
     // Final peer-witness drain, BEFORE session.end so the observations land
     // inside the session they belong to. Checkpoints fire every 100 entries, so
     // a partner's log that arrived after the last one would otherwise never be
@@ -1041,7 +1105,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     }
     // Emit session.end event.
     try {
-      sessionHost.emit('session.end', { reason: 'deactivate' });
+      sessionHost.emit('session.end', { reason });
     } catch {
       // Ignore — best effort.
     }
@@ -1111,6 +1175,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
 
   return {
     assignmentRoot,
+    sessionId: recorderContext.session_id,
     manifest,
     provenanceDir,
     slogPath,

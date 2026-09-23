@@ -298,6 +298,96 @@ export async function activateImpl(deps: ActivateDeps): Promise<ActiveSession | 
 const registry = new SessionRegistry();
 
 /**
+ * Everything both session-starting call sites (activation and `rescan`) have in
+ * common, so size rotation can restart a root with EXACTLY the deps it was
+ * started with rather than a hand-copied subset.
+ */
+type StartAndRegisterArgs = {
+  context: vscode.ExtensionContext;
+  extensionDistPath: string;
+  extension: vscode.Extension<unknown>;
+  root: string;
+  manifest: Manifest;
+  /** Every discovered assignment root, for the two ownership predicates. */
+  allRoots: readonly string[];
+  /** The `startSession` seam this caller resolved (see {@link ActivateWiring}). */
+  start: typeof startSession;
+  /**
+   * Set only by rotation (PRD §4.6): the ended session's logical id, which chain
+   * recovery cannot supply because a rotation ends cleanly.
+   */
+  prevSessionId?: string;
+};
+
+/**
+ * Start one session for `args.root` and register it, replacing any session
+ * already registered for that root (`registry.add` overwrites by root).
+ */
+async function startAndRegister(args: StartAndRegisterArgs): Promise<void> {
+  const { context, extensionDistPath, extension, root, manifest, allRoots, start } = args;
+  const session = await start({
+    assignmentRoot: root,
+    manifest,
+    extension,
+    vscodeVersion: vscode.version,
+    platform: `${process.platform}-${process.arch}`,
+    clock: new SystemClock(),
+    extensionDistPath,
+    secrets: context.secrets,
+    isOwnedByThisRoot: (fsPath: string) => resolveOwnerRoot(fsPath, [...allRoots]) === root,
+    // A repository root is an ANCESTOR of the assignment root it serves, so the
+    // containment predicate above can never match it — see isRepoOwnedByRoot and
+    // spec §3 S14(a).
+    isRepoOwnedByThisRoot: (repoRootFsPath: string) =>
+      isRepoOwnedByRoot(repoRootFsPath, root, [...allRoots]),
+    // Conditional spread, not `prevSessionIdOverride: args.prevSessionId`:
+    // `exactOptionalPropertyTypes` forbids passing an explicit `undefined` for an
+    // optional property, and a non-rotation start must OMIT it, not blank it.
+    ...(args.prevSessionId === undefined ? {} : { prevSessionIdOverride: args.prevSessionId }),
+    requestRotation: (endedSessionId) => {
+      void rotate(args, endedSessionId);
+    },
+  });
+  context.subscriptions.push(...session.ownDisposables);
+  session.ownDisposables.length = 0;
+  registry.add(session);
+}
+
+/** In-flight rotation roots, so a second request cannot interleave with the first. */
+const rotating = new Set<string>();
+
+/**
+ * Rotate the session at `args.root`: dispose it (sealing it, with
+ * `session.end{reason:'rotate'}`), then start its successor linked by
+ * `prev_session_id`.
+ *
+ * Dispose-then-start, NOT start-then-dispose: the old session's doc wiring is
+ * only unsubscribed at the END of its teardown, so starting first would record
+ * the same keystroke into both logs. Dropping the sub-second gap is safe —
+ * the successor's catch-up doc.open re-reads the live buffer, so reconstruction
+ * resynchronises and no divergence is flagged.
+ *
+ * A failure here leaves the predecessor sealed and this root simply not
+ * recording, which is the existing per-root failure mode (PRD §4.8), not a new
+ * one.
+ */
+async function rotate(args: StartAndRegisterArgs, endedSessionId: string): Promise<void> {
+  const { root } = args;
+  if (rotating.has(root)) return;
+  rotating.add(root);
+  try {
+    const current = registry.get(root);
+    if (current === undefined || current.sessionId !== endedSessionId) return;
+    await current.dispose('rotate');
+    await startAndRegister({ ...args, prevSessionId: endedSessionId });
+  } catch (e: unknown) {
+    console.error('[provenance] session rotation failed:', e);
+  } finally {
+    rotating.delete(root);
+  }
+}
+
+/**
  * The single status bar item, held so enrollment state can be re-rendered after
  * the sessions have started and again on every rescan. Null before activation
  * mounts it, and in workspaces where no verified manifest was found.
@@ -484,33 +574,15 @@ export async function activate(
     const failedRoots: string[] = [];
     for (const { root, manifest } of found) {
       try {
-        const session = await start({
-          assignmentRoot: root,
-          manifest,
-          extension,
-          vscodeVersion: vscode.version,
-          platform: `${process.platform}-${process.arch}`,
-          clock: new SystemClock(),
+        await startAndRegister({
+          context,
           extensionDistPath,
-          secrets: context.secrets,
-          isOwnedByThisRoot: (fsPath: string) =>
-            resolveOwnerRoot(
-              fsPath,
-              found.map((f) => f.root),
-            ) === root,
-          // A repository root is an ANCESTOR of the assignment root it serves, so
-          // the containment predicate above can never match it — see
-          // isRepoOwnedByRoot and spec §3 S14(a).
-          isRepoOwnedByThisRoot: (repoRootFsPath: string) =>
-            isRepoOwnedByRoot(
-              repoRootFsPath,
-              root,
-              found.map((f) => f.root),
-            ),
+          extension,
+          root,
+          manifest,
+          allRoots: found.map((f) => f.root),
+          start,
         });
-        context.subscriptions.push(...session.ownDisposables);
-        session.ownDisposables.length = 0;
-        registry.add(session);
       } catch (e) {
         failedRoots.push(root);
         console.error(`[provenance] could not start recording for ${root}:`, e);
@@ -582,24 +654,15 @@ async function rescan(
       // added to the workspace that cannot be recorded must not stop the folders
       // added alongside it from being recorded.
       try {
-        const session = await startSession({
-          assignmentRoot: root,
-          manifest,
-          extension,
-          vscodeVersion: vscode.version,
-          platform: `${process.platform}-${process.arch}`,
-          clock: new SystemClock(),
+        await startAndRegister({
+          context,
           extensionDistPath,
-          secrets: context.secrets,
-          isOwnedByThisRoot: (fsPath: string) => resolveOwnerRoot(fsPath, allRoots) === root,
-          // See the activation call site: a repository root is an ancestor of the
-          // assignment root, which `resolveOwnerRoot` cannot express.
-          isRepoOwnedByThisRoot: (repoRootFsPath: string) =>
-            isRepoOwnedByRoot(repoRootFsPath, root, allRoots),
+          extension,
+          root,
+          manifest,
+          allRoots,
+          start: startSession,
         });
-        context.subscriptions.push(...session.ownDisposables);
-        session.ownDisposables.length = 0;
-        registry.add(session);
       } catch (e) {
         console.error(`[provenance] could not start recording for ${root}:`, e);
       }

@@ -152,6 +152,143 @@ describe('startSession', () => {
     expect(contentsB).toContain('"hog"');
     expect(contentsB).not.toContain('"cats"');
   });
+
+  // -------------------------------------------------------------------------
+  // Size rotation (PRD §4.6)
+  // -------------------------------------------------------------------------
+
+  it('requests a rotation once the log passes the threshold', async () => {
+    const rotations: string[] = [];
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+
+    const session = await startSession({
+      assignmentRoot,
+      manifest: await signedManifest({
+        assignment_id: 'hw03',
+        semester: 'fa26',
+        issued_at: '2026-09-15T00:00:00Z',
+        files_under_review: ['hw1.py'],
+      }),
+      extension: makeExtension(),
+      vscodeVersion: '1.97.0',
+      platform: 'darwin-arm64',
+      clock,
+      provenanceDirOverride: provenanceDir,
+      // A tiny threshold: a handful of real entries crosses it, so the test
+      // never writes 40 MiB.
+      rotateAtBytesOverride: 512,
+      requestRotation: (endedSessionId) => rotations.push(endedSessionId),
+    });
+
+    // startSession itself writes some entries (session.start, and whatever the
+    // capability/identity steps emit), so count them rather than assuming the
+    // checkpoint boundary lands exactly 100 doc.saves from here.
+    await session.writer.flush();
+    const beforeParsed = parseEntries(await fs.readFile(session.slogPath, 'utf8'));
+    expect(beforeParsed.ok).toBe(true);
+    if (!beforeParsed.ok) return;
+    const alreadyWritten = beforeParsed.value.length;
+    const CHECKPOINT_INTERVAL = 100;
+    expect(alreadyWritten).toBeLessThan(CHECKPOINT_INTERVAL);
+
+    // The threshold is only READ at the checkpoint cadence (every 100 entries),
+    // so crossing it must not fire before the 100th entry.
+    for (let i = 0; i < CHECKPOINT_INTERVAL - alreadyWritten - 1; i++) {
+      session.sessionHost.emit('doc.save', { path: 'hw1.py', sha256: 'a'.repeat(64) });
+    }
+    expect(session.writer.bytesAppended).toBeGreaterThan(512);
+    expect(rotations).toEqual([]);
+
+    session.sessionHost.emit('doc.save', { path: 'hw1.py', sha256: 'a'.repeat(64) });
+    expect(rotations).toEqual([session.sessionId]);
+
+    // Requested at most once, however many further checkpoints go by.
+    for (let i = 0; i < CHECKPOINT_INTERVAL; i++) {
+      session.sessionHost.emit('doc.save', { path: 'hw1.py', sha256: 'a'.repeat(64) });
+    }
+    expect(rotations).toEqual([session.sessionId]);
+
+    await session.dispose();
+  });
+
+  it('writes the rotate reason and links the successor by prev_session_id', async () => {
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const manifestFields = {
+      assignment_id: 'hw03',
+      semester: 'fa26',
+      issued_at: '2026-09-15T00:00:00Z',
+      files_under_review: ['hw1.py'],
+    };
+
+    const first = await startSession({
+      assignmentRoot,
+      manifest: await signedManifest(manifestFields),
+      extension: makeExtension(),
+      vscodeVersion: '1.97.0',
+      platform: 'darwin-arm64',
+      clock,
+      provenanceDirOverride: provenanceDir,
+    });
+    const firstId = first.sessionId;
+    expect(firstId).toBe(first.sessionHost.sessionId);
+    await first.dispose('rotate');
+
+    const second = await startSession({
+      assignmentRoot,
+      manifest: await signedManifest(manifestFields),
+      extension: makeExtension(),
+      vscodeVersion: '1.97.0',
+      platform: 'darwin-arm64',
+      clock,
+      provenanceDirOverride: provenanceDir,
+      prevSessionIdOverride: firstId,
+    });
+    await second.dispose();
+
+    const firstParsed = parseEntries(await fs.readFile(first.slogPath, 'utf8'));
+    const secondParsed = parseEntries(await fs.readFile(second.slogPath, 'utf8'));
+    expect(firstParsed.ok).toBe(true);
+    expect(secondParsed.ok).toBe(true);
+    if (!firstParsed.ok || !secondParsed.ok) return;
+
+    const lastFirst = firstParsed.value.at(-1)!;
+    expect(lastFirst.kind).toBe('session.end');
+    expect((lastFirst.data as { reason: string }).reason).toBe('rotate');
+
+    const start = secondParsed.value[0]!;
+    expect(start.kind).toBe('session.start');
+    expect((start.data as { prev_session_id: string | null }).prev_session_id).toBe(firstId);
+    // Each log is independently chain-valid — rotation does not span a chain.
+    expect(validateChain(firstParsed.value).ok).toBe(true);
+    expect(validateChain(secondParsed.value).ok).toBe(true);
+    expect(second.slogPath).not.toBe(first.slogPath);
+  });
+
+  it('defaults session.end to deactivate when dispose() is given no reason', async () => {
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const session = await startSession({
+      assignmentRoot,
+      manifest: await signedManifest({
+        assignment_id: 'hw03',
+        semester: 'fa26',
+        issued_at: '2026-09-15T00:00:00Z',
+        files_under_review: ['hw1.py'],
+      }),
+      extension: makeExtension(),
+      vscodeVersion: '1.97.0',
+      platform: 'darwin-arm64',
+      clock,
+      provenanceDirOverride: provenanceDir,
+    });
+    await session.dispose();
+
+    const parsed = parseEntries(await fs.readFile(session.slogPath, 'utf8'));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const last = parsed.value.at(-1)!;
+    expect(last.kind).toBe('session.end');
+    expect((last.data as { reason: string }).reason).toBe('deactivate');
+  });
 });
 
 describe('SessionRegistry', () => {
