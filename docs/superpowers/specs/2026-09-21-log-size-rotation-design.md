@@ -112,10 +112,14 @@ a behavioural choice, not a derivation, and it must be identical in all three po
 disk fills. The guard is at the commit point, so it cannot see a degradation that happens
 afterwards, and adding a second check inside the teardown would recreate the very pattern this rule
 exists to prevent — a guarantee spread across two sites, where the second one is the one a later
-change forgets. The window is bounded by the commit point (microseconds to milliseconds), the
-outcome is the same falsely-`final` seal, and the honest position is that it is unreachable in
-practice rather than impossible in principle. Ranked against the alternative — three ports each
-carrying two degraded checks — this is the better failure mode.
+change forgets. The outcome is the same falsely-`final` seal.
+
+Do not describe that window as vanishing: the teardown contains the **largest write the session ever
+makes** (the final flush plus the seal's walk-and-hash), so a disk filling _during_ a rotation is
+among the more likely moments for it, not one of the less likely. The decision not to add a second
+guard stands on the two-sites argument alone, not on the window being small. Ranked against the
+alternative — three ports each carrying two degraded checks, where the second is the one a later
+change forgets — this is still the better failure mode.
 
 ### 3.3 The seam must be empty, because a lossy seam accuses the student
 
@@ -168,9 +172,28 @@ power, and keying suppression off the student-controlled `reason` string is forb
 
 **Hard ceiling.** If the log reaches `ROTATE_HARD_CEILING_BYTES = 48 * 1024 * 1024` without ever
 seeing a quiet window, the recorder rotates anyway. A continuous-typing session that never idles
-must not grow without limit, and at that point an unpushable repo is the worse outcome. With
-mechanism 2 in place the residual window is small, but it is **not zero**, and this is the one path
-on which a rotation can still lose an edit.
+must not grow without limit, and at that point an unpushable repo is the worse outcome.
+
+**What the gate does and does not buy (corrected 2026-09-23).** An earlier version of this
+paragraph called the hard ceiling "the one path on which a rotation can still lose an edit". That is
+an overclaim, and it is the third time this spec has understated the seam. Stated correctly:
+
+- The quiet gate makes the **keyboard** safe. The hard ceiling is the only path on which a rotation
+  can lose a **keystroke**.
+- The gate cannot make an **external writer** safe, because a formatter daemon, a build tool, or a
+  partner's `git pull` is not synchronised to the student's pause. After the teardown begins, the
+  window still contains the final flush, the checkpoint drain, the rolling seal's walk-and-hash over
+  the whole 40 MiB log, and then the successor's keygen, identity, git probe and catch-up — on the
+  order of 0.3–1 s, not microseconds. An `fs.external_change` landing in there is dropped, and
+  because an external write is typically a whole-file rewrite it clears
+  `highSeverityCharsChanged`, so the false flag lands at **high** severity.
+- Worse, the gate **concentrates** rotations into the moments the student is idle, which is exactly
+  when background repo activity is most likely.
+
+This is a real residual, not a theoretical one, and it is the honest limit of this design: rotation
+reduces the false-accusation surface to external writers inside a sub-second window, from
+"every keystroke in a multi-second window". Anyone reading a rotated bundle's flags should know that
+an `inter_session_external_change` at a rotation seam has a benign explanation available.
 
 **The analyzer keeps a negative control.** `analysis-core` carries a test asserting that a _lossy_
 seam — one where content diverges across the boundary — **still flags**. That test is what stops
