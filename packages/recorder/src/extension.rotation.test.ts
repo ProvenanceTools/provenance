@@ -161,6 +161,14 @@ describe('extension.ts — session rotation', () => {
 
     // The successor replaced the predecessor for this root.
     expect(activeSessionsForTest()).toEqual([{ root, sessionId: 'B' }]);
+
+    // The successor also skips chain recovery (design §3.3 mechanism 2): it was
+    // handed its predecessor's id, and re-validating a 40 MiB log with no wiring
+    // attached is the largest term in the window where a keystroke can be lost.
+    expect(calls[1]!.deps.skipChainRecovery).toBe(true);
+    // An ordinary (non-rotation) start must NOT skip it.
+    expect(calls[0]!.deps.skipChainRecovery).toBeUndefined();
+    expect(calls[0]!.deps.prevSessionIdOverride).toBeUndefined();
   });
 
   it("disposes the predecessor's context-owned disposables and drops them from context", async () => {
@@ -248,5 +256,65 @@ describe('extension.ts — session rotation', () => {
 
     expect(trace).toEqual(['session-disposed:B:rotate', 'wiring-disposed:B', 'start:2:prev=B']);
     expect(activeSessionsForTest()).toEqual([{ root, sessionId: 'C' }]);
+  });
+
+  // -------------------------------------------------------------------------
+  // Abandonment (design §3.2 item 3) — review finding F2.
+  // -------------------------------------------------------------------------
+
+  it('abandons a rotation in flight when the extension deactivates, leaving nothing dangling', async () => {
+    // The window: a student closes the editor while the successor is starting.
+    // `registry.disposeAll()` cannot reach a session that is not registered yet, so
+    // without abandonment the successor is registered AFTER teardown and the
+    // process exits with its session.end never written — the student's next launch
+    // then reports `previous_session_dangling`, a crash-shaped session produced by
+    // closing a window normally.
+    let release: (() => void) | undefined;
+    startBehaviour = (n) =>
+      n === 1 ? new Promise<void>((resolve) => (release = resolve)) : Promise.resolve();
+
+    requestRotationOf(0)('A');
+    await settle();
+    // Predecessor already sealed; the successor's start is hanging.
+    expect(trace).toContain('session-disposed:A:rotate');
+    expect(calls).toHaveLength(1);
+
+    // The window closes here.
+    const shuttingDown = deactivate();
+    await settle();
+    release?.();
+    await shuttingDown;
+
+    // The successor was started (the start had already been entered) — so it must
+    // have been torn down, with its session.end written, and it must not be left
+    // registered after teardown.
+    expect(calls).toHaveLength(2);
+    expect(trace).toContain('session-disposed:B:deactivate');
+    expect(trace).toContain('wiring-disposed:B');
+    expect(activeSessionsForTest()).toEqual([]);
+    // Nothing of that session is left in context.subscriptions either.
+    expect(context.subscriptions).not.toContain(wirings.get('B'));
+  });
+
+  it('does not start a successor at all when deactivation lands before the start', async () => {
+    // Same abandonment, one step earlier: the predecessor's teardown is what is in
+    // flight. Starting a successor here would only create something else to stop.
+    let release: (() => void) | undefined;
+    calls[0]!.session.dispose = (reason?: string) => {
+      trace.push(`session-disposed:A:${reason ?? 'deactivate'}`);
+      return new Promise<void>((resolve) => (release = resolve));
+    };
+
+    requestRotationOf(0)('A');
+    await settle();
+    const shuttingDown = deactivate();
+    await settle();
+    release?.();
+    await shuttingDown;
+
+    // No second start, and no session left registered.
+    expect(calls).toHaveLength(1);
+    expect(trace.filter((t) => t.startsWith('start:'))).toEqual(['start:0:prev=none']);
+    expect(activeSessionsForTest()).toEqual([]);
   });
 });

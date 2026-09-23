@@ -343,9 +343,15 @@ async function startAndRegister(args: StartAndRegisterArgs): Promise<void> {
     // Conditional spread, not `prevSessionIdOverride: args.prevSessionId`:
     // `exactOptionalPropertyTypes` forbids passing an explicit `undefined` for an
     // optional property, and a non-rotation start must OMIT it, not blank it.
-    ...(args.prevSessionId === undefined ? {} : { prevSessionIdOverride: args.prevSessionId }),
+    // A rotation ALSO skips chain recovery (design §3.3 mechanism 2): it already
+    // knows the predecessor's id, and recovery would re-read and re-validate the
+    // whole 40 MiB predecessor log with no wiring attached — the largest term in
+    // the window where a keystroke can be lost.
+    ...(args.prevSessionId === undefined
+      ? {}
+      : { prevSessionIdOverride: args.prevSessionId, skipChainRecovery: true }),
     requestRotation: (endedSessionId) => {
-      void rotate(args, endedSessionId);
+      void beginRotation(args, endedSessionId);
     },
   });
   // Historical ordering, unchanged: VS Code owns these and disposes them before
@@ -398,8 +404,76 @@ function disposeContextOwned(context: vscode.ExtensionContext, root: string): vo
   }
 }
 
-/** In-flight rotation roots, so a second request cannot interleave with the first. */
-const rotating = new Set<string>();
+/**
+ * In-flight rotations by root, so a second request cannot interleave with the
+ * first and `deactivate()` can WAIT for one rather than racing it.
+ */
+const rotating = new Map<string, Promise<void>>();
+
+/**
+ * Roots whose in-flight rotation must be abandoned: the extension is shutting
+ * down, or the root left the workspace (design §3.2 item 3; the JetBrains port's
+ * `rotationsAbandoned`).
+ */
+const rotationsAbandoned = new Set<string>();
+
+/** True from the first line of `deactivate()`, so every step of a rotation sees it. */
+let deactivating = false;
+
+/**
+ * Mark an in-flight rotation for `root` as abandoned, if there is one.
+ *
+ * Called when a root leaves the workspace and for every root at `deactivate()`.
+ * Cheap and harmless when nothing is rotating.
+ */
+function abandonRotation(root: string): void {
+  if (rotating.has(root)) {
+    rotationsAbandoned.add(root);
+  }
+}
+
+/**
+ * Stop recording `root` right now: forget it, unsubscribe its wiring, and tear the
+ * session down so its `session.end` IS written.
+ *
+ * Idempotent, and that matters: it is the undo for the one window an abandonment
+ * check cannot close — the successor start that completes after teardown has
+ * already run. Without it that session is registered after `disposeAll()` has been
+ * and gone, the process exits with no `session.end`, and the student's next launch
+ * reads a DANGLING session: a crash-shaped log produced by closing a window
+ * normally, in a bundle that is evidence.
+ */
+async function stopRoot(context: vscode.ExtensionContext, root: string): Promise<void> {
+  const session = registry.get(root);
+  registry.remove(root);
+  disposeContextOwned(context, root);
+  if (session !== undefined) {
+    try {
+      await session.dispose();
+    } catch (e: unknown) {
+      console.error(`[provenance] error stopping ${root}:`, e);
+    }
+  }
+}
+
+/**
+ * Serialize rotations per root and publish the in-flight promise.
+ *
+ * `requestRotation` is a fire-and-forget callback from the event path, so this is
+ * the only place that can record "a rotation is running for this root" — which
+ * `deactivate()` needs in order to await it instead of exiting underneath it.
+ */
+function beginRotation(args: StartAndRegisterArgs, endedSessionId: string): Promise<void> {
+  const { root } = args;
+  const inFlight = rotating.get(root);
+  if (inFlight !== undefined) return inFlight;
+  const p = rotate(args, endedSessionId).finally(() => {
+    rotating.delete(root);
+    rotationsAbandoned.delete(root);
+  });
+  rotating.set(root, p);
+  return p;
+}
 
 /**
  * Rotate the session at `args.root`: dispose it (sealing it, with
@@ -419,19 +493,34 @@ const rotating = new Set<string>();
  * could not start. Leaving the entry in place would keep the status bar claiming
  * "recording" and keep `resolveForPath` routing to a closed writer, and no retry
  * could ever fire because that session's rotation was already requested.
+ *
+ * ABANDONMENT (design §3.2 item 3). Every step re-checks whether the extension is
+ * deactivating or this root has been stopped, because a rotation takes multiple
+ * awaits and a student can close the window inside any of them. The check after
+ * the successor start is the important one: `registry.disposeAll()` cannot reach a
+ * session that was not registered yet, so without it a window closed mid-rotation
+ * would register a session AFTER teardown and exit with its `session.end` never
+ * written — a dangling session, i.e. a crash-shaped log produced by a normal close.
  */
 async function rotate(args: StartAndRegisterArgs, endedSessionId: string): Promise<void> {
   const { context, root } = args;
-  if (rotating.has(root)) return;
-  rotating.add(root);
+  const abandoned = (): boolean => deactivating || rotationsAbandoned.has(root);
   try {
     const current = registry.get(root);
     if (current === undefined || current.sessionId !== endedSessionId) return;
+    if (abandoned()) return;
     await current.dispose('rotate');
     // The seal is written; now actually unsubscribe the predecessor's wiring,
     // which `dispose()` could not reach (see `contextOwnedDisposables`). After
     // this point nothing can emit into the closed writer.
     disposeContextOwned(context, root);
+    if (abandoned()) {
+      // The predecessor is sealed and its wiring is gone; starting a successor now
+      // would only create something else to tear down. Drop the dead entry so
+      // nothing claims to be recording.
+      registry.remove(root);
+      return;
+    }
     try {
       await startAndRegister({ ...args, prevSessionId: endedSessionId });
     } catch (e: unknown) {
@@ -442,6 +531,12 @@ async function rotate(args: StartAndRegisterArgs, endedSessionId: string): Promi
         inactiveReason = { kind: 'no_manifest_file' };
       }
       throw e;
+    }
+    // The window no check can close: abandonment that happened DURING the start
+    // above. The successor exists and is registered, so undo it properly — that
+    // writes its `session.end` instead of leaving it dangling.
+    if (abandoned()) {
+      await stopRoot(context, root);
     }
   } catch (e: unknown) {
     console.error(`[provenance] session rotation failed for ${root}:`, e);
@@ -454,8 +549,6 @@ async function rotate(args: StartAndRegisterArgs, endedSessionId: string): Promi
           'course staff.',
       );
     }
-  } finally {
-    rotating.delete(root);
   }
 }
 
@@ -709,6 +802,15 @@ async function rescan(
     const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
     const currentRoots = workspaceFolders.map((f) => f.uri.fsPath);
 
+    // A root that is leaving must not have a rotation land on it afterwards
+    // (design §3.2 item 3): the swap would re-register a session for a folder that
+    // is no longer in the workspace.
+    for (const root of [...rotating.keys()]) {
+      if (resolveOwnerRoot(root, currentRoots) === null) {
+        abandonRotation(root);
+      }
+    }
+
     // Stop sessions whose root left the workspace.
     await registry.pruneToRoots(currentRoots);
 
@@ -879,11 +981,25 @@ function registerEnrollmentCommands(context: vscode.ExtensionContext): void {
 }
 
 export async function deactivate(): Promise<void> {
+  // Set BEFORE anything is awaited, so a rotation that is mid-flight sees it at
+  // its very next check and bails (design §3.2 item 3).
+  deactivating = true;
+  for (const root of rotating.keys()) {
+    rotationsAbandoned.add(root);
+  }
+  // Then WAIT for those rotations. `registry.disposeAll()` below cannot reach a
+  // successor that has not been registered yet, so exiting underneath an in-flight
+  // rotation is exactly how a session ends up registered after teardown with no
+  // `session.end` written. `allSettled`: a rotation that throws must not stop the
+  // rest of teardown — `rotate` already logs its own failures.
+  await Promise.allSettled([...rotating.values()]);
   await registry.disposeAll();
   // The disposables themselves belong to context.subscriptions, which VS Code
   // tears down; drop only our bookkeeping so a re-activation starts clean.
   contextOwnedDisposables.clear();
   rotating.clear();
+  rotationsAbandoned.clear();
+  deactivating = false;
 }
 
 /**

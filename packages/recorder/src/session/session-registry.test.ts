@@ -17,7 +17,7 @@ import {
 import type { Manifest, Clock } from '@provenance/log-core';
 import * as vscodeMock from 'vscode';
 import { startSession, SessionRegistry } from './session-registry.js';
-import type { ActiveSession } from './session-registry.js';
+import type { ActiveSession, StartSessionDeps } from './session-registry.js';
 
 function makeExtension(): import('vscode').Extension<unknown> {
   return {
@@ -157,11 +157,15 @@ describe('startSession', () => {
   // Size rotation (PRD §4.6)
   // -------------------------------------------------------------------------
 
-  it('requests a rotation once the log passes the threshold', async () => {
-    const rotations: string[] = [];
-    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+  const CHECKPOINT_INTERVAL = 100;
 
-    const session = await startSession({
+  /** A session with a tiny rotation threshold, so no test writes 40 MiB. */
+  async function startRotating(
+    clock: Clock,
+    rotations: string[],
+    overrides: Partial<StartSessionDeps> = {},
+  ): Promise<ActiveSession> {
+    return startSession({
       assignmentRoot,
       manifest: await signedManifest({
         assignment_id: 'hw03',
@@ -174,41 +178,168 @@ describe('startSession', () => {
       platform: 'darwin-arm64',
       clock,
       provenanceDirOverride: provenanceDir,
-      // A tiny threshold: a handful of real entries crosses it, so the test
-      // never writes 40 MiB.
       rotateAtBytesOverride: 512,
       requestRotation: (endedSessionId) => rotations.push(endedSessionId),
+      ...overrides,
     });
+  }
 
-    // startSession itself writes some entries (session.start, and whatever the
-    // capability/identity steps emit), so count them rather than assuming the
-    // checkpoint boundary lands exactly 100 doc.saves from here.
+  /**
+   * Emit `kind` events until the next checkpoint boundary is crossed.
+   *
+   * startSession writes an unknown number of entries of its own (session.start,
+   * capability/identity steps), so the boundary is derived from the log rather
+   * than assumed to be 100 emits away.
+   */
+  async function emitToNextCheckpoint(
+    session: ActiveSession,
+    kind: 'doc.save' | 'doc.change',
+  ): Promise<void> {
     await session.writer.flush();
-    const beforeParsed = parseEntries(await fs.readFile(session.slogPath, 'utf8'));
-    expect(beforeParsed.ok).toBe(true);
-    if (!beforeParsed.ok) return;
-    const alreadyWritten = beforeParsed.value.length;
-    const CHECKPOINT_INTERVAL = 100;
-    expect(alreadyWritten).toBeLessThan(CHECKPOINT_INTERVAL);
-
-    // The threshold is only READ at the checkpoint cadence (every 100 entries),
-    // so crossing it must not fire before the 100th entry.
-    for (let i = 0; i < CHECKPOINT_INTERVAL - alreadyWritten - 1; i++) {
-      session.sessionHost.emit('doc.save', { path: 'hw1.py', sha256: 'a'.repeat(64) });
+    const parsed = parseEntries(await fs.readFile(session.slogPath, 'utf8'));
+    if (!parsed.ok) throw new Error('slog did not parse');
+    const written = parsed.value.length;
+    const toGo = CHECKPOINT_INTERVAL - (written % CHECKPOINT_INTERVAL);
+    for (let i = 0; i < toGo; i++) {
+      if (kind === 'doc.save') {
+        session.sessionHost.emit('doc.save', { path: 'hw1.py', sha256: 'a'.repeat(64) });
+      } else {
+        session.sessionHost.emit('doc.change', { path: 'hw1.py', deltas: [], source: 'typed' });
+      }
     }
+  }
+
+  /** Wait until `check()` holds, or give up. The DECISION is clock-driven, not time-driven. */
+  async function waitFor(check: () => boolean, budgetMs = 2000): Promise<void> {
+    const deadline = Date.now() + budgetMs;
+    while (!check() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
+  it('arms the rotation at the threshold but waits for a quiet window', async () => {
+    // Design §3.3 mechanism 1: rotating mid-burst loses the keystrokes that arrive
+    // during teardown, and a lost keystroke makes inter_session_external_change
+    // accuse the student. So crossing the size threshold must only ARM.
+    const rotations: string[] = [];
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const session = await startRotating(clock, rotations, { rotateIdleQuietMsOverride: 2000 });
+
+    // Still typing as the threshold is crossed: armed, not rotated.
+    await emitToNextCheckpoint(session, 'doc.change');
     expect(session.writer.bytesAppended).toBeGreaterThan(512);
     expect(rotations).toEqual([]);
 
-    session.sessionHost.emit('doc.save', { path: 'hw1.py', sha256: 'a'.repeat(64) });
+    // Keeps typing across a second checkpoint: still no rotation.
+    await emitToNextCheckpoint(session, 'doc.change');
+    expect(rotations).toEqual([]);
+
+    // Now the student pauses. The next checkpoint sees the quiet window.
+    clock.advance(2000);
+    await emitToNextCheckpoint(session, 'doc.save');
     expect(rotations).toEqual([session.sessionId]);
 
     // Requested at most once, however many further checkpoints go by.
-    for (let i = 0; i < CHECKPOINT_INTERVAL; i++) {
-      session.sessionHost.emit('doc.save', { path: 'hw1.py', sha256: 'a'.repeat(64) });
-    }
+    await emitToNextCheckpoint(session, 'doc.save');
+    await emitToNextCheckpoint(session, 'doc.save');
     expect(rotations).toEqual([session.sessionId]);
 
     await session.dispose();
+  });
+
+  it('rotates on the idle poll timer, without waiting for another checkpoint', async () => {
+    // A student who stops typing records nothing but heartbeats, so waiting for the
+    // next 100-entry checkpoint could defer the rotation by ~50 minutes.
+    const rotations: string[] = [];
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const session = await startRotating(clock, rotations, { rotateIdleQuietMsOverride: 100 });
+
+    await emitToNextCheckpoint(session, 'doc.change');
+    expect(rotations).toEqual([]);
+
+    // No further entries at all — only the pause.
+    clock.advance(100);
+    await waitFor(() => rotations.length > 0);
+    expect(rotations).toEqual([session.sessionId]);
+
+    await session.dispose();
+  });
+
+  it('rotates at the hard ceiling even though the student never pauses', async () => {
+    // Design §3.3: a continuous-typing session must not grow without limit — past
+    // GitHub's 100 MB hard limit the student cannot push at all. This is the one
+    // path where a rotation can still lose an edit, and it is the lesser harm.
+    const rotations: string[] = [];
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const session = await startRotating(clock, rotations, {
+      rotateIdleQuietMsOverride: 2000,
+      rotateHardCeilingBytesOverride: 4096,
+    });
+
+    // The clock never advances past the last doc.change, so the session is never
+    // idle: every rotation here is the ceiling's doing.
+    await emitToNextCheckpoint(session, 'doc.change');
+    while (rotations.length === 0 && session.writer.bytesAppended < 1_000_000) {
+      await emitToNextCheckpoint(session, 'doc.change');
+    }
+
+    expect(rotations).toEqual([session.sessionId]);
+    expect(session.writer.bytesAppended).toBeGreaterThanOrEqual(4096);
+
+    await session.dispose();
+  });
+
+  it('stops the idle poll when the session is disposed', async () => {
+    // CLAUDE.md: every setInterval has a shutdown path. An armed-but-unfired poll
+    // outliving its session would request a rotation of a sealed log.
+    const rotations: string[] = [];
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const session = await startRotating(clock, rotations, { rotateIdleQuietMsOverride: 100 });
+
+    await emitToNextCheckpoint(session, 'doc.change');
+    expect(rotations).toEqual([]);
+
+    await session.dispose();
+    clock.advance(10_000);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(rotations).toEqual([]);
+  });
+
+  it('runs NO chain recovery when the caller says the predecessor is known', async () => {
+    // Design §3.3 mechanism 2, proved by construction: recovery would read, parse
+    // and validateChain the whole 40 MiB predecessor log with no wiring attached —
+    // the largest term in the window where a keystroke can be lost.
+    const recover = vi.fn(() => {
+      throw new Error('chain recovery must not run on a rotation');
+    }) as unknown as NonNullable<StartSessionDeps['recoverPreviousSession']>;
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+
+    const rotated = await startRotating(clock, [], {
+      prevSessionIdOverride: 'the-predecessor',
+      skipChainRecovery: true,
+      recoverPreviousSession: recover,
+    });
+    expect(recover).not.toHaveBeenCalled();
+
+    await rotated.dispose();
+    const parsed = parseEntries(await fs.readFile(rotated.slogPath, 'utf8'));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    // Skipping recovery must not cost the link: the caller supplied it.
+    expect((parsed.value[0]!.data as { prev_session_id: string | null }).prev_session_id).toBe(
+      'the-predecessor',
+    );
+    expect(validateChain(parsed.value).ok).toBe(true);
+
+    // The seam is really wired: an ORDINARY start does call it.
+    const ordinaryRecover = vi.fn(() =>
+      Promise.resolve({ kind: 'clean_start' as const }),
+    ) as unknown as NonNullable<StartSessionDeps['recoverPreviousSession']>;
+    const ordinary = await startRotating(clock, [], {
+      recoverPreviousSession: ordinaryRecover,
+    });
+    expect(ordinaryRecover).toHaveBeenCalledTimes(1);
+    await ordinary.dispose();
   });
 
   it('writes the rotate reason and links the successor by prev_session_id', async () => {
