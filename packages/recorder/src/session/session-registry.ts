@@ -719,6 +719,35 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   let rotationRequested = false;
 
   /**
+   * True from the moment `session.end` has been written onward: this session is
+   * sealing and accepts no further entries.
+   *
+   * Set AFTER the `session.end` emit and after the final peer-witness drain, so
+   * both of those still land — `session.end` is by definition the last entry of
+   * the log, and the drain's observations belong to the session that saw them.
+   * Everything emitted after that point is DROPPED, silently and by design.
+   *
+   * Why drop rather than throw. `dispose()` closes the writer a few awaits later,
+   * and `SessionWriter.append` throws on a disposed writer — correctly, since a
+   * use-after-dispose anywhere else is a real bug and must stay loud. But the
+   * teardown window is not a bug: the doc wiring is still subscribed while the
+   * writer flushes, drains and seals (rotation, PRD §4.6, does not unsubscribe it
+   * until teardown returns), so an ordinary keystroke inside that window would
+   * raise an exception into a VS Code event listener on the student's machine.
+   * Design §3.2 specifies these events as dropped, and argues the drop is safe:
+   * the successor's catch-up `doc.open` re-reads the LIVE BUFFER, so its
+   * reconstruction starts from the true current content and the seam shows no
+   * divergence. A drop is invisible to the analyzer for that reason; noise on the
+   * student's screen would not be.
+   *
+   * What this can hide: any event kind at all, but only in the sub-second span
+   * after `session.end` has been written. Nothing is lost that a reader could
+   * otherwise have seen, because a log cannot legally continue past its own
+   * `session.end`.
+   */
+  let sealing = false;
+
+  /**
    * PEER WITNESSING (program spec §7 mechanism 2). Forward reference: the
    * watcher needs `sessionHost.emit`, which does not exist until the host below
    * is constructed, while the checkpoint hook that DRAINS it lives inside that
@@ -733,6 +762,12 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     // The single choke point for policy-gated event kinds — see session-host.ts.
     capturePolicy,
     onEntry: (entry: HashedEnvelope) => {
+      // This session has already written its `session.end` — see `sealing`.
+      // Dropped, not thrown, and not queued anywhere: the log is closed.
+      if (sealing) {
+        return;
+      }
+
       // Route through disk-full handler.
       // If degraded: critical entries go to the ring; non-critical are dropped.
       // If not degraded: write to disk as normal.
@@ -1109,6 +1144,12 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     } catch {
       // Ignore — best effort.
     }
+    // From here on this session accepts nothing more: `onEntry` drops every
+    // further entry instead of appending to a writer that is about to close.
+    // Set AFTER the emit above so `session.end` itself lands, and after the peer
+    // drain above so its observations do. See `sealing`'s docstring and design
+    // §3.2 for why a drop is the specified behaviour rather than a throw.
+    sealing = true;
     // Flush pending entries and close the file handle. Await this to ensure
     // the writer is fully disposed before VS Code shuts down.
     try {

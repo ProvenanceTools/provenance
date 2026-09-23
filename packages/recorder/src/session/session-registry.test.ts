@@ -291,6 +291,49 @@ describe('startSession', () => {
     }
   });
 
+  it('drops an event emitted after session.end instead of throwing', async () => {
+    // The teardown window (design §3.2): the doc wiring is still subscribed while
+    // dispose() flushes, drains and seals — and on a rotation nothing unsubscribes
+    // it until teardown returns. A keystroke there must be DROPPED, not raised
+    // into a VS Code listener on the student's machine.
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const session = await startSession({
+      assignmentRoot,
+      manifest: await signedManifest({
+        assignment_id: 'hw03',
+        semester: 'fa26',
+        issued_at: '2026-09-15T00:00:00Z',
+        files_under_review: ['hw1.py'],
+      }),
+      extension: makeExtension(),
+      vscodeVersion: '1.97.0',
+      platform: 'darwin-arm64',
+      clock,
+      provenanceDirOverride: provenanceDir,
+    });
+
+    await session.dispose();
+    const afterDispose = await fs.readFile(session.slogPath, 'utf8');
+
+    // The writer is closed, so SessionWriter.append would throw — the guard lives
+    // at the session's routing choke point, not in the writer.
+    expect(() =>
+      session.sessionHost.emit('doc.save', { path: 'hw1.py', sha256: 'a'.repeat(64) }),
+    ).not.toThrow();
+    expect(() =>
+      session.sessionHost.emit('doc.change', { path: 'hw1.py', deltas: [], source: 'typed' }),
+    ).not.toThrow();
+
+    // Nothing was appended, and session.end is still the last entry: a log cannot
+    // legally continue past its own session.end.
+    expect(await fs.readFile(session.slogPath, 'utf8')).toBe(afterDispose);
+    const parsed = parseEntries(afterDispose);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.at(-1)!.kind).toBe('session.end');
+    expect(validateChain(parsed.value).ok).toBe(true);
+  });
+
   it('defaults session.end to deactivate when dispose() is given no reason', async () => {
     const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
     const session = await startSession({
