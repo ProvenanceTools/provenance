@@ -112,11 +112,22 @@ power, and keying suppression off the student-controlled `reason` string is forb
 
 **Two mechanisms, both required in all three ports.**
 
-1. **Rotate only when idle.** A rotation is deferred until the session has recorded no `doc.change`
-   for `ROTATE_IDLE_QUIET_MS = 2000`. Once the size threshold is crossed the recorder arms the
-   rotation and waits for that quiet window; it does not rotate mid-burst. Students pause
-   constantly, so in practice this costs nothing, and it makes "nobody typed during teardown" a
-   property of when we rotate rather than a hope about how fast teardown is.
+1. **Rotate only when idle.** A rotation is deferred until the session has recorded no
+   **content-mutating event** for `ROTATE_IDLE_QUIET_MS = 2000`. Once the size threshold is crossed
+   the recorder arms the rotation and waits for that quiet window; it does not rotate mid-burst.
+   Students pause constantly, so in practice this costs nothing, and it makes "nothing changed
+   during teardown" a property of when we rotate rather than a hope about how fast teardown is.
+
+   **Content-mutating means `doc.change`, `paste`, and `fs.external_change` — not `doc.change`
+   alone.** An earlier version of this section said `doc.change`, which is not sufficient: the
+   heuristic this whole section exists to protect compares file CONTENT, and it does not care which
+   event changed it. A formatter-on-save or a `git checkout` landing inside the teardown window is
+   dropped exactly as a keystroke would be, and its divergence lands at the seam as the same false
+   `inter_session_external_change` — in fact a worse one, because an external write is typically a
+   whole-file rewrite, so the delta clears `highSeverityCharsChanged` and the flag is reported at
+   **high** severity. Quieting only the keyboard leaves the specific event class named in the flag
+   unguarded. External writes are rare, so resetting on them costs nothing in practice.
+
 2. **Skip chain recovery on a rotation.** The successor already knows its predecessor's id, so it
    must not run `recoverPreviousSession`. That path reads, parses and `validateChain`s the whole
    40 MiB predecessor log — roughly 150k entries of JCS canonicalization and SHA-256 — while no
