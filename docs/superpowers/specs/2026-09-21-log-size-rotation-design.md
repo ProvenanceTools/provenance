@@ -63,9 +63,18 @@ beyond the orchestration.
    per-session keypair, `prev_session_id` = the ended session's id. It runs the normal activation
    catch-up: synthetic `doc.open` for every open document in scope (carrying live **buffer**
    content), extension set, identity, git state, §5.6 capability reports.
-3. Steps 1–2 are serialized on the session's write path, so no event is recorded between the two
-   sessions and no event is lost. Events that arrive while rotation is in progress are recorded
-   into the new session after its `session.start`.
+3. Step 1 completes **before** step 2 begins, and a second rotation request for the same scope is
+   ignored while one is in flight.
+
+**Why end-then-start, and what it costs.** In all three recorders the old session's document
+wiring is detached only during its teardown, so starting the successor first would leave two
+wirings subscribed and record the same keystroke into two logs. Ending first instead means any
+event arriving inside the teardown window (sub-second, and no user-visible pause) is **dropped**
+rather than duplicated. That is the right trade: a duplicate would corrupt two reconstructions and
+could fabricate evidence, whereas a drop is self-correcting — the successor's catch-up `doc.open`
+re-reads the live buffer, so its reconstruction starts from the true current content. A dropped
+edit is invisible to the analyzer for the same reason: the seam is compared against buffer content
+on both sides, not against a running diff.
 
 Rotation happens at most once per checkpoint and only while the session is in the RECORDING
 state (not degraded, not sealing).
