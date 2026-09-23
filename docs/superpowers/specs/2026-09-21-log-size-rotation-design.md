@@ -76,8 +76,17 @@ re-reads the live buffer, so its reconstruction starts from the true current con
 edit is invisible to the analyzer for the same reason: the seam is compared against buffer content
 on both sides, not against a running diff.
 
-Rotation happens at most once per checkpoint and only while the session is in the RECORDING
-state (not degraded, not sealing).
+Rotation happens at most once per session, and never while the session is degraded — the
+degraded branch returns before the checkpoint branch in every recorder, so this is structural
+rather than a second guard.
+
+**Not gated on sealing.** An earlier draft of this spec also required "not while sealing". That
+condition is dropped: nothing implements it, and on inspection it protects nothing. Sealing a
+live, still-appending session is already the ordinary case — students run
+`Prepare Submission Bundle` while recording — so the seal command already has to tolerate a log
+growing under it. A rotation adds no new class of race: once `session.end` is written the
+predecessor's `.slog` never changes again, and the successor writes a different filename that the
+seal either includes or does not. Both outcomes are valid bundles.
 
 ### 3.3 Why the seam does not produce false flags
 
