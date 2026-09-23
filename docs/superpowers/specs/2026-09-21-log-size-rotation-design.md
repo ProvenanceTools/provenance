@@ -54,27 +54,25 @@ bump, no conformance-vector change.
 ### 3.2 Sequence
 
 Rotation reuses the existing teardown and startup paths; it introduces no new lifecycle code
-beyond the orchestration.
+beyond the orchestration and the idle gate of §3.3.
 
 1. Emit `session.end { reason: 'rotate' }`, flush the writer, drain the pending checkpoint, take
    the teardown rolling-seal roll — i.e. exactly the `dispose()`/`deactivate` path, with a
    different reason. The ended session is fully sealed on disk.
 2. Start a new session in the same scope: new random filename UUID, new `session_id`, new
-   per-session keypair, `prev_session_id` = the ended session's id. It runs the normal activation
-   catch-up: synthetic `doc.open` for every open document in scope (carrying live **buffer**
-   content), extension set, identity, git state, §5.6 capability reports.
+   per-session keypair, `prev_session_id` = the ended session's id, **skipping chain recovery**
+   (§3.3). It runs the normal activation catch-up: synthetic `doc.open` for every open document in
+   scope (carrying live **buffer** content), extension set, identity, git state, §5.6 capability
+   reports.
 3. Step 1 completes **before** step 2 begins, and a second rotation request for the same scope is
-   ignored while one is in flight.
+   ignored while one is in flight. A rotation must also be abandoned if the scope is stopped or
+   the editor/project shuts down while it is in flight, in **every** port.
 
-**Why end-then-start, and what it costs.** In all three recorders the old session's document
-wiring is detached only during its teardown, so starting the successor first would leave two
-wirings subscribed and record the same keystroke into two logs. Ending first instead means any
-event arriving inside the teardown window (sub-second, and no user-visible pause) is **dropped**
-rather than duplicated. That is the right trade: a duplicate would corrupt two reconstructions and
-could fabricate evidence, whereas a drop is self-correcting — the successor's catch-up `doc.open`
-re-reads the live buffer, so its reconstruction starts from the true current content. A dropped
-edit is invisible to the analyzer for the same reason: the seam is compared against buffer content
-on both sides, not against a running diff.
+**Why end-then-start.** In all three recorders the old session's document wiring is detached only
+during its teardown, so starting the successor first would leave two wirings subscribed and record
+the same keystroke into two logs. A duplicate would corrupt two reconstructions and could
+fabricate evidence. Ending first instead means any event arriving inside the teardown window is
+**dropped** — which is not free, and §3.3 is how that cost is paid.
 
 Rotation happens at most once per session, and never while the session is degraded — the
 degraded branch returns before the checkpoint branch in every recorder, so this is structural
@@ -88,20 +86,54 @@ growing under it. A rotation adds no new class of race: once `session.end` is wr
 predecessor's `.slog` never changes again, and the successor writes a different filename that the
 seal either includes or does not. Both outcomes are valid bundles.
 
-### 3.3 Why the seam does not produce false flags
+### 3.3 The seam must be empty, because a lossy seam accuses the student
 
-`inter_session_external_change` compares the reconstruction of each file at the end of session A
-against the first `doc.open` content for that file in session B. All three recorders source the
-catch-up `doc.open` content from the live buffer, not from disk:
+**Correction (2026-09-23).** An earlier version of this section argued that a dropped edit is
+invisible to the analyzer because "the seam is compared against buffer content on both sides". That
+was **wrong**, and every port, the PRD paragraph and the `/architecture` node body were built on
+it. What `inter_session_external_change` actually compares
+(`packages/analysis-core/src/heuristics/inter-session-external-change.ts:291`) is:
 
-| Recorder  | Source                                                                 |
-| --------- | ---------------------------------------------------------------------- |
-| VS Code   | `document.getText()` (`packages/recorder/src/wiring/doc-wiring.ts`)    |
-| JetBrains | `Document` snapshot under a read action (`wiring/EdtCatchUp.kt`)       |
-| Neovim    | `nvim_buf_get_lines` (`lua/provenance/recorder/wiring/doc_wiring.lua`) |
+| Side      | What it is                                                                                                      |
+| --------- | --------------------------------------------------------------------------------------------------------------- |
+| Session A | `establishedContent(...)` — a **reconstruction from A's event stream** (`heuristics/reconstruction-gate.ts:75`) |
+| Session B | B's first `doc.open.content` — a **live buffer read**                                                           |
 
-The analyzer's reconstruction likewise includes unsaved edits, so the two sides are equal —
-including for dirty buffers — and the heuristic does not fire.
+The comparison is exact string equality. So a character typed inside the teardown window is in B's
+baseline and absent from A's reconstruction, the two differ, and the heuristic fires at confidence
+0.85 — `high` once the delta passes `highSeverityCharsChanged`. In plain terms: **every rotation
+that loses a keystroke tells staff the student edited that file outside the recorder.** The overlap
+gate does not save it, because a rotation's gap is strictly positive. On a system that produces
+evidence for academic-integrity cases, that is the most expensive defect available.
+
+The analyzer is **not** the place to fix this. Suppressing the pair would cost real detection
+power, and keying suppression off the student-controlled `reason` string is forbidden outright
+(§4). So the recorder must make the seam empty instead.
+
+**Two mechanisms, both required in all three ports.**
+
+1. **Rotate only when idle.** A rotation is deferred until the session has recorded no `doc.change`
+   for `ROTATE_IDLE_QUIET_MS = 2000`. Once the size threshold is crossed the recorder arms the
+   rotation and waits for that quiet window; it does not rotate mid-burst. Students pause
+   constantly, so in practice this costs nothing, and it makes "nobody typed during teardown" a
+   property of when we rotate rather than a hope about how fast teardown is.
+2. **Skip chain recovery on a rotation.** The successor already knows its predecessor's id, so it
+   must not run `recoverPreviousSession`. That path reads, parses and `validateChain`s the whole
+   40 MiB predecessor log — roughly 150k entries of JCS canonicalization and SHA-256 — while no
+   wiring is attached. It is the largest term in the teardown window by orders of magnitude, it is
+   pure waste here, and in the Neovim port it runs on the main loop, where it freezes the editor.
+   Removing it shrinks the window from seconds to the cost of a flush plus a seal.
+
+**Hard ceiling.** If the log reaches `ROTATE_HARD_CEILING_BYTES = 48 * 1024 * 1024` without ever
+seeing a quiet window, the recorder rotates anyway. A continuous-typing session that never idles
+must not grow without limit, and at that point an unpushable repo is the worse outcome. With
+mechanism 2 in place the residual window is small, but it is **not zero**, and this is the one path
+on which a rotation can still lose an edit.
+
+**The analyzer keeps a negative control.** `analysis-core` carries a test asserting that a _lossy_
+seam — one where content diverges across the boundary — **still flags**. That test is what stops
+this hole reopening silently: the no-flag tests alone cannot distinguish "the recorders produce an
+empty seam" from "the heuristic stopped working".
 
 ### 3.4 Failure handling
 
@@ -139,7 +171,21 @@ Per recorder (VS Code in Vitest; JetBrains in its Gradle suite; Neovim in its Lu
 2. The rotated pair: session A ends with `session.end { reason: 'rotate' }` and is sealed; B's
    `session.start.prev_session_id` = A; both pass chain and seal validation.
 3. Dirty buffer at rotation: B's `doc.open` content equals the pre-rotation buffer.
-4. New session start fails → degraded path; A remains sealed and valid.
+4. New session start fails → degraded path, surfaced to the student; A remains sealed and valid.
+   Required in **every** port — a silent failed rotation leaves the student unrecorded.
+5. **Idle gate (§3.3):** crossing the threshold mid-burst arms the rotation but does not rotate;
+   the rotation fires only after `ROTATE_IDLE_QUIET_MS` of no `doc.change`. A session that keeps
+   typing past `ROTATE_HARD_CEILING_BYTES` rotates anyway.
+6. **No chain recovery on a rotation (§3.3):** the successor does not read or validate the
+   predecessor's log. Assert it by construction, e.g. a recovery seam that fails the test if called.
+7. A rotation in flight is abandoned when the scope is stopped or the editor/project shuts down —
+   no session may be registered after teardown, and no dangling session may be left behind.
+
+Analyzer-side, in `analysis-core`:
+
+8. **Negative control:** a _lossy_ seam (content diverges across the rotation boundary) **still
+   flags** `inter_session_external_change`. Without this, the no-flag tests cannot distinguish an
+   empty seam from a broken heuristic — which is exactly how the §3.3 error survived review.
 
 Cross-repo acceptance: a bundle containing a rotation, produced by each recorder, loaded through
 `analysis-core` — all 8 validation checks pass; zero `inter_session_external_change`,
