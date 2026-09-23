@@ -134,7 +134,7 @@ export const ROTATE_IDLE_QUIET_MS = 2000;
  * saves, terminal and git events do not, so they must not hold a rotation off —
  * a session that only saves and heartbeats is idle for this purpose.
  */
-const ROTATE_QUIET_KINDS: ReadonlySet<string> = new Set([
+export const ROTATE_QUIET_KINDS: ReadonlySet<string> = new Set([
   'doc.change',
   'paste',
   'fs.external_change',
@@ -145,11 +145,24 @@ const ROTATE_QUIET_KINDS: ReadonlySet<string> = new Set([
  *
  * A session that never idles must not grow without limit: past GitHub's 100 MB
  * hard limit the student cannot push at all, and an unpushable repo is worse than
- * a flag. This is the ONE remaining path on which a rotation can still lose an
- * edit and so raise a false `inter_session_external_change` — with chain recovery
- * skipped (see {@link StartSessionDeps.skipChainRecovery}) the window is a flush
- * plus a seal rather than a full re-validation of the predecessor's log, but it is
- * not zero.
+ * a flag.
+ *
+ * This is the only path on which a rotation can lose a KEYSTROKE — and that is the
+ * whole of the claim. It is NOT the only way the seam can diverge:
+ *
+ * - The quiet gate makes the KEYBOARD safe. It cannot make an EXTERNAL WRITER safe,
+ *   because a formatter daemon, a build tool or a partner's `git pull` is not
+ *   synchronised to the student's pause. An external write landing inside ANY
+ *   teardown window still diverges the seam, and because it is a whole-file rewrite
+ *   it lands at HIGH severity.
+ * - The window is not microseconds. After `sealing` is set it still contains the
+ *   final flush, the checkpoint drain and the rolling seal's walk-and-hash over the
+ *   whole 40 MiB log, then the successor's keygen, identity, git probe and catch-up:
+ *   order 0.3–1 s. Skipping chain recovery
+ *   (see {@link StartSessionDeps.skipChainRecovery}) removed the seconds-long term,
+ *   not the window.
+ * - And the gate CONCENTRATES rotations into the moments the student is idle, which
+ *   is precisely when background repository activity is most likely.
  */
 export const ROTATE_HARD_CEILING_BYTES = 48 * 1024 * 1024;
 
@@ -821,13 +834,24 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   /**
    * When content was last mutated ({@link ROTATE_QUIET_KINDS}), in `clock` time.
    *
-   * Seeded at session start so a session that crosses the threshold without the
-   * file ever changing is idle by definition. Written on the event path — and
-   * ONLY while a rotation is armed, so an ordinary session pays a single boolean
-   * test per entry and nothing else; the p99 < 1 ms budget (PRD §4.7) binds there
-   * and nowhere else. No evaluation happens here, only the timestamp.
+   * Seeded in {@link armRotation}, NOT at session start. Arming and the first
+   * evaluation happen in the same checkpoint tick, so a session-start seed would be
+   * hours old by the time a log reaches 40 MiB — `now - seed` would be hours, `quiet`
+   * would be trivially true, and the very first evaluation would rotate the session
+   * MID-BURST. That is the false accusation the gate exists to prevent: everything in
+   * the teardown window is dropped, and `inter_session_external_change` then reports
+   * an honest student at 0.85 confidence.
+   *
+   * Seeding at arm time instead makes the first evaluation pessimistic — it demands a
+   * full quiet window measured from the moment of arming — which is the right default
+   * for a mechanism that can accuse someone.
+   *
+   * Written on the event path, and ONLY while a rotation is armed, so an ordinary
+   * session pays a single boolean test per entry and nothing else; the p99 < 1 ms
+   * budget (PRD §4.7) binds there and nowhere else. No evaluation happens there, only
+   * the timestamp.
    */
-  let lastContentChangeAtMs = clock.now();
+  let lastContentChangeAtMs = 0;
   let idleTimer: ReturnType<typeof setInterval> | undefined;
   /** Set by `dispose()`: no timer may be armed after teardown has begun. */
   let disposed = false;
@@ -880,6 +904,13 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
       clearIdleTimer();
       return;
     }
+    // Only an ARMED rotation can fire, because `lastContentChangeAtMs` is only
+    // meaningful once `armRotation` has seeded it. Without this, a tick that reached
+    // here with arming refused — `dispose()` sets `disposed`, and the `session.end`
+    // entry it emits can land on a checkpoint boundary — would compare `now` against
+    // an unseeded 0, find the window trivially open, and request a rotation during
+    // teardown.
+    if (!rotationArmed) return;
     const bytes = writer.bytesAppended;
     if (bytes < rotateAtBytes) return;
     const quiet = clock.now() - lastContentChangeAtMs >= rotateIdleQuietMs;
@@ -903,6 +934,11 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     // would otherwise create a fresh interval after teardown.
     if (rotationArmed || disposed) return;
     rotationArmed = true;
+    // The quiet window starts NOW, never at session start — see
+    // `lastContentChangeAtMs`. `armRotation()` and the first `evaluateRotation()` run
+    // in the same checkpoint tick, so without this the first evaluation would compare
+    // against a seed hours old and rotate mid-burst.
+    lastContentChangeAtMs = clock.now();
     // A quarter of the quiet interval: fine-grained enough that the rotation
     // follows the pause closely, coarse enough to be free (one callback per 500 ms
     // in production, and only while armed).

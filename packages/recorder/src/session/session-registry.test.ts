@@ -13,10 +13,12 @@ import {
   rollingManifestFilenames,
   validateBundleManifestShape,
   validateRollingSessionManifest,
+  FLOOR_EVENT_KINDS,
+  POLICY_GATED_EVENT_KINDS,
 } from '@provenance/log-core';
 import type { Manifest, Clock } from '@provenance/log-core';
 import * as vscodeMock from 'vscode';
-import { startSession, SessionRegistry } from './session-registry.js';
+import { startSession, SessionRegistry, ROTATE_QUIET_KINDS } from './session-registry.js';
 import type { ActiveSession, StartSessionDeps } from './session-registry.js';
 
 function makeExtension(): import('vscode').Extension<unknown> {
@@ -225,16 +227,34 @@ describe('startSession', () => {
     }
   }
 
-  async function emitToNextCheckpoint(session: ActiveSession, kind: EmitKind): Promise<void> {
+  /**
+   * Emit events up to the next checkpoint boundary, optionally advancing the clock
+   * between them.
+   *
+   * `burst` is not decoration. A `FixedClock` that never advances makes "now" equal
+   * to every seeded timestamp, so a quiet-window comparison is trivially 0 and any
+   * test built on it passes whatever the gate does — that is how the arm-time seeding
+   * bug survived a test I wrote and a review that read it. Rotation tests pass a real
+   * typing cadence so the comparison has something to measure.
+   */
+  async function emitToNextCheckpoint(
+    session: ActiveSession,
+    kind: EmitKind,
+    burst?: { clock: FixedClock; msPerEvent: number },
+  ): Promise<void> {
     await session.writer.flush();
     const parsed = parseEntries(await fs.readFile(session.slogPath, 'utf8'));
     if (!parsed.ok) throw new Error('slog did not parse');
     const written = parsed.value.length;
     const toGo = CHECKPOINT_INTERVAL - (written % CHECKPOINT_INTERVAL);
     for (let i = 0; i < toGo; i++) {
+      burst?.clock.advance(burst.msPerEvent);
       emitOne(session, kind);
     }
   }
+
+  /** A realistic keystroke cadence: 100 events over 5 seconds. */
+  const TYPING = (clock: FixedClock) => ({ clock, msPerEvent: 50 });
 
   /** Wait until `check()` holds, or give up. The DECISION is clock-driven, not time-driven. */
   async function waitFor(check: () => boolean, budgetMs = 2000): Promise<void> {
@@ -257,25 +277,51 @@ describe('startSession', () => {
     await new Promise((resolve) => setTimeout(resolve, pollMs * 4));
   }
 
+  it('keeps every idle-gate kind on the capture-policy floor', () => {
+    // The gate can only see kinds that are actually recorded. If a course policy
+    // could switch one of these off, it would silently re-narrow the gate for its
+    // whole cohort — and a narrowed gate rotates mid-burst, which produces a false
+    // `inter_session_external_change` against its own students. `log-core`'s floor is
+    // what makes that impossible; this pins the dependency rather than leaving it to
+    // prose. (JetBrains and Neovim carry the equivalent assertion.)
+    expect([...ROTATE_QUIET_KINDS].sort()).toEqual(
+      ['doc.change', 'fs.external_change', 'paste'].sort(),
+    );
+    for (const kind of ROTATE_QUIET_KINDS) {
+      expect(FLOOR_EVENT_KINDS).toContain(kind);
+      expect(POLICY_GATED_EVENT_KINDS).not.toContain(kind);
+    }
+  });
+
   it('arms the rotation at the threshold but waits for a quiet window', async () => {
     // Design §3.3 mechanism 1: rotating mid-burst loses the keystrokes that arrive
     // during teardown, and a lost keystroke makes inter_session_external_change
     // accuse the student. So crossing the size threshold must only ARM.
+    const QUIET = 2000;
+    const POLL = QUIET / 4;
     const rotations: string[] = [];
     const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
-    const session = await startRotating(clock, rotations, { rotateIdleQuietMsOverride: 2000 });
+    const session = await startRotating(clock, rotations, { rotateIdleQuietMsOverride: QUIET });
+
+    // A log only reaches 40 MiB after hours of work, so the wall clock is HOURS past
+    // session start by the time the threshold is crossed. That matters: a quiet window
+    // measured from a session-start seed would be hours wide and therefore trivially
+    // open, and the first evaluation would rotate mid-keystroke.
+    clock.advance(3_600_000);
 
     // Still typing as the threshold is crossed: armed, not rotated.
-    await emitToNextCheckpoint(session, 'doc.change');
+    await emitToNextCheckpoint(session, 'doc.change', TYPING(clock));
     expect(session.writer.bytesAppended).toBeGreaterThan(512);
+    await drainPoll(POLL);
     expect(rotations).toEqual([]);
 
     // Keeps typing across a second checkpoint: still no rotation.
-    await emitToNextCheckpoint(session, 'doc.change');
+    await emitToNextCheckpoint(session, 'doc.change', TYPING(clock));
+    await drainPoll(POLL);
     expect(rotations).toEqual([]);
 
     // Now the student pauses. The next checkpoint sees the quiet window.
-    clock.advance(2000);
+    clock.advance(QUIET);
     await emitToNextCheckpoint(session, 'doc.save');
     expect(rotations).toEqual([session.sessionId]);
 
@@ -307,7 +353,7 @@ describe('startSession', () => {
       });
 
       // Armed, past the size threshold, and the poll is running.
-      await emitToNextCheckpoint(session, 'doc.change');
+      await emitToNextCheckpoint(session, 'doc.change', TYPING(clock));
       expect(session.writer.bytesAppended).toBeGreaterThan(512);
       await drainPoll(POLL);
       expect(rotations).toEqual([]);
@@ -342,7 +388,7 @@ describe('startSession', () => {
     const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
     const session = await startRotating(clock, rotations, { rotateIdleQuietMsOverride: QUIET });
 
-    await emitToNextCheckpoint(session, 'doc.change');
+    await emitToNextCheckpoint(session, 'doc.change', TYPING(clock));
     expect(rotations).toEqual([]);
 
     clock.advance(QUIET);
@@ -361,7 +407,7 @@ describe('startSession', () => {
     const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
     const session = await startRotating(clock, rotations, { rotateIdleQuietMsOverride: 100 });
 
-    await emitToNextCheckpoint(session, 'doc.change');
+    await emitToNextCheckpoint(session, 'doc.change', TYPING(clock));
     expect(rotations).toEqual([]);
 
     // No further entries at all — only the pause.
@@ -383,11 +429,12 @@ describe('startSession', () => {
       rotateHardCeilingBytesOverride: 4096,
     });
 
-    // The clock never advances past the last doc.change, so the session is never
-    // idle: every rotation here is the ceiling's doing.
-    await emitToNextCheckpoint(session, 'doc.change');
+    // Typing continuously: the clock only ever advances BETWEEN keystrokes, and each
+    // one restamps the quiet window, so every evaluation sees quiet === false and the
+    // only thing that can fire is the ceiling.
+    await emitToNextCheckpoint(session, 'doc.change', TYPING(clock));
     while (rotations.length === 0 && session.writer.bytesAppended < 1_000_000) {
-      await emitToNextCheckpoint(session, 'doc.change');
+      await emitToNextCheckpoint(session, 'doc.change', TYPING(clock));
     }
 
     expect(rotations).toEqual([session.sessionId]);
@@ -403,7 +450,7 @@ describe('startSession', () => {
     const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
     const session = await startRotating(clock, rotations, { rotateIdleQuietMsOverride: 100 });
 
-    await emitToNextCheckpoint(session, 'doc.change');
+    await emitToNextCheckpoint(session, 'doc.change', TYPING(clock));
     expect(rotations).toEqual([]);
 
     await session.dispose();
@@ -426,7 +473,7 @@ describe('startSession', () => {
     const session = await startRotating(clock, rotations, { rotateIdleQuietMsOverride: QUIET });
 
     // Armed while healthy: over threshold, poll running, not yet quiet.
-    await emitToNextCheckpoint(session, 'doc.change');
+    await emitToNextCheckpoint(session, 'doc.change', TYPING(clock));
     expect(session.writer.bytesAppended).toBeGreaterThan(512);
     await drainPoll(POLL);
     expect(rotations).toEqual([]);
@@ -484,7 +531,7 @@ describe('startSession', () => {
     // The arming must happen for the FIRST time on that session.end entry, or
     // `rotationArmed` short-circuits and the test proves nothing. So: get to a
     // boundary while still well under the threshold…
-    await emitToNextCheckpoint(session, 'doc.change');
+    await emitToNextCheckpoint(session, 'doc.change', TYPING(clock));
     expect(session.writer.bytesAppended).toBeLessThan(200_000);
     expect(rotations).toEqual([]);
 
