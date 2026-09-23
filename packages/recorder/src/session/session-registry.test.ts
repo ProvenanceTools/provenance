@@ -412,6 +412,52 @@ describe('startSession', () => {
     expect(rotations).toEqual([]);
   });
 
+  it('never rotates a degraded session, not even from an already-armed poll', async () => {
+    // "Degraded never rotates" was only ever structural for the ENTRY path: onEntry's
+    // degraded branch returns before the checkpoint branch. The idle poll is a second,
+    // independent trigger that does not pass through it. Arm mid-burst, fill the disk,
+    // and the student's pause while reading the disk-full notification IS the quiet
+    // window — so the poll would commit a rotation, sealing the predecessor `final`
+    // while its session.end went to the ring buffer instead of its log.
+    const QUIET = 200;
+    const POLL = QUIET / 4;
+    const rotations: string[] = [];
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const session = await startRotating(clock, rotations, { rotateIdleQuietMsOverride: QUIET });
+
+    // Armed while healthy: over threshold, poll running, not yet quiet.
+    await emitToNextCheckpoint(session, 'doc.change');
+    expect(session.writer.bytesAppended).toBeGreaterThan(512);
+    await drainPoll(POLL);
+    expect(rotations).toEqual([]);
+
+    // The disk fills. Any write error degrades the session, one way and for good.
+    // DiskFullHandler notifies through `window.showErrorMessage`, which the vscode
+    // mock does not model; stub it for this test only rather than change the shared
+    // double.
+    const win = vscodeMock.window as unknown as {
+      showErrorMessage?: (m: string) => Promise<undefined>;
+    };
+    const hadShowError = 'showErrorMessage' in win;
+    win.showErrorMessage = () => Promise.resolve(undefined);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- invasive test
+      await (session.writer as any).fh.close();
+      emitOne(session, 'doc.change');
+      await session.writer.flush();
+    } finally {
+      if (!hadShowError) delete win.showErrorMessage;
+    }
+
+    // The student pauses to read the notification — the quiet window opens.
+    clock.advance(10_000);
+    await drainPoll(POLL);
+    await drainPoll(POLL);
+    expect(rotations).toEqual([]);
+
+    await session.dispose();
+  });
+
   it('arms no poll from the session.end entry written during teardown', async () => {
     // dispose() clears the timer on its first line and THEN emits session.end, which
     // still runs through onEntry (that is what `sealing` is for). If that entry lands

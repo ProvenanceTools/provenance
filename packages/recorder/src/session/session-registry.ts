@@ -851,6 +851,25 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
    */
   function evaluateRotation(): void {
     if (rotationRequested) return;
+    // DEGRADED NEVER ROTATES — asserted here, at the commit point, not inferred
+    // from the entry path.
+    //
+    // "The degraded branch returns before the checkpoint branch" only ever covered
+    // `onEntry`. The idle poll is a SECOND, independent trigger that never passes
+    // through it: arm the rotation mid-burst, let the disk fill, and the student's
+    // pause while reading the disk-full notification IS the quiet window the gate
+    // waits for. The poll would then commit a rotation with the byte counter frozen
+    // at threshold — tearing the predecessor down and sealing it `final: true` while
+    // its `session.end` went to the ring buffer instead of the log, and starting a
+    // successor onto a disk that is still full. A bundle sealed final whose log is
+    // missing its own terminal `session.end` is an evidence-integrity problem.
+    //
+    // `degraded` is one-way, so this is terminal for the session: stop the poll too
+    // rather than spin for the rest of the editor's life.
+    if (diskFullHandler.degraded) {
+      clearIdleTimer();
+      return;
+    }
     const bytes = writer.bytesAppended;
     if (bytes < rotateAtBytes) return;
     const quiet = clock.now() - lastContentChangeAtMs >= rotateIdleQuietMs;
@@ -1005,9 +1024,9 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
         // 100 more entries for the next checkpoint.
         //
         // A degraded (disk-full) session can never reach here: the degraded
-        // branch at the top of onEntry returns before the append. That is the
-        // required behaviour — there is no point rotating a log we cannot write
-        // — so no second guard is added for it.
+        // branch at the top of onEntry returns before the append. That covers the
+        // ENTRY path only, which is why `evaluateRotation` checks the flag itself
+        // — the idle poll does not come through here.
         if (!rotationRequested && writer.bytesAppended >= rotateAtBytes) {
           armRotation();
           evaluateRotation();
