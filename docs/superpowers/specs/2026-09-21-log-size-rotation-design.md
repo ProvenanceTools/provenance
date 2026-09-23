@@ -153,6 +153,23 @@ power, and keying suppression off the student-controlled `reason` string is forb
    Students pause constantly, so in practice this costs nothing, and it makes "nothing changed
    during teardown" a property of when we rotate rather than a hope about how fast teardown is.
 
+   **When the window starts is part of the contract (added 2026-09-23).** The quiet interval is
+   measured from the later of (a) the moment the rotation was **armed** and (b) the last
+   content-mutating event. It is **never** measured from session start, and never from an unset
+   value. This sentence exists because omitting it produced a Critical: the VS Code port seeded its
+   timestamp at session start and stamped it only once armed, and since arming and the first
+   evaluation happen in the same checkpoint tick, that first evaluation compared against a seed
+   hours old, concluded the session was quiet, and **rotated mid-keystroke** — the exact false
+   accusation this gate exists to prevent. Two shapes satisfy the contract: seed at arm time (VS
+   Code, Neovim), or stamp unconditionally on every content event with a sentinel meaning "no
+   content event ever" (JetBrains). A port that does neither is wrong even if its tests pass.
+
+   **The window must be tested with an ADVANCING clock.** The bug above survived review because
+   every rotation test used a fixed clock that never advanced, so `now - lastChange` was always
+   zero and the quiet assertion compared a value to itself. Those tests could not fail. Any test of
+   this gate advances the clock across the burst it claims to model, and any change to the gate is
+   verified by reverting it and confirming the tests go red.
+
    **Content-mutating means `doc.change`, `paste`, and `fs.external_change` — not `doc.change`
    alone.** An earlier version of this section said `doc.change`, which is not sufficient: the
    heuristic this whole section exists to protect compares file CONTENT, and it does not care which
