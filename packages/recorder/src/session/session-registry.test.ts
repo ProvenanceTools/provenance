@@ -287,9 +287,19 @@ describe('startSession', () => {
     expect([...ROTATE_QUIET_KINDS].sort()).toEqual(
       ['doc.change', 'fs.external_change', 'paste'].sort(),
     );
+    // POSITIVE CONTROL, and it stays. `POLICY_GATED_EVENT_KINDS` is an OBJECT, not an
+    // array, and Vitest coerces a non-iterable object to `[]` for `toContain` — so
+    // `expect(POLICY_GATED_EVENT_KINDS).not.toContain(kind)` passes unconditionally
+    // and can never fail, which is exactly the defect class this test exists to
+    // prevent. `Object.keys` is the idiom `log-core/policy.test.ts` uses; this line
+    // proves the assertion below is capable of failing, and pins the shape of the
+    // constant so a future change back to an array cannot silently re-vacuum it.
+    const gated = Object.keys(POLICY_GATED_EVENT_KINDS);
+    expect(gated).toContain('selection.change');
+
     for (const kind of ROTATE_QUIET_KINDS) {
       expect(FLOOR_EVENT_KINDS).toContain(kind);
-      expect(POLICY_GATED_EVENT_KINDS).not.toContain(kind);
+      expect(gated).not.toContain(kind);
     }
   });
 
@@ -451,11 +461,50 @@ describe('startSession', () => {
     const session = await startRotating(clock, rotations, { rotateIdleQuietMsOverride: 100 });
 
     await emitToNextCheckpoint(session, 'doc.change', TYPING(clock));
+    // The rotation really is armed — otherwise "no rotation after dispose" would hold
+    // for the trivial reason that there was never a poll to stop.
+    expect(session.writer.bytesAppended).toBeGreaterThan(512);
     expect(rotations).toEqual([]);
 
     await session.dispose();
     clock.advance(10_000);
     await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(rotations).toEqual([]);
+  });
+
+  it('does not commit a rotation from an entry written during teardown', async () => {
+    // The sibling of the unarmed case: an ALREADY-armed session reaching
+    // evaluateRotation during dispose(). dispose() sets `disposed` and clears the
+    // timer, then the peer drain and the session.end emit push entries through
+    // onEntry — and if one lands on a 100-entry boundary while the log is over
+    // threshold and the quiet window has elapsed (the window is 2 s, teardown is
+    // 0.3–1 s), a successor session would be started in the middle of shutdown.
+    const QUIET = 2000;
+    const rotations: string[] = [];
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+    const session = await startRotating(clock, rotations, { rotateIdleQuietMsOverride: QUIET });
+
+    // Armed, over threshold, and NOT yet quiet — so nothing has fired.
+    await emitToNextCheckpoint(session, 'doc.change', TYPING(clock));
+    expect(session.writer.bytesAppended).toBeGreaterThan(512);
+    expect(rotations).toEqual([]);
+
+    // Work out the boundary BEFORE the clock moves, so the poll still declines during
+    // this await; everything after it is synchronous, so the poll cannot interleave
+    // and dispose()'s first act is to clear it.
+    await session.writer.flush();
+    const parsed = parseEntries(await fs.readFile(session.slogPath, 'utf8'));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const toGo = CHECKPOINT_INTERVAL - (parsed.value.length % CHECKPOINT_INTERVAL);
+    for (let i = 0; i < toGo - 1; i++) {
+      emitOne(session, 'doc.change');
+    }
+    // The student stops typing and closes the window: the quiet window is open at the
+    // exact moment teardown begins, and session.end is the hundredth entry.
+    clock.advance(QUIET);
+    await session.dispose();
+
     expect(rotations).toEqual([]);
   });
 
@@ -479,22 +528,12 @@ describe('startSession', () => {
     expect(rotations).toEqual([]);
 
     // The disk fills. Any write error degrades the session, one way and for good.
-    // DiskFullHandler notifies through `window.showErrorMessage`, which the vscode
-    // mock does not model; stub it for this test only rather than change the shared
-    // double.
-    const win = vscodeMock.window as unknown as {
-      showErrorMessage?: (m: string) => Promise<undefined>;
-    };
-    const hadShowError = 'showErrorMessage' in win;
-    win.showErrorMessage = () => Promise.resolve(undefined);
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- invasive test
-      await (session.writer as any).fh.close();
-      emitOne(session, 'doc.change');
-      await session.writer.flush();
-    } finally {
-      if (!hadShowError) delete win.showErrorMessage;
-    }
+    // (DiskFullHandler notifies through `window.showErrorMessage`, which the shared
+    // vscode mock now models — no local stub needed.)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- invasive test
+    await (session.writer as any).fh.close();
+    emitOne(session, 'doc.change');
+    await session.writer.flush();
 
     // The student pauses to read the notification — the quiet window opens.
     clock.advance(10_000);

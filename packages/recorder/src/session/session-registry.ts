@@ -904,13 +904,23 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
       clearIdleTimer();
       return;
     }
-    // Only an ARMED rotation can fire, because `lastContentChangeAtMs` is only
-    // meaningful once `armRotation` has seeded it. Without this, a tick that reached
-    // here with arming refused — `dispose()` sets `disposed`, and the `session.end`
-    // entry it emits can land on a checkpoint boundary — would compare `now` against
-    // an unseeded 0, find the window trivially open, and request a rotation during
-    // teardown.
-    if (!rotationArmed) return;
+    // Two preconditions, and they are siblings — a guard on one path only is how the
+    // degraded hole and this one both arose.
+    //
+    // `rotationArmed`: `lastContentChangeAtMs` is only meaningful once `armRotation`
+    // has seeded it, so an unarmed evaluation would compare `now` against an unseeded
+    // 0, find the window trivially open, and commit.
+    //
+    // `disposed`: an ALREADY-armed session can still reach here during teardown.
+    // `dispose()` sets `disposed` and clears the timer, and then `peerWatcher.drain()`
+    // and the `session.end` emit push entries through `onEntry`; if one lands on a
+    // 100-entry boundary with the log over threshold and the last content change a
+    // quiet window ago — entirely plausible, the window is 2 s and teardown is
+    // 0.3–1 s — this would request a rotation and start a successor session in the
+    // middle of shutdown. A LEGITIMATE rotation is unaffected: it set
+    // `rotationRequested` before `dispose()` was ever called, so it short-circuits on
+    // the first line of this function.
+    if (!rotationArmed || disposed) return;
     const bytes = writer.bytesAppended;
     if (bytes < rotateAtBytes) return;
     const quiet = clock.now() - lastContentChangeAtMs >= rotateIdleQuietMs;
