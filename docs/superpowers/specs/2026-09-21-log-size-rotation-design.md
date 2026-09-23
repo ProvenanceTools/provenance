@@ -86,6 +86,28 @@ growing under it. A rotation adds no new class of race: once `session.end` is wr
 predecessor's `.slog` never changes again, and the successor writes a different filename that the
 seal either includes or does not. Both outcomes are valid bundles.
 
+**Degraded abandons a rotation; it does not defer it.** The idle gate introduced a **second**
+rotation trigger — a poll — and the "a degraded session never rotates" property was only ever
+structural on the **entry** path, so every port initially let the poll fire while degraded. The
+failure that produces: arming happens while healthy, the disk then fills (degraded is one-way and
+never clears), the student pauses to read the error notification — which _is_ the quiet window —
+and the poll commits a rotation. The predecessor is torn down and its rolling seal claims
+`final: true`, while its `session.end` went to the in-memory ring rather than the log, and a
+successor starts recording onto a still-full disk. **A bundle sealed `final` whose log lacks its own
+terminal `session.end` is an evidence-integrity problem**, which is worse than anything rotation was
+meant to solve.
+
+So the degraded check belongs at the **single point of commit** that both triggers pass through,
+never at the individual call sites, and it **abandons**: the poll is stopped and the armed flag is
+left set so nothing re-arms. Deferring would be wrong, because degraded never becomes healthy
+again without a restart, so a deferred rotation is one that waits forever while pretending it might
+not.
+
+The accepted consequence: **a degraded session's log can exceed `ROTATE_AT_BYTES`, and in the
+extreme the 50 MB warning.** That is the right trade — a degraded session writes almost nothing, so
+it barely grows, and an oversized log is recoverable whereas a falsely-`final` seal is not. This is
+a behavioural choice, not a derivation, and it must be identical in all three ports.
+
 ### 3.3 The seam must be empty, because a lossy seam accuses the student
 
 **Correction (2026-09-23).** An earlier version of this section argued that a dropped edit is
