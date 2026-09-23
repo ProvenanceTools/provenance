@@ -108,6 +108,15 @@ extreme the 50 MB warning.** That is the right trade — a degraded session writ
 it barely grows, and an oversized log is recoverable whereas a falsely-`final` seal is not. This is
 a behavioural choice, not a derivation, and it must be identical in all three ports.
 
+**Not covered, deliberately:** a rotation that has already committed and is mid-teardown when the
+disk fills. The guard is at the commit point, so it cannot see a degradation that happens
+afterwards, and adding a second check inside the teardown would recreate the very pattern this rule
+exists to prevent — a guarantee spread across two sites, where the second one is the one a later
+change forgets. The window is bounded by the commit point (microseconds to milliseconds), the
+outcome is the same falsely-`final` seal, and the honest position is that it is unreachable in
+practice rather than impossible in principle. Ranked against the alternative — three ports each
+carrying two degraded checks — this is the better failure mode.
+
 ### 3.3 The seam must be empty, because a lossy seam accuses the student
 
 **Correction (2026-09-23).** An earlier version of this section argued that a dropped edit is
