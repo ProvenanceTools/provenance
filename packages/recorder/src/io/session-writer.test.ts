@@ -315,4 +315,31 @@ describe('SessionWriter', () => {
     await writer.dispose();
     await expect(writer.dispose()).resolves.toBeUndefined();
   });
+
+  // -------------------------------------------------------------------------
+  // Cumulative byte counter (size rotation, PRD §4.6)
+  // -------------------------------------------------------------------------
+
+  it('reports cumulative bytes appended across flushes', async () => {
+    const slogPath = path.join(tmpDir, 'session.slog');
+    const clock = new FixedClock(0, new Date('2026-01-01T00:00:00.000Z'));
+
+    const entryA = makeEntry(0, GENESIS_PREV_HASH);
+    const entryB = makeEntry(1, entryA.hash);
+
+    const writer = await SessionWriter.open({ slogPath, clock });
+    expect(writer.bytesAppended).toBe(0);
+    writer.append(entryA);
+    const afterFirst = writer.bytesAppended;
+    expect(afterFirst).toBeGreaterThan(0);
+    await writer.flush();
+    // A flush resets the buffer, never the cumulative total.
+    expect(writer.bytesAppended).toBe(afterFirst);
+    writer.append(entryB);
+    expect(writer.bytesAppended).toBeGreaterThan(afterFirst);
+    await writer.dispose();
+    // The counter must equal the file's real size on disk.
+    const stat = await fsPromises.stat(slogPath);
+    expect(writer.bytesAppended).toBe(stat.size);
+  });
 });

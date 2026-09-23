@@ -57,6 +57,13 @@ export class SessionWriter {
   private fh: fsPromises.FileHandle;
   private buffer: string[] = [];
   private bufferedBytes = 0;
+  /**
+   * Total bytes appended over this writer's lifetime. Unlike {@link bufferedBytes}
+   * it is NEVER reset by a flush, so it equals the `.slog`'s size on disk once
+   * everything is flushed. Size rotation (PRD §4.6) reads it at checkpoint
+   * cadence; nothing on the hot path does more than one addition here.
+   */
+  private totalBytes = 0;
   private lastFlushAtMs: number;
   private flushTimer: ReturnType<typeof setInterval> | undefined;
   private disposed = false;
@@ -100,6 +107,11 @@ export class SessionWriter {
     return new SessionWriter(slogPath, clock, bufferPolicy, onError, fh);
   }
 
+  /** Cumulative bytes appended (written + buffered). See {@link totalBytes}. */
+  get bytesAppended(): number {
+    return this.totalBytes;
+  }
+
   /**
    * Synchronously enqueue an entry for writing.
    * Kicks off a background flush if the buffer policy says to.
@@ -112,7 +124,9 @@ export class SessionWriter {
 
     const line = serializeEntry(entry);
     this.buffer.push(line);
-    this.bufferedBytes += Buffer.byteLength(line, 'utf8');
+    const lineBytes = Buffer.byteLength(line, 'utf8');
+    this.bufferedBytes += lineBytes;
+    this.totalBytes += lineBytes;
 
     if (
       shouldFlush(
