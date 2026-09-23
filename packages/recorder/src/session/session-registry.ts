@@ -1208,6 +1208,19 @@ export class SessionRegistry {
     return this.sessions.get(root);
   }
 
+  /**
+   * Forget the session at `root` WITHOUT disposing it.
+   *
+   * For the one caller that has already disposed it: size rotation (PRD §4.6),
+   * when starting the successor failed. Leaving the disposed predecessor in the
+   * map would keep `all()` non-empty — so the status bar goes on claiming
+   * "recording" — and keep `resolveForPath` routing events to a closed writer.
+   * Everything else must go through `pruneToRoots`/`disposeAll`, which dispose.
+   */
+  remove(root: string): boolean {
+    return this.sessions.delete(root);
+  }
+
   all(): readonly ActiveSession[] {
     return [...this.sessions.values()];
   }

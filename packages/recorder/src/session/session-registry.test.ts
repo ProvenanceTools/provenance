@@ -262,6 +262,33 @@ describe('startSession', () => {
     expect(validateChain(firstParsed.value).ok).toBe(true);
     expect(validateChain(secondParsed.value).ok).toBe(true);
     expect(second.slogPath).not.toBe(first.slogPath);
+
+    // Design §5 case 2: the ROLLING SEAL must validate on both sides too. A
+    // rotation goes through the ordinary teardown, so the predecessor's seal is
+    // final and signed by its own session key — a rotated log is as sealed as a
+    // deactivated one, or check 1 would report `unsealed_session` on a student
+    // who did nothing but keep their editor open.
+    const secondId = second.sessionId;
+    for (const [id, session] of [
+      [firstId, first],
+      [secondId, second],
+    ] as const) {
+      const json = await fs.readFile(path.join(provenanceDir, `manifest-${id}.json`), 'utf8');
+      const sigHex = await fs.readFile(path.join(provenanceDir, `manifest-${id}.sig`), 'utf8');
+      const seal: unknown = JSON.parse(json);
+      expect((seal as { final?: boolean }).final).toBe(true);
+      const shape = validateBundleManifestShape(seal);
+      expect(shape.ok).toBe(true);
+      if (!shape.ok) return;
+      expect(validateRollingSessionManifest(shape.value, id).ok).toBe(true);
+      expect(
+        await ed.verifyAsync(
+          hexToBytes(sigHex),
+          new TextEncoder().encode(json),
+          hexToBytes(session.sessionKeypair.publicKeyHex),
+        ),
+      ).toBe(true);
+    }
   });
 
   it('defaults session.end to deactivate when dispose() is given no reason', async () => {

@@ -348,9 +348,54 @@ async function startAndRegister(args: StartAndRegisterArgs): Promise<void> {
       void rotate(args, endedSessionId);
     },
   });
-  context.subscriptions.push(...session.ownDisposables);
+  // Historical ordering, unchanged: VS Code owns these and disposes them before
+  // `deactivate()` runs, so `dispose()`'s own LIFO loop must find an empty array.
+  // The cost is that `dispose()` alone does NOT unsubscribe this session's
+  // wiring — which is fine at deactivate and fatal at rotation, where nothing
+  // disposes `context.subscriptions`. Hence the bookkeeping below: rotation
+  // disposes them itself.
+  const handedToContext = [...session.ownDisposables];
+  context.subscriptions.push(...handedToContext);
   session.ownDisposables.length = 0;
   registry.add(session);
+  contextOwnedDisposables.set(root, handedToContext);
+}
+
+/**
+ * Per assignment root, the disposables that `startAndRegister` handed to
+ * `context.subscriptions` on that session's behalf.
+ *
+ * Needed because handing them over empties `ActiveSession.ownDisposables`, so
+ * `dispose()` can no longer reach them and only VS Code's own teardown of
+ * `context.subscriptions` ever would. Rotation has no such teardown: without
+ * this map the predecessor's doc wiring, fs watcher, paste intercept, heartbeat,
+ * terminal/git/extension wiring and peer watcher would stay subscribed for the
+ * editor's lifetime — throwing `append() after dispose()` on every keystroke,
+ * and letting the dead session's peer watcher witness the SUCCESSOR's own
+ * `.slog` as a foreign peer file.
+ */
+const contextOwnedDisposables = new Map<string, vscode.Disposable[]>();
+
+/**
+ * Dispose (LIFO) the disposables held on `root`'s behalf and drop them from
+ * `context.subscriptions`, so VS Code's own teardown cannot dispose them a
+ * second time and the array does not grow by one wiring set per rotation.
+ */
+function disposeContextOwned(context: vscode.ExtensionContext, root: string): void {
+  const handed = contextOwnedDisposables.get(root);
+  if (handed === undefined) return;
+  contextOwnedDisposables.delete(root);
+  for (const d of [...handed].reverse()) {
+    const at = context.subscriptions.indexOf(d);
+    if (at !== -1) context.subscriptions.splice(at, 1);
+    try {
+      d.dispose();
+    } catch (e: unknown) {
+      // Best effort, exactly as startSession's own LIFO teardown is: one wiring
+      // that cannot be torn down must not keep the others subscribed.
+      console.error('[provenance] error disposing session wiring:', e);
+    }
+  }
 }
 
 /** In-flight rotation roots, so a second request cannot interleave with the first. */
@@ -367,21 +412,48 @@ const rotating = new Set<string>();
  * the successor's catch-up doc.open re-reads the live buffer, so reconstruction
  * resynchronises and no divergence is flagged.
  *
- * A failure here leaves the predecessor sealed and this root simply not
- * recording, which is the existing per-root failure mode (PRD §4.8), not a new
- * one.
+ * If starting the successor fails (design §3.4), the predecessor is already
+ * sealed and nothing recorded before the rotation is at risk — but this root is
+ * no longer recording, so the dead session is dropped from the registry and the
+ * student is told, exactly as the activation loop tells them about a root that
+ * could not start. Leaving the entry in place would keep the status bar claiming
+ * "recording" and keep `resolveForPath` routing to a closed writer, and no retry
+ * could ever fire because that session's rotation was already requested.
  */
 async function rotate(args: StartAndRegisterArgs, endedSessionId: string): Promise<void> {
-  const { root } = args;
+  const { context, root } = args;
   if (rotating.has(root)) return;
   rotating.add(root);
   try {
     const current = registry.get(root);
     if (current === undefined || current.sessionId !== endedSessionId) return;
     await current.dispose('rotate');
-    await startAndRegister({ ...args, prevSessionId: endedSessionId });
+    // The seal is written; now actually unsubscribe the predecessor's wiring,
+    // which `dispose()` could not reach (see `contextOwnedDisposables`). After
+    // this point nothing can emit into the closed writer.
+    disposeContextOwned(context, root);
+    try {
+      await startAndRegister({ ...args, prevSessionId: endedSessionId });
+    } catch (e: unknown) {
+      registry.remove(root);
+      if (registry.all().length === 0) {
+        statusBar?.dispose();
+        statusBar = null;
+        inactiveReason = { kind: 'no_manifest_file' };
+      }
+      throw e;
+    }
   } catch (e: unknown) {
-    console.error('[provenance] session rotation failed:', e);
+    console.error(`[provenance] session rotation failed for ${root}:`, e);
+    if (registry.get(root) === undefined) {
+      void vscode.window.showWarningMessage(
+        `Provenance stopped recording ${root}: the log reached its size limit and a new ` +
+          'recording session could not be started. Your work so far is saved and sealed. ' +
+          'Reopen the folder to resume recording; if this folder is on OneDrive, iCloud, or ' +
+          'Google Drive, move the course folder to a local disk first. Otherwise contact ' +
+          'course staff.',
+      );
+    }
   } finally {
     rotating.delete(root);
   }
@@ -808,4 +880,20 @@ function registerEnrollmentCommands(context: vscode.ExtensionContext): void {
 
 export async function deactivate(): Promise<void> {
   await registry.disposeAll();
+  // The disposables themselves belong to context.subscriptions, which VS Code
+  // tears down; drop only our bookkeeping so a re-activation starts clean.
+  contextOwnedDisposables.clear();
+  rotating.clear();
+}
+
+/**
+ * Read-only view of the module-level registry, for the rotation tests.
+ *
+ * `rotate` is reachable only through the `requestRotation` callback that
+ * `startAndRegister` installs, and what it does is register bookkeeping — which
+ * is otherwise unobservable from outside this module. Read-only and used by
+ * nothing in production.
+ */
+export function activeSessionsForTest(): readonly { root: string; sessionId: string }[] {
+  return registry.all().map((s) => ({ root: s.assignmentRoot, sessionId: s.sessionId }));
 }
