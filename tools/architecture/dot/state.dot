@@ -43,6 +43,8 @@ digraph state {
   suspended -> recording[label="wake — the heartbeat emits\nsession.resumed when the gap is\n≥ 2× the interval. The gap has no\nintervening events, so it is NOT flagged"
                          color="#5d677d" style=dashed]
 
+  recording -> recording[label="log passes 40 MiB — session.end{rotate},\nseal, then a FRESH session.start carrying\nprev_session_id into a NEW log file. Keeps every\nfile under GitHub's 100 MB push limit" color="#17bfae" style=dashed]
+
   recording -> degraded [label="write fails:\nENOSPC" color="#ff6b6b"]
   degraded  -> dormant  [label="an editor restart is the ONLY\nway out — degraded mode is\nnever cleared in-process"
                          color="#ff6b6b" style=dashed]

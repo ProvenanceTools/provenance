@@ -241,6 +241,8 @@ A submission-ready bundle is produced by a "seal" operation:
 
 The seal operation is triggered by a VS Code command (`Provenance: Prepare Submission Bundle`). The bundle is what course staff pick up. Format details are in §5.
 
+**Size rotation.** A session whose `.slog` passes `ROTATE_AT_BYTES` (40 MiB) is rotated: the recorder emits `session.end` with `reason: "rotate"`, seals the session through the ordinary teardown path, and immediately starts a new session in the same scope whose `prev_session_id` names the one that just ended. The threshold is checked at the existing checkpoint cadence (every 100 entries), never per event. This exists because `submission: "git"` assignments commit `.provenance/` to a GitHub repo, and GitHub warns at 50 MB and refuses a push containing a file over 100 MB — a session now lives for the editor's lifetime, so without rotation a long-running session can grow past the limit and make the student unable to submit. Rotation is not a format change: `reason` is a free-form string and `prev_session_id` already exists. The successor's catch-up `doc.open` carries live buffer content, so a rotation seam shows no content divergence even when a buffer is unsaved.
+
 ### 4.7 Performance and footprint
 
 Constraints:
@@ -250,6 +252,7 @@ Constraints:
 - Disk: a 4-hour project session should produce < 20 MB of log. The inline-content truncation rule (§4.2) is the main lever here — it caps how much of a pasted or externally-written blob any single event carries.
   - That cap was raised from 4 KB to 64 KB (see §4.3 and §4.5), which deliberately weakens the lever, so the headroom is restated here. The events it governs are rare: a `paste` fires when a student pastes, and an `fs.external_change` only on a genuine external write. Each such event grows from ~1 KB (512-byte head + 512-byte tail) to at most 64 KB. A realistic session carries on the order of 10 over-cap events, at a typical source-file size of 10–20 KB, so roughly **+150 KB**; a pathological session with 15 events all at the full cap adds **~1 MB**. Against a 20 MB budget that is about 5% in the worst case, so the constraint holds.
   - This estimate assumes the D1 save-time race is fixed. Before that fix the recorder emitted roughly 21 false `fs.external_change` events per session; at 64 KB each those alone would have exceeded the budget. **The cap raise is only sound in combination with that fix** — do not port one without the other.
+  - No single `.slog` exceeds 40 MiB, because the session rotates at that size (§4.6). This bounds the per-file size independently of how long a session lives, which the 20 MB-per-4-hours figure does not.
 - The extension should not block typing under any circumstance. All disk I/O is async; all hashing happens on a worker thread.
 
 ### 4.8 Failure modes
@@ -257,6 +260,7 @@ Constraints:
 | Failure                                                                   | Behavior                                                                                                                                                   |
 | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Disk full                                                                 | Surface a notification; switch to a tiny in-memory ring buffer for critical events only; emit `recorder.degraded` event                                    |
+| Log file approaching GitHub's file-size limit                             | At the next checkpoint, emit `session.end` (`reason: "rotate"`), seal, and start a new session linked by `prev_session_id` (§4.6)                          |
 | Log file corrupted on startup                                             | Quarantine (rename to `.corrupt`), start a new session, emit `recorder.recovered_from_corruption` event in the new session referencing the quarantined one |
 | Extension crashes                                                         | VS Code will reload it; on reload, we open a new session, link it to the previous via the `prev_session_id` field, and continue                            |
 | Manifest trust chain fails to verify against the embedded root public key | Don't activate; log nothing                                                                                                                                |

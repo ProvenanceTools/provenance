@@ -66,6 +66,16 @@
 <text xml:space="preserve" text-anchor="middle" x="845.5" y="-213.02" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">while the wiring that consumes them starts after</text>
 </g>
 
+<g id="edge7" class="edge">
+
+<path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M1003.8,-250.51C991.92,-271.08 1000.89,-292.71 1030.71,-292.71 1057.03,-292.71 1067.11,-275.85 1060.93,-257.75" class="s-tra"/>
+<polygon stroke-width="1.2" points="1063.15,-257.12 1058.37,-252.16 1059.01,-259.02 1063.15,-257.12" class="a-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-320.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">log passes 40 MiB — session.end{rotate},</text>
+<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-311.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">seal, then a FRESH session.start carrying</text>
+<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-302.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">prev_session_id into a NEW log file. Keeps every</text>
+<text xml:space="preserve" text-anchor="middle" x="1030.71" y="-293.64" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">file under GitHub&#39;s 100 MB push limit</text>
+</g>
+
 <g id="node5" class="node">
 <title>degraded</title>
 <path stroke-width="1.4" d="M1499.96,-46.71C1499.96,-46.71 1370.54,-46.71 1370.54,-46.71 1364.54,-46.71 1358.54,-40.71 1358.54,-34.71 1358.54,-34.71 1358.54,-12 1358.54,-12 1358.54,-6 1364.54,0 1370.54,0 1370.54,0 1499.96,0 1499.96,0 1505.96,0 1511.96,-6 1511.96,-12 1511.96,-12 1511.96,-34.71 1511.96,-34.71 1511.96,-40.71 1505.96,-46.71 1499.96,-46.71" class="f-bad s-bad"/>
@@ -74,7 +84,7 @@
 <text xml:space="preserve" text-anchor="middle" x="1435.25" y="-7.76" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">appends suspended</text>
 </g>
 
-<g id="edge7" class="edge">
+<g id="edge8" class="edge">
 
 <path fill="none" stroke-width="1.2" d="M1043.8,-202.18C1059.31,-173.67 1088.93,-126.95 1127.79,-101.36 1194.63,-57.34 1284.71,-38.16 1349.9,-29.81" class="s-bad"/>
 <polygon stroke-width="1.2" points="1350.15,-32.07 1356.32,-29.01 1349.59,-27.55 1350.15,-32.07" class="a-bad s-bad"/>
@@ -105,7 +115,7 @@
 <text xml:space="preserve" text-anchor="middle" x="1435.25" y="-108.76" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">no session.end written</text>
 </g>
 
-<g id="edge9" class="edge">
+<g id="edge10" class="edge">
 
 <path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M1059.08,-202.17C1077.27,-187.53 1102.41,-169.89 1127.79,-160.36 1203.66,-131.85 1296.88,-124.46 1360.45,-123.19" class="s-bad"/>
 <polygon stroke-width="1.2" points="1360.16,-125.47 1366.62,-123.09 1360.09,-120.92 1360.16,-125.47" class="a-bad s-bad"/>
@@ -126,7 +136,7 @@
 <text xml:space="preserve" text-anchor="middle" x="1435.25" y="-198.01" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">ROLLING seal, rewritten at every checkpoint.</text>
 </g>
 
-<g id="edge12" class="edge">
+<g id="edge13" class="edge">
 
 <path fill="none" stroke-width="1.2" d="M1082.75,-202.06C1097.01,-196.42 1112.73,-191.23 1127.79,-188.36 1191.97,-176.13 1210.48,-176.84 1274.79,-188.36 1284.42,-190.08 1294.23,-192.35 1304.01,-194.99" class="s-tra"/>
 <polygon stroke-width="1.2" points="1303.22,-197.13 1310.1,-196.69 1304.45,-192.75 1303.22,-197.13" class="a-tra s-tra"/>
@@ -134,7 +144,7 @@
 <text xml:space="preserve" text-anchor="middle" x="1201.29" y="-189.28" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">Prepare Submission Bundle</text>
 </g>
 
-<g id="edge8" class="edge">
+<g id="edge9" class="edge">
 
 <path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M1358.03,-25.48C1296.01,-27.35 1206.22,-30.4 1127.79,-34.36 750.86,-53.35 655.62,-48.69 280.41,-89.36 270.88,-90.39 260.82,-91.7 250.99,-93.09" class="s-bad"/>
 <polygon stroke-width="1.2" points="250.71,-90.84 244.61,-94.02 251.37,-95.34 250.71,-90.84" class="a-bad s-bad"/>
@@ -166,14 +176,14 @@
 <text xml:space="preserve" text-anchor="middle" x="1810.55" y="-258.63" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">never its author</text>
 </g>
 
-<g id="edge10" class="edge">
+<g id="edge11" class="edge">
 
 <path fill="none" stroke-width="1.2" d="M1501.85,-146.2C1520.14,-152.81 1539.88,-160.43 1557.71,-168.36 1609.91,-191.56 1666.19,-221.05 1712.27,-246.45" class="s-fmt"/>
 <polygon stroke-width="1.2" points="1710.91,-248.3 1717.7,-249.45 1713.11,-244.32 1710.91,-248.3" class="a-fmt s-fmt"/>
 <text xml:space="preserve" text-anchor="middle" x="1621.59" y="-210.15" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">editor restarts</text>
 </g>
 
-<g id="edge11" class="edge">
+<g id="edge12" class="edge">
 
 <path fill="none" stroke-width="1.2" d="M1716.06,-354.45C1577.02,-424.24 1312.34,-526.8 1127.79,-412.36 1072.95,-378.34 1047.96,-302.04 1037.8,-258.46" class="s-fmt"/>
 <polygon stroke-width="1.2" points="1040.04,-258.09 1036.41,-252.24 1035.6,-259.08 1040.04,-258.09" class="a-fmt s-fmt"/>
@@ -182,7 +192,7 @@
 <text xml:space="preserve" text-anchor="middle" x="1435.25" y="-464.66" font-family="Helvetica,sans-Serif" font-size="8.50" class="t-hum">and always into a NEW log file</text>
 </g>
 
-<g id="edge13" class="edge">
+<g id="edge14" class="edge">
 
 <path fill="none" stroke-width="1.2" stroke-dasharray="5,2" d="M1311.92,-240.97C1241.85,-237.32 1156.6,-232.87 1098.66,-229.85" class="s-tra"/>
 <polygon stroke-width="1.2" points="1099.1,-227.59 1092.49,-229.53 1098.86,-232.14 1099.1,-227.59" class="a-tra s-tra"/>
