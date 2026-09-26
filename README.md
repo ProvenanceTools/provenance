@@ -58,11 +58,21 @@ full server dev guide (run modes, migrations, env var reference); the essentials
 
 ```sh
 # 1. Start Postgres + MinIO
-docker compose up -d
+docker compose up -d postgres rustfs
 
-# 2. Create the MinIO storage bucket (one-time — uploads 404 without it)
-docker compose exec minio mc alias set local http://localhost:9000 minioadmin minioadmin
-docker compose exec minio mc mb local/provenance
+# 2. Create the RustSF storage bucket (one-time operation — uploads 404 without it)
+
+# via web interface:
+open http://localhost:9001, sign in with the credentials configured for the rustfs service in compose.yaml, and create a bucket named provenance.
+
+# via cli see for installation instructions ([Server README](packages/server/README.md))
+
+# configure the rustsf client
+rc alias set local http://localhost:9000 provenance-local rustfsadmin --region us-east-1 --bucket-lookup path
+
+# Create the bucket (one time)
+rc bucket create local/provenance
+
 
 # 3. Configure environment. Defaults match the compose stack; fill in Google
 #    OAuth creds for real logins (dummy values are fine for API/worker/seed work).
@@ -85,7 +95,7 @@ alone in dev: `npm run dev --workspace=packages/server -- --mode=api`.)
 ### Seed example data
 
 With the server prerequisites above in place (compose up, bucket created, `.env`,
-migrations), populate the database with an example cohort:
+migrations), open a new terminal window and populate the database with an example cohort:
 
 ```sh
 npm run seed --workspace=packages/server
