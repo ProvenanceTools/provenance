@@ -41,8 +41,8 @@ describe('parseEnv — happy path', () => {
     expect(cfg.OBJECT_STORAGE_ENDPOINT).toBe('http://localhost:9000');
     expect(cfg.OBJECT_STORAGE_REGION).toBe('us-east-1'); // rustsf default value
     expect(cfg.OBJECT_STORAGE_BUCKET).toBe('provenance');
-    expect(cfg.OBJECT_STORAGE_ACCESS_KEY_ID).toBe('minioadmin');
-    expect(cfg.OBJECT_STORAGE_SECRET_ACCESS_KEY).toBe('minioadmin');
+    expect(cfg.OBJECT_STORAGE_ACCESS_KEY_ID).toBe('rustsfadmin');
+    expect(cfg.OBJECT_STORAGE_SECRET_ACCESS_KEY).toBe('rustsfadmin');
     expect(cfg.GOOGLE_OAUTH_CLIENT_ID).toBe('client-id');
     expect(cfg.GOOGLE_OAUTH_CLIENT_SECRET).toBe('client-secret');
     expect(cfg.AUTH_ALLOWED_HOSTED_DOMAINS).toEqual(['berkeley.edu']);
