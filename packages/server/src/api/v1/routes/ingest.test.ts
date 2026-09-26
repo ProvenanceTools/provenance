@@ -166,8 +166,8 @@ function makeTestEnv(rustfsEndpoint: string, rustfsBucket: string): Record<strin
     DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance', // overridden by mock
     OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
     OBJECT_STORAGE_BUCKET: rustfsBucket,
-    OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+    OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
     OBJECT_STORAGE_REGION: 'us-east-1',
     GOOGLE_OAUTH_CLIENT_ID: 'client-id',
     GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',

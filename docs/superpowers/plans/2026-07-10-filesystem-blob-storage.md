@@ -272,8 +272,8 @@ it('extracts all OBJECT_STORAGE_* fields from a validated env', () => {
   expect(cfg.endpoint).toBe('http://localhost:9000');
   expect(cfg.region).toBe('auto');
   expect(cfg.bucket).toBe('provenance');
-  expect(cfg.accessKeyId).toBe('minioadmin');
-  expect(cfg.secretAccessKey).toBe('minioadmin');
+  expect(cfg.accessKeyId).toBe('rustsfadmin');
+  expect(cfg.secretAccessKey).toBe('rustsfadmin');
 });
 ```
 

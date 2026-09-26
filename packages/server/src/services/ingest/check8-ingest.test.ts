@@ -61,8 +61,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../../db/migrations');
 
 const RUSTFS_IMAGE = 'rustfs/rustfs:1.0.0';
-const RUSTFS_USER = 'minioadmin';
-const RUSTFS_PASSWORD = 'minioadmin';
+const RUSTFS_USER = 'rustsfadmin';
+const RUSTFS_PASSWORD = 'rustsfadmin';
 const BUCKET_NAME = 'test-bucket';
 
 // ---------------------------------------------------------------------------

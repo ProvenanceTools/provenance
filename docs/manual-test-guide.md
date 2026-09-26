@@ -457,7 +457,7 @@ reading alongside the guilty one, and say that confirming enrolment is what dist
 
 ```sh
 docker compose up -d
-docker compose exec minio mc alias set local http://localhost:9000 minioadmin minioadmin
+docker compose exec minio mc alias set local http://localhost:9000 rustsfadmin rustsfadmin
 docker compose exec minio mc mb local/provenance      # uploads 404 without this
 cp packages/server/.env.example packages/server/.env
 npm run db:migrate --workspace=packages/server
@@ -477,7 +477,7 @@ npm run dev --workspace=packages/analyzer             # :5173
 ```sh
 # fresh
 docker compose down -v && docker compose up -d
-docker compose exec minio mc alias set local http://localhost:9000 minioadmin minioadmin
+docker compose exec minio mc alias set local http://localhost:9000 rustsfadmin rustsfadmin
 docker compose exec minio mc mb local/provenance
 npm run db:migrate --workspace=packages/server
 ```
