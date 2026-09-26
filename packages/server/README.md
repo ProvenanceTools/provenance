@@ -29,19 +29,13 @@ docker compose up -d rustfs
 2) create the storage bucket:
 The Rustsf web console is at http://localhost:9001 (user: `rustsfadmin`, password: `rustsfadmin`).
 
-or via CLI
+or via CLI 
 
 ```bash
 $ rc alias set local http://localhost:9000 provenance-local rustfsadmin \
   --region us-east-1 --bucket-lookup path
 
 $ rc bucket create local/provenance
-```
-
-
-```bash
-docker compose exec minio mc alias set local http://localhost:9000 minioadmin minioadmin
-docker compose exec minio mc mb local/provenance
 ```
 
 ### 2. Configure environment
