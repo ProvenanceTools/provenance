@@ -13,10 +13,31 @@ Current schema version: **0029** (`submission_contributors` — a submission bel
 docker compose up -d
 ```
 
-This starts Postgres 16 (port 5432) and MinIO (ports 9000/9001).
-The MinIO web console is at http://localhost:9001 (user: `minioadmin`, password: `minioadmin`).
+This starts the database using Postgres 16 (port 5432) and local storage container using RustSF (ports 9000/9001).
+
+optional - install the rustSF cli 
+for macs: `brew install rustfs/tap/rc' 
+others: check https://docs.rustfs.com/en/operations/rc
 
 Create the storage bucket (one-time):
+
+1) spin up docker to run rustfs
+```
+docker compose up -d rustfs
+```
+
+2) create the storage bucket:
+The Rustsf web console is at http://localhost:9001 (user: `rustsfadmin`, password: `rustsfadmin`).
+
+or via CLI
+
+```bash
+$ rc alias set local http://localhost:9000 provenance-local rustfsadmin \
+  --region us-east-1 --bucket-lookup path
+
+$ rc bucket create local/provenance
+```
+
 
 ```bash
 docker compose exec minio mc alias set local http://localhost:9000 minioadmin minioadmin
@@ -24,9 +45,9 @@ docker compose exec minio mc mb local/provenance
 ```
 
 ### 2. Configure environment
-
+Note: OAUTH currently not needed for local development
 ```bash
-cp .env.example .env
+cp .env-example .env
 # Fill in GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET from Google Cloud Console.
 ```
 
