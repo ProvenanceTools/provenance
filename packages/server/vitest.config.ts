@@ -13,7 +13,7 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/dist/**', ...excludePerf],
     environment: 'node',
     // Roughly half of this workspace's test files spawn testcontainers
-    // (Postgres and/or RustSF) — see test/helpers/db.ts and test/helpers/minio.ts.
+    // (Postgres and/or RustFS) — see test/helpers/db.ts and test/helpers/rustfs.ts.
     // Container start-up (pull + boot + migrate) plus real DB/S3 round trips
     // routinely exceed vitest's 5s/10s defaults once more than a couple of
     // files run concurrently and compete for the Docker daemon and CPU.
