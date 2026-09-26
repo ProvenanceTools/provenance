@@ -11,7 +11,7 @@ import { defineConfig } from 'vitest/config';
  *
  * Scoped with an explicit `include` on purpose. Without one, a bare `vitest` at
  * the repo root would walk into `packages/**` and pick up the server's
- * integration suites, which spin up Postgres and MinIO via testcontainers. Each
+ * integration suites, which spin up Postgres and RustSF via testcontainers. Each
  * package has its own vitest.config.ts and runs with its own cwd, so nothing
  * here affects `npm run test --workspace=packages/<name>`.
  */
