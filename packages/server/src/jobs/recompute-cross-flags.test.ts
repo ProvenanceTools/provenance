@@ -21,7 +21,7 @@ import postgres from 'postgres';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { eq, count, sql } from 'drizzle-orm';
-import { withTestMinio } from '../../test/helpers/minio.js';
+import { withTestRustfs } from '../../test/helpers/rustfs.js';
 import { _setConfigForTest, _resetConfigForTest } from '../config/index.js';
 import { _resetLoggerForTest } from '../logging.js';
 import { _resetDbForTest } from '../db/client.js';
@@ -111,16 +111,16 @@ describe('recompute_cross_flags handler (pg-boss integration)', () => {
   // -------------------------------------------------------------------------
 
   it('worker picks up recompute_cross_flags job and completes (cross_flags table updated)', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
+    await withTestRustfs(async ({ client, bucketName }) => {
       const connectionString = pgContainer.getConnectionUri();
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
 
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: connectionString,
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
           OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
           OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
@@ -233,16 +233,16 @@ describe('recompute_cross_flags handler (pg-boss integration)', () => {
   // -------------------------------------------------------------------------
 
   it('singletonKey: enqueueing twice for the same semester collapses to one pending job', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
+    await withTestRustfs(async ({ client, bucketName }) => {
       const connectionString = pgContainer.getConnectionUri();
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
 
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: connectionString,
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
           OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
           OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
@@ -339,16 +339,16 @@ describe('recompute_cross_flags handler (pg-boss integration)', () => {
   // -------------------------------------------------------------------------
 
   it('ingest_finalize produces cross_flags table update after successful ingest', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
+    await withTestRustfs(async ({ client, bucketName }) => {
       const connectionString = pgContainer.getConnectionUri();
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
 
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: connectionString,
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
           OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
           OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',

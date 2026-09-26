@@ -26,7 +26,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import JSZip from 'jszip';
-import { withTestMinio } from '../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../test/helpers/rustfs.js';
 import { _setConfigForTest, _resetConfigForTest, getConfig } from '../../config/index.js';
 import { _resetLoggerForTest } from '../../logging.js';
 import { _resetDbForTest } from '../../db/client.js';
@@ -181,14 +181,14 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
   });
 
   it('upserts roster, gives the co-submitter pair ONE submission with both contributors, reports skipped folders', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+    await withTestRustfs(async ({ client, bucketName }) => {
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: pgContainer.getConnectionUri(),
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
           OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
           OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
@@ -310,14 +310,14 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
   });
 
   it('stages into a pre-created job when jobId is supplied', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+    await withTestRustfs(async ({ client, bucketName }) => {
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: pgContainer.getConnectionUri(),
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
           OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
           OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
@@ -394,14 +394,14 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
   });
 
   it('fans one git repo out to one submission per assignment scope', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+    await withTestRustfs(async ({ client, bucketName }) => {
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: pgContainer.getConnectionUri(),
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
           OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
           OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
@@ -569,12 +569,12 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
     return { userId, semesterId: semester!.id };
   }
 
-  function e2eEnv(minioEndpoint: string, bucketName: string) {
+  function e2eEnv(rustfsEndpoint: string, bucketName: string) {
     return parseEnv({
       NODE_ENV: 'test',
       PUBLIC_BASE_URL: 'http://localhost:3000',
       DATABASE_URL: pgContainer.getConnectionUri(),
-      OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+      OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
       OBJECT_STORAGE_BUCKET: bucketName,
       OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
       OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
@@ -592,7 +592,7 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
   }
 
   it('honours a per-request ingest_scope override, beating the assignment defaults', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
+    await withTestRustfs(async ({ client, bucketName }) => {
       _setConfigForTest(e2eEnv(client.bucketUrl.replace(`/${bucketName}`, ''), bucketName));
       const { userId, semesterId } = await seedSemesterFor('CS 61B override');
 
@@ -635,7 +635,7 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
   });
 
   it('an override that the batch does not match fails the submission, legibly', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
+    await withTestRustfs(async ({ client, bucketName }) => {
       _setConfigForTest(e2eEnv(client.bucketUrl.replace(`/${bucketName}`, ''), bucketName));
       const { userId, semesterId } = await seedSemesterFor('CS 61B mismatch');
 
@@ -690,7 +690,7 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
   });
 
   it('a glob that matches nothing fails loudly rather than reporting a clean empty ingest', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
+    await withTestRustfs(async ({ client, bucketName }) => {
       _setConfigForTest(e2eEnv(client.bucketUrl.replace(`/${bucketName}`, ''), bucketName));
       const { userId, semesterId } = await seedSemesterFor('CS 61B empty glob');
 

@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import { withTestDb } from '../../../../test/helpers/db.js';
-import { withTestMinio } from '../../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../../test/helpers/rustfs.js';
 import { waitForAuditRow } from '../../../../test/helpers/audit.js';
 import { _resetConfigForTest, _setConfigForTest } from '../../../config/index.js';
 import { _resetLoggerForTest } from '../../../logging.js';
@@ -205,13 +205,13 @@ async function seedUnmatchedFile(db: DrizzleDb, ingestJobId: string) {
 // Test env builder (no RustSF needed for non-attach tests)
 // ---------------------------------------------------------------------------
 
-function makeTestEnv(opts?: { minioEndpoint?: string; minioBucket?: string }) {
+function makeTestEnv(opts?: { rustfsEndpoint?: string; rustfsBucket?: string }) {
   return {
     NODE_ENV: 'test',
     PUBLIC_BASE_URL: 'http://localhost:3000',
     DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance', // overridden by mock
-    OBJECT_STORAGE_ENDPOINT: opts?.minioEndpoint ?? 'http://localhost:9000',
-    OBJECT_STORAGE_BUCKET: opts?.minioBucket ?? 'test-bucket',
+    OBJECT_STORAGE_ENDPOINT: opts?.rustfsEndpoint ?? 'http://localhost:9000',
+    OBJECT_STORAGE_BUCKET: opts?.rustfsBucket ?? 'test-bucket',
     OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
     OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
     OBJECT_STORAGE_REGION: 'us-east-1',
@@ -590,8 +590,8 @@ async function stageTestBundle(
 
 describe('PATCH /semesters/:semesterId/unmatched/:id — attach (requires RustSF)', () => {
   it('happy path: moves file unmatched → matched, creates submission, materializes pipeline', async () => {
-    await withTestMinio(async ({ client: storageClient, bucketName }) => {
-      const minioEndpoint = storageClient.bucketUrl.replace(`/${bucketName}`, '');
+    await withTestRustfs(async ({ client: storageClient, bucketName }) => {
+      const rustfsEndpoint = storageClient.bucketUrl.replace(`/${bucketName}`, '');
 
       // Use a dedicated Postgres container so we don't compete with withTestDb.
       const pgContainer = await new PostgreSqlContainer('postgres:16-alpine')
@@ -612,8 +612,8 @@ describe('PATCH /semesters/:semesterId/unmatched/:id — attach (requires RustSF
       _setConfigForTest(
         parseEnv(
           makeTestEnv({
-            minioEndpoint: minioEndpoint ?? 'http://localhost:9000',
-            minioBucket: bucketName,
+            rustfsEndpoint: rustfsEndpoint ?? 'http://localhost:9000',
+            rustfsBucket: bucketName,
           }),
         ),
       );
@@ -728,8 +728,8 @@ describe('PATCH /semesters/:semesterId/unmatched/:id — attach (requires RustSF
   });
 
   it('attach with bundle manifest assignment_id mismatch → 200 + warning', async () => {
-    await withTestMinio(async ({ client: storageClient, bucketName }) => {
-      const minioEndpoint = storageClient.bucketUrl.replace(`/${bucketName}`, '');
+    await withTestRustfs(async ({ client: storageClient, bucketName }) => {
+      const rustfsEndpoint = storageClient.bucketUrl.replace(`/${bucketName}`, '');
 
       const pgContainer = await new PostgreSqlContainer('postgres:16-alpine')
         .withDatabase('provenance_test')
@@ -748,8 +748,8 @@ describe('PATCH /semesters/:semesterId/unmatched/:id — attach (requires RustSF
       _setConfigForTest(
         parseEnv(
           makeTestEnv({
-            minioEndpoint: minioEndpoint,
-            minioBucket: bucketName,
+            rustfsEndpoint: rustfsEndpoint,
+            rustfsBucket: bucketName,
           }),
         ),
       );
@@ -911,7 +911,7 @@ describe('PATCH /unmatched/:id — error cases', () => {
 
 describe('PATCH /unmatched/:id — concurrent attach (V21)', () => {
   it('exactly one succeeds and one gets 409 when two requests race', async () => {
-    await withTestMinio(async ({ client: storageClient, bucketName }) => {
+    await withTestRustfs(async ({ client: storageClient, bucketName }) => {
       const pgContainer = await new PostgreSqlContainer('postgres:16-alpine')
         .withDatabase('provenance_test')
         .withUsername('test')
@@ -928,13 +928,13 @@ describe('PATCH /unmatched/:id — concurrent attach (V21)', () => {
       _resetLoggerForTest();
       await _resetDbForTest();
 
-      const minioEndpoint = storageClient.bucketUrl.replace(`/${bucketName}`, '');
+      const rustfsEndpoint = storageClient.bucketUrl.replace(`/${bucketName}`, '');
 
       _setConfigForTest(
         parseEnv(
           makeTestEnv({
-            minioEndpoint,
-            minioBucket: bucketName,
+            rustfsEndpoint,
+            rustfsBucket: bucketName,
           }),
         ),
       );

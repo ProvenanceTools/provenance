@@ -15,7 +15,7 @@
 
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { withTestDb } from '../../../../test/helpers/db.js';
-import { withTestMinio } from '../../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../../test/helpers/rustfs.js';
 import { putSubmissionBundle } from '../../../../test/helpers/seed-bundle.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { _resetConfigForTest, _setConfigForTest } from '../../../config/index.js';
@@ -248,7 +248,7 @@ async function seedSubmissionWithFile(
 
 describe('GET /submissions/:id/files/:path/content', () => {
   it('happy path: returns correct content + metadata', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
@@ -278,7 +278,7 @@ describe('GET /submissions/:id/files/:path/content', () => {
   });
 
   it('with at_seq=2: reconstruction stops before doc.change (only "hello")', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
@@ -310,7 +310,7 @@ describe('GET /submissions/:id/files/:path/content', () => {
   });
 
   it('returns 404 FILE_NOT_FOUND for path not in per_file_stats', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
@@ -338,7 +338,7 @@ describe('GET /submissions/:id/files/:path/content', () => {
   });
 
   it('tainted file returns 200 with content:"" and warning field', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
@@ -369,7 +369,7 @@ describe('GET /submissions/:id/files/:path/content', () => {
   });
 
   it('sets Cache-Control: max-age=60, private', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
@@ -417,7 +417,7 @@ describe('GET /submissions/:id/files/:path/content', () => {
 
 describe('GET /submissions/:id/files/:path/provenance', () => {
   it('happy path: returns RLE provenance with correct shape', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
@@ -454,7 +454,7 @@ describe('GET /submissions/:id/files/:path/provenance', () => {
   });
 
   it('provenance runs cover the full content length', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));

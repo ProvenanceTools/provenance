@@ -1,12 +1,12 @@
 /**
  * Integration tests for stageBlob (Phase 9a §9.3 step 1).
  *
- * Uses withTestMinio — requires Docker.
+ * Uses withTestRustfs — requires Docker.
  */
 
 import { vi, describe, it, expect } from 'vitest';
 import { createHash } from 'node:crypto';
-import { withTestMinio } from '../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../test/helpers/rustfs.js';
 import { stageBlob } from './stage-blob.js';
 import { getBlob } from '../storage/blobs.js';
 import { ingestStagingKey } from '../storage/keys.js';
@@ -45,7 +45,7 @@ async function collectStream(stream: ReadableStream<Uint8Array>): Promise<Uint8A
 
 describe('stageBlob', () => {
   it('stages a file to RustSF at the expected key', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       const jobId = crypto.randomUUID();
       const fileId = crypto.randomUUID();
       const data = new TextEncoder().encode('hello provenance ingest');
@@ -61,7 +61,7 @@ describe('stageBlob', () => {
   });
 
   it('returns correct stagingKey matching ingestStagingKey(jobId, fileId)', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       const jobId = crypto.randomUUID();
       const fileId = crypto.randomUUID();
       const data = new Uint8Array(64).fill(0xab);
@@ -76,7 +76,7 @@ describe('stageBlob', () => {
   });
 
   it('returns correct sha256 matching independently computed hash', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       const jobId = crypto.randomUUID();
       const fileId = crypto.randomUUID();
       const data = new TextEncoder().encode('sha256-test-content');
@@ -92,7 +92,7 @@ describe('stageBlob', () => {
   });
 
   it('returns correct sizeBytes', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       const jobId = crypto.randomUUID();
       const fileId = crypto.randomUUID();
       const data = new Uint8Array(1024).fill(0x42);
@@ -107,7 +107,7 @@ describe('stageBlob', () => {
   });
 
   it('works with ArrayBuffer body', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       const jobId = crypto.randomUUID();
       const fileId = crypto.randomUUID();
       const data = new Uint8Array(256).fill(0xcd);
@@ -124,7 +124,7 @@ describe('stageBlob', () => {
   });
 
   it('stages different files for the same job to distinct keys', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       const jobId = crypto.randomUUID();
       const fileId1 = crypto.randomUUID();
       const fileId2 = crypto.randomUUID();

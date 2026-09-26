@@ -25,7 +25,7 @@
 
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { withTestDb } from '../../../../test/helpers/db.js';
-import { withTestMinio } from '../../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../../test/helpers/rustfs.js';
 import { putSubmissionBundle } from '../../../../test/helpers/seed-bundle.js';
 import { _resetConfigForTest, _setConfigForTest } from '../../../config/index.js';
 import { _resetLoggerForTest } from '../../../logging.js';
@@ -80,13 +80,13 @@ beforeEach(() => {
 // Seed helpers
 // ---------------------------------------------------------------------------
 
-function makeTestEnv(opts?: { minioEndpoint?: string; minioBucket?: string }) {
+function makeTestEnv(opts?: { rustfsEndpoint?: string; rustfsBucket?: string }) {
   return {
     NODE_ENV: 'test',
     PUBLIC_BASE_URL: 'http://localhost:3000',
     DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance',
-    OBJECT_STORAGE_ENDPOINT: opts?.minioEndpoint ?? 'http://localhost:9000',
-    OBJECT_STORAGE_BUCKET: opts?.minioBucket ?? 'test-bucket',
+    OBJECT_STORAGE_ENDPOINT: opts?.rustfsEndpoint ?? 'http://localhost:9000',
+    OBJECT_STORAGE_BUCKET: opts?.rustfsBucket ?? 'test-bucket',
     OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
     OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
     OBJECT_STORAGE_REGION: 'us-east-1',
@@ -248,11 +248,11 @@ describe('events query builder — cursor encode/decode', () => {
 
 describe('GET /submissions/:id/events', () => {
   it('returns all events for a submission (happy path)', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
-          parseEnv(makeTestEnv({ minioEndpoint: endpoint, minioBucket: bucketName })),
+          parseEnv(makeTestEnv({ rustfsEndpoint: endpoint, rustfsBucket: bucketName })),
         );
 
         const user = await seedUser(db);
@@ -285,11 +285,11 @@ describe('GET /submissions/:id/events', () => {
   });
 
   it('filters by kind', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
-          parseEnv(makeTestEnv({ minioEndpoint: endpoint, minioBucket: bucketName })),
+          parseEnv(makeTestEnv({ rustfsEndpoint: endpoint, rustfsBucket: bucketName })),
         );
 
         const user = await seedUser(db);
@@ -328,11 +328,11 @@ describe('GET /submissions/:id/events', () => {
   });
 
   it('filters by session_id and includes total_count', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
-          parseEnv(makeTestEnv({ minioEndpoint: endpoint, minioBucket: bucketName })),
+          parseEnv(makeTestEnv({ rustfsEndpoint: endpoint, rustfsBucket: bucketName })),
         );
 
         const user = await seedUser(db);
@@ -371,11 +371,11 @@ describe('GET /submissions/:id/events', () => {
   });
 
   it('filters by file (payload.path)', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
-          parseEnv(makeTestEnv({ minioEndpoint: endpoint, minioBucket: bucketName })),
+          parseEnv(makeTestEnv({ rustfsEndpoint: endpoint, rustfsBucket: bucketName })),
         );
 
         const user = await seedUser(db);
@@ -412,11 +412,11 @@ describe('GET /submissions/:id/events', () => {
   });
 
   it('filters by seq_from / seq_to range', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
-          parseEnv(makeTestEnv({ minioEndpoint: endpoint, minioBucket: bucketName })),
+          parseEnv(makeTestEnv({ rustfsEndpoint: endpoint, rustfsBucket: bucketName })),
         );
 
         const user = await seedUser(db);
@@ -443,11 +443,11 @@ describe('GET /submissions/:id/events', () => {
   });
 
   it('filters by t_from / t_to range', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
-          parseEnv(makeTestEnv({ minioEndpoint: endpoint, minioBucket: bucketName })),
+          parseEnv(makeTestEnv({ rustfsEndpoint: endpoint, rustfsBucket: bucketName })),
         );
 
         const user = await seedUser(db);
@@ -480,11 +480,11 @@ describe('GET /submissions/:id/events', () => {
   });
 
   it('returns total_count when kind filter active, omits it without', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
-          parseEnv(makeTestEnv({ minioEndpoint: endpoint, minioBucket: bucketName })),
+          parseEnv(makeTestEnv({ rustfsEndpoint: endpoint, rustfsBucket: bucketName })),
         );
 
         const user = await seedUser(db);
@@ -518,11 +518,11 @@ describe('GET /submissions/:id/events', () => {
   });
 
   it('paginates with cursor (round-trip page1 + page2 = full list)', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
-          parseEnv(makeTestEnv({ minioEndpoint: endpoint, minioBucket: bucketName })),
+          parseEnv(makeTestEnv({ rustfsEndpoint: endpoint, rustfsBucket: bucketName })),
         );
 
         const user = await seedUser(db);
@@ -570,11 +570,11 @@ describe('GET /submissions/:id/events', () => {
   });
 
   it('returns events in seq_desc order', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
-          parseEnv(makeTestEnv({ minioEndpoint: endpoint, minioBucket: bucketName })),
+          parseEnv(makeTestEnv({ rustfsEndpoint: endpoint, rustfsBucket: bucketName })),
         );
 
         const user = await seedUser(db);
@@ -801,11 +801,11 @@ describe('GET /submissions/:id/events', () => {
   });
 
   it('filters by wall_from / wall_to range', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
-          parseEnv(makeTestEnv({ minioEndpoint: endpoint, minioBucket: bucketName })),
+          parseEnv(makeTestEnv({ rustfsEndpoint: endpoint, rustfsBucket: bucketName })),
         );
 
         const user = await seedUser(db);
@@ -842,11 +842,11 @@ describe('GET /submissions/:id/events', () => {
   });
 
   it('supports multiple kind values (OR semantics)', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
-          parseEnv(makeTestEnv({ minioEndpoint: endpoint, minioBucket: bucketName })),
+          parseEnv(makeTestEnv({ rustfsEndpoint: endpoint, rustfsBucket: bucketName })),
         );
 
         const user = await seedUser(db);
@@ -895,11 +895,11 @@ describe('GET /submissions/:id/events', () => {
 
 describe('GET /submissions/:id/events/:seq', () => {
   it('returns single event by seq', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
-          parseEnv(makeTestEnv({ minioEndpoint: endpoint, minioBucket: bucketName })),
+          parseEnv(makeTestEnv({ rustfsEndpoint: endpoint, rustfsBucket: bucketName })),
         );
 
         const user = await seedUser(db);
@@ -925,11 +925,11 @@ describe('GET /submissions/:id/events/:seq', () => {
   });
 
   it('returns 404 for unknown seq', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
-          parseEnv(makeTestEnv({ minioEndpoint: endpoint, minioBucket: bucketName })),
+          parseEnv(makeTestEnv({ rustfsEndpoint: endpoint, rustfsBucket: bucketName })),
         );
 
         const user = await seedUser(db);

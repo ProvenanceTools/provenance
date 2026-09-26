@@ -19,7 +19,7 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 // a loaded full-suite run look like a product failure.
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 import { withTestDb } from '../../../test/helpers/db.js';
-import { withTestMinio } from '../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../test/helpers/rustfs.js';
 import { putSubmissionBundle } from '../../../test/helpers/seed-bundle.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import {
@@ -183,7 +183,7 @@ async function seedBundleForSubmission(
 
 describe('getSubmissionSummary — protected mode masking', () => {
   it('masks student identity and source_filename when protectedMode=true', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const user = await seedUser(db);
         const { semester } = await seedCourseAndSemester(db);
@@ -236,7 +236,7 @@ describe('getSubmissionSummary — protected mode masking', () => {
   });
 
   it('returns real values when protectedMode=false', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const user = await seedUser(db);
         const { semester } = await seedCourseAndSemester(db);
@@ -269,7 +269,7 @@ describe('getSubmissionSummary — protected mode masking', () => {
   });
 
   it('falls back to UUID-derived label when protected_index is null', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const user = await seedUser(db);
         const { semester } = await seedCourseAndSemester(db);
@@ -308,7 +308,7 @@ describe('getSubmissionSummary — protected mode masking', () => {
 
 describe('getSubmissionSummary — sessions[]', () => {
   it('reports one entry per session, in bundle order, with start time and event count', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const user = await seedUser(db);
         const { semester } = await seedCourseAndSemester(db);
@@ -368,7 +368,7 @@ describe('getSubmissionSummary — sessions[]', () => {
 
 describe('getSubmissionSummary — assignment_manifest', () => {
   it('reports the legacy shape for a 1.x bundle, with no disabled signals', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const user = await seedUser(db);
         const { semester } = await seedCourseAndSemester(db);
@@ -402,7 +402,7 @@ describe('getSubmissionSummary — assignment_manifest', () => {
   });
 
   it('surfaces course id, capability flags, cert and disabled signals for a 2.0 bundle', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const user = await seedUser(db);
         const { semester } = await seedCourseAndSemester(db);
@@ -452,7 +452,7 @@ describe('getSubmissionSummary — assignment_manifest', () => {
   });
 
   it('reports trust_chain "unconfigured" for a 2.0 bundle when no root key is set', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const user = await seedUser(db);
         const { semester } = await seedCourseAndSemester(db);
@@ -487,7 +487,7 @@ describe('getSubmissionSummary — assignment_manifest', () => {
 
 describe('getSubmissionSummary — a submission with no single owning student', () => {
   it('returns the summary with student: null and the contributors named', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { semester } = await seedCourseAndSemester(db);
         const user = await seedUser(db);
@@ -535,7 +535,7 @@ describe('getSubmissionSummary — a submission with no single owning student', 
   });
 
   it('still returns null — and therefore 404 — for a submission that does not exist', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         // The distinction the LEFT join preserves: "no one student" and "no such
         // submission" must not share a response.
@@ -545,7 +545,7 @@ describe('getSubmissionSummary — a submission with no single owning student', 
   });
 
   it('a solo submission still reports exactly one contributor, the same student', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { semester } = await seedCourseAndSemester(db);
         const user = await seedUser(db);
@@ -610,7 +610,7 @@ describe('getSubmissionSummary — a submission with no single owning student', 
  */
 describe('getSubmissionSummary — coverage facts', () => {
   it('serializes real facts that survive JSON and the shared schema', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const user = await seedUser(db);
         const { semester } = await seedCourseAndSemester(db);
@@ -668,7 +668,7 @@ describe('getSubmissionSummary — coverage facts', () => {
    * grader through the wire rather than only through `/local`.
    */
   it('reports the single-repository caveat off the stored bundle, not a default', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const user = await seedUser(db);
         const { semester } = await seedCourseAndSemester(db);
@@ -738,7 +738,7 @@ describe('getSubmissionSummary — coverage facts', () => {
    * submission. This test is what proves the read path actually re-derives it.
    */
   it('recomputes the §5.6 capability report off the stored bundle', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const user = await seedUser(db);
         const { semester } = await seedCourseAndSemester(db);

@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import JSZip from 'jszip';
-import { withTestMinio } from '../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../test/helpers/rustfs.js';
 import { _setConfigForTest, _resetConfigForTest, getConfig } from '../../config/index.js';
 import { _resetLoggerForTest } from '../../logging.js';
 import { _resetDbForTest } from '../../db/client.js';
@@ -130,14 +130,14 @@ describe('resumable upload (create → part → complete → ingest)', () => {
   });
 
   it('ingests a completed multipart upload to the same end state', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+    await withTestRustfs(async ({ client, bucketName }) => {
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: pgContainer.getConnectionUri(),
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
           OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
           OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',

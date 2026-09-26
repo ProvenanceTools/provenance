@@ -1,11 +1,11 @@
 /**
- * Integration tests for S3 multipart upload ops against RustSF (via withTestMinio).
+ * Integration tests for S3 multipart upload ops against RustSF (via withTestRustfs).
  * Validates create → uploadPart → listParts (resume) → complete → object bytes,
  * plus abort. Requires Docker.
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { withTestMinio } from '../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../test/helpers/rustfs.js';
 import { getBlob } from './blobs.js';
 import {
   createMultipartUpload,
@@ -44,7 +44,7 @@ async function collect(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> 
 
 describe('S3 multipart ops', () => {
   it('create → parts → listParts (resume) → complete assembles the object', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       const key = 'uploads/test/multi.bin';
       const part1 = makeBytes(S3_MIN_PART_BYTES, 0x41); // must be >= 5 MiB
       const part2 = makeBytes(1024, 0x42); // last part may be small
@@ -75,7 +75,7 @@ describe('S3 multipart ops', () => {
   });
 
   it('abort discards the upload', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       const key = 'uploads/test/aborted.bin';
       const uploadId = await createMultipartUpload(client, key);
       await uploadPart(client, key, uploadId, 1, makeBytes(S3_MIN_PART_BYTES, 0x43));

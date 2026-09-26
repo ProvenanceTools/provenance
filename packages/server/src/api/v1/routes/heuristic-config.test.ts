@@ -18,7 +18,7 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { withTestDb } from '../../../../test/helpers/db.js';
-import { withTestMinio } from '../../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../../test/helpers/rustfs.js';
 import { waitForAuditRow } from '../../../../test/helpers/audit.js';
 import { _resetConfigForTest, _setConfigForTest } from '../../../config/index.js';
 import { _resetLoggerForTest } from '../../../logging.js';
@@ -98,7 +98,7 @@ beforeEach(() => {
 
 /**
  * BASE_ENV with OBJECT_STORAGE_* overridden to point at an ephemeral RustSF
- * instance from withTestMinio. computeDryRunDiff re-parses each submission's
+ * instance from withTestRustfs. computeDryRunDiff re-parses each submission's
  * stored bundle blob on demand (via getStorageClient() / loadSubmissionIndex,
  * events are no longer persisted in Postgres), so any test that exercises a
  * non-empty semester must both store a bundle blob AND point config at the
@@ -983,7 +983,7 @@ describe('computeDryRunDiff', () => {
   });
 
   it('returns zero tier_change when all weights match existing scores', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _setConfigForTest(parseEnv(minioEnv(endpoint, bucketName)));
 
@@ -1066,7 +1066,7 @@ describe('computeDryRunDiff', () => {
   });
 
   it('detects tier change when a weight change shifts score_max_severity', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _setConfigForTest(parseEnv(minioEnv(endpoint, bucketName)));
 
@@ -1199,7 +1199,7 @@ describe('computeDryRunDiff', () => {
 
 describe('computeDryRunDiff — threshold forwarding (V46 regression)', () => {
   it('raising largePaste.minChars above paste size suppresses the flag in dry-run', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _setConfigForTest(parseEnv(minioEnv(endpoint, bucketName)));
 
@@ -1566,7 +1566,7 @@ describe('GET /semesters/:semesterId/recompute/:jobId', () => {
 
 describe('computeDryRunDiff — protected mode masks top_movers student identity', () => {
   it('masked: top_movers.student has Student N / SN (never real name/sid)', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _setConfigForTest(parseEnv(minioEnv(endpoint, bucketName)));
         const adminUser = await insertUser(db);
@@ -1682,7 +1682,7 @@ describe('computeDryRunDiff — protected mode masks top_movers student identity
   });
 
   it('protected dry-run via HTTP: top_movers.student masked', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(parseEnv(minioEnv(endpoint, bucketName)));

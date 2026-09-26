@@ -14,7 +14,7 @@
 
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { withTestDb } from '../../../../test/helpers/db.js';
-import { withTestMinio } from '../../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../../test/helpers/rustfs.js';
 import { putSubmissionBundle } from '../../../../test/helpers/seed-bundle.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { _resetConfigForTest, _setConfigForTest } from '../../../config/index.js';
@@ -223,7 +223,7 @@ async function seedSubmission(
 
 describe('GET /submissions/:id', () => {
   it('returns full summary for a seeded submission', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
@@ -528,7 +528,7 @@ describe('GET /submissions/:id/flags', () => {
 
 describe('GET /submissions/:id/stats', () => {
   it('returns per_file and aggregate stats', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(

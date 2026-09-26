@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import JSZip from 'jszip';
-import { withTestMinio } from '../../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../../test/helpers/rustfs.js';
 import { _setConfigForTest, _resetConfigForTest } from '../../../config/index.js';
 import { _resetLoggerForTest } from '../../../logging.js';
 import { _resetDbForTest } from '../../../db/client.js';
@@ -152,14 +152,14 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
   });
 
   it('resumable /complete returns 202 with job_id and the background job reaches succeeded', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+    await withTestRustfs(async ({ client, bucketName }) => {
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: pgContainer.getConnectionUri(),
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
           OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
           OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
@@ -314,14 +314,14 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
   });
 
   it('upserts roster, matches solo + group submitters, reports skipped folders', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+    await withTestRustfs(async ({ client, bucketName }) => {
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: pgContainer.getConnectionUri(),
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
           OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
           OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
@@ -609,7 +609,7 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
   // -------------------------------------------------------------------------
 
   it('scope_* query params override the assignment defaults for the batch', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
+    await withTestRustfs(async ({ client, bucketName }) => {
       const { semester, sessionToken } = await seedForOverride(client, bucketName);
       workerStop = await startWorker();
 
@@ -646,7 +646,7 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
   });
 
   it('a repo_scoped override whose glob matches nothing fails every folder, legibly', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
+    await withTestRustfs(async ({ client, bucketName }) => {
       const { semester, sessionToken } = await seedForOverride(client, bucketName);
 
       const formData = new FormData();
@@ -683,7 +683,7 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
   });
 
   it('rejects a malformed scope override with 400, before reading the body', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
+    await withTestRustfs(async ({ client, bucketName }) => {
       const { semester, sessionToken } = await seedForOverride(client, bucketName);
       const app = createV1App();
 
