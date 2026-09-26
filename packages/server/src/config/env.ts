@@ -89,7 +89,7 @@ const rawEnvSchema = z.object({
   DATABASE_POOL_MAX: intStr(10),
   BLOB_STORAGE_BACKEND: z.enum(['s3', 'fs']).default('s3'),
   OBJECT_STORAGE_ENDPOINT: z.string().url().optional(),
-  OBJECT_STORAGE_REGION: z.string().min(1).default('auto'),
+  OBJECT_STORAGE_REGION: z.string().min(1).default('us-east-1'),
   OBJECT_STORAGE_BUCKET: z.string().min(1).optional(),
   OBJECT_STORAGE_ACCESS_KEY_ID: z.string().min(1).optional(),
   OBJECT_STORAGE_SECRET_ACCESS_KEY: z.string().min(1).optional(),
@@ -183,7 +183,7 @@ const rawEnvSchema = z.object({
    */
   RECONSTRUCTION_CACHE_SIZE: intStr(100),
   // Operational notifications (docs/superpowers/specs/2026-07-10-operational-notifications-design.md).
-  ALERT_WEBHOOK_URL: z.string().url().optional(),
+  ALERT_WEBHOOK_URL: optionalUrlStr.transform((v) => v || undefined),
   ALERT_WEBHOOK_MIN_SEVERITY: z.enum(['info', 'warn', 'critical']).default('warn'),
   ALERT_WEBHOOK_TIMEOUT_MS: intStr(5000),
   ALERT_EMAIL_RECIPIENTS: jsonStringArray.default('[]'),
