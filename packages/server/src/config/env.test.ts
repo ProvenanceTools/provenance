@@ -39,7 +39,7 @@ describe('parseEnv — happy path', () => {
     expect(cfg.DATABASE_URL).toBe('postgres://user:pass@localhost:5432/provenance');
     expect(cfg.DATABASE_POOL_MAX).toBe(10);
     expect(cfg.OBJECT_STORAGE_ENDPOINT).toBe('http://localhost:9000');
-    expect(cfg.OBJECT_STORAGE_REGION).toBe('auto');
+    expect(cfg.OBJECT_STORAGE_REGION).toBe('us-east-1'); // rustsf default value
     expect(cfg.OBJECT_STORAGE_BUCKET).toBe('provenance');
     expect(cfg.OBJECT_STORAGE_ACCESS_KEY_ID).toBe('minioadmin');
     expect(cfg.OBJECT_STORAGE_SECRET_ACCESS_KEY).toBe('minioadmin');
@@ -279,6 +279,11 @@ describe('alert config', () => {
     });
     expect(env.ALERT_WEBHOOK_URL).toBe('https://discord.test/hook');
     expect(env.ALERT_EMAIL_RECIPIENTS).toEqual(['a@berkeley.edu', 'b@berkeley.edu']);
+  });
+
+  it('treats an empty webhook URL as disabled', () => {
+    const env = parseEnv({ ...VALID_BASE, ALERT_WEBHOOK_URL: '' });
+    expect(env.ALERT_WEBHOOK_URL).toBeUndefined();
   });
 
   it('rejects a bad severity', () => {
