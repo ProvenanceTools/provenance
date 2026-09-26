@@ -11,7 +11,7 @@
  *   4. Not archived: semester has archived_at=null → blob is not purged.
  *
  * Uses withTestDb (testcontainers) for real Postgres, and a mock storageClient
- * so the test does not require a running MinIO instance.
+ * so the test does not require a running RustSF instance.
  */
 
 import { vi, describe, it, expect } from 'vitest';

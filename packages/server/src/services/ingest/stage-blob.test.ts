@@ -44,7 +44,7 @@ async function collectStream(stream: ReadableStream<Uint8Array>): Promise<Uint8A
 // ---------------------------------------------------------------------------
 
 describe('stageBlob', () => {
-  it('stages a file to MinIO at the expected key', async () => {
+  it('stages a file to RustSF at the expected key', async () => {
     await withTestMinio(async ({ client }) => {
       const jobId = crypto.randomUUID();
       const fileId = crypto.randomUUID();

@@ -26,7 +26,7 @@ instance (not end users).
 | --------------------- | --------------------------------------------- | -------------------- |
 | Node.js               | 22 LTS                                        | 22 LTS               |
 | Postgres              | 16                                            | 16                   |
-| Object storage        | MinIO (self-hosted) or AWS S3 / Cloudflare R2 | MinIO on same subnet |
+| Object storage        | RustSF (self-hosted) or AWS S3 / Cloudflare R2 | RustSF on same subnet |
 | RAM (server)          | 512 MB                                        | 2 GB                 |
 | Disk (Postgres data)  | 10 GB                                         | 50 GB                |
 | Disk (object storage) | 100 GB                                        | 1 TB                 |
@@ -496,11 +496,11 @@ Restore from backup:
 pg_restore --clean --if-exists --dbname="$DATABASE_URL" /backups/provenance-20251231.dump
 ```
 
-### 8.2 Object storage (MinIO)
+### 8.2 Object storage (RustSF)
 
-**Option A — MinIO replication (recommended for production):**
+**Option A — RustSF replication (recommended for production):**
 
-Configure MinIO bucket replication to a second site or S3 bucket:
+Configure RustSF bucket replication to a second site or S3 bucket:
 
 ```bash
 mc alias set local http://localhost:9000 $ACCESS_KEY $SECRET_KEY
@@ -526,7 +526,7 @@ are restorable. Schedule quarterly thereafter.
 
 ### Step 1: Prepare a clean environment
 
-Start fresh Postgres and MinIO instances (do not touch production):
+Start fresh Postgres and RustSF instances (do not touch production):
 
 ```bash
 docker run -d --name pg-restore \
@@ -555,7 +555,7 @@ SELECT COUNT(*) FROM users;         -- expect > 0
 SELECT MAX(created_at) FROM submissions;  -- expect recent date
 ```
 
-### Step 3: Restore MinIO blobs
+### Step 3: Restore RustSF blobs
 
 ```bash
 mc alias set restore http://localhost:9100 testadmin testadmin
@@ -631,7 +631,7 @@ a variable from the other group is harmless but has no effect.
 | ------------------------------------- | ----------------- | ------- | ----------------------------------------------------------------------------------------------------------------- |
 | `BLOB_STORAGE_BACKEND`                | No                | `s3`    | `s3` (S3-compatible object storage) or `fs` (a plain directory, e.g. an NFS mount).                               |
 | `OBJECT_STORAGE_ENDPOINT`             | **Yes when `s3`** | —       | S3-compatible endpoint URL.                                                                                       |
-| `OBJECT_STORAGE_REGION`               | No                | `auto`  | S3 region. `auto` suits MinIO and Cloudflare R2; set a real region for AWS.                                       |
+| `OBJECT_STORAGE_REGION`               | No                | `auto`  | S3 region. `auto` suits RustSF and Cloudflare R2; set a real region for AWS.                                       |
 | `OBJECT_STORAGE_BUCKET`               | **Yes when `s3`** | —       | Bucket name.                                                                                                      |
 | `OBJECT_STORAGE_ACCESS_KEY_ID`        | **Yes when `s3`** | —       | S3 access key id.                                                                                                 |
 | `OBJECT_STORAGE_SECRET_ACCESS_KEY`    | **Yes when `s3`** | —       | S3 secret access key.                                                                                             |
@@ -886,9 +886,9 @@ SELECT * FROM pgboss.schedule WHERE name = 'retention_sweep';
 If missing, restart the worker — `boss.schedule()` is called on startup and is
 idempotent. Verify the worker started without errors after the `schedule()` calls.
 
-### MinIO connection refused
+### RustSF connection refused
 
-Confirm MinIO is running and accessible from the server host:
+Confirm RustSF is running and accessible from the server host:
 
 ```bash
 curl -f http://<OBJECT_STORAGE_ENDPOINT>/minio/health/live

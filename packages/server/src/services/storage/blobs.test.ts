@@ -1,7 +1,7 @@
 /**
  * Integration tests for blob operations (putBlob, getBlob, presignGetUrl, deleteBlob).
  *
- * Requires Docker — each test gets its own isolated MinIO container via
+ * Requires Docker — each test gets its own isolated RustSF container via
  * `withTestMinio`.
  *
  * Per V12 convention: integration test files set generous timeouts at the top.
@@ -182,7 +182,7 @@ describe('presignGetUrl', () => {
       await putBlob(client, key, new TextEncoder().encode('original'));
 
       const url = await presignGetUrl(client, key, 300);
-      // Attempt a PUT using the GET-signed URL — S3/MinIO reject it.
+      // Attempt a PUT using the GET-signed URL — S3/RustSF reject it.
       const res = await fetch(url, {
         method: 'PUT',
         body: 'tampered',
@@ -233,7 +233,7 @@ describe('deleteBlob', () => {
 
   it('delete is idempotent — deleting a non-existent key does not throw', async () => {
     await withTestMinio(async ({ client }) => {
-      // S3 and MinIO return 204 for DELETE of a non-existent object.
+      // S3 and RustSF return 204 for DELETE of a non-existent object.
       await expect(deleteBlob(client, 'test/does-not-exist')).resolves.toBeUndefined();
     });
   });

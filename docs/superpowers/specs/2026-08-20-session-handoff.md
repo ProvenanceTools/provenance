@@ -191,7 +191,7 @@ Non-negotiable in every brief:
 - `npm run test --workspace=packages/X`, **never** `--root packages/X` (bypasses package config:
   the recorder loses its `vscode` alias, the analyzer denies `docs/heuristics.md` — both fake).
   **Never** the bare root `npm run test`.
-- One agent on the server suite at a time. Two produced ~37 containers and MinIO 503s that read
+- One agent on the server suite at a time. Two produced ~37 containers and RustSF 503s that read
   exactly like real regressions.
 - **Check your own shell cwd before trusting a verification run** — a persisted `cd` into
   `packages/server` once made build/typecheck/lint report a false clean.

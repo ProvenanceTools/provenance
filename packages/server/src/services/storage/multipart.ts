@@ -5,7 +5,7 @@
  * export in parts, the storage tracks part state server-side (so an interrupted
  * upload resumes by re-sending only missing parts via `listParts`), and on
  * completion S3 assembles the parts into one object. Works against any
- * S3-compatible endpoint (AWS S3, MinIO, R2) via `aws4fetch` SigV4 signing —
+ * S3-compatible endpoint (AWS S3, RustSF, R2) via `aws4fetch` SigV4 signing —
  * the same signer `blobs.ts` uses.
  *
  * S3 constraint: every part except the last must be ≥ 5 MiB.

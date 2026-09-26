@@ -10,7 +10,7 @@
  *   - parse-bundle-phase.ts needs no change (verified by the test reaching
  *     the validation step without a parse_bundle error).
  *
- * Uses testcontainers (Postgres + MinIO). Both containers are shared across
+ * Uses testcontainers (Postgres + RustSF). Both containers are shared across
  * all tests in this file (started once in beforeAll, stopped in afterAll)
  * to avoid the ~60-90s startup cost per test.
  *
@@ -76,7 +76,7 @@ let db: DrizzleDb;
 let storageClient: StorageClient;
 
 beforeAll(async () => {
-  // Start Postgres and MinIO in parallel to cut startup time.
+  // Start Postgres and RustSF in parallel to cut startup time.
   [pgContainer, minioContainer] = await Promise.all([
     new PostgreSqlContainer('postgres:16-alpine')
       .withDatabase('provenance_test')
@@ -107,7 +107,7 @@ beforeAll(async () => {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 500));
     const res = await storageClient.aws.fetch(bucketUrl, { method: 'PUT' });
     if (res.ok || res.status === 409) break;
-    if (attempt === 9) throw new Error(`Failed to create MinIO test bucket after retries`);
+    if (attempt === 9) throw new Error(`Failed to create RustSF test bucket after retries`);
   }
 });
 

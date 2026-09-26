@@ -13,7 +13,7 @@
  * Events are no longer persisted in Postgres — runAndStoreCrossHeuristics now
  * reads each submission's event stream by re-parsing its stored bundle blob
  * (via loadSubmissionIndex). To trigger paste_shared_across_students, we build
- * and store real bundle blobs (in a test MinIO) whose sessions carry a 'paste'
+ * and store real bundle blobs (in a test RustSF) whose sessions carry a 'paste'
  * event with matching sha256/content, instead of inserting into the (removed)
  * events table.
  */

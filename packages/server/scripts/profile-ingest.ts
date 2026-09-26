@@ -8,7 +8,7 @@
  *   - wall-clock segmentation (upload request / worker drain / cross-flags),
  *   - a per-phase profile dump (requires INGEST_PROFILE=1; auto-set below).
  *
- * Run from the server workspace (Postgres + MinIO must be up, migrations applied):
+ * Run from the server workspace (Postgres + RustSF must be up, migrations applied):
  *
  *   npm run profile:ingest --workspace=packages/server
  *

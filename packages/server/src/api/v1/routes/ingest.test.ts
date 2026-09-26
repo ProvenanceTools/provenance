@@ -2,9 +2,9 @@
  * Ingest routes integration tests (Phase 9a).
  *
  * Tests all ingest endpoints through createV1App() per V18 rule.
- * Both Postgres (withTestDb) and MinIO (withTestMinio) containers are required.
+ * Both Postgres (withTestDb) and RustSF (withTestMinio) containers are required.
  * The route handler reads storage config from getConfig(), so we wire the test
- * MinIO endpoint into _setConfigForTest().
+ * RustSF endpoint into _setConfigForTest().
  */
 
 import { vi, describe, it, expect, beforeEach } from 'vitest';
@@ -156,7 +156,7 @@ async function seedRosterEntry(
 }
 
 // ---------------------------------------------------------------------------
-// Test env builder (includes MinIO endpoint)
+// Test env builder (includes RustSF endpoint)
 // ---------------------------------------------------------------------------
 
 function makeTestEnv(minioEndpoint: string, minioBucket: string): Record<string, string> {
@@ -293,7 +293,7 @@ describe('POST /semesters/:semesterId/ingest', () => {
     });
   });
 
-  it('returns 202 and stages blobs in MinIO', async () => {
+  it('returns 202 and stages blobs in RustSF', async () => {
     await withTestDb(async (db) => {
       await withTestMinio(async ({ client, bucketName }) => {
         _testDb = db;
@@ -319,14 +319,14 @@ describe('POST /semesters/:semesterId/ingest', () => {
           expect(res.status).toBe(202);
           const { job_id } = (await res.json()) as { job_id: string };
 
-          // Verify blob exists in MinIO by retrieving ingest_files row and checking the staging key.
+          // Verify blob exists in RustSF by retrieving ingest_files row and checking the staging key.
           const [fileRow] = await db
             .select()
             .from(ingest_files)
             .where(eq(ingest_files.ingest_job_id, job_id));
           expect(fileRow).toBeDefined();
 
-          // Verify the blob is retrievable from MinIO.
+          // Verify the blob is retrievable from RustSF.
           const { getBlob } = await import('../../../services/storage/blobs.js');
           const { ingestStagingKey } = await import('../../../services/storage/keys.js');
           const key = ingestStagingKey(job_id, fileRow!.id);
@@ -877,7 +877,7 @@ describe('POST /semesters/:semesterId/ingest — staging failure compensation (C
             .mockImplementation(async (...args: Parameters<typeof stageBlobModule.stageBlob>) => {
               callCount++;
               if (callCount === 2) {
-                throw new Error('simulated MinIO failure on file 2');
+                throw new Error('simulated RustSF failure on file 2');
               }
               return originalStageBlob(...args);
             });
@@ -906,7 +906,7 @@ describe('POST /semesters/:semesterId/ingest — staging failure compensation (C
 
           // No ingest_files rows: rows are bulk-inserted only after ALL staging
           // succeeds, so a mid-staging failure leaves zero rows (the file-1 blob
-          // staged to MinIO is an orphan the retention sweep reclaims).
+          // staged to RustSF is an orphan the retention sweep reclaims).
           const files = await db
             .select()
             .from(ingest_files)

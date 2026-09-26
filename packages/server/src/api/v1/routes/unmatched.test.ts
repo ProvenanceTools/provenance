@@ -7,10 +7,10 @@
  * requests for the same file — exactly one succeeds, the other gets 409).
  *
  * Test groups:
- *   1. GET /unmatched — list tests (DB only, no MinIO needed)
+ *   1. GET /unmatched — list tests (DB only, no RustSF needed)
  *   2. POST /unmatched/:id/discard — discard tests (DB only)
- *   3. PATCH /unmatched/:id — attach tests (requires MinIO for real bundle parse)
- *   4. Concurrent attach — concurrency test with real MinIO
+ *   3. PATCH /unmatched/:id — attach tests (requires RustSF for real bundle parse)
+ *   4. Concurrent attach — concurrency test with real RustSF
  */
 
 import { vi, describe, it, expect, beforeEach } from 'vitest';
@@ -202,7 +202,7 @@ async function seedUnmatchedFile(db: DrizzleDb, ingestJobId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Test env builder (no MinIO needed for non-attach tests)
+// Test env builder (no RustSF needed for non-attach tests)
 // ---------------------------------------------------------------------------
 
 function makeTestEnv(opts?: { minioEndpoint?: string; minioBucket?: string }) {
@@ -560,7 +560,7 @@ describe('POST /semesters/:semesterId/unmatched/:id/discard', () => {
 });
 
 // ---------------------------------------------------------------------------
-// §3. PATCH /unmatched/:id — attach tests (require MinIO + real bundle)
+// §3. PATCH /unmatched/:id — attach tests (require RustSF + real bundle)
 // ---------------------------------------------------------------------------
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -588,7 +588,7 @@ async function stageTestBundle(
   return { blobSha256: sha256 };
 }
 
-describe('PATCH /semesters/:semesterId/unmatched/:id — attach (requires MinIO)', () => {
+describe('PATCH /semesters/:semesterId/unmatched/:id — attach (requires RustSF)', () => {
   it('happy path: moves file unmatched → matched, creates submission, materializes pipeline', async () => {
     await withTestMinio(async ({ client: storageClient, bucketName }) => {
       const minioEndpoint = storageClient.bucketUrl.replace(`/${bucketName}`, '');

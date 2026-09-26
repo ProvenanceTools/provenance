@@ -150,7 +150,7 @@ In `packages/server/src/services/ingest/create-submission.ts`, the blob is curre
 - **Read paths:** timeline API, reconstruction/replay, per-submission recompute, and cross-flag recompute all produce identical results against an events-less DB (parse-from-blob). Add regression tests that would fail if a read path still queried `events`.
 - **Source tab:** returns reconstructed content and the stored verdict; taint indicator set when reconstruction is incomplete.
 - **strip-bundle:** unit test — output contains exactly the provenance entries, is deterministic, and re-parses via `loadBundle`.
-- Server integration tests keep using testcontainers (Postgres + MinIO); never point at dev compose.
+- Server integration tests keep using testcontainers (Postgres + RustSF); never point at dev compose.
 
 ## Risks / tradeoffs (on the record)
 

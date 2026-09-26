@@ -8,12 +8,12 @@
  *   npm run seed --workspace=packages/server -- --regenerate # rebuild the export ZIP + reseed
  *
  * Prerequisites (same as `npm run dev`):
- *   - docker compose up -d   (Postgres + MinIO)
+ *   - docker compose up -d   (Postgres + RustSF)
  *   - npm run db:migrate --workspace=packages/server
  *   - packages/server/.env present (copy of .env.example; OAuth creds may be dummy)
  *
  * What it does, end to end:
- *   1. ensures the MinIO bucket exists,
+ *   1. ensures the RustSF bucket exists,
  *   2. seeds an admin user + course + semester + membership (idempotent),
  *   3. builds (or reuses) the committed example Gradescope export ZIP
  *      (~700 students across three assignments, with a spread of pastes),
@@ -78,7 +78,7 @@ function log(msg: string): void {
   process.stdout.write(`[seed] ${msg}\n`);
 }
 
-/** Best-effort CreateBucket so a fresh MinIO doesn't 404 the staged uploads. */
+/** Best-effort CreateBucket so a fresh RustSF doesn't 404 the staged uploads. */
 async function ensureBucket(): Promise<void> {
   const cfg = getConfig();
   const storage = createStorageClient(storageConfigFromEnv(cfg));

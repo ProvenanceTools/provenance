@@ -1,5 +1,5 @@
 /**
- * Integration tests for S3 multipart upload ops against MinIO (via withTestMinio).
+ * Integration tests for S3 multipart upload ops against RustSF (via withTestMinio).
  * Validates create → uploadPart → listParts (resume) → complete → object bytes,
  * plus abort. Requires Docker.
  */

@@ -97,12 +97,12 @@ beforeEach(() => {
 });
 
 /**
- * BASE_ENV with OBJECT_STORAGE_* overridden to point at an ephemeral MinIO
+ * BASE_ENV with OBJECT_STORAGE_* overridden to point at an ephemeral RustSF
  * instance from withTestMinio. computeDryRunDiff re-parses each submission's
  * stored bundle blob on demand (via getStorageClient() / loadSubmissionIndex,
  * events are no longer persisted in Postgres), so any test that exercises a
  * non-empty semester must both store a bundle blob AND point config at the
- * same MinIO the blob was written to.
+ * same RustSF the blob was written to.
  */
 function minioEnv(endpoint: string, bucketName: string): Record<string, string> {
   return { ...BASE_ENV, OBJECT_STORAGE_ENDPOINT: endpoint, OBJECT_STORAGE_BUCKET: bucketName };

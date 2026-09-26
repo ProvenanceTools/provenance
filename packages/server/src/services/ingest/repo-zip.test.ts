@@ -19,7 +19,7 @@
  *     through the existing `no_seal` / `scope_excluded` / `ambiguous_scope` /
  *     `submission_type_mismatch` vocabulary — never a new channel.
  *
- * Pure: no DB, no MinIO, no containers.
+ * Pure: no DB, no RustSF, no containers.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';

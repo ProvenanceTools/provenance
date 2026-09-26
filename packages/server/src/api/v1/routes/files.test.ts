@@ -5,7 +5,7 @@
  *
  * Events are no longer stored in Postgres: the routes parse the stored bundle
  * blob on demand (via getStorageClient() → loadSubmissionIndex). Each test spins
- * a MinIO container, points the app config at it, and seeds a bundle whose events
+ * a RustSF container, points the app config at it, and seeds a bundle whose events
  * (doc.open 'hello' + doc.change ' world' + doc.save) reconstruct file main.py.
  *
  * globalIdx note: the bundle's session.start is globalIdx 0, so doc.open=1,
@@ -93,7 +93,7 @@ function makeTestEnv(extra?: Record<string, string>) {
   };
 }
 
-/** Config env wired to the ephemeral MinIO endpoint/bucket. */
+/** Config env wired to the ephemeral RustSF endpoint/bucket. */
 function envForMinio(endpoint: string, bucket: string, extra?: Record<string, string>) {
   return makeTestEnv({
     OBJECT_STORAGE_ENDPOINT: endpoint,
@@ -399,7 +399,7 @@ describe('GET /submissions/:id/files/:path/content', () => {
       _testDb = db;
       _setConfigForTest(parseEnv(makeTestEnv()));
 
-      // Auth fails before any storage access — no MinIO needed.
+      // Auth fails before any storage access — no RustSF needed.
       const fakeId = crypto.randomUUID();
       const app = createV1App();
       const res = await app.fetch(

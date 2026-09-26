@@ -14,7 +14,7 @@
  *     packages/server/scripts/seed-rolling-test.ts
  *
  * Prerequisites (same as `npm run dev`):
- *   - docker compose up -d   (Postgres + MinIO)
+ *   - docker compose up -d   (Postgres + RustSF)
  *   - npm run db:migrate --workspace=packages/server
  *   - packages/server/.env present
  *

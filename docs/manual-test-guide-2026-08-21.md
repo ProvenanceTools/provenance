@@ -21,7 +21,7 @@ reachable by honest work.
 cd ~/projects/provenance
 git switch feat/manifest-2.0-trust-chain
 npm run build
-docker compose up -d           # Postgres + MinIO for local dev
+docker compose up -d           # Postgres + RustSF for local dev
 npm run db:migrate --workspace=packages/server
 ```
 
@@ -344,7 +344,7 @@ rows sharing a millisecond.
   detector". Always run the control.
 - **`unwitnessed`, `unknown`, `absent` and `not_owned` are not deficiencies.** If any of them
   render as a problem, the fix is the wording, not the data.
-- **The full server suite takes ~42 minutes** (144 files, each with its own Postgres + MinIO
+- **The full server suite takes ~42 minutes** (144 files, each with its own Postgres + RustSF
   container). Do not run two of them at once — that is what made this look flaky for weeks. If a
   test fails on a container timeout rather than an assertion, the machine was loaded, not the code
   wrong.

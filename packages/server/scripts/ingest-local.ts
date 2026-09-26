@@ -12,7 +12,7 @@
  *     --path ./export.zip --semester <semester-uuid> --user staff@berkeley.edu
  *
  * Prerequisites (same as `npm run dev`):
- *   - docker compose up -d        (Postgres + MinIO)
+ *   - docker compose up -d        (Postgres + RustSF)
  *   - npm run db:migrate --workspace=packages/server
  *   - a worker running (`npm run dev` with --mode=all, or a separate worker):
  *     this command stages + enqueues the submissions; the worker processes them.

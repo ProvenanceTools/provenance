@@ -2,8 +2,8 @@
  * Bundle download endpoint integration tests (Phase 18).
  *
  * Tests the bundle endpoint through createV1App() per V18 rule.
- * Requires both Postgres (testcontainers) and MinIO (for signed URL
- * generation — presignGetUrl makes an AWS4 HTTP request to MinIO).
+ * Requires both Postgres (testcontainers) and RustSF (for signed URL
+ * generation — presignGetUrl makes an AWS4 HTTP request to RustSF).
  *
  * Test groups:
  *   1. GET /submissions/:id/bundle — returns 302 with Location header
@@ -11,8 +11,8 @@
  *   3. GET /submissions/:id/bundle — token without include_blobs → 403
  *   4. GET /submissions/:id/bundle — unauthenticated → 401
  *
- * Implementation note on signed URLs: `presignGetUrl` calls MinIO's S3
- * presign API. We need a real MinIO container OR we can mock storageClient.
+ * Implementation note on signed URLs: `presignGetUrl` calls RustSF's S3
+ * presign API. We need a real RustSF container OR we can mock storageClient.
  * To keep tests fast we mock `presignGetUrl` directly — the signed-URL
  * generation is already tested in blobs.test.ts. What we're testing here
  * is the route wiring: auth, audit, token scope, 302 location.
@@ -42,7 +42,7 @@ import { createToken } from '../../../auth/tokens.js';
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
 
 // ---------------------------------------------------------------------------
-// Mock presignGetUrl to avoid needing a real MinIO container.
+// Mock presignGetUrl to avoid needing a real RustSF container.
 // blobs.test.ts covers the actual S3 signing; here we test route wiring.
 // ---------------------------------------------------------------------------
 

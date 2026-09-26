@@ -7,7 +7,7 @@
  * multipart upload is downloaded and fed through the SAME ingestLocalPath
  * pipeline, reaching the same end state as every other ingest path.
  *
- * Real pg-boss + Postgres + MinIO via testcontainers.
+ * Real pg-boss + Postgres + RustSF via testcontainers.
  */
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';

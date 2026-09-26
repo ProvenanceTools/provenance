@@ -39,7 +39,7 @@ digraph deploy {
     fontsize=9.5 fontcolor="#F97316" color="#4a3316" penwidth=1.5 style=rounded
     bgcolor="#12100c" labeljust="l"
     node [fillcolor="#241a0c" color="#F97316" fontsize=9.5]
-    blobs [label="blob store — filesystem backend\nbehind the same S3-compatible interface\nMinIO provides in development"
+    blobs [label="blob store — filesystem backend\nbehind the same S3-compatible interface\nRustSF provides in development"
            shape=cylinder height=0.75]
     backs [label="backups/" shape=cylinder height=0.5]
   }

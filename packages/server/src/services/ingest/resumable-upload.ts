@@ -3,7 +3,7 @@
  *
  * A single multi-GB upload in one request is fragile: any interruption (wifi
  * drop, proxy timeout, server restart) loses the whole transfer. This splits the
- * export into parts backed by an S3/MinIO **multipart upload**, so:
+ * export into parts backed by an S3/RustSF **multipart upload**, so:
  *   - part state lives in object storage, not server memory — correct across
  *     multiple `--mode=api` processes behind a load balancer, and durable across
  *     restarts;

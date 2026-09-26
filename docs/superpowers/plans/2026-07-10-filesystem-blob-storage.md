@@ -330,7 +330,7 @@ npm run lint --workspace=packages/server
 npm run test --workspace=packages/server -- src/config/ src/services/storage/client.test.ts
 ```
 
-Expected: typecheck + lint clean; tests PASS. (The MinIO-backed `blobs.test.ts`/`multipart.test.ts` still pass because the s3 path is unchanged — run them too if Docker is available: `npm run test --workspace=packages/server -- src/services/storage/blobs.test.ts src/services/storage/multipart.test.ts`.)
+Expected: typecheck + lint clean; tests PASS. (The RustSF-backed `blobs.test.ts`/`multipart.test.ts` still pass because the s3 path is unchanged — run them too if Docker is available: `npm run test --workspace=packages/server -- src/services/storage/blobs.test.ts src/services/storage/multipart.test.ts`.)
 
 - [ ] **Step 10: Commit**
 
@@ -1599,7 +1599,7 @@ npm run lint --workspace=packages/server
 npm run test --workspace=packages/server
 ```
 
-Expected: typecheck + lint clean; full server suite PASS (Docker must be running for the MinIO/Postgres testcontainer suites). If any pre-existing MinIO test fails, confirm it fails on `main` too before treating it as a regression.
+Expected: typecheck + lint clean; full server suite PASS (Docker must be running for the RustSF/Postgres testcontainer suites). If any pre-existing RustSF test fails, confirm it fails on `main` too before treating it as a regression.
 
 - [ ] **Step 4: Commit**
 

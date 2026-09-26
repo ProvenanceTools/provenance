@@ -88,7 +88,7 @@ click around the analyzer without hunting for real submissions. It does the real
 thing end to end: it generates a Gradescope export ZIP and runs it through the **real**
 ingest pipeline (the same `POST /ingest:gradescope` route + worker that production uses).
 
-Prerequisites are the same as `npm run dev`: `docker compose up -d`, the MinIO bucket
+Prerequisites are the same as `npm run dev`: `docker compose up -d`, the RustSF bucket
 created (step 1 above), `.env` present, and migrations applied. Then:
 
 ```bash
@@ -334,7 +334,7 @@ upserts the roster from the export metadata automatically).
 
 Both drive the real route + worker in-process and print a per-phase timing table (parse,
 match, heuristics, stats, validation, crypto, DB, S3). They need the same backing services
-as `npm run dev` (Postgres + MinIO up, migrations applied) and set `INGEST_PROFILE=1`
+as `npm run dev` (Postgres + RustSF up, migrations applied) and set `INGEST_PROFILE=1`
 inline. Use them to check the cost model after changing any pipeline stage.
 
 - `profile:ingest` runs the committed ~700-bundle example export against a fresh,

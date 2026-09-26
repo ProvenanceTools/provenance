@@ -31,7 +31,7 @@ import { Errors } from '../../api/v1/errors.js';
  * Marks an ingest job as failed with an optional error detail string.
  *
  * Called as a compensation path when staging fails mid-batch. Any blobs
- * already staged to MinIO are left as orphans — the retention sweep (Phase 9c)
+ * already staged to RustSF are left as orphans — the retention sweep (Phase 9c)
  * will clean them up.
  *
  * Silently no-ops if the job doesn't exist (worker idempotency).

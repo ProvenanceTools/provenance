@@ -7,7 +7,7 @@
  * submission's stored bundle blob from object storage on demand (via
  * loadSubmissionIndex). Tests that need a real event stream build a bundle with
  * buildTestBundle() and store it via putSubmissionBundle(), then point the app
- * config at the ephemeral MinIO instance so getStorageClient() resolves to the
+ * config at the ephemeral RustSF instance so getStorageClient() resolves to the
  * same store.
  *
  * NOTE ON SEQ NUMBERING: `seq` in the API response is the GLOBAL chronological
@@ -204,7 +204,7 @@ async function seedSubmission(db: DrizzleDb, semesterId: string, userId: string)
 
 /**
  * Build a bundle from explicit per-session EventSpec[] and store it as the
- * submission's bundle blob in the (ephemeral) MinIO instance `storage` points
+ * submission's bundle blob in the (ephemeral) RustSF instance `storage` points
  * to. Every session automatically gets a `session.start` entry (globalIdx 0
  * if it's the earliest event chronologically) ahead of the given events.
  */

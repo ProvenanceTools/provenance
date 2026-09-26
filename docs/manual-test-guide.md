@@ -796,7 +796,7 @@ Each of these has already cost someone real time.
   `--reporter=verbose` it buffers to nothing and looks wedged; someone lost 2h20m to that.
   (`--reporter=basic` does not exist in vitest 4.)
 - The server suite has genuine flakes under container contention. **Re-run a failing file alone**
-  before calling it a regression. Never two server suites at once — ~37 containers produces MinIO
+  before calling it a regression. Never two server suites at once — ~37 containers produces RustSF
   503s that read exactly like real bugs.
 - The analyzer suite intermittently exits non-zero with **all tests passing** (a deliberate uncaught
   error in `BundleContext.test.tsx`). Re-run before believing it.

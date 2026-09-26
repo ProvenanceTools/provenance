@@ -5,7 +5,7 @@
  * helpers — the same helper used by analyzer unit tests. Uses zipBuffer
  * (ArrayBuffer) directly so no browser Blob API is required in Node.
  *
- * No DB, no MinIO — pure function tests over ArrayBuffer input.
+ * No DB, no RustSF — pure function tests over ArrayBuffer input.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';

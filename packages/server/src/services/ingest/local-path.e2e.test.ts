@@ -11,7 +11,7 @@
  *     second resolves as `duplicate` rather than fanning out a second row,
  *   - a no-manifest folder reported as skipped.
  *
- * Mirrors ingest-gradescope.e2e.test.ts: real pg-boss + Postgres + MinIO via
+ * Mirrors ingest-gradescope.e2e.test.ts: real pg-boss + Postgres + RustSF via
  * testcontainers.
  */
 

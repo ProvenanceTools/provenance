@@ -9,7 +9,7 @@
  *     contributors (D9) — not one row per co-submitter,
  *   - a folder with no bundle is reported as skipped.
  *
- * Mirrors ingest-e2e.test.ts: real pg-boss + Postgres + MinIO via testcontainers.
+ * Mirrors ingest-e2e.test.ts: real pg-boss + Postgres + RustSF via testcontainers.
  */
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';

@@ -6,7 +6,7 @@
  * stages → per-file jobs + finalize run on worker) reaches the same end state
  * as the sync completeResumableUpload path.
  *
- * Real pg-boss + Postgres + MinIO via testcontainers.
+ * Real pg-boss + Postgres + RustSF via testcontainers.
  */
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';

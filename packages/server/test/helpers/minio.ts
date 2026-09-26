@@ -1,19 +1,19 @@
 /**
- * Testcontainers harness for MinIO integration tests.
+ * Testcontainers harness for RustSF integration tests.
  *
  * Usage:
  *   import { withTestMinio } from '../../test/helpers/minio.js';
  *
  *   it('can put and get an object', async () => {
  *     await withTestMinio(async ({ client, bucketName }) => {
- *       // client is a StorageClient wired to the ephemeral MinIO instance.
+ *       // client is a StorageClient wired to the ephemeral RustSF instance.
  *       // bucketName is the pre-created bucket name ('test-bucket').
  *     });
  *   });
  *
  * Requirements:
  * - Docker must be running.
- * - Each `withTestMinio` call gets its own isolated MinIO container.
+ * - Each `withTestMinio` call gets its own isolated RustSF container.
  *   Container teardown is guaranteed even if `fn` throws.
  */
 
@@ -28,14 +28,14 @@ const BUCKET_NAME = 'test-bucket';
 
 export interface TestMinioContext {
   /**
-   * Always the `s3` variant — this harness only ever wires up MinIO. Typed as
+   * Always the `s3` variant — this harness only ever wires up RustSF. Typed as
    * the narrowed branch (not the full `StorageClient` union) so callers can
    * access `.aws` / `.bucketUrl` directly without re-narrowing on `kind`.
    */
   client: Extract<StorageClient, { kind: 's3' }>;
   bucketName: string;
   /** Container endpoint URL — wire into config (OBJECT_STORAGE_ENDPOINT) so that
-   *  code paths using getStorageClient() hit this same ephemeral MinIO. */
+   *  code paths using getStorageClient() hit this same ephemeral RustSF. */
   endpoint: string;
   accessKeyId: string;
   secretAccessKey: string;
@@ -43,7 +43,7 @@ export interface TestMinioContext {
 }
 
 /**
- * Spawns a MinIO container, creates the test bucket, then calls `fn` with a
+ * Spawns a RustSF container, creates the test bucket, then calls `fn` with a
  * bound `StorageClient`. Tears down on completion even if `fn` throws.
  *
  * Isolation level: one container per `withTestMinio` call.
@@ -85,7 +85,7 @@ export async function withTestMinio(fn: (ctx: TestMinioContext) => Promise<void>
   }
   if (!created) {
     await container.stop();
-    throw new Error(`Failed to create MinIO test bucket after retries: ${lastError}`);
+    throw new Error(`Failed to create RustSF test bucket after retries: ${lastError}`);
   }
 
   try {

@@ -30,7 +30,7 @@
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-// Testcontainers spin up Postgres + MinIO per file; the repo convention is to
+// Testcontainers spin up Postgres + RustSF per file; the repo convention is to
 // raise the 10s unit-test default here rather than let container startup under
 // a loaded full-suite run look like a product failure.
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
