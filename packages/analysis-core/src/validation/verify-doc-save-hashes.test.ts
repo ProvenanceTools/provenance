@@ -8,6 +8,7 @@ import { sha512 } from '@noble/hashes/sha2.js';
 import { sha256Hex } from '@provenance/log-core';
 import { loadBundle } from '../loader/parse-bundle.js';
 import { buildTestBundle } from '../test-support/build-test-bundle.js';
+import type { EventSpec } from '../test-support/build-test-bundle.js';
 import { verifyDocSaveHashes } from './verify-doc-save-hashes.js';
 
 beforeAll(() => {
@@ -551,5 +552,143 @@ describe('verifyDocSaveHashes', () => {
     expect(check.status).toBe('pass');
     expect(check.detail).toMatch(/inline cap/i);
     expect(check.detail).not.toMatch(/does not match|mismatch/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // Autosave observed late (a keystroke landed during the save)
+  // -------------------------------------------------------------------------
+  //
+  // The recorder hashes a save from a disk read that completes after the write.
+  // A keystroke that lands in between is logged as a doc.change BEFORE the
+  // doc.save, while the save's sha256 is of the bytes written just before that
+  // keystroke. The recorder recognises this against a ring of its buffer's
+  // recent states (RECENT_HASH_RING_SIZE in recorder/src/state/expected-content.ts)
+  // and logs the save as the student's own; check 7 must accept the same saves.
+
+  const LATE = 'hw.py';
+
+  const openEmpty = (): EventSpec => ({
+    kind: 'doc.open',
+    data: { path: LATE, sha256: sha256Hex(''), line_count: 1, content: '' },
+  });
+
+  /** One keystroke: insert `text` at column `col` of line 0. */
+  const typeAt = (col: number, text: string): EventSpec => ({
+    kind: 'doc.change',
+    data: {
+      path: LATE,
+      deltas: [
+        {
+          range: { start: { line: 0, character: col }, end: { line: 0, character: col } },
+          text,
+        },
+      ],
+      source: 'typed',
+    },
+  });
+
+  /** `n` single-character keystrokes, each appending 'a' to line 0. */
+  const typeRun = (n: number): EventSpec[] => Array.from({ length: n }, (_, i) => typeAt(i, 'a'));
+
+  const saveOf = (content: string): EventSpec => ({
+    kind: 'doc.save',
+    data: { path: LATE, sha256: sha256Hex(content) },
+  });
+
+  const checkEvents = async (events: EventSpec[]) => {
+    const { blob } = await buildTestBundle({ sessions: [{ events }] });
+    const result = await loadBundle(blob, 'test.zip');
+    if (!result.ok) throw new Error('test bundle failed to load');
+    return verifyDocSaveHashes(result.value);
+  };
+
+  it('accepts an autosave whose disk snapshot predates the last keystroke', async () => {
+    // Regression for a FALSE ACCUSATION. The student types "ab"; the autosave
+    // wrote "a" and the "b" keystroke landed before the recorder read the file
+    // back, so the log reads change("a"), change("b"), save(sha256("a")).
+    // Before the fix this was reported as a hash mismatch.
+    const check = await checkEvents([openEmpty(), typeAt(0, 'a'), typeAt(1, 'b'), saveOf('a')]);
+    expect(check.status).toBe('pass');
+    expect(check.detail).toMatch(/1 save\(s\).*before the save was logged/i);
+    expect(check.detail).not.toMatch(/does not match|mismatch/i);
+    expect(check.supportingSeqs).toBeUndefined();
+  });
+
+  it('keeps the live buffer after a late-observed save, so the next save still verifies', async () => {
+    // The stale snapshot must not reseed the replay: the buffer is ahead of it
+    // and authoritative. Reseeding would make the NEXT honest save mismatch.
+    const check = await checkEvents([
+      openEmpty(),
+      typeAt(0, 'a'),
+      typeAt(1, 'b'),
+      saveOf('a'), // observed late
+      typeAt(2, 'c'),
+      saveOf('abc'), // current
+    ]);
+    expect(check.status).toBe('pass');
+    expect(check.detail).toMatch(/1 save\(s\)/);
+  });
+
+  it('accepts a snapshot several keystrokes behind, within the recorder window', async () => {
+    // 40 keystrokes, then a save of the state 31 keystrokes before the current
+    // one: the oldest state the recorder's 32-entry ring (current included) holds.
+    const check = await checkEvents([openEmpty(), ...typeRun(40), saveOf('a'.repeat(40 - 31))]);
+    expect(check.status).toBe('pass');
+  });
+
+  it('still fails a snapshot older than the recorder window', async () => {
+    // One state further back than the ring reaches. The recorder would have
+    // logged this as an fs.external_change, not as a plain save.
+    const check = await checkEvents([openEmpty(), ...typeRun(40), saveOf('a'.repeat(40 - 32))]);
+    expect(check.status).toBe('fail');
+    expect(check.detail).toMatch(/does not match/i);
+  });
+
+  it('still fails a save of content the buffer never held', async () => {
+    const check = await checkEvents([openEmpty(), typeAt(0, 'a'), typeAt(1, 'b'), saveOf('ba')]);
+    expect(check.status).toBe('fail');
+    expect(check.detail).toMatch(/does not match/i);
+  });
+
+  it('does not accept a state between the deltas of a single change event', async () => {
+    // A multi-cursor edit applies its deltas atomically, so the half-applied
+    // state was never buffer content and never entered the recorder's ring.
+    const multiCursor: EventSpec = {
+      kind: 'doc.change',
+      data: {
+        path: LATE,
+        deltas: [
+          {
+            range: { start: { line: 0, character: 1 }, end: { line: 0, character: 1 } },
+            text: 'y',
+          },
+          {
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+            text: 'x',
+          },
+        ],
+        source: 'typed',
+      },
+    };
+    // "-" → (y at 1) "-y" → (x at 0) "x-y"; "-y" is the half-applied state.
+    const check = await checkEvents([openEmpty(), typeAt(0, '-'), multiCursor, saveOf('-y')]);
+    expect(check.status).toBe('fail');
+  });
+
+  it('reports late-observed and unreconstructable saves together', async () => {
+    const check = await checkEvents([
+      openEmpty(),
+      typeAt(0, 'a'),
+      typeAt(1, 'b'),
+      saveOf('a'), // observed late
+      {
+        kind: 'doc.open',
+        data: { path: 'big.py', sha256: 'a'.repeat(64), line_count: 1, truncated: true },
+      },
+      { kind: 'doc.save', data: { path: 'big.py', sha256: 'b'.repeat(64) } }, // indeterminate
+    ]);
+    expect(check.status).toBe('pass');
+    expect(check.detail).toMatch(/could not be reconstructed/i);
+    expect(check.detail).toMatch(/before the save was logged/i);
   });
 });

@@ -49,6 +49,24 @@
  *    doc.save.sha256. Mismatch is a failure UNLESS a fs.external_change event
  *    for the same file appears between the previous save and this one (the
  *    recorder already accounted for the divergence).
+ *  - A save whose sha256 is not the current state but IS one of the file's
+ *    recent states is an autosave observed late, and passes. The recorder
+ *    hashes a save from an asynchronous disk read, so a keystroke landing
+ *    between VS Code's write and that read is logged as a doc.change ahead of
+ *    the doc.save while the save carries the pre-keystroke bytes. The recorder
+ *    recognises exactly this against a ring of its buffer's recent states and
+ *    logs it as a plain doc.save rather than an fs.external_change; this check
+ *    mirrors that ring (see `RECENT_STATE_WINDOW`) so that every save the
+ *    recorder accepted as the student's own is accepted here too. The live
+ *    replay is NOT reseeded onto the stale snapshot: the buffer is ahead of it
+ *    and authoritative, so the next save still verifies against it.
+ *
+ *    What this forgives is narrow. The accepted content is, by construction, a
+ *    state the student's own recorded events produced moments earlier, so it
+ *    cannot admit content the log does not account for. A state older than the
+ *    window, a state that was never buffer content (including the half-applied
+ *    state between the deltas of one change event), and any file this session
+ *    never observed a baseline for all still fail exactly as before.
  *
  * Note: this check predates the Phase-3 `reconstructFile` indexer
  * (`src/index/reconstruct-file.ts`), which performs the same kind of replay
@@ -149,7 +167,57 @@ type FileState = {
   baselineUnobserved: boolean;
   /** True if a fs.external_change was seen since the last save. */
   externalChangeSinceSave: boolean;
+  /**
+   * The file's most recent content states, oldest first, current last; at most
+   * `RECENT_STATE_WINDOW` entries. `null` while there is no replay lineage the
+   * recorder would have held a ring for: before this session's doc.open seeded
+   * the content, and from any point reconstruction went indeterminate.
+   */
+  recent: RecentState[] | null;
 };
+
+/**
+ * How many recent content states a late-observed save may match, current state
+ * included.
+ *
+ * Mirrors `RECENT_HASH_RING_SIZE` in `recorder/src/state/expected-content.ts`,
+ * which cannot be imported from here (analysis-core does not depend on the
+ * recorder). The two must stay equal: a smaller window here would report as a
+ * mismatch saves the recorder deliberately logged as the student's own, and a
+ * larger one would forgive snapshots the recorder itself classified as
+ * external writes. The recorder records one state per content-change event,
+ * seeded by the content at doc.open, and never clears the ring on save; so does
+ * this check.
+ */
+export const RECENT_STATE_WINDOW = 32;
+
+/**
+ * One recent content state. The content is held by reference (the replay
+ * builds a new string per edit anyway) and hashed only when a save fails to
+ * match the current state, so the common case costs no extra hashing. The hash
+ * is memoised because a replay that has genuinely diverged mismatches at every
+ * later save, and must not re-hash the whole window each time.
+ */
+type RecentState = { content: string; hash: string | null };
+
+/** Record the current content as the newest recent state, evicting the oldest. */
+function recordState(state: FileState): void {
+  if (state.recent === null) return;
+  state.recent.push({ content: state.content, hash: null });
+  if (state.recent.length > RECENT_STATE_WINDOW) state.recent.shift();
+}
+
+/** Whether `hash` is one of the file's recent states other than the current one. */
+function isRecentState(state: FileState, hash: string): boolean {
+  if (state.recent === null) return false;
+  // The newest entry is the current state, already compared by the caller.
+  for (let i = state.recent.length - 2; i >= 0; i--) {
+    const entry = state.recent[i]!;
+    entry.hash ??= sha256Hex(entry.content);
+    if (entry.hash === hash) return true;
+  }
+  return false;
+}
 
 /** Splice `[start, end)` → `replacement` in `state`, maintaining the line index. */
 function spliceFileState(state: FileState, start: number, end: number, replacement: string): void {
@@ -244,7 +312,7 @@ function checkSession(
   sessionId: string,
   events: readonly HashedEnvelope[],
   sharedPaths: ReadonlySet<string>,
-): { failures: SaveFailure[]; indeterminates: SaveFailure[] } {
+): { failures: SaveFailure[]; indeterminates: SaveFailure[]; lateObservedSaves: number } {
   const fileStates = new Map<string, FileState>();
 
   function getOrCreate(path: string): FileState {
@@ -259,6 +327,7 @@ function checkSession(
         indeterminate: unobserved,
         baselineUnobserved: unobserved,
         externalChangeSinceSave: false,
+        recent: null,
       };
       fileStates.set(path, state);
     }
@@ -267,6 +336,7 @@ function checkSession(
 
   const failures: SaveFailure[] = [];
   const indeterminates: SaveFailure[] = [];
+  let lateObservedSaves = 0;
 
   for (const event of events) {
     switch (event.kind) {
@@ -289,8 +359,13 @@ function checkSession(
           state.content = data.content;
           state.lineStarts = computeLineStarts(data.content);
           state.indeterminate = false;
+          // The recorder seeds its ring from the content at open, and keeps the
+          // ring it already had if the file was opened before.
+          state.recent ??= [];
+          recordState(state);
         } else {
           state.indeterminate = true;
+          state.recent = null;
         }
         break;
       }
@@ -303,6 +378,9 @@ function checkSession(
           for (const delta of data.deltas) {
             applyDelta(state, delta);
           }
+          // One state per change event, not per delta: the states between the
+          // deltas of one event were never buffer content.
+          recordState(state);
         }
         break;
       }
@@ -321,10 +399,12 @@ function checkSession(
         if (data.content !== undefined) {
           // Inline paste — apply it.
           applyPaste(state, data.range, data.content);
+          recordState(state);
         } else {
           // Large paste: content not available inline. Reconstruction is no
           // longer possible until the next verified anchor.
           state.indeterminate = true;
+          state.recent = null;
         }
         break;
       }
@@ -335,6 +415,7 @@ function checkSession(
         state.externalChangeSinceSave = true;
         // The recorder knows about this change; reconstruction is invalidated.
         state.indeterminate = true;
+        state.recent = null;
         break;
       }
 
@@ -375,7 +456,11 @@ function checkSession(
 
         // Reconstruction is possible — compare hashes.
         const computedHash = sha256Hex(state.content);
-        if (computedHash !== data.sha256) {
+        if (computedHash !== data.sha256 && isRecentState(state, data.sha256)) {
+          // Autosave observed late: the disk snapshot predates keystrokes
+          // already applied. Keep the live replay; it is ahead and authoritative.
+          lateObservedSaves++;
+        } else if (computedHash !== data.sha256) {
           failures.push({
             sessionId,
             seq: event.seq,
@@ -395,7 +480,7 @@ function checkSession(
     }
   }
 
-  return { failures, indeterminates };
+  return { failures, indeterminates, lateObservedSaves };
 }
 
 // ---------------------------------------------------------------------------
@@ -405,16 +490,18 @@ function checkSession(
 export function verifyDocSaveHashes(bundle: Bundle): ValidationCheck {
   const allFailures: SaveFailure[] = [];
   const allIndeterminates: SaveFailure[] = [];
+  let allLateObservedSaves = 0;
   const sharedPaths = pathsSeenByMultipleSessions(bundle);
 
   for (const session of bundle.sessions) {
-    const { failures, indeterminates } = checkSession(
+    const { failures, indeterminates, lateObservedSaves } = checkSession(
       session.sessionId,
       session.events,
       sharedPaths,
     );
     allFailures.push(...failures);
     allIndeterminates.push(...indeterminates);
+    allLateObservedSaves += lateObservedSaves;
   }
 
   if (allFailures.length > 0) {
@@ -428,16 +515,28 @@ export function verifyDocSaveHashes(bundle: Bundle): ValidationCheck {
     };
   }
 
+  const notes: string[] = [];
   if (allIndeterminates.length > 0) {
+    notes.push(
+      `${allIndeterminates.length} save(s) could not be reconstructed (file opened with unknown ` +
+        `content, paste exceeded the recorder's inline cap, 64 KB in v1.1.2+, or the file was ` +
+        `shared with another session that established content this one never observed); relying ` +
+        `on doc.save sha256 alone for those.`,
+    );
+  }
+  if (allLateObservedSaves > 0) {
+    notes.push(
+      `${allLateObservedSaves} save(s) recorded the file as it was a few keystrokes before the ` +
+        `save was logged (an autosave that completed while typing continued); each matches a ` +
+        `state the recorded edits produced, so they are consistent.`,
+    );
+  }
+  if (notes.length > 0) {
     return {
       id: 'doc_save_hashes',
       label: 'Doc save hash consistency',
       status: 'pass',
-      detail:
-        `${allIndeterminates.length} save(s) could not be reconstructed (file opened with unknown ` +
-        `content, paste exceeded the recorder's inline cap, 64 KB in v1.1.2+, or the file was ` +
-        `shared with another session that established content this one never observed); relying ` +
-        `on doc.save sha256 alone for those.`,
+      detail: notes.join(' '),
     };
   }
 
