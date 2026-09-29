@@ -40,6 +40,10 @@ export type Delta = {
  * completing (typically one, occasionally a handful at burst typing speed),
  * while staying trivially small: 32 x 64 hex chars is ~2 KB per watched file.
  * Only hashes are retained — never content.
+ *
+ * Mirrored by `RECENT_STATE_WINDOW` in
+ * `analysis-core/src/validation/verify-doc-save-hashes.ts` (check 7), which
+ * accepts a doc.save carrying any of these states. Change both together.
  */
 export const RECENT_HASH_RING_SIZE = 32;
 
