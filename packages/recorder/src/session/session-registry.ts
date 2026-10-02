@@ -87,8 +87,93 @@ export type HeartbeatVscodeDeps = {
   onDidChangeTextDocument: (handler: () => void) => vscode.Disposable;
 };
 
+/**
+ * Rotate a session once its `.slog` passes this size (PRD §4.6).
+ *
+ * `submission: 'git'` assignments commit `.provenance/` to a GitHub repo, and
+ * GitHub warns at 50 MB and REFUSES a push containing a file over 100 MB. A
+ * session now lives for the editor's lifetime, so an unrotated log can grow
+ * past that and leave the student unable to submit. 40 MiB keeps a whole
+ * 256 KB flush plus a few 64 KB payloads clear of the warning.
+ */
+export const ROTATE_AT_BYTES = 40 * 1024 * 1024;
+
+/**
+ * Once {@link ROTATE_AT_BYTES} is crossed, wait for this much quiet — no
+ * {@link ROTATE_QUIET_KINDS} event recorded — before rotating (design §3.3
+ * mechanism 1).
+ *
+ * The seam between a rotated pair is NOT free. `inter_session_external_change`
+ * compares a reconstruction of the predecessor's event stream against the
+ * successor's first `doc.open` content, which is a LIVE BUFFER read, by exact
+ * string equality. Content lost inside the teardown window is therefore in the
+ * successor's baseline and missing from the predecessor's reconstruction, and the
+ * heuristic reports at 0.85 confidence that the student edited the file outside the
+ * recorder. Rotating only while nothing is mutating content makes "the file did not
+ * change during teardown" a property of WHEN we rotate rather than a hope about how
+ * fast teardown is.
+ */
+export const ROTATE_IDLE_QUIET_MS = 2000;
+
+/**
+ * The event kinds that reset the idle window: every kind that MUTATES file content
+ * (design §3.3 — "content-mutating means `doc.change`, `paste` and
+ * `fs.external_change`, not `doc.change` alone").
+ *
+ * `doc.change` alone is not enough, and the gap is not theoretical:
+ *
+ * - An inlineable single-shot paste is emitted as kind `paste`, not `doc.change`
+ *   (`wiring/doc-wiring.ts`), so a gate on typing alone opens while the student is
+ *   reading a web page, fires the rotation, and then loses their Cmd+V inside the
+ *   teardown window. A paste is large, so the resulting false flag likely clears
+ *   `highSeverityCharsChanged` and is reported at HIGH severity.
+ * - `fs.external_change` is a formatter-on-save or a `git checkout`: a whole-file
+ *   rewrite, i.e. the same false flag in its worst form.
+ *
+ * Only these three change bytes in a file. Heartbeats, focus and selection changes,
+ * saves, terminal and git events do not, so they must not hold a rotation off —
+ * a session that only saves and heartbeats is idle for this purpose.
+ */
+export const ROTATE_QUIET_KINDS: ReadonlySet<string> = new Set([
+  'doc.change',
+  'paste',
+  'fs.external_change',
+]);
+
+/**
+ * Rotate even without a quiet window once the log reaches this size (design §3.3).
+ *
+ * A session that never idles must not grow without limit: past GitHub's 100 MB
+ * hard limit the student cannot push at all, and an unpushable repo is worse than
+ * a flag.
+ *
+ * This is the only path on which a rotation can lose a KEYSTROKE — and that is the
+ * whole of the claim. It is NOT the only way the seam can diverge:
+ *
+ * - The quiet gate makes the KEYBOARD safe. It cannot make an EXTERNAL WRITER safe,
+ *   because a formatter daemon, a build tool or a partner's `git pull` is not
+ *   synchronised to the student's pause. An external write landing inside ANY
+ *   teardown window still diverges the seam, and because it is a whole-file rewrite
+ *   it lands at HIGH severity.
+ * - The window is not microseconds. After `sealing` is set it still contains the
+ *   final flush, the checkpoint drain and the rolling seal's walk-and-hash over the
+ *   whole 40 MiB log, then the successor's keygen, identity, git probe and catch-up:
+ *   order 0.3–1 s. Skipping chain recovery
+ *   (see {@link StartSessionDeps.skipChainRecovery}) removed the seconds-long term,
+ *   not the window.
+ * - And the gate CONCENTRATES rotations into the moments the student is idle, which
+ *   is precisely when background repository activity is most likely.
+ */
+export const ROTATE_HARD_CEILING_BYTES = 48 * 1024 * 1024;
+
 export type ActiveSession = {
   assignmentRoot: string;
+  /**
+   * This session's LOGICAL `session_id` — the one in `session.start`, which is
+   * also what a successor's `prev_session_id` names. NOT the uuid in the `.slog`
+   * filename: the two are deliberately different (see `recorder-context.ts`).
+   */
+  sessionId: string;
   manifest: Manifest;
   provenanceDir: string;
   slogPath: string;
@@ -127,8 +212,14 @@ export type ActiveSession = {
   ownDisposables: vscode.Disposable[];
   /** Most recent checkpoint write chain. dispose() awaits this so the final checkpoint isn't lost. */
   getPendingCheckpoint: () => Promise<void>;
-  /** Emits session.end, flushes the writer, drains the pending checkpoint, disposes metaWriter + ownDisposables, in that order. */
-  dispose: () => Promise<void>;
+  /**
+   * Emits session.end, flushes the writer, drains the pending checkpoint, disposes
+   * metaWriter + ownDisposables, in that order.
+   *
+   * `reason` is the `session.end` reason and defaults to `'deactivate'`. Size
+   * rotation (PRD §4.6) passes `'rotate'`; everything else takes the default.
+   */
+  dispose: (reason?: string) => Promise<void>;
 };
 
 export type StartSessionDeps = {
@@ -139,6 +230,53 @@ export type StartSessionDeps = {
   platform: string;
   clock: Clock;
   provenanceDirOverride?: string;
+  /**
+   * Force this session's `prev_session_id`, bypassing chain recovery.
+   *
+   * Recovery only links a DANGLING previous session (a crash). A rotation ends
+   * the previous session CLEANLY, so recovery reports `previous_session_complete`
+   * and would link nothing — the successor would look like an unrelated session.
+   * The rotation caller therefore passes the ended session's id here.
+   */
+  prevSessionIdOverride?: string;
+  /**
+   * Skip chain recovery entirely (design §3.3 mechanism 2).
+   *
+   * Set only by rotation, which already knows its predecessor's id. Recovery
+   * would read, parse and `validateChain` the whole 40 MiB predecessor log —
+   * ~150k entries of JCS canonicalization and SHA-256 — while NO wiring is
+   * attached, making it by far the largest term in the teardown window. Every
+   * millisecond spent there is a millisecond in which a keystroke can be lost,
+   * and a lost keystroke accuses the student (see {@link ROTATE_IDLE_QUIET_MS}).
+   *
+   * Skipping is safe here and ONLY here: the two things recovery produces are a
+   * `prev_session_id` (which {@link prevSessionIdOverride} supplies directly) and
+   * the quarantine of a corrupt log (which cannot apply — the predecessor was
+   * just written and sealed by this same process).
+   */
+  skipChainRecovery?: boolean;
+  /** Production default {@link ROTATE_AT_BYTES}; tests pass a tiny value. */
+  rotateAtBytesOverride?: number;
+  /** Production default {@link ROTATE_IDLE_QUIET_MS}; tests pass a tiny value. */
+  rotateIdleQuietMsOverride?: number;
+  /** Production default {@link ROTATE_HARD_CEILING_BYTES}; tests pass a tiny value. */
+  rotateHardCeilingBytesOverride?: number;
+  /**
+   * The chain-recovery seam. Defaults to the real `recoverPreviousSession`.
+   *
+   * Exists so a test can prove BY CONSTRUCTION that a rotated session runs no
+   * recovery (design §5 item 6) — the injected function fails the test if it is
+   * called at all. Nothing in production overrides it.
+   */
+  recoverPreviousSession?: typeof recoverPreviousSession;
+  /**
+   * Called (at most once) when this session's log should be rotated: the size
+   * threshold has been crossed AND the session has been quiet for
+   * {@link ROTATE_IDLE_QUIET_MS}, or the hard ceiling has been reached. The
+   * session does NOT rotate itself: it owns neither the registry nor its own
+   * deps. `extension.ts` supplies this and performs the swap.
+   */
+  requestRotation?: (endedSessionId: string) => void;
   heartbeatDeps?: HeartbeatVscodeDeps;
   extensionDistPath?: string;
   /**
@@ -368,37 +506,53 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   // enrolled, no keyring, lapsed cert. That is the common case today and it is
   // handled explicitly inside `recoverPreviousSession`; it must never throw or
   // block recording.
-  const recovery = await recoverPreviousSession({
-    provenanceDir,
-    readSlogFile: async (p) => {
-      try {
-        const text = await fsPromises.readFile(p, 'utf8');
-        return { ok: true, text };
-      } catch (e) {
-        const code = (e as NodeJS.ErrnoException).code;
-        return { ok: false, reason: code === 'ENOENT' ? 'not_found' : 'read_error' };
-      }
-    },
-    rename: fsPromises.rename,
-    listSlogFiles: async (dir) => {
-      try {
-        const entries = await fsPromises.readdir(dir);
-        return entries.filter((f) => f.endsWith('.slog'));
-      } catch {
-        return [];
-      }
-    },
-    now: () => new Date(),
-    ownStudentRef: identity?.enrollment.student_ref ?? null,
-  });
+  //
+  // A ROTATION SKIPS ALL OF IT (design §3.3 mechanism 2). `skipChainRecovery`
+  // short-circuits to `clean_start` without touching the filesystem, because the
+  // caller already knows the predecessor's id and the predecessor was sealed by
+  // this same process moments ago. See `skipChainRecovery`'s docstring for why the
+  // cost matters: recovery is the largest term in the teardown window, and the
+  // window is where a lost keystroke turns into a false accusation.
+  const recover = deps.recoverPreviousSession ?? recoverPreviousSession;
+  const recovery =
+    deps.skipChainRecovery === true
+      ? ({ kind: 'clean_start' } as const)
+      : await recover({
+          provenanceDir,
+          readSlogFile: async (p) => {
+            try {
+              const text = await fsPromises.readFile(p, 'utf8');
+              return { ok: true, text };
+            } catch (e) {
+              const code = (e as NodeJS.ErrnoException).code;
+              return { ok: false, reason: code === 'ENOENT' ? 'not_found' : 'read_error' };
+            }
+          },
+          rename: fsPromises.rename,
+          listSlogFiles: async (dir) => {
+            try {
+              const entries = await fsPromises.readdir(dir);
+              return entries.filter((f) => f.endsWith('.slog'));
+            } catch {
+              return [];
+            }
+          },
+          now: () => new Date(),
+          ownStudentRef: identity?.enrollment.student_ref ?? null,
+        });
 
   // Determine prev_session_id from recovery result.
   // Only set for dangling sessions (crashes) — not for cleanly ended sessions.
   // The session it names is now guaranteed to be one of THIS contributor's, so
   // the back-pointer is a real intra-contributor chain link rather than "whoever
   // wrote last by wall clock" (program spec §7 mechanism 1).
+  //
+  // `prevSessionIdOverride` wins, and exists for exactly one caller: size
+  // rotation (PRD §4.6), whose predecessor ended CLEANLY and so is invisible to
+  // the dangling-only rule above. Recovery itself is untouched.
   const prevSessionId: string | null =
-    recovery.kind === 'previous_session_dangling' ? recovery.prevSessionId : null;
+    deps.prevSessionIdOverride ??
+    (recovery.kind === 'previous_session_dangling' ? recovery.prevSessionId : null);
 
   // Step 3c-quater: THE CAPABILITY REPORTS (collaboration spec §5.6).
   //
@@ -670,6 +824,181 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   const CHECKPOINT_INTERVAL = 100;
   let entryCountSinceLastCheckpoint = 0;
   let pendingCheckpoint: Promise<void> = Promise.resolve();
+  const rotateAtBytes = deps.rotateAtBytesOverride ?? ROTATE_AT_BYTES;
+  const rotateIdleQuietMs = deps.rotateIdleQuietMsOverride ?? ROTATE_IDLE_QUIET_MS;
+  const rotateHardCeilingBytes = deps.rotateHardCeilingBytesOverride ?? ROTATE_HARD_CEILING_BYTES;
+  /** Requested exactly once, ever. */
+  let rotationRequested = false;
+  /** Size threshold crossed; waiting for a quiet window (design §3.3). */
+  let rotationArmed = false;
+  /**
+   * When content was last mutated ({@link ROTATE_QUIET_KINDS}), in `clock` time.
+   *
+   * Seeded in {@link armRotation}, NOT at session start. Arming and the first
+   * evaluation happen in the same checkpoint tick, so a session-start seed would be
+   * hours old by the time a log reaches 40 MiB — `now - seed` would be hours, `quiet`
+   * would be trivially true, and the very first evaluation would rotate the session
+   * MID-BURST. That is the false accusation the gate exists to prevent: everything in
+   * the teardown window is dropped, and `inter_session_external_change` then reports
+   * an honest student at 0.85 confidence.
+   *
+   * Seeding at arm time instead makes the first evaluation pessimistic — it demands a
+   * full quiet window measured from the moment of arming — which is the right default
+   * for a mechanism that can accuse someone.
+   *
+   * Written on the event path, and ONLY while a rotation is armed, so an ordinary
+   * session pays a single boolean test per entry and nothing else; the p99 < 1 ms
+   * budget (PRD §4.7) binds there and nowhere else. No evaluation happens there, only
+   * the timestamp.
+   */
+  let lastContentChangeAtMs = 0;
+  let idleTimer: ReturnType<typeof setInterval> | undefined;
+  /** Set by `dispose()`: no timer may be armed after teardown has begun. */
+  let disposed = false;
+
+  function clearIdleTimer(): void {
+    if (idleTimer !== undefined) {
+      clearInterval(idleTimer);
+      idleTimer = undefined;
+    }
+  }
+
+  /**
+   * Request a rotation if the log is big enough AND the student is idle — or if
+   * the hard ceiling has been reached, idle or not.
+   *
+   * Called at the checkpoint cadence (every 100 entries) and, once armed, on a
+   * poll timer. NEVER per keystroke: a quiet session records nothing, so the
+   * checkpoint cadence alone could defer a rotation by 100 heartbeats — but
+   * evaluating on the event path would put a clock read and two comparisons in
+   * front of every `doc.change`.
+   */
+  function evaluateRotation(): void {
+    if (rotationRequested) return;
+    // DEGRADED ABANDONS A ROTATION; IT DOES NOT DEFER IT (design §3.2).
+    //
+    // Here, at the SINGLE POINT OF COMMIT that both triggers pass through, never at
+    // the individual call sites — guarding call sites is how this hole arose. The
+    // property "a degraded session never rotates" was structural on the ENTRY path
+    // only (`onEntry` returns before the checkpoint branch); the idle poll is a
+    // second, independent trigger that never passes through it, and a third trigger
+    // added later would repeat the mistake. Arm mid-burst, let the disk fill, and the
+    // student's pause while reading the error notification IS the quiet window the
+    // gate waits for — so the poll would commit with the byte counter frozen at
+    // threshold, tearing the predecessor down and sealing it `final: true` while its
+    // `session.end` went to the in-memory ring rather than the log. A bundle sealed
+    // final whose log lacks its own terminal `session.end` is an evidence-integrity
+    // problem, which is worse than anything rotation was meant to solve.
+    //
+    // ABANDON, not defer: the poll is stopped and `rotationArmed` is deliberately
+    // LEFT SET, so `armRotation` cannot start another one. `degraded` is one-way —
+    // nothing clears it without a restart — so a deferred rotation would wait forever
+    // while pretending it might still happen.
+    //
+    // Accepted consequence (§3.2, a behavioural choice shared by all three ports): a
+    // degraded session's log can exceed ROTATE_AT_BYTES and, in the extreme, GitHub's
+    // 50 MB warning. A degraded session writes almost nothing so it barely grows, and
+    // an oversized log is recoverable whereas a falsely-`final` seal is not. There is
+    // deliberately no second ceiling to compensate.
+    if (diskFullHandler.degraded) {
+      clearIdleTimer();
+      return;
+    }
+    // Two preconditions, and they are siblings — a guard on one path only is how the
+    // degraded hole and this one both arose.
+    //
+    // `rotationArmed`: `lastContentChangeAtMs` is only meaningful once `armRotation`
+    // has seeded it, so an unarmed evaluation would compare `now` against an unseeded
+    // 0, find the window trivially open, and commit.
+    //
+    // `disposed`: an ALREADY-armed session can still reach here during teardown.
+    // `dispose()` sets `disposed` and clears the timer, and then `peerWatcher.drain()`
+    // and the `session.end` emit push entries through `onEntry`; if one lands on a
+    // 100-entry boundary with the log over threshold and the last content change a
+    // quiet window ago — entirely plausible, the window is 2 s and teardown is
+    // 0.3–1 s — this would request a rotation and start a successor session in the
+    // middle of shutdown. A LEGITIMATE rotation is unaffected: it set
+    // `rotationRequested` before `dispose()` was ever called, so it short-circuits on
+    // the first line of this function.
+    if (!rotationArmed || disposed) return;
+    const bytes = writer.bytesAppended;
+    if (bytes < rotateAtBytes) return;
+    const quiet = clock.now() - lastContentChangeAtMs >= rotateIdleQuietMs;
+    if (!quiet && bytes < rotateHardCeilingBytes) return;
+    rotationRequested = true;
+    clearIdleTimer();
+    deps.requestRotation?.(recorderContext.session_id);
+  }
+
+  /**
+   * Start polling for a quiet window. Idempotent, and the timer exists only while
+   * a rotation is armed and unfired, so a session that never reaches the threshold
+   * holds no timer at all. Disposed by `dispose()` (CLAUDE.md: every `setInterval`
+   * has a shutdown path).
+   */
+  function armRotation(): void {
+    // `disposed` is checked, not just `rotationArmed`: `dispose()` clears the timer
+    // on its first line and THEN emits `session.end`, which still runs through
+    // `onEntry` (that is the point — see `sealing`). If that entry happens to land
+    // on the 100-entry boundary with the log over threshold and not yet quiet, this
+    // would otherwise create a fresh interval after teardown.
+    if (rotationArmed || disposed) return;
+    rotationArmed = true;
+    // The quiet window starts NOW, never at session start — see
+    // `lastContentChangeAtMs`. `armRotation()` and the first `evaluateRotation()` run
+    // in the same checkpoint tick, so without this the first evaluation would compare
+    // against a seed hours old and rotate mid-burst.
+    lastContentChangeAtMs = clock.now();
+    // A quarter of the quiet interval: fine-grained enough that the rotation
+    // follows the pause closely, coarse enough to be free (one callback per 500 ms
+    // in production, and only while armed).
+    const pollMs = Math.max(50, Math.floor(rotateIdleQuietMs / 4));
+    idleTimer = setInterval(() => {
+      evaluateRotation();
+    }, pollMs);
+    idleTimer.unref?.();
+  }
+
+  /**
+   * True from the moment `session.end` has been written onward: this session is
+   * sealing and accepts no further entries.
+   *
+   * Set AFTER the `session.end` emit and after the final peer-witness drain, so
+   * both of those still land — `session.end` is by definition the last entry of
+   * the log, and the drain's observations belong to the session that saw them.
+   * Everything emitted after that point is DROPPED, silently and by design.
+   *
+   * Why drop rather than throw. `dispose()` closes the writer a few awaits later,
+   * and `SessionWriter.append` throws on a disposed writer — correctly, since a
+   * use-after-dispose anywhere else is a real bug and must stay loud. But the
+   * teardown window is not a bug: the doc wiring is still subscribed while the
+   * writer flushes, drains and seals (rotation, PRD §4.6, does not unsubscribe it
+   * until teardown returns), so an ordinary keystroke inside that window would
+   * raise an exception into a VS Code event listener on the student's machine.
+   * Design §3.2 specifies these events as dropped; this is that drop.
+   *
+   * A DROP IS NOT FREE, and an earlier version of this comment claimed it was.
+   * Design §3.3 (correction, 2026-09-23) records why that was wrong:
+   * `inter_session_external_change` compares a RECONSTRUCTION of the predecessor's
+   * event stream against the successor's first `doc.open` content, which is a live
+   * buffer read, by exact string equality. So content dropped here is present on the
+   * successor's side and absent from the predecessor's, the two differ, and the
+   * student is reported at 0.85 confidence for editing the file outside the recorder.
+   * The drop is VISIBLE to the analyzer, and deliberately so — the negative control
+   * in `analysis-core` exists to keep it visible.
+   *
+   * That is why this flag is not the mitigation. The mitigation is WHEN we rotate:
+   * {@link ROTATE_IDLE_QUIET_MS} + {@link ROTATE_QUIET_KINDS} mean a rotation begins
+   * only after nothing has mutated content for two seconds, so in the ordinary case
+   * there is nothing in the window to drop. The one exception is
+   * {@link ROTATE_HARD_CEILING_BYTES}, which rotates a never-idle session anyway and
+   * can therefore still produce a false flag.
+   *
+   * What this can hide: any event kind at all, but only in the span after
+   * `session.end` has been written, and nothing a reader could otherwise have seen —
+   * a log cannot legally continue past its own `session.end`.
+   */
+  let sealing = false;
 
   /**
    * PEER WITNESSING (program spec §7 mechanism 2). Forward reference: the
@@ -686,6 +1015,12 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     // The single choke point for policy-gated event kinds — see session-host.ts.
     capturePolicy,
     onEntry: (entry: HashedEnvelope) => {
+      // This session has already written its `session.end` — see `sealing`.
+      // Dropped, not thrown, and not queued anywhere: the log is closed.
+      if (sealing) {
+        return;
+      }
+
       // Route through disk-full handler.
       // If degraded: critical entries go to the ring; non-critical are dropped.
       // If not degraded: write to disk as normal.
@@ -695,6 +1030,14 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
       }
 
       writer.append(entry);
+      // The idle gate's only hot-path cost (design §3.3 mechanism 1): the WHEN,
+      // never the whether. Evaluation happens at the checkpoint cadence and on the
+      // poll timer, not here. `rotationArmed` is tested FIRST so an ordinary session
+      // — which is every session until it passes 40 MiB — pays one boolean and
+      // neither a Set lookup nor a clock read.
+      if (rotationArmed && ROTATE_QUIET_KINDS.has(entry.kind)) {
+        lastContentChangeAtMs = clock.now();
+      }
       entryCountSinceLastCheckpoint++;
       if (entryCountSinceLastCheckpoint >= CHECKPOINT_INTERVAL) {
         entryCountSinceLastCheckpoint = 0;
@@ -724,6 +1067,26 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
           // session-start or dispose() rolls (see `rewriteRollingSeal`'s
           // docstring).
           .then(() => rewriteRollingSeal());
+
+        // Size rotation (PRD §4.6). Read INSIDE the checkpoint branch so the
+        // check costs one comparison per 100 entries, not one per keystroke —
+        // doc.change must stay under 1 ms p99 (§4.7). Requested at most once;
+        // the swap itself is extension.ts's job.
+        //
+        // Crossing the threshold ARMS the rotation (design §3.3); it fires only
+        // once the student has been quiet for `rotateIdleQuietMs`, or at the hard
+        // ceiling. Both decisions live in `evaluateRotation`, which the poll timer
+        // also calls — a session that goes quiet right after arming must not wait
+        // 100 more entries for the next checkpoint.
+        //
+        // A degraded (disk-full) session can never reach here: the degraded
+        // branch at the top of onEntry returns before the append. That covers the
+        // ENTRY path only, which is why `evaluateRotation` checks the flag itself
+        // — the idle poll does not come through here.
+        if (!rotationRequested && writer.bytesAppended >= rotateAtBytes) {
+          armRotation();
+          evaluateRotation();
+        }
       }
     },
   });
@@ -1024,11 +1387,21 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
    * pending checkpoint, dispose the metaWriter, then dispose ownDisposables in LIFO
    * order. Each step is best-effort so a failure in one does not skip the rest.
    *
+   * `reason` becomes `session.end.reason` and defaults to `'deactivate'`, which is
+   * what every caller but size rotation (PRD §4.6, `'rotate'`) passes.
+   *
    * Note: when extension.ts hands ownDisposables to VS Code's context.subscriptions
    * (single-root case), it empties this array so the LIFO teardown here is a no-op —
    * VS Code disposes those first, matching the historical ordering.
    */
-  async function dispose(): Promise<void> {
+  async function dispose(reason: string = 'deactivate'): Promise<void> {
+    // The rotation idle poll, if one is armed. First, and unconditionally: it is
+    // the one background task this function owns directly rather than through
+    // ownDisposables, and it must not outlive the session that armed it. `disposed`
+    // also stops `armRotation` creating a NEW one from the `session.end` entry that
+    // this function is about to write — see `armRotation`.
+    disposed = true;
+    clearIdleTimer();
     // Final peer-witness drain, BEFORE session.end so the observations land
     // inside the session they belong to. Checkpoints fire every 100 entries, so
     // a partner's log that arrived after the last one would otherwise never be
@@ -1041,10 +1414,16 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     }
     // Emit session.end event.
     try {
-      sessionHost.emit('session.end', { reason: 'deactivate' });
+      sessionHost.emit('session.end', { reason });
     } catch {
       // Ignore — best effort.
     }
+    // From here on this session accepts nothing more: `onEntry` drops every
+    // further entry instead of appending to a writer that is about to close.
+    // Set AFTER the emit above so `session.end` itself lands, and after the peer
+    // drain above so its observations do. See `sealing`'s docstring and design
+    // §3.2 for why a drop is the specified behaviour rather than a throw.
+    sealing = true;
     // Flush pending entries and close the file handle. Await this to ensure
     // the writer is fully disposed before VS Code shuts down.
     try {
@@ -1111,6 +1490,7 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
 
   return {
     assignmentRoot,
+    sessionId: recorderContext.session_id,
     manifest,
     provenanceDir,
     slogPath,
@@ -1141,6 +1521,19 @@ export class SessionRegistry {
 
   get(root: string): ActiveSession | undefined {
     return this.sessions.get(root);
+  }
+
+  /**
+   * Forget the session at `root` WITHOUT disposing it.
+   *
+   * For the one caller that has already disposed it: size rotation (PRD §4.6),
+   * when starting the successor failed. Leaving the disposed predecessor in the
+   * map would keep `all()` non-empty — so the status bar goes on claiming
+   * "recording" — and keep `resolveForPath` routing events to a closed writer.
+   * Everything else must go through `pruneToRoots`/`disposeAll`, which dispose.
+   */
+  remove(root: string): boolean {
+    return this.sessions.delete(root);
   }
 
   all(): readonly ActiveSession[] {

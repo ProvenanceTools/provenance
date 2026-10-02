@@ -121,6 +121,35 @@ describe('multiple_sessions_overlap — negative', () => {
     const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
     expect(flags).toHaveLength(0);
   });
+
+  it('treats a rotated pair as non-overlapping', async () => {
+    // coverage/session-overlap.ts bounds a session at its session.end.wall,
+    // which a rotation always writes (session.end {reason:'rotate'}), so a
+    // rotated pair's ranges are bounded and adjacent — never overlapping —
+    // even though B starts only 1s after A's terminal event and carries
+    // prev_session_id pointing back at A. See
+    // docs/superpowers/specs/2026-09-21-log-size-rotation-design.md §3.3.
+    const sessionAId = 'dddddddd-0000-4000-8000-000000000001';
+    const endWallA = wallAt(10);
+    const startWallB = new Date(new Date(endWallA).getTime() + 1000).toISOString();
+    const { index, bundle } = await buildAndIndex({
+      sessions: [
+        {
+          sessionId: sessionAId,
+          events: [{ kind: 'session.end', data: { reason: 'rotate' }, wall: endWallA, t: 600_000 }],
+          walls: [wallAt(0)],
+        },
+        {
+          sessionId: 'dddddddd-0000-4000-8000-000000000002',
+          sessionStart: { prev_session_id: sessionAId },
+          events: [endsAt(30)],
+          walls: [startWallB],
+        },
+      ],
+    });
+    const flags = multipleSessionsOverlapHeuristic.run(index, bundle, defaultConfig);
+    expect(flags).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

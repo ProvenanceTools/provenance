@@ -189,6 +189,64 @@ describe('gap_in_heartbeats — negative', () => {
     const flags = gapInHeartbeatsHeuristic.run(index, bundle, testConfig);
     expect(flags).toHaveLength(0);
   });
+
+  it('does not flag the gap across a rotation seam', async () => {
+    // Heartbeats are grouped by session.start.data.session_id (index.bySessionId),
+    // so a rotation seam can never produce a "consecutive heartbeat" pair that
+    // spans it — session A's heartbeats and session B's heartbeats are simply
+    // two disjoint, well-behaved 30s-apart pairs. This pins that a rotation
+    // (session.end {reason:'rotate'} followed by a linked session.start) never
+    // manufactures a cross-session gap. See
+    // docs/superpowers/specs/2026-09-21-log-size-rotation-design.md §3.3.
+    const { index, bundle } = await buildAndIndex({
+      sessions: [
+        {
+          sessionId: 'cccccccc-0000-4000-8000-000000000001',
+          events: [
+            {
+              kind: 'session.heartbeat',
+              data: { focused: true, active_file: null, idle_since_ms: 0 },
+              wall: wallPlusMinutes(BASE_MS, 0),
+              t: 1000,
+            },
+            {
+              kind: 'session.heartbeat',
+              data: { focused: true, active_file: null, idle_since_ms: 0 },
+              wall: new Date(BASE_MS + 30_000).toISOString(),
+              t: 31_000,
+            },
+            {
+              kind: 'session.end',
+              data: { reason: 'rotate' },
+              wall: new Date(BASE_MS + 30_000).toISOString(),
+              t: 31_000,
+            },
+          ],
+        },
+        {
+          sessionId: 'cccccccc-0000-4000-8000-000000000002',
+          sessionStart: { prev_session_id: 'cccccccc-0000-4000-8000-000000000001' },
+          walls: [new Date(BASE_MS + 31_000).toISOString()],
+          events: [
+            {
+              kind: 'session.heartbeat',
+              data: { focused: true, active_file: null, idle_since_ms: 0 },
+              wall: new Date(BASE_MS + 31_000).toISOString(),
+              t: 1000,
+            },
+            {
+              kind: 'session.heartbeat',
+              data: { focused: true, active_file: null, idle_since_ms: 0 },
+              wall: new Date(BASE_MS + 61_000).toISOString(),
+              t: 31_000,
+            },
+          ],
+        },
+      ],
+    });
+    const flags = gapInHeartbeatsHeuristic.run(index, bundle, testConfig);
+    expect(flags).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
