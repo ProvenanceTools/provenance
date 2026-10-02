@@ -33,6 +33,9 @@
  * weight 1.0). Combined with the DELETE-then-INSERT contract below, disabling a
  * cross heuristic removes the rows earlier passes wrote for it on the next run
  * — matching what a per-submission recompute does to a disabled flag's rows.
+ * The same gate is also passed to `runCrossAnalysis`, so a disabled heuristic
+ * is not RUN at all — filtering its output afterwards could not stop it from
+ * exhausting the worker's heap first.
  *
  * ## Memory: compact features, not full bundles
  *
@@ -121,6 +124,28 @@ export type RunCrossResult = {
   exclusion_count: number;
 };
 
+/**
+ * Progress for one assignment group, reported once that group's analysis has
+ * finished. The job handler logs it; the service itself does no logging, so it
+ * stays callable without the server's config.
+ *
+ * A large semester runs for a long time, and the pass used to report nothing
+ * between "started" and an out-of-memory abort — so there was no way to tell
+ * whether loading or analysing consumed the time or the heap.
+ */
+export type CrossGroupProgress = {
+  /** 1-based index of the group within this pass. */
+  group: number;
+  groupCount: number;
+  submissions: number;
+  /** Paste records across the group — the paste-sharing comparison's input size. */
+  pastes: number;
+  extractMs: number;
+  analyzeMs: number;
+  flags: number;
+  heapUsedMb: number;
+};
+
 type CrossFlagRow = typeof cross_flags.$inferInsert;
 type ParticipantRow = typeof cross_flag_participants.$inferInsert;
 
@@ -143,13 +168,16 @@ type ParticipantRow = typeof cross_flag_participants.$inferInsert;
  *   - A MISSING per_flag entry → enabled at weight 1.0, via `resolvePerFlag`.
  *     Absence means the stored config predates the flag id, not that staff
  *     suppressed it; suppression is always written explicitly.
- *   - The gate is applied AFTER the heuristics run, on the emitted flags, so
- *     enabling and disabling an id cannot change what the other ids see.
+ *   - Enabling and disabling an id cannot change what the other ids see: each
+ *     heuristic reads the same features and the same partition either way.
  *
- * The filter runs here rather than by skipping registry entries inside
- * `runCrossHeuristics` because the config is a server concern and
- * analysis-core is isomorphic — the browser-only /local route runs the same
- * registry with no server config at all.
+ * This output filter is the second of two applications of the gate. The first
+ * is the `isEnabled` predicate `runAndStoreCrossHeuristics` hands to
+ * `runCrossAnalysis`, which skips a disabled heuristic before it runs (it is a
+ * predicate rather than the config itself because the config is a server
+ * concern and analysis-core is isomorphic — the browser-only /local route runs
+ * the same registry with no server config at all). This one remains so the
+ * translation is correct on its own for any CrossFlag[] it is handed.
  *
  * ## Weight
  *
@@ -245,11 +273,13 @@ export function translateCrossFlagsToRows(
  *
  * @param db         - Drizzle DB handle.
  * @param semesterId - UUID of the semester to run cross-heuristics for.
+ * @param onGroupDone - Optional progress callback, once per assignment group.
  */
 export async function runAndStoreCrossHeuristics(
   db: DrizzleDb,
   storage: StorageClient,
   semesterId: string,
+  onGroupDone?: (progress: CrossGroupProgress) => void,
 ): Promise<RunCrossResult> {
   // -------------------------------------------------------------------------
   // Step 1: Get the active heuristic config for the semester.
@@ -351,7 +381,15 @@ export async function runAndStoreCrossHeuristics(
   const crossFlags: CrossFlag[] = [];
   const crossExclusions: SameScopeExclusion[] = [];
 
-  for (const submissionIds of comparableGroups) {
+  // The per_flag gate, consulted BEFORE each heuristic runs (2026-09). The
+  // output gate in translateCrossFlagsToRows stays — it is what clears rows a
+  // previous, still-enabled pass wrote — but on its own it could not stop a
+  // disabled heuristic from exhausting the worker's heap before anything was
+  // filtered.
+  const isEnabled = (heuristicId: string): boolean => resolvePerFlag(config, heuristicId).enabled;
+
+  for (const [groupIdx, submissionIds] of comparableGroups.entries()) {
+    const extractStarted = performance.now();
     const features: CrossSubmissionFeatures[] = [];
     for (const submissionId of submissionIds) {
       const bundleId = crypto.randomUUID();
@@ -371,9 +409,21 @@ export async function runAndStoreCrossHeuristics(
     // the side — recomputing them separately is exactly how the browser and the
     // server drifted into disagreeing about whether a grader gets told why a
     // comparison is missing.
-    const { flags, exclusions } = runCrossAnalysis(features, undefined);
+    const analyzeStarted = performance.now();
+    const { flags, exclusions } = runCrossAnalysis(features, undefined, isEnabled);
     for (const f of flags) crossFlags.push(f);
     for (const e of exclusions) crossExclusions.push(e);
+
+    onGroupDone?.({
+      group: groupIdx + 1,
+      groupCount: comparableGroups.length,
+      submissions: submissionIds.length,
+      pastes: features.reduce((n, f) => n + f.pastes.length, 0),
+      extractMs: Math.round(analyzeStarted - extractStarted),
+      analyzeMs: Math.round(performance.now() - analyzeStarted),
+      flags: flags.length,
+      heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1048576),
+    });
     // `features` leaves scope here, so this group's feature set is collectable
     // before the next group is extracted.
   }

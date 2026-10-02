@@ -2,8 +2,9 @@
  * Tests for runCrossHeuristics orchestrator (Phase 18).
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { runCrossAnalysis, runCrossHeuristics } from './run-cross-heuristics.js';
+import { pasteSharedAcrossStudentsHeuristic } from './paste-shared-across-students.js';
 import { extractCrossFeatures } from './features.js';
 import type { Bundle } from '../../loader/types.js';
 import type { EventIndex, IndexedEvent } from '../../index/event-index.js';
@@ -303,5 +304,65 @@ describe('runCrossAnalysis', () => {
 
   it('returns both halves empty below two submissions', () => {
     expect(runCrossAnalysis([])).toEqual({ flags: [], exclusions: [] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isEnabled — a disabled heuristic is never RUN (2026-09)
+//
+// Filtering a heuristic's output after the fact cannot stop the heuristic from
+// exhausting the worker's heap, which is how a cross pass on a ~7.7k-submission
+// semester crash-looped the server workers even though the output gate existed.
+// ---------------------------------------------------------------------------
+
+describe('runCrossAnalysis — isEnabled', () => {
+  function sharedPastePair() {
+    const bundleA = makeBundle('bundle-a');
+    const bundleB = makeBundle('bundle-b');
+    const sha = 'x'.repeat(64);
+    const indices = new Map([
+      [bundleA.id, makeIndexWithPaste('sess-a', 1, sha)],
+      [bundleB.id, makeIndexWithPaste('sess-b', 1, sha)],
+    ]);
+    return toFeatures([bundleA, bundleB], indices);
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does not call run() for a heuristic the predicate rejects', () => {
+    const run = vi.spyOn(pasteSharedAcrossStudentsHeuristic, 'run');
+
+    const { flags } = runCrossAnalysis(
+      sharedPastePair(),
+      undefined,
+      (id) => id !== 'paste_shared_across_students',
+    );
+
+    expect(run).not.toHaveBeenCalled();
+    expect(flags).toEqual([]);
+  });
+
+  it('runs every heuristic when the predicate is absent', () => {
+    const run = vi.spyOn(pasteSharedAcrossStudentsHeuristic, 'run');
+
+    const { flags } = runCrossAnalysis(sharedPastePair());
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(flags.length).toBeGreaterThan(0);
+  });
+
+  it('still returns the exclusion register when every heuristic is disabled', () => {
+    // The register describes the partition, not a heuristic's output; switching
+    // heuristics off must not hide that a comparison was withheld.
+    const key = `repository:assumed-single ${'a'.repeat(40)}`;
+    const features = sharedPastePair().map((f) => ({ ...f, observedCommitKeys: [key] }));
+
+    const { flags, exclusions } = runCrossAnalysis(features, undefined, () => false);
+
+    expect(flags).toEqual([]);
+    expect(exclusions).toHaveLength(1);
+    expect(exclusions[0]!.reason).toBe('same_repository_lineage');
   });
 });

@@ -12,6 +12,8 @@
  *   retryLimit: 5 (same class as recompute_finalize — cheap, must complete)
  *   Sent with singletonKey: semesterId so concurrent enqueues (from multiple
  *   ingest jobs finishing in the same semester) collapse to one pending job.
+ *   Sent with an explicit expiry (CROSS_FLAGS_EXPIRE_IN_SECONDS) — see there
+ *   for why pg-boss's 15-minute default turned one slow pass into many.
  *
  * ## Advisory lock strategy (V32 — fixed review I1)
  *
@@ -43,6 +45,29 @@ export interface RecomputeCrossFlagsPayload {
 }
 
 // ---------------------------------------------------------------------------
+// Expiry
+// ---------------------------------------------------------------------------
+
+/**
+ * How long one attempt may run before pg-boss reclaims it.
+ *
+ * pg-boss's default is 15 minutes, and expiry does NOT stop the running
+ * handler — it marks the attempt failed and hands the job to another worker
+ * while the first is still going. On a ~7.7k-submission semester (2026-09) the
+ * pass ran past 15 minutes, so every expiry started a second full copy
+ * alongside the first, both near the heap limit, and the workers crash-looped.
+ *
+ * The limit must therefore sit comfortably ABOVE the pass's real runtime.
+ * Loading every bundle in a semester serially, plus the paste-sharing
+ * comparison (quadratic in paste count), is not yet measured at that scale —
+ * the per-group log line in run-cross.ts exists to measure it. Four hours is
+ * deliberately generous: an attempt that genuinely hangs is reclaimed late,
+ * which costs only time, whereas a limit that is too short duplicates the work.
+ * pg-boss rejects anything at or above 24 hours.
+ */
+export const CROSS_FLAGS_EXPIRE_IN_SECONDS = 4 * 60 * 60;
+
+// ---------------------------------------------------------------------------
 // Public: enqueue helper
 // ---------------------------------------------------------------------------
 
@@ -62,6 +87,7 @@ export async function enqueueCrossFlagsJob(boss: PgBoss, semesterId: string): Pr
     {
       singletonKey: semesterId,
       retryLimit: 5, // PRD §12.3 — same class as recompute_finalize
+      expireInSeconds: CROSS_FLAGS_EXPIRE_IN_SECONDS,
     },
   );
   getLogger().info({ semesterId }, 'recompute_cross_flags: enqueued');
@@ -101,7 +127,12 @@ export async function registerCrossFlagsHandler(boss: PgBoss): Promise<void> {
             // Advisory lock is acquired inside runAndStoreCrossHeuristics as
             // pg_advisory_xact_lock (transaction-scoped). No explicit lock/unlock here.
             const storage = getStorageClient();
-            const result = await runAndStoreCrossHeuristics(db, storage, semesterId);
+            const result = await runAndStoreCrossHeuristics(db, storage, semesterId, (progress) =>
+              logger.info(
+                { semesterId, ...progress },
+                'recompute_cross_flags: assignment group done',
+              ),
+            );
 
             logger.info(
               {

@@ -81,12 +81,24 @@ export type CrossAnalysis = {
  * not, so the server-backed cross-flags view showed the suppression with no
  * explanation for it.
  *
+ * ## Skipping disabled heuristics
+ *
+ * `isEnabled` is consulted BEFORE a heuristic runs, so a heuristic staff have
+ * switched off costs nothing. The server used to apply its per_flag gate only
+ * to the emitted flags, which meant disabling a heuristic could not stop it
+ * from exhausting the worker's heap on a large semester (2026-09). The
+ * exclusion register is NOT gated: it describes the partition, which no
+ * heuristic setting changes.
+ *
  * @param features       - Per-submission cross features (must be >= 2 to produce any flags).
  * @param configOverride - Optional partial config override.
+ * @param isEnabled      - Optional predicate over heuristic ids; a heuristic it
+ *                         rejects is not run. Absent means every heuristic runs.
  */
 export function runCrossAnalysis(
   features: CrossSubmissionFeatures[],
   configOverride?: Partial<CrossHeuristicConfig>,
+  isEnabled?: (heuristicId: string) => boolean,
 ): CrossAnalysis {
   if (features.length < 2) return { flags: [], exclusions: [] };
 
@@ -109,6 +121,7 @@ export function runCrossAnalysis(
   const allFlags: CrossFlag[] = [];
 
   for (const heuristic of CROSS_HEURISTIC_REGISTRY) {
+    if (isEnabled !== undefined && !isEnabled(heuristic.id)) continue;
     const flags = heuristic.run(features, config, scopes);
     // Use a for-of append rather than `allFlags.push(...flags)` — spread-into-push
     // passes every element as a separate argument, which overflows the call stack

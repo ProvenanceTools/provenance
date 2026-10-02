@@ -30,6 +30,7 @@ import {
   translateCrossFlagsToRows,
   translateExclusionsToRows,
 } from './run-cross.js';
+import type { CrossGroupProgress } from './run-cross.js';
 import { translateFlagsToRows } from '../scoring/recompute-submission.js';
 import { ALL_FLAG_IDS } from '@provenance/analysis-core/heuristics/known-flag-ids.js';
 import type { CrossFlag } from '@provenance/analysis-core/heuristics/cross/types.js';
@@ -57,7 +58,12 @@ import type { StorageClient } from '../storage/client.js';
 // calls. Inert unless `recording` is set, so every other test in this file runs
 // against the real implementations unchanged.
 // ---------------------------------------------------------------------------
-const streamProbe = vi.hoisted(() => ({ recording: false, events: [] as string[] }));
+const streamProbe = vi.hoisted(() => ({
+  recording: false,
+  events: [] as string[],
+  // The `isEnabled` predicate from the most recent runCrossAnalysis call.
+  lastIsEnabled: undefined as ((heuristicId: string) => boolean) | undefined,
+}));
 
 vi.mock('../bundle/load-index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../bundle/load-index.js')>();
@@ -81,6 +87,7 @@ vi.mock(
       ...actual,
       runCrossAnalysis: (...args: Parameters<typeof actual.runCrossAnalysis>) => {
         if (streamProbe.recording) streamProbe.events.push('analyze');
+        streamProbe.lastIsEnabled = args[2];
         return actual.runCrossAnalysis(...args);
       },
     };
@@ -701,6 +708,31 @@ describe('runAndStoreCrossHeuristics — per_flag config', () => {
           .from(cross_flags)
           .where(eq(cross_flags.semester_id, semesterId));
         expect(rows).toHaveLength(0);
+      });
+    });
+  });
+
+  it('skips a disabled heuristic BEFORE it runs, not only when storing (2026-09)', async () => {
+    // The output gate alone let a disabled heuristic exhaust the worker's heap
+    // before anything was filtered. The analysis must be told what is off.
+    await withTestMinio(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const { semesterId } = await seedSharedPastePair(db, client, 'pregate-sha');
+
+        await setActiveConfig(db, semesterId, {
+          paste_shared_across_students: { enabled: false, weight: 1.0 },
+        });
+
+        streamProbe.lastIsEnabled = undefined;
+        await runAndStoreCrossHeuristics(db, client, semesterId);
+
+        // Re-read through a cast: TS narrowed the field to `undefined` above and
+        // cannot see the mock's write.
+        const isEnabled = streamProbe.lastIsEnabled as ((id: string) => boolean) | undefined;
+        expect(isEnabled, 'runCrossAnalysis must receive the per_flag gate').toBeDefined();
+        expect(isEnabled!('paste_shared_across_students')).toBe(false);
+        // A per_flag entry the config omits keeps resolvePerFlag's meaning.
+        expect(isEnabled!('some_future_cross_heuristic')).toBe(true);
       });
     });
   });
@@ -1353,11 +1385,20 @@ describe('runAndStoreCrossHeuristics — memory', () => {
 
         streamProbe.events.length = 0;
         streamProbe.recording = true;
+        const progress: CrossGroupProgress[] = [];
         try {
-          await runAndStoreCrossHeuristics(db, client, semesterId);
+          await runAndStoreCrossHeuristics(db, client, semesterId, (p) => progress.push(p));
         } finally {
           streamProbe.recording = false;
         }
+
+        // One progress report per group, in order — the job logs these so a
+        // long pass on a large semester shows where its time and heap go.
+        expect(progress.map((p) => [p.group, p.groupCount, p.submissions])).toEqual([
+          [1, 2, 2],
+          [2, 2, 2],
+        ]);
+        expect(progress.every((p) => p.pastes === 2)).toBe(true);
 
         expect(
           streamProbe.events.filter((e) => e === 'load'),
