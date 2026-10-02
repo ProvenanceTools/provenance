@@ -1,8 +1,9 @@
 /**
  * runAndStoreCrossHeuristics — Phase 14 semester-scoped cross-heuristic service.
  *
- * Runs cross-submission heuristics (paste_shared_across_students,
- * editing_pattern_clone) for all non-superseded submissions in a semester,
+ * Runs cross-submission heuristics (paste_shared_across_students; the
+ * editing_pattern_clone heuristic was retired 2026-09) for all non-superseded
+ * submissions in a semester,
  * then atomically replaces the semester's cross_flags + cross_flag_participants
  * rows in a single transaction (DELETE-then-INSERT contract).
  *
@@ -39,8 +40,8 @@
  *
  * ## Memory: compact features, not full bundles
  *
- * Cross-heuristics consume CrossSubmissionFeatures (paste records + a bounded
- * kind-stream n-gram fingerprint), extracted by streaming each submission from
+ * Cross-heuristics consume CrossSubmissionFeatures (paste records + the
+ * same-scope exclusion keys), extracted by streaming each submission from
  * the DB (extract-cross-features-from-db.ts). This avoids holding full Bundles +
  * EventIndices for the whole semester in memory at once, which OOM'd the worker.
  *
@@ -50,14 +51,15 @@
  * but the COMPARISON is run once per assignment. Until 2026-08 the pool was
  * `semester_id` + `isNull(superseded_by)` and nothing else, so a student's own
  * hw1 and hw2 were compared against each other, as was every pair of unrelated
- * assignments in the semester. Both cross heuristics then behave exactly as they
+ * assignments in the semester. The cross heuristics then behaved exactly as they
  * do on a genuine match:
  *
  *   - `paste_shared_across_students` fires at high / 0.95 whenever a student
  *     carries their own helper into their next assignment, naming them twice;
- *   - `editing_pattern_clone` fingerprints the event-KIND stream, which is
- *     essentially the same shape for one person across two assignments, so it
- *     fires at medium / 0.7 on nearly every same-student pair.
+ *   - `editing_pattern_clone` (retired 2026-09) fingerprinted the event-KIND
+ *     stream, which is essentially the same shape for one person across two
+ *     assignments, so it fired at medium / 0.7 on nearly every same-student
+ *     pair.
  *
  * A cross-assignment finding is not a weaker version of a real one — it answers
  * a question nobody asked. "Did two students share this?" only has meaning
@@ -230,7 +232,7 @@ export function translateCrossFlagsToRows(
       }
 
       // Translate seqKeys to globalIdx values via the per-bundle seqKey→globalIdx
-      // map built during feature extraction (covers pastes + representatives).
+      // map built during feature extraction (covers the pastes).
       const globalIdxBySeqKey = globalIdxBySeqKeyByBundle.get(bundleId);
       const seqKeys = cf.eventsPerBundle[bundleId] ?? [];
       const globalIdxs: number[] = [];
@@ -352,8 +354,8 @@ export async function runAndStoreCrossHeuristics(
   // Steps 3 + 4: per assignment group, extract compact cross-features, run the
   // heuristics on that group, then release the features before the next group.
   //
-  // We reduce each submission to CrossSubmissionFeatures (paste records + a
-  // bounded kind-stream fingerprint) rather than holding full Bundles +
+  // We reduce each submission to CrossSubmissionFeatures (paste records + the
+  // same-scope exclusion keys) rather than holding full Bundles +
   // EventIndices for the whole semester at once (see extract-cross-features.ts).
   //
   // The extract and analyse halves are FUSED deliberately. Extracting every group
@@ -373,7 +375,7 @@ export async function runAndStoreCrossHeuristics(
   // (which use the synthetic bundleId) back to submission UUIDs, and a
   // Map<bundleId, Map<seqKey, globalIdx>> for the supporting-seq translation that
   // formerly used each bundle's EventIndex.bySeq. Both are bounded per submission
-  // (pastes + the leading representatives) and are read after the loop, so they
+  // (one entry per paste) and are read after the loop, so they
   // stay semester-wide.
   // -------------------------------------------------------------------------
   const bundleIdToSubmissionId = new Map<string, string>();

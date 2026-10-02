@@ -112,8 +112,10 @@ describe('runCrossHeuristics', () => {
     const bundleB = makeBundle('bundle-b');
 
     const sha = 'y'.repeat(64);
-    // The shared paste triggers high-severity paste_shared flag.
-    // The identical kind stream triggers medium-severity editing_pattern_clone.
+    // The shared paste triggers high-severity paste_shared flag. (Until 2026-09
+    // the identical kind stream also produced a medium editing_pattern_clone
+    // flag here; with that heuristic retired the ordering is checked over
+    // whatever the registry emits.)
     const e: IndexedEvent = {
       sessionId: 'sess-a',
       seq: 1,
@@ -131,7 +133,7 @@ describe('runCrossHeuristics', () => {
     const byKind = new Map<EventKind, IndexedEvent[]>();
     byKind.set('paste', [e]);
 
-    // Add extra events so the kind stream forms 3-grams.
+    // Extra non-paste events, so the pair is not paste-only.
     const extraKinds: EventKind[] = ['session.start', 'doc.open', 'doc.change', 'doc.save'];
     const extraEvents: IndexedEvent[] = extraKinds.map((kind, i) => ({
       sessionId: 'sess-a',

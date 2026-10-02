@@ -18,7 +18,8 @@
  *
  *  - `paste_shared_across_students` fires at **high / 0.95** on every paste
  *    either partner ever made, describing it as "content sharing";
- *  - `editing_pattern_clone` fires at medium / 0.7 on a Jaccard of 1.0.
+ *  - `editing_pattern_clone` (retired 2026-09) fired at medium / 0.7 on a
+ *    Jaccard of 1.0.
  *
  * S20: *"The system's flagship collusion detector fires on the two people the
  * course assigned to collaborate, at high severity, every time."*

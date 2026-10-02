@@ -529,9 +529,10 @@ describe('listCrossScopeExclusions', () => {
   });
 
   it('ignores the heuristic_id filter — one exclusion covers every cross-heuristic', async () => {
-    // Both `paste_shared_across_students` and `editing_pattern_clone` consume
-    // the SAME partition, so narrowing the findings to one of them does not
-    // narrow what was withheld. Hiding the register behind a heuristic filter
+    // Every cross-heuristic consumes the SAME partition, so narrowing the
+    // findings to one of them does not narrow what was withheld. (The filter
+    // value is a retired id on purpose: a stored row can still carry it, and
+    // the register must not care.) Hiding the register behind a heuristic filter
     // would let a grader filter their way into an unexplained silence.
     await withTestDb(async (db) => {
       const { semester } = await seedCourseAndSemester(db);

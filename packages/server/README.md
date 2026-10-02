@@ -91,7 +91,7 @@ a real one):
   heuristics), with a deliberate spread of findings: most students type normally; ~214
   paste a large blob (`large_paste`, `paste_is_solution`, `low_typing_high_output`); six
   clusters paste identical blobs on the same assignment, producing
-  `paste_shared_across_students` cross-flags (plus a handful of `editing_pattern_clone`).
+  `paste_shared_across_students` cross-flags.
 
 This is intentionally cohort-sized so the analyzer's pagination, filters, and
 cross-submission views have real volume — and so the ingest flow itself can be

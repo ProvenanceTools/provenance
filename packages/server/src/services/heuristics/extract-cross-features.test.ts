@@ -17,12 +17,6 @@ import { buildTestBundle } from '@provenance/analysis-core/test-support/build-te
 import { loadBundle } from '@provenance/analysis-core/loader/parse-bundle.js';
 import { buildIndex } from '@provenance/analysis-core/index/build-index.js';
 import {
-  buildTrustChainKeys,
-  buildManifest2,
-  sessionStart2,
-} from '@provenance/analysis-core/test-support/build-manifest-2.js';
-import { establishBundleTrust } from '@provenance/analysis-core/manifest/bundle-manifest.js';
-import {
   ASSUMED_SINGLE_REPOSITORY,
   commitNodeKey,
 } from '@provenance/analysis-core/git/observed-dag.js';
@@ -82,20 +76,13 @@ describe('extractCrossFeaturesFromIndex', () => {
     );
 
     expect(features.bundleId).toBe('bundle-1');
-    expect(features.eventCount).toBe(3);
 
-    // Chronological order: seq0 (idx0), seq2 (idx1), seq1 (idx2).
-    expect(features.representativeSeqKeys).toEqual([
-      `${SESSION}:0`,
-      `${SESSION}:2`,
-      `${SESSION}:1`,
-    ]);
-    expect(globalIdxBySeqKey.get(`${SESSION}:0`)).toBe(0);
+    // Chronological order: seq0 (idx0), seq2 (idx1), seq1 (idx2). The paste is
+    // seq 2 but globalIdx 1 — a seq-order assignment would give 2.
     expect(globalIdxBySeqKey.get(`${SESSION}:2`)).toBe(1);
-    expect(globalIdxBySeqKey.get(`${SESSION}:1`)).toBe(2);
-
-    // n-gram fingerprint built from the chronological kind stream.
-    expect([...features.kindNgrams]).toEqual(['session.start|paste|doc.change']);
+    // Only events a cross-flag can reference are mapped, and those are the
+    // pastes (editing_pattern_clone's leading "representatives" were retired).
+    expect([...globalIdxBySeqKey.keys()]).toEqual([`${SESSION}:2`]);
 
     // Paste payload reduced to the fields the heuristic needs.
     expect(features.pastes).toHaveLength(1);
@@ -107,7 +94,7 @@ describe('extractCrossFeaturesFromIndex', () => {
     });
   });
 
-  it('produces an empty n-gram set and no pastes for a sub-3-event submission', async () => {
+  it('produces no pastes and an empty globalIdx map for a paste-free submission', async () => {
     const { zipBuffer } = await buildTestBundle({
       sessions: [{ sessionId: SESSION, eventCount: 0 }],
     });
@@ -116,101 +103,14 @@ describe('extractCrossFeaturesFromIndex', () => {
     if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
     const index = buildIndex(parsed.value);
 
-    const { features } = extractCrossFeaturesFromIndex(index, 'sub-1', 'bundle-1');
+    const { features, globalIdxBySeqKey } = extractCrossFeaturesFromIndex(
+      index,
+      'sub-1',
+      'bundle-1',
+    );
 
-    expect(features.eventCount).toBe(1);
-    expect(features.kindNgrams.size).toBe(0);
     expect(features.pastes).toHaveLength(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Capture policy (program spec §4)
-//
-// editing_pattern_clone fingerprints the event-KIND stream, so a course that
-// disables a gated kind shrinks the alphabet and inflates Jaccard similarity
-// across the whole cohort. The features must carry the recorded policy for the
-// heuristic to be able to decline the comparison.
-// ---------------------------------------------------------------------------
-
-describe('extractCrossFeaturesFromIndex — capture policy', () => {
-  it('reports no disabled signals when the bundle is not passed (1.x default)', async () => {
-    const { zipBuffer } = await buildTestBundle({ sessions: [{ sessionId: SESSION }] });
-    const parsed = await loadBundle(zipBuffer, 'b.zip');
-    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
-
-    const { features } = extractCrossFeaturesFromIndex(
-      buildIndex(parsed.value),
-      'sub-1',
-      'bundle-1',
-    );
-    expect(features.disabledCaptureSignals).toBeUndefined();
-  });
-
-  it('reports an empty list for a 1.x bundle passed explicitly', async () => {
-    const { zipBuffer } = await buildTestBundle({ sessions: [{ sessionId: SESSION }] });
-    const parsed = await loadBundle(zipBuffer, 'b.zip');
-    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
-
-    const { features } = extractCrossFeaturesFromIndex(
-      buildIndex(parsed.value),
-      'sub-1',
-      'bundle-1',
-      parsed.value,
-    );
-    expect(features.disabledCaptureSignals).toEqual([]);
-  });
-
-  it("carries a VERIFIED 2.0 bundle's disabled signals through to the cross-heuristics", async () => {
-    const keys = await buildTrustChainKeys();
-    const manifest = await buildManifest2({
-      keys,
-      policy: { capture: { terminal: false, focus_change: false } },
-    });
-    const { zipBuffer } = await buildTestBundle({
-      sessions: [{ sessionId: SESSION, sessionStart: sessionStart2(manifest) }],
-    });
-    const parsed = await loadBundle(zipBuffer, 'b.zip');
-    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
-    // What loadSubmissionIndex does for every bundle it hands out. Without it
-    // the policy is not honoured at all — see the next case.
-    await establishBundleTrust(parsed.value, keys.rootPubkeyHex);
-
-    const { features } = extractCrossFeaturesFromIndex(
-      buildIndex(parsed.value),
-      'sub-1',
-      'bundle-1',
-      parsed.value,
-    );
-    expect(features.disabledCaptureSignals).toEqual(['focus_change', 'terminal']);
-  });
-
-  it('reports no disabled signals for a 2.0 bundle whose trust chain did not verify', async () => {
-    // The evasion this closes: `editing_pattern_clone` declines the comparison
-    // when EITHER side had a kind-stream signal disabled, so a student who
-    // tampers with their own manifest would suppress every cross-flag between
-    // themselves and a collusion partner — who would have nothing recorded
-    // against them at all. An unverified policy must narrow nothing.
-    const keys = await buildTrustChainKeys();
-    const wrongRoot = await buildTrustChainKeys(0x33, 0x44);
-    const manifest = await buildManifest2({
-      keys,
-      policy: { capture: { terminal: false, focus_change: false } },
-    });
-    const { zipBuffer } = await buildTestBundle({
-      sessions: [{ sessionId: SESSION, sessionStart: sessionStart2(manifest) }],
-    });
-    const parsed = await loadBundle(zipBuffer, 'b.zip');
-    if (!parsed.ok) throw new Error(`bundle parse failed: ${parsed.error.kind}`);
-    await establishBundleTrust(parsed.value, wrongRoot.rootPubkeyHex);
-
-    const { features } = extractCrossFeaturesFromIndex(
-      buildIndex(parsed.value),
-      'sub-1',
-      'bundle-1',
-      parsed.value,
-    );
-    expect(features.disabledCaptureSignals).toEqual([]);
+    expect(globalIdxBySeqKey.size).toBe(0);
   });
 });
 

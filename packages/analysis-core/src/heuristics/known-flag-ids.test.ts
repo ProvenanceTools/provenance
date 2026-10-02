@@ -4,6 +4,7 @@ import {
   PER_SUBMISSION_HEURISTIC_IDS,
   INTEGRITY_FLAG_IDS,
   CROSS_SUBMISSION_HEURISTIC_IDS,
+  RETIRED_FLAG_IDS,
 } from './known-flag-ids.js';
 
 describe('known-flag-ids', () => {
@@ -26,12 +27,12 @@ describe('known-flag-ids', () => {
     expect(INTEGRITY_FLAG_IDS).toContain('manifest_downgrade');
   });
 
-  it('has 2 cross-submission heuristics', () => {
-    expect(CROSS_SUBMISSION_HEURISTIC_IDS).toHaveLength(2);
+  it('has 1 cross-submission heuristic', () => {
+    expect(CROSS_SUBMISSION_HEURISTIC_IDS).toEqual(['paste_shared_across_students']);
   });
 
-  it('ALL_FLAG_IDS is the union of all three categories, 29 ids total', () => {
-    expect(ALL_FLAG_IDS).toHaveLength(29);
+  it('ALL_FLAG_IDS is the union of all three categories, 28 ids total', () => {
+    expect(ALL_FLAG_IDS).toHaveLength(28);
     expect(ALL_FLAG_IDS).toEqual([
       ...PER_SUBMISSION_HEURISTIC_IDS,
       ...INTEGRITY_FLAG_IDS,
@@ -52,6 +53,13 @@ describe('known-flag-ids', () => {
       seen.add(id);
     }
     expect(seen.size).toBe(ALL_FLAG_IDS.length);
+  });
+
+  it('no retired id is still produced — retiring means removing it from its registry', () => {
+    expect(RETIRED_FLAG_IDS).toContain('editing_pattern_clone');
+    for (const id of RETIRED_FLAG_IDS) {
+      expect(ALL_FLAG_IDS).not.toContain(id);
+    }
   });
 
   it('every id is non-empty snake_case', () => {

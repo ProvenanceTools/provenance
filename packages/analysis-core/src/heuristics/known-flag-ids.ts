@@ -30,7 +30,7 @@
  *     tunable thresholds — but they ARE ordinary `Flag` rows once produced,
  *     so course staff can still weight or disable them like any other flag.
  *   - `CROSS_HEURISTIC_REGISTRY` (cross/run-cross-heuristics.ts): heuristics
- *     that compare multiple bundles (`editing_pattern_clone`,
+ *     that compare multiple bundles (today only
  *     `paste_shared_across_students`). Run through a separate entry point —
  *     only from the `/compare` view, never from `runHeuristics` — but still
  *     ordinary `Flag` rows once produced.
@@ -58,6 +58,26 @@ export const INTEGRITY_FLAG_IDS: readonly string[] = Object.values(CHECK_META).m
 export const CROSS_SUBMISSION_HEURISTIC_IDS: readonly string[] = CROSS_HEURISTIC_REGISTRY.map(
   (h) => h.id,
 );
+
+/**
+ * Ids the engine USED to produce and no longer does.
+ *
+ * Not part of `ALL_FLAG_IDS`: nothing emits them, so nothing should offer to
+ * tune them. They are listed because stored data outlives a heuristic —
+ * semester configs written while one existed still carry a `per_flag` entry for
+ * it, and the server's config validator must accept that entry back on a PUT
+ * rather than reject every existing semester's config as "unknown id".
+ *
+ *   - `editing_pattern_clone` (retired 2026-09). Jaccard over the SET of
+ *     event-kind 3-grams. With ~20 event kinds the set saturates for anyone who
+ *     works long enough, so the score measured session length, not
+ *     collaboration: it fired on 94% of all student pairs in the 2026 summer
+ *     pilot (11,320 of 12,090), and on the ~7.7k-submission fall semester its
+ *     ~5.9M same-assignment pairs exhausted the worker heap on every attempt. No
+ *     threshold or cap fixes that — either keeps the pairs with the LONGEST
+ *     logs, which accuses the most diligent students first.
+ */
+export const RETIRED_FLAG_IDS: readonly string[] = ['editing_pattern_clone'];
 
 /**
  * Every flag/heuristic id the system can produce, across all three sources.

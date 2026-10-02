@@ -57,7 +57,10 @@ const DEFAULT_CONFIG = {
     shell_integration_disabled: { enabled: true, weight: 1.0 },
     terminal_active_during_external_change: { enabled: true, weight: 1.0 },
     multiple_sessions_overlap: { enabled: true, weight: 1.0 },
-    editing_pattern_clone: { enabled: true, weight: 1.0 },
+    // Retired 2026-09, but every config stored before then still carries it —
+    // exactly what the server returns for those semesters. Kept here so the
+    // fixture is the real shape; see the round-trip test at the end.
+    editing_pattern_clone: { enabled: false, weight: 1.0 },
     paste_shared_across_students: { enabled: true, weight: 1.0 },
   },
   severity_weights: { info: 0, low: 1, medium: 3, high: 8 },
@@ -212,7 +215,7 @@ describe('TuningView', () => {
     // directly, so this asserts the render surface actually reflects that
     // canonical list — not just that the import exists.
     await renderAndWaitForLoad();
-    expect(ALL_FLAG_IDS).toHaveLength(29);
+    expect(ALL_FLAG_IDS).toHaveLength(28);
     for (const id of ALL_FLAG_IDS) {
       expect(screen.getByTestId(`slider-${id}`)).toBeInTheDocument();
       expect(screen.getByTestId(`toggle-${id}`)).toBeInTheDocument();
@@ -240,8 +243,7 @@ describe('TuningView', () => {
   });
 
   it('disables the weight slider for cross-submission heuristics and explains why, while keeping the toggle functional', async () => {
-    // editing_pattern_clone and paste_shared_across_students are cross-submission
-    // heuristics: cross_flags has no score_contribution/weight column and cross
+    // paste_shared_across_students is a cross-submission heuristic: cross_flags has no score_contribution/weight column and cross
     // flags feed no score anywhere (only per-submission `flags` rows reach
     // computeScore). The weight slider for these ids cannot do anything, so it
     // must be disabled with a visible (non-color-only) explanation. The
@@ -464,5 +466,43 @@ describe('TuningView', () => {
       },
       { timeout: 5000 },
     );
+  });
+
+  it('does not offer a retired id, but sends its stored entry back untouched on save', async () => {
+    // A config stored while editing_pattern_clone existed still carries its
+    // entry. There is nothing to tune — nothing emits it — but the server keeps
+    // the staff setting on read and accepts it on write, so the UI must neither
+    // render it nor drop it.
+    let committedBody: Record<string, unknown> | undefined;
+    await renderAndWaitForLoad();
+    mswServer.use(
+      http.put(`/api/v1/semesters/${DEFAULT_SEMESTER_ID}/heuristic-config`, async ({ request }) => {
+        if (new URL(request.url).searchParams.get('dryRun') === 'true') {
+          return HttpResponse.json(DRY_RUN_DIFF);
+        }
+        committedBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({
+          new_config: {
+            id: 'cc000000-0000-0000-0000-000000000002',
+            version: 4,
+            set_at: '2025-01-11T00:00:00.000Z',
+            note: '',
+            is_active: true,
+          },
+          recompute_job: { id: 'a1000000-0000-4000-8000-000000000099', status: 'queued' },
+        });
+      }),
+    );
+
+    expect(screen.queryByTestId('slider-editing_pattern_clone')).toBeNull();
+    expect(screen.queryByTestId('toggle-editing_pattern_clone')).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('save-recompute-btn'));
+    });
+
+    await waitFor(() => expect(committedBody).toBeDefined(), { timeout: 5000 });
+    const perFlag = committedBody!['per_flag'] as Record<string, unknown>;
+    expect(perFlag['editing_pattern_clone']).toEqual({ enabled: false, weight: 1.0 });
   });
 });

@@ -61,25 +61,6 @@ import {
 import { runValidation } from './run-validation.js';
 import type { ValidationCheck, ValidationReport } from './check-types.js';
 import { runHeuristics } from '../heuristics/run-heuristics.js';
-import { extractCrossFeatures } from '../heuristics/cross/features.js';
-import { editingPatternCloneHeuristic as realEditingPatternCloneHeuristic } from '../heuristics/cross/editing-pattern-clone.js';
-import { partitionCrossScopes } from '../coverage/cross-scope.js';
-
-/**
- * The heuristic under test, driven with the repository-lineage partition of its
- * own features — what `runCrossHeuristics` hands it in production (spec S20).
- * None of the fixtures below records a `git.event`, so every submission is its
- * own lineage and nothing here is suppressed; the suppression path itself is
- * covered in `heuristics/cross/same-scope-exclusion.test.ts`.
- */
-const editingPatternCloneHeuristic = {
-  ...realEditingPatternCloneHeuristic,
-  run: (
-    features: Parameters<typeof realEditingPatternCloneHeuristic.run>[0],
-    config: Parameters<typeof realEditingPatternCloneHeuristic.run>[1],
-  ) => realEditingPatternCloneHeuristic.run(features, config, partitionCrossScopes(features)),
-};
-import { DEFAULT_CROSS_HEURISTIC_CONFIG } from '../heuristics/cross/types.js';
 
 // jsdom's WebCrypto rejects the buffers @noble/ed25519's default async sha512
 // hands it; same wiring as the test-support builders.
@@ -871,52 +852,6 @@ describe('a signed policy that disables terminal capture', () => {
     );
     for (const id of TERMINAL_HEURISTICS) expect(fired).not.toContain(id);
   });
-
-  it('makes a cross-submission comparison not-applicable rather than scoring it', async () => {
-    // Two submissions with identical kind streams. Under 1.x that is a clone
-    // signal; under a policy that removed a kind from both streams the
-    // similarity is an artefact of the policy, so the pair must be skipped —
-    // not scored zero, and certainly not flagged.
-    const manifest = await terminalOffManifest();
-    const policy = resolveCapturePolicy(manifest.policy);
-
-    const legacyFeatures = await Promise.all(
-      [0, 1].map(async () => {
-        const b = await buildBundle({ sessions: [{ events: terminalHeavySession() }] });
-        return extractCrossFeatures(b, buildIndex(b));
-      }),
-    );
-    for (const f of legacyFeatures) expect(f.disabledCaptureSignals).toEqual([]);
-    expect(
-      editingPatternCloneHeuristic.run(legacyFeatures, DEFAULT_CROSS_HEURISTIC_CONFIG),
-    ).toHaveLength(1);
-
-    const gatedFeatures = await Promise.all(
-      [0, 1].map(async () => {
-        const b = await buildBundle({
-          sessions: [
-            {
-              sessionStart: sessionStart2(manifest),
-              events: applyCapturePolicy(terminalHeavySession(), policy),
-            },
-          ],
-        });
-        // The chain must be walked before the policy counts — a cross-feature
-        // blob is extracted from a bundle the server re-parsed, so this mirrors
-        // `loadSubmissionIndex` establishing the verdict at parse time. Without
-        // it the pair would be scored, not skipped (see §6).
-        expect(
-          check(await runValidation(b, { rootPubkeyHex: keys.rootPubkeyHex }), 'session_binding')
-            .status,
-        ).toBe('pass');
-        return extractCrossFeatures(b, buildIndex(b));
-      }),
-    );
-    for (const f of gatedFeatures) expect(f.disabledCaptureSignals).toEqual(['terminal']);
-    expect(editingPatternCloneHeuristic.run(gatedFeatures, DEFAULT_CROSS_HEURISTIC_CONFIG)).toEqual(
-      [],
-    );
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1042,26 +977,6 @@ describe('an unverified capture policy', () => {
       runHeuristics(buildIndex(bundle), bundle, report).map((f) => f.heuristic),
     );
     for (const id of TERMINAL_HEURISTICS) expect(fired).not.toContain(id);
-  });
-
-  it('cannot be used to shield a collusion partner from cross-submission flags', async () => {
-    // The worst consequence of an unverified policy is not the self-inflicted
-    // one. `editing_pattern_clone` is not-applicable when EITHER side had a
-    // kind-stream signal disabled, so a student who tampers with their own
-    // manifest absorbs a `session_binding_invalid` flag and in exchange shields
-    // their counterpart, against whom nothing is recorded at all.
-    const honest = await bundleWith(await buildManifest2({ keys, courseId: COURSE_ID }));
-    const tampered = await bundleWith(await tamperedPolicyManifest());
-
-    for (const b of [honest, tampered]) {
-      await runValidation(b, { rootPubkeyHex: keys.rootPubkeyHex });
-    }
-
-    const features = [honest, tampered].map((b) => extractCrossFeatures(b, buildIndex(b)));
-    expect(features.map((f) => f.disabledCaptureSignals)).toEqual([[], []]);
-    expect(editingPatternCloneHeuristic.run(features, DEFAULT_CROSS_HEURISTIC_CONFIG)).toHaveLength(
-      1,
-    );
   });
 });
 

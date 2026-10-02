@@ -413,35 +413,11 @@ describe('CompareView — Phase 18 cross-flag rendering', () => {
     expect(screen.queryByTestId('cross-flag-detail-overlay')).toBeNull();
   });
 
-  it('shows editing_pattern_clone flags with medium severity', () => {
-    const flag = makeCrossFlag({
-      id: 'editing_pattern_clone-bundle-a|bundle-b-0',
-      heuristic: 'editing_pattern_clone',
-      title: 'Editing-pattern clone detected (Jaccard 85%)',
-      severity: 'medium',
-      confidence: 0.7,
-      description: 'Similar editing workflows detected.',
-    });
-    mockUseBundleReturn = makeStubContext([flag]);
-
-    render(
-      <MemoryRouter>
-        <CompareView />
-      </MemoryRouter>,
-    );
-
-    expect(screen.getByTestId('cross-flags-table')).toBeTruthy();
-    expect(screen.getByText('medium')).toBeTruthy();
-    expect(screen.getByText('editing_pattern_clone')).toBeTruthy();
-  });
-
   it('renders multiple cross-flags as multiple table rows', () => {
     const flag1 = makeCrossFlag({ id: 'flag-1' });
     const flag2 = makeCrossFlag({
       id: 'flag-2',
-      heuristic: 'editing_pattern_clone',
-      severity: 'medium',
-      title: 'Clone detected',
+      title: 'Second shared paste',
     });
     mockUseBundleReturn = makeStubContext([flag1, flag2]);
 

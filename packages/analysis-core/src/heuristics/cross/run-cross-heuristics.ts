@@ -21,7 +21,6 @@ import type {
 } from './types.js';
 import { DEFAULT_CROSS_HEURISTIC_CONFIG } from './types.js';
 import { pasteSharedAcrossStudentsHeuristic } from './paste-shared-across-students.js';
-import { editingPatternCloneHeuristic } from './editing-pattern-clone.js';
 import { partitionCrossScopes } from '../../coverage/cross-scope.js';
 import type { SameScopeExclusion } from '../../coverage/cross-scope.js';
 
@@ -30,12 +29,12 @@ import type { SameScopeExclusion } from '../../coverage/cross-scope.js';
 //
 // Exported so known-flag-ids.ts can derive the canonical cross-submission
 // heuristic id list from it, rather than a hand-maintained duplicate.
+//
+// `editing_pattern_clone` was removed 2026-09 — see RETIRED_FLAG_IDS in
+// known-flag-ids.ts for why, and before re-adding anything like it.
 // ---------------------------------------------------------------------------
 
-export const CROSS_HEURISTIC_REGISTRY: CrossHeuristic[] = [
-  pasteSharedAcrossStudentsHeuristic,
-  editingPatternCloneHeuristic,
-];
+export const CROSS_HEURISTIC_REGISTRY: CrossHeuristic[] = [pasteSharedAcrossStudentsHeuristic];
 
 // ---------------------------------------------------------------------------
 // Severity sort order (mirrors per-bundle run-heuristics.ts)

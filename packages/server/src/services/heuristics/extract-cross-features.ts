@@ -4,7 +4,7 @@
  *
  * The cross-heuristics only need a tiny per-submission slice (see
  * `@provenance/analysis-core/heuristics/cross/features.ts`): the paste events and
- * a bounded n-gram fingerprint of the event-kind stream. Extracting from the
+ * the two same-scope exclusion keys. Extracting from the
  * already-parsed EventIndex keeps this pure and DB-free; run-cross.ts loads one
  * submission's bundle at a time (LRU-bounded) so peak memory stays bounded even
  * for large cohorts.
@@ -15,15 +15,12 @@
  * chronological index the analyzer/replay use). `EventIndex.ordered` is already
  * sorted by (wall, sessionId, seq) with `ordered[i].globalIdx === i`, so we read
  * globalIdx straight off the index and return a small seqKey→globalIdx map
- * covering only the events a cross-flag can reference (pastes + representatives).
+ * covering only the events a cross-flag can reference — the pastes.
  */
 
 import {
-  buildKindNgramSet,
-  NGRAM_SIZE,
   observedCommitKeysOf,
   recordedSessionKeysOf,
-  REPRESENTATIVE_EVENT_COUNT,
 } from '@provenance/analysis-core/heuristics/cross/features.js';
 import type {
   CrossSubmissionFeatures,
@@ -31,15 +28,13 @@ import type {
 } from '@provenance/analysis-core/heuristics/cross/types.js';
 import type { EventIndex } from '@provenance/analysis-core/index/event-index.js';
 import type { Bundle } from '@provenance/analysis-core/loader/types.js';
-import { resolveBundleCapturePolicy } from '@provenance/analysis-core/manifest/bundle-manifest.js';
 
 export type ExtractedCrossFeatures = {
   features: CrossSubmissionFeatures;
   /**
    * Map from `${sessionId}:${seq}` to globalIdx, for exactly the events a
-   * cross-flag may reference (all paste events + the leading representative
-   * events). Used by run-cross.ts to translate eventsPerBundle seqKeys back to
-   * supporting_seqs.
+   * cross-flag may reference (the paste events). Used by run-cross.ts to
+   * translate eventsPerBundle seqKeys back to supporting_seqs.
    */
   globalIdxBySeqKey: Map<string, number>;
 };
@@ -57,15 +52,10 @@ export function extractCrossFeaturesFromIndex(
   submissionId: string,
   bundleId: string,
   /**
-   * The parsed bundle the index came from, used only to read the recorded
-   * capture policy. Optional so callers holding an index alone keep working;
-   * absent means "nothing disabled", which is the truth for every 1.x bundle.
+   * The parsed bundle the index came from. Optional so callers holding an
+   * index alone keep working.
    *
-   * editing_pattern_clone needs this: a course that switches a gated event kind
-   * off shrinks the kind alphabet the fingerprint is built from, which inflates
-   * Jaccard similarity across the whole cohort at once.
-   *
-   * It is also where BOTH same-scope exclusion keys come from (spec S20): the
+   * It is where BOTH same-scope exclusion keys come from (spec S20): the
    * observed commit DAG is walked over the bundle's `git.event`s, which the
    * EventIndex alone does not carry the session grouping for. A caller with no
    * bundle therefore gets neither `observedCommitKeys` nor
@@ -75,27 +65,16 @@ export function extractCrossFeaturesFromIndex(
    */
   bundle?: Bundle,
 ): ExtractedCrossFeatures {
-  const ordered = index.ordered;
+  const pasteEvents = index.byKind.get('paste') ?? [];
 
-  const kinds: string[] = new Array(ordered.length);
-  const representativeSeqKeys: string[] = [];
+  // Only the events a cross-flag can reference need a globalIdx mapping, and
+  // since editing_pattern_clone's leading "representative" events were retired
+  // (2026-09) those are exactly the pastes.
   const globalIdxBySeqKey = new Map<string, number>();
-
-  for (let i = 0; i < ordered.length; i++) {
-    const ie = ordered[i]!;
-    kinds[i] = ie.kind;
-    const seqKey = `${ie.sessionId}:${ie.seq}`;
-    if (i < REPRESENTATIVE_EVENT_COUNT) representativeSeqKeys.push(seqKey);
-    // Only the events a cross-flag can reference need a globalIdx mapping:
-    // the leading representatives (editing_pattern_clone) and pastes (paste_shared).
-    if (ie.kind === 'paste' || i < REPRESENTATIVE_EVENT_COUNT) {
-      globalIdxBySeqKey.set(seqKey, ie.globalIdx);
-    }
+  for (const ie of pasteEvents) {
+    globalIdxBySeqKey.set(`${ie.sessionId}:${ie.seq}`, ie.globalIdx);
   }
 
-  const kindNgrams = buildKindNgramSet(kinds, NGRAM_SIZE);
-
-  const pasteEvents = index.byKind.get('paste') ?? [];
   const pastes: CrossPasteFeature[] = pasteEvents.map((ie) => {
     const p =
       typeof ie.payload === 'object' && ie.payload !== null
@@ -114,13 +93,9 @@ export function extractCrossFeaturesFromIndex(
     bundleId,
     sourceFilename: `reconstruct-stub-${submissionId}`,
     pastes,
-    kindNgrams,
-    eventCount: ordered.length,
-    representativeSeqKeys,
     ...(bundle === undefined
       ? {}
       : {
-          disabledCaptureSignals: resolveBundleCapturePolicy(bundle).disabledSignals,
           // The SAME derivation the browser path uses — imported, never
           // reimplemented, so the two cannot drift into disagreeing about which
           // pairs are one repository.

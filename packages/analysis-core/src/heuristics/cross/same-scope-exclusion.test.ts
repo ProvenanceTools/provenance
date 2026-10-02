@@ -32,7 +32,6 @@ import { partitionCrossScopes } from '../../coverage/cross-scope.js';
 import { extractCrossFeatures } from './features.js';
 import { runCrossHeuristics } from './run-cross-heuristics.js';
 import { pasteSharedAcrossStudentsHeuristic } from './paste-shared-across-students.js';
-import { editingPatternCloneHeuristic } from './editing-pattern-clone.js';
 import { DEFAULT_CROSS_HEURISTIC_CONFIG } from './types.js';
 import type { Bundle } from '../../loader/types.js';
 import type { EventIndex } from '../../index/event-index.js';
@@ -191,17 +190,6 @@ describe('S20 — two honest partners on one shared repository', () => {
     expect(pasteFlags(runCrossHeuristics(features))).toEqual([]);
   });
 
-  it('does not fire editing_pattern_clone on the partner pair either', async () => {
-    const aliceSession: SessionSpec = { minute: 0, observed: [ALICE_COMMIT] };
-    const bobSession: SessionSpec = { minute: 60, observed: [ALICE_COMMIT, BOB_COMMIT] };
-
-    const alice = await buildSubmission('alice_proj1.zip', [aliceSession, bobSession]);
-    const bob = await buildSubmission('bob_proj1.zip', [aliceSession, bobSession]);
-
-    const flags = runCrossHeuristics([featuresOf(alice), featuresOf(bob)]);
-    expect(flags.filter((f) => f.heuristic === 'editing_pattern_clone')).toEqual([]);
-  });
-
   it('states the exclusion as a visible fact, naming the shared commit', async () => {
     // The consumer of the ABSENT flag above is a grader, and a grader reading
     // "no findings" must be able to tell a searched comparison from a withheld
@@ -265,16 +253,6 @@ describe('S20/D12 — a MIXED-scope partner pair, one build ahead of the other',
     expect(features[1]!.observedCommitKeys).toEqual([`repository:assumed-single ${SHARED_COMMIT}`]);
 
     expect(pasteFlags(runCrossHeuristics(features))).toEqual([]);
-  });
-
-  it('does not fire editing_pattern_clone across the labelling boundary either', async () => {
-    const alice = await buildSubmission('alice_proj1.zip', [
-      { minute: 0, observed: [SHARED_COMMIT], rootCommitSha: ROOT_ONE },
-    ]);
-    const bob = await buildSubmission('bob_proj1.zip', [{ minute: 60, observed: [SHARED_COMMIT] }]);
-
-    const flags = runCrossHeuristics([featuresOf(alice), featuresOf(bob)]);
-    expect(flags.filter((f) => f.heuristic === 'editing_pattern_clone')).toEqual([]);
   });
 
   it('states the mixed exclusion visibly, naming BOTH keys the commit was seen under', async () => {
@@ -499,14 +477,8 @@ describe('S20 — the negative controls, which are not optional', () => {
       DEFAULT_CROSS_HEURISTIC_CONFIG,
       emptyPartition,
     );
-    const clone = editingPatternCloneHeuristic.run(
-      features,
-      DEFAULT_CROSS_HEURISTIC_CONFIG,
-      emptyPartition,
-    );
 
     expect(paste).toHaveLength(1);
-    expect(clone.length).toBeGreaterThan(0);
   });
 
   it('STILL fires between a partner and an outsider who shares the same paste', async () => {

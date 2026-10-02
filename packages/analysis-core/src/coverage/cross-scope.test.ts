@@ -42,9 +42,6 @@ function features(
     bundleId,
     sourceFilename: `${bundleId}.zip`,
     pastes: [],
-    kindNgrams: new Set<string>(),
-    eventCount: 0,
-    representativeSeqKeys: [],
     ...(observedCommitKeys === undefined ? {} : { observedCommitKeys }),
     ...(recordedSessionKeys === undefined ? {} : { recordedSessionKeys }),
   };

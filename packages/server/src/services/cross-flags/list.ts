@@ -281,9 +281,8 @@ export async function listCrossFlags(
  *
  * The `heuristic_id` and `severity_min` filters are deliberately NOT applied. An
  * exclusion has neither field — it is one suppression that covers every
- * cross-heuristic at once (both `paste_shared_across_students` and
- * `editing_pattern_clone` consume the same partition), so narrowing the findings
- * to one heuristic does not narrow what was withheld. `submission_id` IS
+ * cross-heuristic at once (every one consumes the same partition), so narrowing
+ * the findings to one heuristic does not narrow what was withheld. `submission_id` IS
  * applied: it names one submission, and the honest answer to "show me
  * everything about this submission" includes the comparisons it was kept out of.
  */

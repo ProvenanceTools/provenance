@@ -441,7 +441,7 @@ The v1 heuristic suite below is a starting set. We expect to add and tune. For t
 **Cross-submission heuristics (v2+, requires staff loading multiple bundles):**
 
 - `paste_shared_across_students`: identical large pastes in different students' logs.
-- `editing_pattern_clone`: students whose event sequences are anomalously similar (timing, file-switch order).
+- `editing_pattern_clone`: students whose event sequences are anomalously similar (timing, file-switch order). **Retired 2026-09** — as built it fired on 94% of student pairs; see `docs/heuristics.md`.
 
 The dashboard sums weighted severity into a single review-priority score, but the score is never the verdict — it's a sort order for staff triage.
 
@@ -567,7 +567,7 @@ A second reviewer can rerun the review (or run a different model) and compare. I
 **v3 — target: after v2 is stable in production for at least one semester.**
 
 - **LLM-assisted review (§7.6).** Staff-initiated deep review of suspicious submissions. The capstone feature; depends on the heuristic suite and replay UI being mature, since the LLM reasons over their outputs.
-- Cross-submission heuristics over a batch of bundles (`paste_shared_across_students`, `editing_pattern_clone`).
+- Cross-submission heuristics over a batch of bundles (`paste_shared_across_students`; `editing_pattern_clone` was retired 2026-09).
 - Optional submission-time server verification (a course-run service that re-validates the bundle and stamps it; reduces the forgery window).
 - Support for non-VS-Code editors via a lightweight CLI shim.
 

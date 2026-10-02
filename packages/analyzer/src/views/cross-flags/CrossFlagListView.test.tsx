@@ -230,7 +230,7 @@ describe('CrossFlagListView', () => {
 
     // Type a heuristic_id filter
     fireEvent.change(screen.getByTestId('filter-heuristic-id'), {
-      target: { value: 'editing_pattern_clone' },
+      target: { value: 'paste_shared_across_students' },
     });
 
     // Apply
@@ -238,7 +238,7 @@ describe('CrossFlagListView', () => {
 
     await waitFor(() => {
       // URL should contain heuristic_id param
-      expect(requestedUrl).toContain('heuristic_id=editing_pattern_clone');
+      expect(requestedUrl).toContain('heuristic_id=paste_shared_across_students');
     });
   });
 
