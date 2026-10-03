@@ -68,7 +68,7 @@ path must stage blobs, write `ingest_files` rows, and enqueue per-file jobs.
 This phase is **O(F)** in the number of submission files, with **three
 sequential round-trips per file** and no bulk batching:
 
-1. `stageBlob` — one S3/RustSF `PUT` of the bundle ZIP. **O(bundle bytes)** and
+1. `stageBlob` — one S3/MinIO `PUT` of the bundle ZIP. **O(bundle bytes)** and
    the dominant per-file cost.
 2. `INSERT` one `ingest_files` row (one DB round-trip).
 3. `boss.send(INGEST_FILE, …)` — one pg-boss enqueue = one `INSERT` into
@@ -79,7 +79,7 @@ So the literal "queue up the jobs" cost is **F sequential `boss.send` calls**
 cheap relative to staging (the S3 PUTs) and processing (~1s CPU/bundle).
 Empirically the whole front half ran ~5s for a 700-small-bundle export
 (~7ms/file, dominated by S3 + DB round-trip latency, not CPU). This phase is
-I/O-bound and needs Postgres + RustSF to measure, so it is **not** covered by
+I/O-bound and needs Postgres + MinIO to measure, so it is **not** covered by
 `bench:stages`; use `profile:ingest` for it.
 
 Where the O(F) work sits relative to the HTTP response differs by entry path:
@@ -374,5 +374,5 @@ BENCH_EDIT=mid npm run bench:stages --workspace=packages/server -- 5000 10000 25
 ```
 
 No infrastructure required — it generates bundles in-process and times the pure
-CPU stages. For the full route+worker path against Postgres/RustSF (DB/S3
+CPU stages. For the full route+worker path against Postgres/MinIO (DB/S3
 included), use `npm run profile:large` instead.

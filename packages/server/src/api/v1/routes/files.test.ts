@@ -5,7 +5,7 @@
  *
  * Events are no longer stored in Postgres: the routes parse the stored bundle
  * blob on demand (via getStorageClient() → loadSubmissionIndex). Each test spins
- * a RustSF container, points the app config at it, and seeds a bundle whose events
+ * a RustFS container, points the app config at it, and seeds a bundle whose events
  * (doc.open 'hello' + doc.change ' world' + doc.save) reconstruct file main.py.
  *
  * globalIdx note: the bundle's session.start is globalIdx 0, so doc.open=1,
@@ -76,8 +76,8 @@ function makeTestEnv(extra?: Record<string, string>) {
     DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance',
     OBJECT_STORAGE_ENDPOINT: 'http://localhost:9000',
     OBJECT_STORAGE_BUCKET: 'test-bucket',
-    OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+    OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
     OBJECT_STORAGE_REGION: 'us-east-1',
     GOOGLE_OAUTH_CLIENT_ID: 'client-id',
     GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -93,8 +93,8 @@ function makeTestEnv(extra?: Record<string, string>) {
   };
 }
 
-/** Config env wired to the ephemeral RustSF endpoint/bucket. */
-function envForMinio(endpoint: string, bucket: string, extra?: Record<string, string>) {
+/** Config env wired to the ephemeral RustFS endpoint/bucket. */
+function envForRustfs(endpoint: string, bucket: string, extra?: Record<string, string>) {
   return makeTestEnv({
     OBJECT_STORAGE_ENDPOINT: endpoint,
     OBJECT_STORAGE_BUCKET: bucket,
@@ -251,7 +251,7 @@ describe('GET /submissions/:id/files/:path/content', () => {
     await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(envForRustfs(endpoint, bucketName)));
 
         const user = await seedUser(db);
         const sessionId = await seedSession(db, user.id);
@@ -281,7 +281,7 @@ describe('GET /submissions/:id/files/:path/content', () => {
     await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(envForRustfs(endpoint, bucketName)));
 
         const user = await seedUser(db);
         const sessionId = await seedSession(db, user.id);
@@ -313,7 +313,7 @@ describe('GET /submissions/:id/files/:path/content', () => {
     await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(envForRustfs(endpoint, bucketName)));
 
         const user = await seedUser(db);
         const sessionId = await seedSession(db, user.id);
@@ -341,7 +341,7 @@ describe('GET /submissions/:id/files/:path/content', () => {
     await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(envForRustfs(endpoint, bucketName)));
 
         const user = await seedUser(db);
         const sessionId = await seedSession(db, user.id);
@@ -372,7 +372,7 @@ describe('GET /submissions/:id/files/:path/content', () => {
     await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(envForRustfs(endpoint, bucketName)));
 
         const user = await seedUser(db);
         const sessionId = await seedSession(db, user.id);
@@ -399,7 +399,7 @@ describe('GET /submissions/:id/files/:path/content', () => {
       _testDb = db;
       _setConfigForTest(parseEnv(makeTestEnv()));
 
-      // Auth fails before any storage access — no RustSF needed.
+      // Auth fails before any storage access — no RustFS needed.
       const fakeId = crypto.randomUUID();
       const app = createV1App();
       const res = await app.fetch(
@@ -420,7 +420,7 @@ describe('GET /submissions/:id/files/:path/provenance', () => {
     await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(envForRustfs(endpoint, bucketName)));
 
         const user = await seedUser(db);
         const sessionId = await seedSession(db, user.id);
@@ -457,7 +457,7 @@ describe('GET /submissions/:id/files/:path/provenance', () => {
     await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(envForRustfs(endpoint, bucketName)));
 
         const user = await seedUser(db);
         const sessionId = await seedSession(db, user.id);

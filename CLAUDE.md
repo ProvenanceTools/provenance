@@ -11,7 +11,7 @@ Provenance: an academic-integrity telemetry and analysis system. Six workspaces 
 - `packages/shared/` — Zod schemas shared between `server` and `analyzer` so API contracts stay in sync.
 - `packages/analysis-core/` — pure-TS analysis engine shared by `analyzer` and `server`: bundle loader (unzip + parse), the 8 validation checks, the EventIndex + file reconstruction, per-submission + cross-submission heuristics. Isomorphic (runs in browser and Node); depends only on `log-core` + a few libs (`jszip`, `diff`, `@noble/ed25519`). This is where the code that used to live inside the analyzer and be imported by the server now lives.
 - `packages/analyzer/` — React/Vite SPA (**v3**). Google OAuth login, semester switcher, cohort list, per-submission drill-in (overview / timeline / replay / validation / export / source), a 29-flag heuristics tuning UI (per-flag **weight** 0.0–2.0 + on/off — _not_ the heuristics' own thresholds, which live in `analysis-core/heuristics/config.ts`; the 29 = 18 per-submission event-stream heuristics + 9 validation-derived integrity flags + 2 cross-submission heuristics, see `analysis-core/heuristics/known-flag-ids.ts`), cross-flags view. Also a standalone `/local` route that runs entirely in-browser (drop a `.zip`, no server). UI on top of `analysis-core`. Note: the submission **Export tab is a v3.1 stub**; the working findings export (markdown + PDF) exists only under `/local`.
-- `packages/server/` — Node + Hono API server (**v3**). Postgres + Drizzle ORM, Google OAuth + sessions + API tokens, ZIP ingest pipeline (parse → match → heuristics → cross-flags), pg-boss job queue, OpenAPI 3.1 + Redoc, Prometheus metrics, retention sweep + session purge cron jobs. Object storage is S3-compatible (RustSF for dev). **Events are not persisted in Postgres** and **stored bundles are provenance-only** (student source stripped after ingest); read paths re-parse the stored bundle blob on demand (see below).
+- `packages/server/` — Node + Hono API server (**v3**). Postgres + Drizzle ORM, Google OAuth + sessions + API tokens, ZIP ingest pipeline (parse → match → heuristics → cross-flags), pg-boss job queue, OpenAPI 3.1 + Redoc, Prometheus metrics, retention sweep + session purge cron jobs. Object storage is S3-compatible (RustFS for dev). **Events are not persisted in Postgres** and **stored bundles are provenance-only** (student source stripped after ingest); read paths re-parse the stored bundle blob on demand (see below).
 
 The product specs live in `docs/`. The recorder spec is `docs/prd.md`; the analyzer/server spec is `docs/analyzer-v3-prd.md`. Section references like "§4.2" mean the recorder PRD unless the surrounding text says otherwise. **Read the relevant PRD section before implementing anything.** If a PRD and this file disagree, this file wins for code conventions; the PRD wins for product behavior.
 
@@ -79,7 +79,7 @@ The product specs live in `docs/`. The recorder spec is `docs/prd.md`; the analy
 
 - Vitest for unit tests across every workspace. Co-located: `foo.ts` and `foo.test.ts` in the same directory.
 - `@vscode/test-electron` for recorder integration tests, in `packages/recorder/test/integration/`.
-- Server integration tests use **testcontainers** to spawn ephemeral Postgres + RustSF; they do not depend on `docker compose up`. Never point a test at the dev compose stack.
+- Server integration tests use **testcontainers** to spawn ephemeral Postgres + RustFS; they do not depend on `docker compose up`. Never point a test at the dev compose stack.
 - Every PR-sized change ships with tests. New behavior gets new tests; bug fixes get a regression test that fails before the fix.
 - For `log-core`: aim for full branch coverage. It's small and load-bearing.
 - For event handlers: test the event-to-log-entry transformation as a pure function, separately from the VS Code wiring.
@@ -120,7 +120,7 @@ The product specs live in `docs/`. The recorder spec is `docs/prd.md`; the analy
 Workspace-wide (run from repo root):
 
 - `npm run build` — build all packages.
-- `npm run test` — run the **workspace** Vitest suites (~1200+ tests; server integration tests spin up ephemeral Postgres/RustSF via testcontainers, so Docker must be running). Note this is `--workspaces`, so it does **not** cover `tools/` — see `test:tools`.
+- `npm run test` — run the **workspace** Vitest suites (~1200+ tests; server integration tests spin up ephemeral Postgres/RustFS via testcontainers, so Docker must be running). Note this is `--workspaces`, so it does **not** cover `tools/` — see `test:tools`.
 - `npm run test:tools` — run the `tools/` suites (course-keypair / cert-minting / manifest-signing, and the recorder→analyzer seal conformance gate). `tools/` is not an npm workspace, so these are invisible to `npm run test`; they ran under nothing at all until a root `vitest.config.ts` was added, deliberately scoped to `tools/**` so a bare `vitest` cannot wander into the server's testcontainers suites.
 - `npm run typecheck` — `tsc --noEmit` across the workspace.
 - `npm run lint` — ESLint (only the `src/` trees of the five packages) + Prettier check.
@@ -146,7 +146,7 @@ Per-workspace (run from root with `--workspace=packages/<name>`):
 
 Dev infra:
 
-- `docker compose up -d` — Postgres + RustSF for local server dev (see `compose.yaml`). Not used in tests.
+- `docker compose up -d` — Postgres + RustFS for local server dev (see `compose.yaml`). Not used in tests.
 
 If you need a command that doesn't exist, ask before adding it to `package.json`.
 
@@ -156,7 +156,7 @@ If you need a command that doesn't exist, ask before adding it to `package.json`
 provenance/
 ├── CLAUDE.md                              # this file
 ├── README.md                              # quickstart, status table, key/manifest workflow
-├── compose.yaml                           # dev-only Postgres + RustSF
+├── compose.yaml                           # dev-only Postgres + RustFS
 ├── docs/
 │   ├── prd.md                             # recorder product spec
 │   ├── recorder.md                        # recorder security model + threat notes

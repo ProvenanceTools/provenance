@@ -2,9 +2,9 @@
  * Ingest routes integration tests (Phase 9a).
  *
  * Tests all ingest endpoints through createV1App() per V18 rule.
- * Both Postgres (withTestDb) and RustSF (withTestRustfs) containers are required.
+ * Both Postgres (withTestDb) and RustFS (withTestRustfs) containers are required.
  * The route handler reads storage config from getConfig(), so we wire the test
- * RustSF endpoint into _setConfigForTest().
+ * RustFS endpoint into _setConfigForTest().
  */
 
 import { vi, describe, it, expect, beforeEach } from 'vitest';
@@ -156,7 +156,7 @@ async function seedRosterEntry(
 }
 
 // ---------------------------------------------------------------------------
-// Test env builder (includes RustSF endpoint)
+// Test env builder (includes RustFS endpoint)
 // ---------------------------------------------------------------------------
 
 function makeTestEnv(rustfsEndpoint: string, rustfsBucket: string): Record<string, string> {
@@ -166,8 +166,8 @@ function makeTestEnv(rustfsEndpoint: string, rustfsBucket: string): Record<strin
     DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance', // overridden by mock
     OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
     OBJECT_STORAGE_BUCKET: rustfsBucket,
-    OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+    OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
     OBJECT_STORAGE_REGION: 'us-east-1',
     GOOGLE_OAUTH_CLIENT_ID: 'client-id',
     GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -293,7 +293,7 @@ describe('POST /semesters/:semesterId/ingest', () => {
     });
   });
 
-  it('returns 202 and stages blobs in RustSF', async () => {
+  it('returns 202 and stages blobs in RustFS', async () => {
     await withTestDb(async (db) => {
       await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
@@ -319,14 +319,14 @@ describe('POST /semesters/:semesterId/ingest', () => {
           expect(res.status).toBe(202);
           const { job_id } = (await res.json()) as { job_id: string };
 
-          // Verify blob exists in RustSF by retrieving ingest_files row and checking the staging key.
+          // Verify blob exists in RustFS by retrieving ingest_files row and checking the staging key.
           const [fileRow] = await db
             .select()
             .from(ingest_files)
             .where(eq(ingest_files.ingest_job_id, job_id));
           expect(fileRow).toBeDefined();
 
-          // Verify the blob is retrievable from RustSF.
+          // Verify the blob is retrievable from RustFS.
           const { getBlob } = await import('../../../services/storage/blobs.js');
           const { ingestStagingKey } = await import('../../../services/storage/keys.js');
           const key = ingestStagingKey(job_id, fileRow!.id);
@@ -877,7 +877,7 @@ describe('POST /semesters/:semesterId/ingest — staging failure compensation (C
             .mockImplementation(async (...args: Parameters<typeof stageBlobModule.stageBlob>) => {
               callCount++;
               if (callCount === 2) {
-                throw new Error('simulated RustSF failure on file 2');
+                throw new Error('simulated RustFS failure on file 2');
               }
               return originalStageBlob(...args);
             });
@@ -906,7 +906,7 @@ describe('POST /semesters/:semesterId/ingest — staging failure compensation (C
 
           // No ingest_files rows: rows are bulk-inserted only after ALL staging
           // succeeds, so a mid-staging failure leaves zero rows (the file-1 blob
-          // staged to RustSF is an orphan the retention sweep reclaims).
+          // staged to RustFS is an orphan the retention sweep reclaims).
           const files = await db
             .select()
             .from(ingest_files)

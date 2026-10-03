@@ -6,7 +6,7 @@
 
 **Architecture:** All analysis already runs at ingest on the in-memory parsed bundle; we persist only derived results and re-parse the stored bundle from S3 on demand for the few read paths that need raw events. Stored bundles keep the signed manifest + `.slog` logs and drop source bytes. The shared loader/validation/index/heuristics closure moves out of analyzer into `analysis-core`.
 
-**Tech Stack:** TypeScript (NodeNext), Vitest, Drizzle/Postgres, Hono, S3 (RustSF in tests via testcontainers), JSZip, `@noble/ed25519`, `diff`.
+**Tech Stack:** TypeScript (NodeNext), Vitest, Drizzle/Postgres, Hono, S3 (MinIO in tests via testcontainers), JSZip, `@noble/ed25519`, `diff`.
 
 ## Global Constraints
 

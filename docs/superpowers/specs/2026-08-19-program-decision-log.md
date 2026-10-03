@@ -492,7 +492,7 @@ manifest shape and every read path in `analyzer` and `server`.
   (`--reporter=basic` does not exist in vitest 4.)
 - **The server suite has genuine flakes** under testcontainers contention — different files fail on
   different runs and pass in isolation. Always re-run a failing file alone before calling it a
-  regression. Never run two server suites concurrently; ~37 containers produces RustSF 503s that
+  regression. Never run two server suites concurrently; ~37 containers produces MinIO 503s that
   look exactly like real bugs.
 - **`npm run build` before `npm run typecheck`**, and build `log-core` explicitly first — a stale
   `dist` produces confusing phantom errors downstream.

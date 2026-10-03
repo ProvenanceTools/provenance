@@ -154,7 +154,7 @@ export const nodes: Record<string, ArchNode> = {
   },
   upl: {
     title: 'Staff upload',
-    body: 'The direct upload path never buffers a body in memory. A single-request upload is streamed straight to a temp file and handed to the same streaming ingest the local-path CLI uses, so the ceiling is disk, not the roughly 2 GiB that multipart form parsing imposes.\n\nAbove a threshold the browser switches to the chunked path, which is backed by an S3/RustSF multipart upload. Part state therefore lives in object storage rather than server memory, which is what makes it correct across several API processes behind a load balancer and durable across restarts; an interrupted upload resumes by listing the parts already received and re-sending only the gaps. There is no server-side upload session table: the (semester, upload id) pair derives the storage key, and every chunk request is re-authorized against the semester.',
+    body: 'The direct upload path never buffers a body in memory. A single-request upload is streamed straight to a temp file and handed to the same streaming ingest the local-path CLI uses, so the ceiling is disk, not the roughly 2 GiB that multipart form parsing imposes.\n\nAbove a threshold the browser switches to the chunked path, which is backed by an S3/RustFS multipart upload. Part state therefore lives in object storage rather than server memory, which is what makes it correct across several API processes behind a load balancer and durable across restarts; an interrupted upload resumes by listing the parts already received and re-sending only the gaps. There is no server-side upload session table: the (semester, upload id) pair derives the storage key, and every chunk request is re-authorized against the semester.',
     links: [
       {
         label: 'resumable-upload.ts (server)',
@@ -253,7 +253,7 @@ export const nodes: Record<string, ArchNode> = {
   },
   blob: {
     title: 'Blob store',
-    body: 'The storage layer is an interface with two implementations: S3-compatible object storage (RustSF in development) and a plain filesystem backend for the apphost deployment, where blobs are ordinary files under a storage root and every key is resolved through a single gate that rejects traversal outside the root or into the multipart staging tree.\n\nThe filesystem backend is where the quota matters. The mount has a hard limit with no headroom, so an hourly cron statfs’s it and raises warn and critical notifications as usage crosses its thresholds. Source stripping is what keeps that curve flat; the quota check is what catches the day it is not enough.',
+    body: 'The storage layer is an interface with two implementations: S3-compatible object storage (RustFS in development) and a plain filesystem backend for the apphost deployment, where blobs are ordinary files under a storage root and every key is resolved through a single gate that rejects traversal outside the root or into the multipart staging tree.\n\nThe filesystem backend is where the quota matters. The mount has a hard limit with no headroom, so an hourly cron statfs’s it and raises warn and critical notifications as usage crosses its thresholds. Source stripping is what keeps that curve flat; the quota check is what catches the day it is not enough.',
     links: [
       { label: 'fs-blobs.ts', href: `${GH}/packages/server/src/services/storage/fs-blobs.ts` },
       {

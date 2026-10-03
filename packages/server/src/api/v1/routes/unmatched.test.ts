@@ -7,10 +7,10 @@
  * requests for the same file — exactly one succeeds, the other gets 409).
  *
  * Test groups:
- *   1. GET /unmatched — list tests (DB only, no RustSF needed)
+ *   1. GET /unmatched — list tests (DB only, no RustFS needed)
  *   2. POST /unmatched/:id/discard — discard tests (DB only)
- *   3. PATCH /unmatched/:id — attach tests (requires RustSF for real bundle parse)
- *   4. Concurrent attach — concurrency test with real RustSF
+ *   3. PATCH /unmatched/:id — attach tests (requires RustFS for real bundle parse)
+ *   4. Concurrent attach — concurrency test with real RustFS
  */
 
 import { vi, describe, it, expect, beforeEach } from 'vitest';
@@ -202,7 +202,7 @@ async function seedUnmatchedFile(db: DrizzleDb, ingestJobId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Test env builder (no RustSF needed for non-attach tests)
+// Test env builder (no RustFS needed for non-attach tests)
 // ---------------------------------------------------------------------------
 
 function makeTestEnv(opts?: { rustfsEndpoint?: string; rustfsBucket?: string }) {
@@ -212,8 +212,8 @@ function makeTestEnv(opts?: { rustfsEndpoint?: string; rustfsBucket?: string }) 
     DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance', // overridden by mock
     OBJECT_STORAGE_ENDPOINT: opts?.rustfsEndpoint ?? 'http://localhost:9000',
     OBJECT_STORAGE_BUCKET: opts?.rustfsBucket ?? 'test-bucket',
-    OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+    OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
     OBJECT_STORAGE_REGION: 'us-east-1',
     GOOGLE_OAUTH_CLIENT_ID: 'client-id',
     GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -560,7 +560,7 @@ describe('POST /semesters/:semesterId/unmatched/:id/discard', () => {
 });
 
 // ---------------------------------------------------------------------------
-// §3. PATCH /unmatched/:id — attach tests (require RustSF + real bundle)
+// §3. PATCH /unmatched/:id — attach tests (require RustFS + real bundle)
 // ---------------------------------------------------------------------------
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -588,7 +588,7 @@ async function stageTestBundle(
   return { blobSha256: sha256 };
 }
 
-describe('PATCH /semesters/:semesterId/unmatched/:id — attach (requires RustSF)', () => {
+describe('PATCH /semesters/:semesterId/unmatched/:id — attach (requires RustFS)', () => {
   it('happy path: moves file unmatched → matched, creates submission, materializes pipeline', async () => {
     await withTestRustfs(async ({ client: storageClient, bucketName }) => {
       const rustfsEndpoint = storageClient.bucketUrl.replace(`/${bucketName}`, '');

@@ -25,7 +25,7 @@
  * worker matches by metadata rather than the filename convention.
  *
  * Phase 9a scope:
- *   - Stage each file to RustSF, create ingest_files rows with status='pending'.
+ *   - Stage each file to RustFS, create ingest_files rows with status='pending'.
  *   - Do NOT parse or match — that is Phase 9b.
  *   - zip-of-zips: expand the outer archive; stage each inner .zip.
  *   - Enforce INGEST_MAX_BUNDLE_BYTES, INGEST_MAX_BATCH_BYTES,
@@ -1185,7 +1185,7 @@ export function createIngestRouter(): Hono {
   // -------------------------------------------------------------------------
   // Resumable (chunked) upload — for very large exports over HTTP.
   //
-  // Backed by an S3/RustSF multipart upload so an interrupted transfer resumes by
+  // Backed by an S3/RustFS multipart upload so an interrupted transfer resumes by
   // re-sending only missing parts (durable across processes/restarts). The
   // (semesterId, uploadId) pair derives the storage key; the S3 upload id
   // returned at create is the capability secret echoed on every request.

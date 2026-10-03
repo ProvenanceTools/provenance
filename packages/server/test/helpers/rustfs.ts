@@ -21,8 +21,8 @@ import { GenericContainer, Wait } from 'testcontainers';
 import { createStorageClient, type StorageClient } from '../../src/services/storage/client.js';
 
 const RUSTFS_IMAGE = 'rustfs/rustfs:1.0.0';
-const RUSTFS_USER = 'rustsfadmin';
-const RUSTFS_PASSWORD = 'rustsfadmin';
+const RUSTFS_USER = 'rustfsadmin';
+const RUSTFS_PASSWORD = 'rustfsadmin';
 const BUCKET_NAME = 'test-bucket';
 
 export interface TestRustfsContext {

@@ -7,7 +7,7 @@
  * multipart upload is downloaded and fed through the SAME ingestLocalPath
  * pipeline, reaching the same end state as every other ingest path.
  *
- * Real pg-boss + Postgres + RustSF via testcontainers.
+ * Real pg-boss + Postgres + RustFS via testcontainers.
  */
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -139,8 +139,8 @@ describe('resumable upload (create → part → complete → ingest)', () => {
           DATABASE_URL: pgContainer.getConnectionUri(),
           OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
-          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
           OBJECT_STORAGE_REGION: 'us-east-1',
           GOOGLE_OAUTH_CLIENT_ID: 'client-id',
           GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',

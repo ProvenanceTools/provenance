@@ -80,8 +80,8 @@ const BASE_ENV: Record<string, string> = {
   DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance',
   OBJECT_STORAGE_ENDPOINT: 'http://localhost:9000',
   OBJECT_STORAGE_BUCKET: 'provenance',
-  OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-  OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+  OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+  OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
   GOOGLE_OAUTH_CLIENT_ID: 'client-id',
   GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
   AUTH_ALLOWED_HOSTED_DOMAINS: '["berkeley.edu"]',
@@ -97,14 +97,14 @@ beforeEach(() => {
 });
 
 /**
- * BASE_ENV with OBJECT_STORAGE_* overridden to point at an ephemeral RustSF
+ * BASE_ENV with OBJECT_STORAGE_* overridden to point at an ephemeral RustFS
  * instance from withTestRustfs. computeDryRunDiff re-parses each submission's
  * stored bundle blob on demand (via getStorageClient() / loadSubmissionIndex,
  * events are no longer persisted in Postgres), so any test that exercises a
  * non-empty semester must both store a bundle blob AND point config at the
- * same RustSF the blob was written to.
+ * same RustFS the blob was written to.
  */
-function minioEnv(endpoint: string, bucketName: string): Record<string, string> {
+function rustfsEnv(endpoint: string, bucketName: string): Record<string, string> {
   return { ...BASE_ENV, OBJECT_STORAGE_ENDPOINT: endpoint, OBJECT_STORAGE_BUCKET: bucketName };
 }
 
@@ -985,7 +985,7 @@ describe('computeDryRunDiff', () => {
   it('returns zero tier_change when all weights match existing scores', async () => {
     await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
-        _setConfigForTest(parseEnv(minioEnv(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(rustfsEnv(endpoint, bucketName)));
 
         const adminUser = await insertUser(db);
         const course = await insertCourse(db);
@@ -1068,7 +1068,7 @@ describe('computeDryRunDiff', () => {
   it('detects tier change when a weight change shifts score_max_severity', async () => {
     await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
-        _setConfigForTest(parseEnv(minioEnv(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(rustfsEnv(endpoint, bucketName)));
 
         const adminUser = await insertUser(db);
         const course = await insertCourse(db);
@@ -1201,7 +1201,7 @@ describe('computeDryRunDiff — threshold forwarding (V46 regression)', () => {
   it('raising largePaste.minChars above paste size suppresses the flag in dry-run', async () => {
     await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
-        _setConfigForTest(parseEnv(minioEnv(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(rustfsEnv(endpoint, bucketName)));
 
         const submissionId = await seedSubmission(db);
         const [subRow] = await db
@@ -1568,7 +1568,7 @@ describe('computeDryRunDiff — protected mode masks top_movers student identity
   it('masked: top_movers.student has Student N / SN (never real name/sid)', async () => {
     await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
-        _setConfigForTest(parseEnv(minioEnv(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(rustfsEnv(endpoint, bucketName)));
         const adminUser = await insertUser(db);
         const course = await insertCourse(db);
         const semester = await insertSemester(db, course.id);
@@ -1685,7 +1685,7 @@ describe('computeDryRunDiff — protected mode masks top_movers student identity
     await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(minioEnv(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(rustfsEnv(endpoint, bucketName)));
         try {
           // Protected principal.
           const admin = await insertUser(db, { protected: true });

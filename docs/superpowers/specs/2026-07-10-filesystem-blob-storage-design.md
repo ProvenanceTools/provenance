@@ -8,7 +8,7 @@
 
 Provenance stores each submission's provenance bundle as a single blob. Today the
 server writes and reads those blobs exclusively through an S3-compatible object-storage
-API (`aws4fetch` SigV4 over `fetch`; RustSF in dev, S3/R2 in prod).
+API (`aws4fetch` SigV4 over `fetch`; MinIO in dev, S3/R2 in prod).
 
 The EECS Instructional apphost deployment (`instapphost.eecs.berkeley.edu` →
 `provenance.eecs.berkeley.edu`) has **no** object-storage service. Blob storage there is

@@ -1843,7 +1843,7 @@ The ingest validation stage calls the analyzer `runValidation` and persists `che
 
 - [ ] **Step 2: Write a regression test proving it**
 
-Add/extend an ingest test: ingest a 1.1 bundle whose submitted file was tampered (hash != last doc.save), assert `validation_results.check_8_status === 'fail'`, `overall === 'fail'`, and that a `flags` row with `heuristic_id = 'submitted_code_match'` exists. Also ingest a clean 1.1 bundle and assert `check_8_status === 'pass'`. Reuse the existing ingest test harness (testcontainers Postgres/RustSF).
+Add/extend an ingest test: ingest a 1.1 bundle whose submitted file was tampered (hash != last doc.save), assert `validation_results.check_8_status === 'fail'`, `overall === 'fail'`, and that a `flags` row with `heuristic_id = 'submitted_code_match'` exists. Also ingest a clean 1.1 bundle and assert `check_8_status === 'pass'`. Reuse the existing ingest test harness (testcontainers Postgres/MinIO).
 
 Run: `npm run test --workspace=packages/server -- ingest`
 Expected: PASS. If `parse-bundle-phase.ts` rejects 1.1 for any reason (e.g. a stale `format_version === '1.0'` assertion), fix it minimally and note it.

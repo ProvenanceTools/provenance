@@ -75,7 +75,7 @@ Approved as a single v3.0 bundle by the PRD's §2 + this plan's §0. Adding anyt
    - **Integration:** Vitest + `testcontainers` spinning ephemeral Postgres per file. The server's full request pipeline is exercised over Hono's in-process fetch; no port binding. Workers run in the same process.
    - **End-to-end (smoke):** A small Playwright suite that boots a server against a test DB, walks login (with a Google-token mock), runs an ingest, asserts the cohort list. Lives in `packages/server/test/e2e/`. Not part of the default `npm run test`; runs in CI under a `test:e2e` script.
 4. **OAuth in tests.** The Google token-exchange and JWKs fetch are injected through a `GoogleOAuthClient` seam. Tests construct a fake client that returns a pre-baked ID token payload (already PKCE-validated). The seam is the only place mocking is allowed in the auth flow.
-5. **Working DB in dev.** A `docker-compose.dev.yml` (or `compose.yaml`) brings up Postgres + an RustSF (S3-compatible object store) for local development. Documented in `packages/server/README.md`. Production object storage (R2 / S3) wires via env vars.
+5. **Working DB in dev.** A `docker-compose.dev.yml` (or `compose.yaml`) brings up Postgres + an MinIO (S3-compatible object store) for local development. Documented in `packages/server/README.md`. Production object storage (R2 / S3) wires via env vars.
 6. **No code coverage gate** beyond what already exists in v2. Per-phase tests aim for "each new pure function gets unit coverage; each new endpoint gets at least one integration test."
 7. **Subagent-driven execution.** Same pattern as v2: dispatch implementer → spec-compliance review → code-quality review → mark complete → next phase. Sequential only.
 8. **Subagent model selection (initial proposal — adjust per phase).** Pure-TS server phases (1–4, 10–13, 16–18): sonnet impl + sonnet code-review + haiku spec-review. UI phases (20–24): sonnet impl + sonnet code-review. Scaffolding/release (0, 19, 25): haiku across the board. Recompute correctness (13–14): consider opus for impl if the heuristic recompute math review surfaces issues during Phase 13.
@@ -160,7 +160,7 @@ Approved as a single v3.0 bundle by the PRD's §2 + this plan's §0. Adding anyt
   - `packages/log-core/src/**`: continues to forbid `node:*`, `fs`, `path`, `worker_threads`, `crypto` (unchanged).
   - `packages/analyzer/src/**`: continues to forbid `node:*`, etc. (unchanged).
 - `packages/server/README.md` — dev quickstart, env var reference (table from PRD §3.1), `compose.yaml` instructions.
-- `compose.yaml` at repo root — Postgres 16 + RustSF services for dev. NOT used in tests (testcontainers spawn their own).
+- `compose.yaml` at repo root — Postgres 16 + MinIO services for dev. NOT used in tests (testcontainers spawn their own).
 
 **Tests:**
 
@@ -389,7 +389,7 @@ Approved as a single v3.0 bundle by the PRD's §2 + this plan's §0. Adding anyt
 
 **Tests:**
 
-- Integration test against RustSF in testcontainers: put, get, presign, delete.
+- Integration test against MinIO in testcontainers: put, get, presign, delete.
 - Streaming put computes correct sha256 on a 50 MB random buffer.
 - Presigned URL is `GET` only and expires within tolerance.
 

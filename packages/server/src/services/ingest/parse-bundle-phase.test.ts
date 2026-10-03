@@ -150,7 +150,7 @@ describe('parseBundlePhase', () => {
 // ---------------------------------------------------------------------------
 // errorDetail — the id space each stored failure string names.
 //
-// Pure; no RustSF. These strings land in `ingest_files.error.detail` and are read
+// Pure; no RustFS. These strings land in `ingest_files.error.detail` and are read
 // by staff on a FAILURE path, which is exactly when someone goes looking through
 // the archive. Printing an id that no file carries makes the tool's own report
 // unverifiable by inspection.

@@ -135,7 +135,7 @@
 <path fill="none" stroke-width="1.3" d="M527.3,-68.76C527.3,-65.85 482.33,-63.49 426.96,-63.49 371.6,-63.49 326.63,-65.85 326.63,-68.76" class="s-rec"/>
 <text xml:space="preserve" text-anchor="middle" x="426.96" y="-50.62" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">blob store — filesystem backend</text>
 <text xml:space="preserve" text-anchor="middle" x="426.96" y="-40.87" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">behind the same S3&#45;compatible interface</text>
-<text xml:space="preserve" text-anchor="middle" x="426.96" y="-31.12" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">RustSF provides in development</text>
+<text xml:space="preserve" text-anchor="middle" x="426.96" y="-31.12" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">RustFS provides in development</text>
 </g>
 
 <g id="edge10" class="edge">

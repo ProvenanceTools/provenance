@@ -23,13 +23,15 @@ services:
       timeout: 5s
       retries: 5
 
+  # RustFS runs as uid 10001 but a fresh named volume is root-owned, so this
+  # one-shot chowns it before rustfs starts.
   rustfs-volume-permissions:
     image: alpine
-    user: "0:0"
+    user: '0:0'
     volumes:
       - rustfs_data:/data
-    command: ["sh", "-c", "chown -R 10001:10001 /data"]
-    restart: "no"
+    command: ['sh', '-c', 'chown -R 10001:10001 /data']
+    restart: 'no'
 
   rustfs:
     image: rustfs/rustfs:1.0.0
@@ -40,15 +42,20 @@ services:
       RUSTFS_VOLUMES: /data
       RUSTFS_ADDRESS: 0.0.0.0:9000
       RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
-      RUSTFS_CONSOLE_ENABLE: "true"
-      RUSTFS_ACCESS_KEY: provenance-local
+      RUSTFS_CONSOLE_ENABLE: 'true'
+      RUSTFS_ACCESS_KEY: rustfsadmin
       RUSTFS_SECRET_KEY: rustfsadmin
       RUSTFS_REGION: us-east-1
     ports:
-      - '9000:9000'
-      - '9001:9001'
+      - '9000:9000' # S3 API
+      - '9001:9001' # Web console
     volumes:
       - rustfs_data:/data
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1:9000/health']
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:

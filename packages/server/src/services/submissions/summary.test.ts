@@ -9,12 +9,12 @@
  *
  * Events are no longer persisted in Postgres — session_ids now come from the
  * stored bundle blob's manifest (via loadSubmissionIndex), so every test here
- * seeds a bundle blob in a test RustSF alongside the submission row.
+ * seeds a bundle blob in a test RustFS alongside the submission row.
  */
 
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
-// Testcontainers spin up Postgres + RustSF per file; the repo convention is to
+// Testcontainers spin up Postgres + RustFS per file; the repo convention is to
 // raise the 10s unit-test default here rather than let container startup under
 // a loaded full-suite run look like a product failure.
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });

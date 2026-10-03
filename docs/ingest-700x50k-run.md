@@ -1,11 +1,11 @@
 # 700 × 50k ingest — measured end-to-end run
 
 **Run date:** 2026-06-20 · **Branch:** `feat/large-file-ingest` · **Machine:** Apple
-Silicon MacBook Pro (local Docker: Postgres 16 + RustSF).
+Silicon MacBook Pro (local Docker: Postgres 16 + MinIO).
 
 A real, full-stack simulation of the headline fleet-scale scenario: a single
 Gradescope export of **700 students × 50,000 events each**, ingested through the
-actual route + worker against a freshly-wiped Postgres + RustSF. This supersedes
+actual route + worker against a freshly-wiped Postgres + MinIO. This supersedes
 the CPU-only estimate in `ingest-complexity.md` ("Fleet-scale"), which predicted
 ~5.8 min / ~44s — that estimate was **wrong by ~24×** because it was built on
 `bench:stages` (which excludes the database) and on drain numbers measured
@@ -111,7 +111,7 @@ by single-Postgres write contention.
   the 35 M-row table. Measuring it properly needs a longer timeout.
 - **Contended per-phase latency.** The per-bundle averages are inflated by 8-way
   contention; treat them as relative shares, not isolated costs.
-- **Local single-node Postgres + RustSF.** Production storage/DB throughput would
+- **Local single-node Postgres + MinIO.** Production storage/DB throughput would
   shift the absolute numbers; the _shape_ (DB-materialize-dominated) holds.
 
 ## Storage footprint
@@ -119,7 +119,7 @@ by single-Postgres write contention.
 |                                      |    size |
 | ------------------------------------ | ------: |
 | Fixture zip (on disk)                |  2.5 GB |
-| RustSF blobs (700 staged bundles)     | 12.4 GB |
+| MinIO blobs (700 staged bundles)     | 12.4 GB |
 | Postgres (35 M event rows + indexes) |   22 GB |
 
 ## Reproduction

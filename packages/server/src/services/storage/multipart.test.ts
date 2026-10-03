@@ -1,5 +1,5 @@
 /**
- * Integration tests for S3 multipart upload ops against RustSF (via withTestRustfs).
+ * Integration tests for S3 multipart upload ops against RustFS (via withTestRustfs).
  * Validates create → uploadPart → listParts (resume) → complete → object bytes,
  * plus abort. Requires Docker.
  */

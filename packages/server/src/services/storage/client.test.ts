@@ -13,8 +13,8 @@ const VALID_BASE: Record<string, string> = {
   DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance',
   OBJECT_STORAGE_ENDPOINT: 'http://localhost:9000',
   OBJECT_STORAGE_BUCKET: 'provenance',
-  OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-  OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+  OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+  OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
   GOOGLE_OAUTH_CLIENT_ID: 'client-id',
   GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
   AUTH_ALLOWED_HOSTED_DOMAINS: '["berkeley.edu"]',
@@ -30,8 +30,8 @@ describe('storageConfigFromEnv', () => {
     expect(cfg.endpoint).toBe('http://localhost:9000');
     expect(cfg.region).toBe('auto');
     expect(cfg.bucket).toBe('provenance');
-    expect(cfg.accessKeyId).toBe('rustsfadmin');
-    expect(cfg.secretAccessKey).toBe('rustsfadmin');
+    expect(cfg.accessKeyId).toBe('rustfsadmin');
+    expect(cfg.secretAccessKey).toBe('rustfsadmin');
   });
 
   it('preserves a custom region from env', () => {

@@ -6,7 +6,7 @@
  *
  * The `s3` variant wraps an `AwsClient` pre-configured with the
  * OBJECT_STORAGE_* env vars — a thin SigV4 wrapper over `fetch` that works
- * against any S3-compatible endpoint (AWS S3, Cloudflare R2, RustSF, etc.).
+ * against any S3-compatible endpoint (AWS S3, Cloudflare R2, RustFS, etc.).
  *
  * The `fs` variant targets a local/NFS-mounted directory (`rootDir`), with a
  * signing secret for producing time-limited download URLs and a public base

@@ -6,7 +6,7 @@
 
 **Architecture:** Today `POST /ingest/uploads/:uploadId/complete` runs `completeResumableUpload` synchronously inside the HTTP request — completing the S3 multipart upload, downloading the whole assembled ZIP to a temp file, then staging one blob + `ingest_files` row per submitter — which takes minutes for a large export while the UI sits at 100% with no feedback. We move that work to a new `ingest_stage_upload` background job: the route creates the `ingest_jobs` row up front (status `queued`), enqueues the staging job, and returns `202 { job_id, … }` at once. The analyzer already navigates to the job view on `job_id` and polls `GET /ingest/jobs/:jobId` every 3 s, so the existing per-file → finalize machinery surfaces progress with **no client changes**. The staging job reuses `completeResumableUpload`/`ingestLocalPath` via a threaded pre-created `jobId`.
 
-**Tech Stack:** Node + Hono + Drizzle + pg-boss + S3/RustSF; Vitest with testcontainers (ephemeral Postgres + RustSF).
+**Tech Stack:** Node + Hono + Drizzle + pg-boss + S3/MinIO; Vitest with testcontainers (ephemeral Postgres + MinIO).
 
 ## Global Constraints
 

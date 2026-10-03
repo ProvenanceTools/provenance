@@ -10,7 +10,7 @@
  *   - parse-bundle-phase.ts needs no change (verified by the test reaching
  *     the validation step without a parse_bundle error).
  *
- * Uses testcontainers (Postgres + RustSF). Both containers are shared across
+ * Uses testcontainers (Postgres + RustFS). Both containers are shared across
  * all tests in this file (started once in beforeAll, stopped in afterAll)
  * to avoid the ~60-90s startup cost per test.
  *
@@ -61,8 +61,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../../db/migrations');
 
 const RUSTFS_IMAGE = 'rustfs/rustfs:1.0.0';
-const RUSTFS_USER = 'rustsfadmin';
-const RUSTFS_PASSWORD = 'rustsfadmin';
+const RUSTFS_USER = 'rustfsadmin';
+const RUSTFS_PASSWORD = 'rustfsadmin';
 const BUCKET_NAME = 'test-bucket';
 
 // ---------------------------------------------------------------------------
@@ -76,7 +76,7 @@ let db: DrizzleDb;
 let storageClient: StorageClient;
 
 beforeAll(async () => {
-  // Start Postgres and RustSF in parallel to cut startup time.
+  // Start Postgres and RustFS in parallel to cut startup time.
   [pgContainer, rustfsContainer] = await Promise.all([
     new PostgreSqlContainer('postgres:16-alpine')
       .withDatabase('provenance_test')
@@ -119,7 +119,7 @@ beforeAll(async () => {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 500));
     const res = await storageClient.aws.fetch(bucketUrl, { method: 'PUT' });
     if (res.ok || res.status === 409) break;
-    if (attempt === 9) throw new Error(`Failed to create RustSF test bucket after retries`);
+    if (attempt === 9) throw new Error(`Failed to create RustFS test bucket after retries`);
   }
 });
 

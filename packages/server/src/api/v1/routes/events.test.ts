@@ -7,7 +7,7 @@
  * submission's stored bundle blob from object storage on demand (via
  * loadSubmissionIndex). Tests that need a real event stream build a bundle with
  * buildTestBundle() and store it via putSubmissionBundle(), then point the app
- * config at the ephemeral RustSF instance so getStorageClient() resolves to the
+ * config at the ephemeral RustFS instance so getStorageClient() resolves to the
  * same store.
  *
  * NOTE ON SEQ NUMBERING: `seq` in the API response is the GLOBAL chronological
@@ -87,8 +87,8 @@ function makeTestEnv(opts?: { rustfsEndpoint?: string; rustfsBucket?: string }) 
     DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance',
     OBJECT_STORAGE_ENDPOINT: opts?.rustfsEndpoint ?? 'http://localhost:9000',
     OBJECT_STORAGE_BUCKET: opts?.rustfsBucket ?? 'test-bucket',
-    OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+    OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
     OBJECT_STORAGE_REGION: 'us-east-1',
     GOOGLE_OAUTH_CLIENT_ID: 'client-id',
     GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -204,7 +204,7 @@ async function seedSubmission(db: DrizzleDb, semesterId: string, userId: string)
 
 /**
  * Build a bundle from explicit per-session EventSpec[] and store it as the
- * submission's bundle blob in the (ephemeral) RustSF instance `storage` points
+ * submission's bundle blob in the (ephemeral) RustFS instance `storage` points
  * to. Every session automatically gets a `session.start` entry (globalIdx 0
  * if it's the earliest event chronologically) ahead of the given events.
  */

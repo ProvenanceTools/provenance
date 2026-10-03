@@ -11,7 +11,7 @@
  *     second resolves as `duplicate` rather than fanning out a second row,
  *   - a no-manifest folder reported as skipped.
  *
- * Mirrors ingest-gradescope.e2e.test.ts: real pg-boss + Postgres + RustSF via
+ * Mirrors ingest-gradescope.e2e.test.ts: real pg-boss + Postgres + RustFS via
  * testcontainers.
  */
 
@@ -190,8 +190,8 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
           DATABASE_URL: pgContainer.getConnectionUri(),
           OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
-          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
           OBJECT_STORAGE_REGION: 'us-east-1',
           GOOGLE_OAUTH_CLIENT_ID: 'client-id',
           GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -319,8 +319,8 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
           DATABASE_URL: pgContainer.getConnectionUri(),
           OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
-          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
           OBJECT_STORAGE_REGION: 'us-east-1',
           GOOGLE_OAUTH_CLIENT_ID: 'client-id',
           GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -403,8 +403,8 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
           DATABASE_URL: pgContainer.getConnectionUri(),
           OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
-          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
           OBJECT_STORAGE_REGION: 'us-east-1',
           GOOGLE_OAUTH_CLIENT_ID: 'client-id',
           GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -576,8 +576,8 @@ describe('ingestLocalPath (disk export → roster + worker)', () => {
       DATABASE_URL: pgContainer.getConnectionUri(),
       OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
       OBJECT_STORAGE_BUCKET: bucketName,
-      OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-      OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+      OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
       OBJECT_STORAGE_REGION: 'us-east-1',
       GOOGLE_OAUTH_CLIENT_ID: 'client-id',
       GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',

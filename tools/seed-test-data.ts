@@ -11,7 +11,7 @@
  *   - Flags sprinkled across ~30% of submissions, mix of real heuristic IDs
  *   - A few cross_flags with 2-3 participants each
  *
- * Does NOT stage any blobs in RustSF — replay view will be broken.
+ * Does NOT stage any blobs in RustFS — replay view will be broken.
  * Does NOT write validation_results — validation report panel will be empty.
  *
  * Usage:

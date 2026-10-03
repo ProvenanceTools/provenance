@@ -41,7 +41,7 @@ the move, and the phased migration from the current dev `compose.yaml` stack.
 ## 1. Current state and why it doesn't translate
 
 The dev stack (`compose.yaml`) is a single Node process serving both API and
-worker, a single Postgres 16 container, and RustSF for object storage, all on one
+worker, a single Postgres 16 container, and MinIO for object storage, all on one
 host. `admin-guide.md` §1 documents this as the supported single-node
 deployment.
 
@@ -57,7 +57,7 @@ make it the wrong shape for a managed Berkeley deployment:
    queue's own send/fetch/complete/archive writes and its monitor/expire pollers
    contend with the event load on the same node and the same connection budget
    (`env.ts` already notes this tension around `DATABASE_POOL_MAX`).
-3. **RustSF and local disk are not durable enough for audit data.** The system's
+3. **MinIO and local disk are not durable enough for audit data.** The system's
    whole premise is tamper-evident, permanently-retained records (rows kept
    forever; see `admin-guide.md` §6). That belongs on managed object storage and
    managed Postgres with PITR, not a container volume.
@@ -181,7 +181,7 @@ event-reads, if the §5 "features-at-ingest" change isn't done yet). Replicas do
 
 ### 4.4 Object storage — GCS
 
-RustSF is dev-only. Use a **GCS bucket** (the SDK is already S3-compatible — an
+MinIO is dev-only. Use a **GCS bucket** (the SDK is already S3-compatible — an
 endpoint + credential swap, via a GCS HMAC key or the native client):
 
 - 11-nines durability for audit blobs.

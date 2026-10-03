@@ -9,7 +9,7 @@
  *     contributors (D9) — not one row per co-submitter,
  *   - a folder with no bundle is reported as skipped.
  *
- * Mirrors ingest-e2e.test.ts: real pg-boss + Postgres + RustSF via testcontainers.
+ * Mirrors ingest-e2e.test.ts: real pg-boss + Postgres + RustFS via testcontainers.
  */
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -161,8 +161,8 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
           DATABASE_URL: pgContainer.getConnectionUri(),
           OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
-          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
           OBJECT_STORAGE_REGION: 'us-east-1',
           GOOGLE_OAUTH_CLIENT_ID: 'client-id',
           GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -323,8 +323,8 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
           DATABASE_URL: pgContainer.getConnectionUri(),
           OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
-          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
           OBJECT_STORAGE_REGION: 'us-east-1',
           GOOGLE_OAUTH_CLIENT_ID: 'client-id',
           GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -544,8 +544,8 @@ describe('POST /ingest:gradescope (export → roster + worker)', () => {
         DATABASE_URL: pgContainer.getConnectionUri(),
         OBJECT_STORAGE_ENDPOINT: client.bucketUrl.replace(`/${bucketName}`, ''),
         OBJECT_STORAGE_BUCKET: bucketName,
-        OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-        OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+        OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+        OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
         OBJECT_STORAGE_REGION: 'us-east-1',
         GOOGLE_OAUTH_CLIENT_ID: 'client-id',
         GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',

@@ -6,7 +6,7 @@
 
 **Architecture:** Today `ingestLocalPath` runs in two phases — stage _all_ `ingest_files` rows (the "Total" the UI watches climb), then enqueue all `ingest_file` jobs at the end. We move the per-file `boss.send(INGEST_FILE)` _inside_ the staging loop so workers begin immediately. The reason it was batched at the end is the finalize trigger: `maybeEnqueueFinalize` fires when zero `ingest_files` rows are still `pending`, so a fast worker draining the queue during a staging lull would finalize the job before later bundles are staged. We gate finalize behind a new `ingest_jobs.staging_complete` flag (default `true`); the streaming stager sets it `false` while it runs and `true` when the loop finishes, then triggers one finalize check. Atomic-staging callers (HTTP routes) keep the `true` default and are untouched.
 
-**Tech Stack:** TypeScript (strict, ESM), Hono, Drizzle ORM, Postgres, pg-boss, S3/RustSF, Vitest + testcontainers.
+**Tech Stack:** TypeScript (strict, ESM), Hono, Drizzle ORM, Postgres, pg-boss, S3/MinIO, Vitest + testcontainers.
 
 ## Global Constraints
 

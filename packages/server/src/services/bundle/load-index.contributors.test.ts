@@ -30,7 +30,7 @@
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-// Testcontainers spin up Postgres + RustSF per file; the repo convention is to
+// Testcontainers spin up Postgres + RustFS per file; the repo convention is to
 // raise the 10s unit-test default here rather than let container startup under
 // a loaded full-suite run look like a product failure.
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
@@ -80,8 +80,8 @@ const BASE_ENV: Record<string, string> = {
   DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance',
   OBJECT_STORAGE_ENDPOINT: 'http://localhost:9000',
   OBJECT_STORAGE_BUCKET: 'provenance',
-  OBJECT_STORAGE_ACCESS_KEY_ID: 'rustsfadmin',
-  OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustsfadmin',
+  OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+  OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
   GOOGLE_OAUTH_CLIENT_ID: 'client-id',
   GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
   AUTH_ALLOWED_HOSTED_DOMAINS: '["berkeley.edu"]',
