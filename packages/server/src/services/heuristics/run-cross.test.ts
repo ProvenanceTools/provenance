@@ -13,7 +13,7 @@
  * Events are no longer persisted in Postgres — runAndStoreCrossHeuristics now
  * reads each submission's event stream by re-parsing its stored bundle blob
  * (via loadSubmissionIndex). To trigger paste_shared_across_students, we build
- * and store real bundle blobs (in a test MinIO) whose sessions carry a 'paste'
+ * and store real bundle blobs (in a test RustFS) whose sessions carry a 'paste'
  * event with matching sha256/content, instead of inserting into the (removed)
  * events table.
  */
@@ -21,7 +21,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { eq, count } from 'drizzle-orm';
 import { withTestDb } from '../../../test/helpers/db.js';
-import { withTestMinio } from '../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../test/helpers/rustfs.js';
 import { seedSubmission } from '../../../test/helpers/seed-submission.js';
 import { putSubmissionBundle } from '../../../test/helpers/seed-bundle.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
@@ -382,7 +382,7 @@ async function setActiveConfig(
 
 describe('runAndStoreCrossHeuristics', () => {
   it('produces one cross_flags row + 2 participants for two bundles with shared paste', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         // Seed two submissions on the SAME assignment in the same semester.
         const {
@@ -438,7 +438,7 @@ describe('runAndStoreCrossHeuristics', () => {
   });
 
   it('returns zero flags for semester with only one submission', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { submissionId, semesterId } = await seedSubmissionWithSemester(db);
 
@@ -466,7 +466,7 @@ describe('runAndStoreCrossHeuristics', () => {
   });
 
   it('is idempotent: running twice produces the same final DB state', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const {
           submissionId: sub1,
@@ -512,7 +512,7 @@ describe('runAndStoreCrossHeuristics', () => {
   });
 
   it('flushes obsolete cross_flags from prior runs', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { submissionId, semesterId } = await seedSubmissionWithSemester(db);
 
@@ -570,7 +570,7 @@ describe('runAndStoreCrossHeuristics', () => {
 
 describe('runAndStoreCrossHeuristics — assignment scoping', () => {
   it("does not compare one student's own two assignments", async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { submissionId: hw1, semesterId, ingestJobId } = await seedSubmissionWithSemester(db);
 
@@ -615,7 +615,7 @@ describe('runAndStoreCrossHeuristics — assignment scoping', () => {
     // The negative control for the scoping change: adding an unrelated
     // assignment to the semester must not suppress the real finding inside the
     // assignment that has two submissions.
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const {
           submissionId: sub1,
@@ -683,7 +683,7 @@ describe('runAndStoreCrossHeuristics — assignment scoping', () => {
 
 describe('runAndStoreCrossHeuristics — per_flag config', () => {
   it('does not emit a cross flag whose heuristic is disabled in the active config', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { semesterId } = await seedSharedPastePair(db, client, 'disabled-sha');
 
@@ -706,7 +706,7 @@ describe('runAndStoreCrossHeuristics — per_flag config', () => {
   });
 
   it('still emits when the active config leaves the heuristic enabled', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { semesterId } = await seedSharedPastePair(db, client, 'enabled-sha');
 
@@ -732,7 +732,7 @@ describe('runAndStoreCrossHeuristics — per_flag config', () => {
   });
 
   it('deletes previously-written rows when the heuristic is later disabled', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { semesterId } = await seedSharedPastePair(db, client, 'later-disabled-sha');
 
@@ -997,7 +997,7 @@ async function seedPairInOneAssignment(
 
 describe('runAndStoreCrossHeuristics — the exclusion register', () => {
   it('writes a register row for a partner pair, and no finding against them', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { semesterId, sub1, sub2 } = await seedPairInOneAssignment(db, 'ex1');
 
@@ -1038,7 +1038,7 @@ describe('runAndStoreCrossHeuristics — the exclusion register', () => {
     // The same fix Task A made in `coverage/cross-scope.ts`, proven on the
     // SERVER path — the two feature producers must not disagree about which
     // pairs are one repository.
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { semesterId, sub1, sub2 } = await seedPairInOneAssignment(db, 'ex2');
 
@@ -1078,7 +1078,7 @@ describe('runAndStoreCrossHeuristics — the exclusion register', () => {
   it('writes NO register row for two DIFFERENT real repositories sharing a sha', async () => {
     // The D12 guarantee. A false exclusion switches a detector silently off, so
     // the flag must still fire and the register must stay empty.
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { semesterId, sub1, sub2 } = await seedPairInOneAssignment(db, 'ex3');
 
@@ -1117,7 +1117,7 @@ describe('runAndStoreCrossHeuristics — the exclusion register', () => {
   });
 
   it('is idempotent: two runs leave exactly one register row with the same content', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { semesterId, sub1, sub2 } = await seedPairInOneAssignment(db, 'ex4');
 
@@ -1157,7 +1157,7 @@ describe('runAndStoreCrossHeuristics — the exclusion register', () => {
   it('flushes a stale register row from a prior run', async () => {
     // The register is on the same DELETE-then-INSERT contract as the flags. A
     // stale row claims a comparison was withheld when this run made it.
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { semesterId, sub1, sub2 } = await seedPairInOneAssignment(db, 'ex5');
 
@@ -1204,7 +1204,7 @@ describe('runAndStoreCrossHeuristics — the exclusion register', () => {
     // The early-return branch: no assignment has two submissions, so nothing is
     // loaded at all. It must still replace the register, or last run's panel
     // outlives the comparison it described.
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { submissionId, semesterId } = await seedSubmissionWithSemester(db);
         await putEmptyBundle(db, client, submissionId);
@@ -1302,7 +1302,7 @@ describe('translateExclusionsToRows', () => {
 
 describe('runAndStoreCrossHeuristics — memory', () => {
   it('analyses each assignment group before extracting the next', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         // Two assignments, two submissions each: both groups are comparable, so
         // the sweep must make two runCrossAnalysis calls.

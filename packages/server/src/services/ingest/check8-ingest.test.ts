@@ -10,7 +10,7 @@
  *   - parse-bundle-phase.ts needs no change (verified by the test reaching
  *     the validation step without a parse_bundle error).
  *
- * Uses testcontainers (Postgres + MinIO). Both containers are shared across
+ * Uses testcontainers (Postgres + RustFS). Both containers are shared across
  * all tests in this file (started once in beforeAll, stopped in afterAll)
  * to avoid the ~60-90s startup cost per test.
  *
@@ -19,7 +19,7 @@
 
 import { vi, describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { MinioContainer, type StartedMinioContainer } from '@testcontainers/minio';
+import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
@@ -60,9 +60,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Navigate 3 levels up to packages/server/, then into db/migrations.
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../../db/migrations');
 
-const MINIO_IMAGE = 'minio/minio:RELEASE.2025-04-22T22-12-26Z';
-const MINIO_USER = 'minioadmin';
-const MINIO_PASSWORD = 'minioadmin';
+const RUSTFS_IMAGE = 'rustfs/rustfs:1.0.0';
+const RUSTFS_USER = 'rustfsadmin';
+const RUSTFS_PASSWORD = 'rustfsadmin';
 const BUCKET_NAME = 'test-bucket';
 
 // ---------------------------------------------------------------------------
@@ -70,34 +70,46 @@ const BUCKET_NAME = 'test-bucket';
 // ---------------------------------------------------------------------------
 
 let pgContainer: StartedPostgreSqlContainer;
-let minioContainer: StartedMinioContainer;
+let rustfsContainer: StartedTestContainer;
 let sql: postgres.Sql;
 let db: DrizzleDb;
 let storageClient: StorageClient;
 
 beforeAll(async () => {
-  // Start Postgres and MinIO in parallel to cut startup time.
-  [pgContainer, minioContainer] = await Promise.all([
+  // Start Postgres and RustFS in parallel to cut startup time.
+  [pgContainer, rustfsContainer] = await Promise.all([
     new PostgreSqlContainer('postgres:16-alpine')
       .withDatabase('provenance_test')
       .withUsername('test')
       .withPassword('test')
       .start(),
-    new MinioContainer(MINIO_IMAGE).withUsername(MINIO_USER).withPassword(MINIO_PASSWORD).start(),
+    new GenericContainer(RUSTFS_IMAGE)
+      .withEnvironment({
+        RUSTFS_VOLUMES: '/data',
+        RUSTFS_ADDRESS: '0.0.0.0:9000',
+        RUSTFS_CONSOLE_ENABLE: 'false',
+        RUSTFS_ACCESS_KEY: RUSTFS_USER,
+        RUSTFS_SECRET_KEY: RUSTFS_PASSWORD,
+        RUSTFS_REGION: 'us-east-1',
+      })
+      .withTmpFs({ '/data': 'rw,uid=10001,gid=10001' })
+      .withExposedPorts(9000)
+      .withWaitStrategy(Wait.forHttp('/health', 9000).forStatusCode(200))
+      .start(),
   ]);
 
   sql = postgres(pgContainer.getConnectionUri(), { max: 3 });
   db = drizzle(sql, { schema }) as DrizzleDb;
   await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
 
-  const endpoint = minioContainer.getConnectionUrl();
+  const endpoint = `http://${rustfsContainer.getHost()}:${rustfsContainer.getMappedPort(9000)}`;
   storageClient = createStorageClient({
     kind: 's3',
     endpoint,
     region: 'us-east-1',
     bucket: BUCKET_NAME,
-    accessKeyId: MINIO_USER,
-    secretAccessKey: MINIO_PASSWORD,
+    accessKeyId: RUSTFS_USER,
+    secretAccessKey: RUSTFS_PASSWORD,
   });
   if (storageClient.kind !== 's3') throw new Error('expected s3 client from s3 config');
 
@@ -107,13 +119,13 @@ beforeAll(async () => {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 500));
     const res = await storageClient.aws.fetch(bucketUrl, { method: 'PUT' });
     if (res.ok || res.status === 409) break;
-    if (attempt === 9) throw new Error(`Failed to create MinIO test bucket after retries`);
+    if (attempt === 9) throw new Error(`Failed to create RustFS test bucket after retries`);
   }
 });
 
 afterAll(async () => {
   await sql.end();
-  await Promise.all([pgContainer.stop(), minioContainer.stop()]);
+  await Promise.all([pgContainer.stop(), rustfsContainer.stop()]);
 });
 
 // ---------------------------------------------------------------------------

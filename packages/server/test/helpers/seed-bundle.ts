@@ -7,7 +7,7 @@
  * the service can re-parse it via loadSubmissionIndex.
  *
  * Usage:
- *   await withTestMinio(async ({ client }) => {
+ *   await withTestRustfs(async ({ client }) => {
  *     await withTestDb(async (db) => {
  *       const submissionId = await seedSubmission(db);
  *       const { blob } = await buildTestBundle({ events: [...] });

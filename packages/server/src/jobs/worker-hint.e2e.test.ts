@@ -27,7 +27,7 @@ import postgres from 'postgres';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
-import { withTestMinio } from '../../test/helpers/minio.js';
+import { withTestRustfs } from '../../test/helpers/rustfs.js';
 import { _setConfigForTest, _resetConfigForTest, getConfig } from '../config/index.js';
 import { _resetLoggerForTest } from '../logging.js';
 import { _resetDbForTest } from '../db/client.js';
@@ -208,17 +208,17 @@ describe('worker match-hint path (Gradescope export ingest)', () => {
   });
 
   it('puts two co-submitters of one group bundle on ONE submission, both attached as contributors', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+    await withTestRustfs(async ({ client, bucketName }) => {
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: pgContainer.getConnectionUri(),
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
-          OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
           OBJECT_STORAGE_REGION: 'us-east-1',
           GOOGLE_OAUTH_CLIENT_ID: 'client-id',
           GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -390,17 +390,17 @@ describe('worker match-hint path (Gradescope export ingest)', () => {
     // phase 4 had run. So this test deliberately does NOT race them — it waits
     // for the first file to resolve before enqueuing the second, which is the
     // only way to land on the phase-2 branch every run.
-    await withTestMinio(async ({ client, bucketName }) => {
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+    await withTestRustfs(async ({ client, bucketName }) => {
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: pgContainer.getConnectionUri(),
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
-          OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
           OBJECT_STORAGE_REGION: 'us-east-1',
           GOOGLE_OAUTH_CLIENT_ID: 'client-id',
           GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -515,17 +515,17 @@ describe('worker match-hint path (Gradescope export ingest)', () => {
     // So this fixture stages DIFFERENT bundle bytes under the SAME declared
     // group. Before 0033 that produced two submissions; it must now produce one
     // with both contributors.
-    await withTestMinio(async ({ client, bucketName }) => {
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+    await withTestRustfs(async ({ client, bucketName }) => {
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: pgContainer.getConnectionUri(),
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
-          OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
           OBJECT_STORAGE_REGION: 'us-east-1',
           GOOGLE_OAUTH_CLIENT_ID: 'client-id',
           GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -641,17 +641,17 @@ describe('worker match-hint path (Gradescope export ingest)', () => {
   });
 
   it('routes an unknown match_sid to the unmatched tray', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+    await withTestRustfs(async ({ client, bucketName }) => {
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: pgContainer.getConnectionUri(),
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
-          OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
           OBJECT_STORAGE_REGION: 'us-east-1',
           GOOGLE_OAUTH_CLIENT_ID: 'client-id',
           GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',

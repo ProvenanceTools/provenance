@@ -457,8 +457,8 @@ reading alongside the guilty one, and say that confirming enrolment is what dist
 
 ```sh
 docker compose up -d
-docker compose exec minio mc alias set local http://localhost:9000 minioadmin minioadmin
-docker compose exec minio mc mb local/provenance      # uploads 404 without this
+rc alias set local http://localhost:9000 rustfsadmin rustfsadmin --region us-east-1 --bucket-lookup path
+rc bucket create local/provenance                     # uploads 404 without this
 cp packages/server/.env.example packages/server/.env
 npm run db:migrate --workspace=packages/server
 npm run dev --workspace=packages/server               # API + worker in one process
@@ -477,8 +477,7 @@ npm run dev --workspace=packages/analyzer             # :5173
 ```sh
 # fresh
 docker compose down -v && docker compose up -d
-docker compose exec minio mc alias set local http://localhost:9000 minioadmin minioadmin
-docker compose exec minio mc mb local/provenance
+rc bucket create local/provenance
 npm run db:migrate --workspace=packages/server
 ```
 
@@ -796,7 +795,7 @@ Each of these has already cost someone real time.
   `--reporter=verbose` it buffers to nothing and looks wedged; someone lost 2h20m to that.
   (`--reporter=basic` does not exist in vitest 4.)
 - The server suite has genuine flakes under container contention. **Re-run a failing file alone**
-  before calling it a regression. Never two server suites at once — ~37 containers produces MinIO
+  before calling it a regression. Never two server suites at once — ~37 containers produces object-store
   503s that read exactly like real bugs.
 - The analyzer suite intermittently exits non-zero with **all tests passing** (a deliberate uncaught
   error in `BundleContext.test.tsx`). Re-run before believing it.

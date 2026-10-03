@@ -2,7 +2,7 @@
  * S3-compatible blob operations.
  *
  * All four operations use `aws4fetch` for SigV4 signing over standard `fetch`.
- * They work against any S3-compatible endpoint: AWS S3, Cloudflare R2, MinIO.
+ * They work against any S3-compatible endpoint: AWS S3, Cloudflare R2, RustFS.
  *
  * PRD §6: single bucket, prefix layout enforced in `keys.ts`.
  * PRD §16.3: presigned URLs scoped to GET, expiry ≤ BLOB_DOWNLOAD_URL_TTL_SECONDS.
@@ -185,7 +185,7 @@ export async function deleteBlob(client: StorageClient, key: string): Promise<vo
   const url = `${client.bucketUrl}/${key}`;
   const res = await client.aws.fetch(url, { method: 'DELETE' });
 
-  // S3/MinIO/R2: 204 on success (both present and absent objects).
+  // S3/RustFS/R2: 204 on success (both present and absent objects).
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`deleteBlob failed for key "${key}": HTTP ${res.status} — ${text}`);

@@ -10,7 +10,7 @@
  *
  * Architecture:
  *   - PostgreSqlContainer for both domain tables (via migrations) and pg-boss schema.
- *   - MinioContainer for blob storage.
+ *   - RustFS container for blob storage.
  *   - The config singleton, db singleton, and boss singleton are all wired to the
  *     test containers so that startWorker(), the route handler, and getDb() share
  *     the same backing stores.
@@ -25,7 +25,7 @@ import postgres from 'postgres';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { eq, and } from 'drizzle-orm';
-import { withTestMinio } from '../../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../../test/helpers/rustfs.js';
 import { _setConfigForTest, _resetConfigForTest } from '../../../config/index.js';
 import { _resetLoggerForTest } from '../../../logging.js';
 import { _resetDbForTest } from '../../../db/client.js';
@@ -131,9 +131,9 @@ describe('ingest e2e pipeline (POST → worker → status=succeeded)', () => {
   });
 
   it('processes a single matched bundle to succeeded + duplicate on re-upload', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
+    await withTestRustfs(async ({ client, bucketName }) => {
       const connectionString = pgContainer.getConnectionUri();
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
 
       // Wire config to the test containers.
       _setConfigForTest(
@@ -141,10 +141,10 @@ describe('ingest e2e pipeline (POST → worker → status=succeeded)', () => {
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: connectionString,
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
-          OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
           OBJECT_STORAGE_REGION: 'us-east-1',
           GOOGLE_OAUTH_CLIENT_ID: 'client-id',
           GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',

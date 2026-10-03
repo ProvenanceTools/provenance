@@ -6,7 +6,7 @@
  * stages → per-file jobs + finalize run on worker) reaches the same end state
  * as the sync completeResumableUpload path.
  *
- * Real pg-boss + Postgres + MinIO via testcontainers.
+ * Real pg-boss + Postgres + RustFS via testcontainers.
  */
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import JSZip from 'jszip';
-import { withTestMinio } from '../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../test/helpers/rustfs.js';
 import { _setConfigForTest, _resetConfigForTest, getConfig } from '../../config/index.js';
 import { _resetLoggerForTest } from '../../logging.js';
 import { _resetDbForTest } from '../../db/client.js';
@@ -181,17 +181,17 @@ describe('stage-upload-job (pre-create job → stageUploadIntoJob → worker →
   });
 
   it('stages a completed upload into a pre-created job and reaches succeeded', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+    await withTestRustfs(async ({ client, bucketName }) => {
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: pgContainer.getConnectionUri(),
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
-          OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
           OBJECT_STORAGE_REGION: 'us-east-1',
           GOOGLE_OAUTH_CLIENT_ID: 'client-id',
           GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -314,17 +314,17 @@ describe('stage-upload-job (pre-create job → stageUploadIntoJob → worker →
   // `ingest_files` rows, and a skipped scope has none. The mismatched
   // submission just never appeared.
   it('surfaces submission_type_mismatch through the job row, identically to the direct path', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+    await withTestRustfs(async ({ client, bucketName }) => {
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: pgContainer.getConnectionUri(),
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
-          OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
           OBJECT_STORAGE_REGION: 'us-east-1',
           GOOGLE_OAUTH_CLIENT_ID: 'client-id',
           GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',

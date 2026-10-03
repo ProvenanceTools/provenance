@@ -29,7 +29,7 @@ import postgres from 'postgres';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { eq, and, sql } from 'drizzle-orm';
-import { withTestMinio } from '../../test/helpers/minio.js';
+import { withTestRustfs } from '../../test/helpers/rustfs.js';
 import { _setConfigForTest, _resetConfigForTest, getConfig } from '../config/index.js';
 import { _resetLoggerForTest } from '../logging.js';
 import { _resetDbForTest } from '../db/client.js';
@@ -124,19 +124,19 @@ describe('recompute e2e pipeline (POST /recompute → worker → status=succeede
   });
 
   it('recomputes ingested submission to succeeded with recompute_status=fresh', async () => {
-    await withTestMinio(async ({ client, bucketName }) => {
+    await withTestRustfs(async ({ client, bucketName }) => {
       const connectionString = pgContainer.getConnectionUri();
-      const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+      const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
 
       _setConfigForTest(
         parseEnv({
           NODE_ENV: 'test',
           PUBLIC_BASE_URL: 'http://localhost:3000',
           DATABASE_URL: connectionString,
-          OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+          OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
           OBJECT_STORAGE_BUCKET: bucketName,
-          OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+          OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
           OBJECT_STORAGE_REGION: 'us-east-1',
           GOOGLE_OAUTH_CLIENT_ID: 'client-id',
           GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -379,9 +379,9 @@ describe('recompute e2e pipeline (POST /recompute → worker → status=succeede
     'RECOMPUTE_MAX_PARALLEL: concurrent recomputes produce the same result as an ' +
       'independent sequential recompute of each submission',
     async () => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         const connectionString = pgContainer.getConnectionUri();
-        const minioEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
+        const rustfsEndpoint = client.bucketUrl.replace(`/${bucketName}`, '');
 
         // RECOMPUTE_MAX_PARALLEL=3 with 6 submissions forces at least two
         // batches of genuinely concurrent recompute_submission processing.
@@ -390,10 +390,10 @@ describe('recompute e2e pipeline (POST /recompute → worker → status=succeede
             NODE_ENV: 'test',
             PUBLIC_BASE_URL: 'http://localhost:3000',
             DATABASE_URL: connectionString,
-            OBJECT_STORAGE_ENDPOINT: minioEndpoint,
+            OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
             OBJECT_STORAGE_BUCKET: bucketName,
-            OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-            OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+            OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+            OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
             OBJECT_STORAGE_REGION: 'us-east-1',
             GOOGLE_OAUTH_CLIENT_ID: 'client-id',
             GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',

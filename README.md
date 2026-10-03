@@ -24,11 +24,11 @@ top-level packages depend on each other's source.
 | [`packages/shared`](packages/shared)               | The Zod schemas that define the HTTP API contract, imported by both the server and the analyzer so the two stay in sync.                                                                                                                                                                                                                                                                                                           |
 | [`packages/analysis-core`](packages/analysis-core) | The analysis engine shared by the analyzer and the server: the bundle loader (unzip + parse), the validation checks, the event index and file reconstruction, and the per-submission and cross-submission heuristics. Isomorphic — the same code runs in the browser and in Node — so it depends only on `log-core` plus `jszip`, `diff`, and `@noble/ed25519`.                                                                    |
 | [`packages/analyzer`](packages/analyzer)           | The React/Vite single-page app course staff use to review submissions: Google OAuth login, semester switcher, a virtualized cohort list, per-submission drill-in (overview / timeline / replay / validation / export / source — the Export tab is a v3.1 stub), a 29-flag heuristics tuning UI (per-flag weight + on/off), and cross-submission flags. A standalone `/local` route runs entirely in-browser from a dropped `.zip`. |
-| [`packages/server`](packages/server)               | The Node.js + Hono API server: PostgreSQL via Drizzle ORM, Google OAuth with sessions and API tokens, the ZIP ingest pipeline (parse → match → heuristics → cross-flags), a pg-boss job queue, an OpenAPI 3.1 spec with Redoc, Prometheus metrics, and retention/purge cron jobs. Object storage is S3-compatible (MinIO in dev).                                                                                                  |
+| [`packages/server`](packages/server)               | The Node.js + Hono API server: PostgreSQL via Drizzle ORM, Google OAuth with sessions and API tokens, the ZIP ingest pipeline (parse → match → heuristics → cross-flags), a pg-boss job queue, an OpenAPI 3.1 spec with Redoc, Prometheus metrics, and retention/purge cron jobs. Object storage is S3-compatible (RustFS in dev).                                                                                                 |
 
 ## Quickstart — development environment
 
-Requires Node 22+ and npm 10+. Docker is required to run the server (Postgres + MinIO via `docker compose`).
+Requires Node 22+ and npm 10+. Docker is required to run the server (Postgres + RustFS via `docker compose`).
 
 ```sh
 git clone <repo> provenance
@@ -57,12 +57,14 @@ Requires Docker. The [`packages/server/README.md`](packages/server/README.md) ha
 full server dev guide (run modes, migrations, env var reference); the essentials are:
 
 ```sh
-# 1. Start Postgres + MinIO
+# 1. Start Postgres + RustFS
 docker compose up -d
 
-# 2. Create the MinIO storage bucket (one-time — uploads 404 without it)
-docker compose exec minio mc alias set local http://localhost:9000 minioadmin minioadmin
-docker compose exec minio mc mb local/provenance
+# 2. Create the RustFS storage bucket (one-time — uploads 404 without it). Either sign in
+#    to the console at http://localhost:9001 (rustfsadmin / rustfsadmin) and create a bucket
+#    named `provenance`, or use the `rc` CLI (install steps in the server README):
+rc alias set local http://localhost:9000 rustfsadmin rustfsadmin --region us-east-1 --bucket-lookup path
+rc bucket create local/provenance
 
 # 3. Configure environment. Defaults match the compose stack; fill in Google
 #    OAuth creds for real logins (dummy values are fine for API/worker/seed work).
@@ -171,7 +173,7 @@ provenance/
 │   └── server/                # Node.js + Hono API server
 ├── tools/                     # dev scripts (key generation, manifest signing)
 ├── test-workspace/            # sample student workspace for dev & integration tests
-├── compose.yaml               # Docker Compose for Postgres + MinIO
+├── compose.yaml               # Docker Compose for Postgres + RustFS
 ├── CLAUDE.md                  # repo conventions for Claude Code
 └── package.json               # npm workspace root
 ```
