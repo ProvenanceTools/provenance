@@ -28,78 +28,22 @@ top-level packages depend on each other's source.
 
 ## Quickstart — development environment
 
-Requires Node 22+ and npm 10+. Docker is required to run the server (Postgres + RustFS via `docker compose`).
+**New here? Follow [`docs/dev-setup.md`](docs/dev-setup.md).** It is the single source of truth
+for setup, from a blank machine to the server, analyzer and recorder running locally, including
+the dev keys and the Google OAuth client. Then read [`CONTRIBUTING.md`](CONTRIBUTING.md) before
+opening a pull request.
+
+Once you are set up, the daily loop is:
 
 ```sh
-git clone <repo> provenance
-cd provenance
-npm install
-npm run build
+docker compose up -d --wait                   # Postgres + RustFS
+npm run build                                 # after pulling; dev servers read the built packages
+npm run dev --workspace=packages/server       # API + worker on :3000
+npm run dev --workspace=packages/analyzer     # the app, on http://localhost:5173
 ```
 
-`npm run build` is a one-time prerequisite, not just a test step. The workspace
-packages (`log-core`, `shared`, `analysis-core`) are consumed through their
-`exports` maps, which point at built output in each package's git-ignored `dist/`.
-Until you build, that `dist/` is absent and any dev entrypoint that imports these
-packages — notably the analyzer frontend — fails to resolve with
-`imported but could not be resolved` errors. Re-run `npm run build` (or the
-per-package `build` script) after pulling changes to those packages.
-
-### Run all tests
-
-```sh
-npm run build && npm run typecheck && npm run lint && npm run test
-```
-
-### Run the analyzer v3 server (API + worker)
-
-Requires Docker. The [`packages/server/README.md`](packages/server/README.md) has the
-full server dev guide (run modes, migrations, env var reference); the essentials are:
-
-```sh
-# 1. Start Postgres + RustFS
-docker compose up -d
-
-# 2. Create the RustFS storage bucket (one-time — uploads 404 without it). Either sign in
-#    to the console at http://localhost:9001 (rustfsadmin / rustfsadmin) and create a bucket
-#    named `provenance`, or use the `rc` CLI (install steps in the server README):
-rc alias set local http://localhost:9000 rustfsadmin rustfsadmin --region us-east-1 --bucket-lookup path
-rc bucket create local/provenance
-
-# 3. Configure environment. Defaults match the compose stack; fill in Google
-#    OAuth creds for real logins (dummy values are fine for API/worker/seed work).
-cp packages/server/.env.example packages/server/.env
-
-# 4. Run migrations
-npm run db:migrate --workspace=packages/server
-
-# 5. Start the server — API + pg-boss worker in ONE process (`--mode=all`)
-npm run dev --workspace=packages/server
-```
-
-The server starts on `http://localhost:3000`. Swagger UI at `http://localhost:3000/api/v1/docs`.
-
-`npm run dev` runs the API and the background worker together (via `--mode=all`), so
-uploaded bundles are actually ingested. In production the two run as separate
-`--mode=api` and `--mode=worker` processes — see the server README. (To run the API
-alone in dev: `npm run dev --workspace=packages/server -- --mode=api`.)
-
-### Seed example data
-
-With the server prerequisites above in place (compose up, bucket created, `.env`,
-migrations), populate the database with an example cohort:
-
-```sh
-npm run seed --workspace=packages/server
-```
-
-This generates a Gradescope export (~700 students across three assignments, with a
-deliberate spread of paste and cross-submission flags) and runs it through the real ingest
-pipeline into an isolated `seed-demo` semester. The ingest takes a few minutes. To view it
-in the analyzer, add your Google email to `AUTH_SUPERADMIN_EMAILS` in
-`packages/server/.env` and sign in. The export ZIP is committed
-(`packages/server/scripts/seed/example-gradescope-export.zip`) for manual upload too.
-Details and the `--regenerate` flag are in [`packages/server/README.md`](packages/server/README.md).
+The checks to run before a PR are
+`npm run build && npm run typecheck && npm run lint && npm run test && npm run test:tools`.
 
 ### Ingesting submissions
 
@@ -119,18 +63,6 @@ See [`packages/server/README.md`](packages/server/README.md#ingesting-submission
 full ingest guide, plus the dev tooling for generating large test fixtures (`gen:fixture`)
 and profiling the pipeline (`profile:ingest`, `profile:large`).
 
-### Run the analyzer frontend
-
-Requires the workspace to have been built at least once (`npm run build` from the
-repo root — see [Quickstart](#quickstart--development-environment)), since the
-analyzer imports `log-core` / `shared` / `analysis-core` from their `dist/` output.
-
-```sh
-npm run dev --workspace=packages/analyzer
-```
-
-Visit `http://localhost:5173`. Sign in with a Google account in `AUTH_ALLOWED_HOSTED_DOMAINS`.
-
 ### Offline / local mode (no server round-trip)
 
 Visit `http://localhost:5173/local/load` and drop a `.zip` bundle. It runs entirely
@@ -138,22 +70,17 @@ in-browser on top of `analysis-core` — no bundle data leaves your machine. You
 have to be **signed in as staff**: the route sits behind `RequireAuth` +
 `RequireStaff` like the rest of the app.
 
-### Run the recorder extension
-
-Open this repo in VS Code and press Fn + F5 (or pick **"Run Recorder Extension"** in the
-Run & Debug panel). A second VS Code window opens with `test-workspace/` loaded; the
-status bar shows "Provenance: recording".
-
-For richer recorder instructions see [`docs/recorder.md`](docs/recorder.md).
-The student-facing description that ships with the VSIX lives at
-[`packages/recorder/README.md`](packages/recorder/README.md).
-
 ### Documentation
 
+- [`docs/dev-setup.md`](docs/dev-setup.md) — developer setup, end to end, with troubleshooting
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — workflow, checks, commit conventions, security reports
 - [`docs/admin-guide.md`](docs/admin-guide.md) — hosting, Google OAuth setup, retention policy, backups, restore drill
+- [`docs/deploy-apphost.md`](docs/deploy-apphost.md) — the production deployment
 - [`docs/key-management.md`](docs/key-management.md) — every key in the system: who holds it, what it signs, setup, rotation
+- [`docs/recorder.md`](docs/recorder.md) — the recorder's security model and what it defends against
+- [`docs/manual-test-guide.md`](docs/manual-test-guide.md) — the flows that need a human to test them
 - [`docs/api-quickstart.md`](docs/api-quickstart.md) — Python and curl examples for the v3 API
-- [`packages/server/README.md`](packages/server/README.md) — server-specific dev instructions
+- [`packages/server/README.md`](packages/server/README.md) — server run modes, migrations, ingest tooling, env var reference
 
 ## Repo layout
 
@@ -162,6 +89,7 @@ provenance/
 ├── docs/
 │   ├── prd.md                          # recorder product spec
 │   ├── analyzer-v3-prd.md              # analyzer product spec
+│   ├── dev-setup.md                    # developer setup, end to end
 │   ├── admin-guide.md                  # hosting + operations guide
 │   └── api-quickstart.md               # Python + curl API examples
 ├── packages/
@@ -244,9 +172,11 @@ you pass `--format 1.0`.
 **The root private key is the highest-value secret in this system.** It transitively
 authorizes every course, past and future. Generate it once, offline, on a secured
 machine, exactly like a course keypair below — never inside this repo, never emailed,
-never logged. A dev root keypair is checked into `.notes/dev-root-keypair.json`
-(git-excluded, deliberately public/insecure) purely so local development and the test
-fixtures under `test-workspace/` have something to sign against; it must never be used
+never logged. A **dev** root keypair exists purely so local development and the test
+fixtures under `test-workspace/` have something to sign against. It is deliberately
+public: its private half is in a recorder test, and the dev tools read it from the
+git-ignored `.notes/dev-root-keypair.json`, which you create in
+[`docs/dev-setup.md`](docs/dev-setup.md#5-create-your-dev-keys) §5. It must never be used
 for a real deployment.
 
 ### 1. Root keypair (once, ever, offline)

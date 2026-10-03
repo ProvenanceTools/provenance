@@ -44,13 +44,12 @@ npm run dev --workspace=packages/analyzer
 Opens the Vite dev server at `http://localhost:5173`.
 
 This is the v3 SPA: Google sign-in and the cohort / per-submission views talk to the
-API server, so run the backend too. See the
-[root quickstart](../../README.md#run-the-analyzer-v3-server-api--worker) and
-[`packages/server/README.md`](../../packages/server/README.md) for the server, and
-`npm run seed --workspace=packages/server` to populate an example cohort to browse.
+API server, so run the backend too. [`docs/dev-setup.md`](../../docs/dev-setup.md) covers the
+full setup (server, OAuth client, dev keys, seed data).
 
-For a no-server flow, open `http://localhost:5173/local/load` and drop a `.zip` bundle —
-the standalone offline mode (`/local`) runs entirely in-browser, no auth required.
+For a flow that keeps bundle data in the browser, open `http://localhost:5173/local/load` and
+drop a `.zip` bundle. The offline mode (`/local`) runs entirely in-browser, but you still have to
+be signed in as staff, so the server must be running.
 
 ## Build
 
