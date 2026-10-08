@@ -49,6 +49,7 @@ import {
   validateBundleManifestShape,
   validateRollingSessionManifest,
   describeRollingManifestError,
+  isFinalRollingSeal,
   ROLLING_MANIFEST_FORMAT_VERSION,
 } from '@provenance/log-core';
 import type { BundleManifest, SubmissionFileEntry } from '@provenance/log-core';
@@ -355,13 +356,23 @@ export function reconcileRollingSealsWithSessions(
  *   recorded hash still fail `hashOk` under every possible order, so genuine
  *   tampering is caught whichever way this sorts. See
  *   `loader/concurrent-rolling-seals.test.ts`.
- * @returns `null` when there is no seal to synthesize from.
+ * @returns `null` when there is no seal to synthesize from. Otherwise the union
+ *   manifest, its defects, and `fileSources`: for every `submission_files` path,
+ *   WHICH seal's entry won the merge and whether that seal was FINAL. The loader
+ *   needs the second half to tell a provisional attestation (a checkpoint-time
+ *   seal, written before the session's last saves) from a commitment (a
+ *   `dispose()`-time seal) — see {@link RollingFileSource}. It is reported here,
+ *   by the merge itself, so nothing downstream has to re-derive the merge.
  */
 export function synthesizeRollingUnionManifest(
   seals: readonly RollingSeal[],
   sessionOrder: readonly LogicalSessionId[],
   sealRecency?: ReadonlyMap<LogicalSessionId, number>,
-): { manifest: BundleManifest; defects: RollingSealDefect[] } | null {
+): {
+  manifest: BundleManifest;
+  defects: RollingSealDefect[];
+  fileSources: Map<string, RollingFileSource>;
+} | null {
   if (seals.length === 0) return null;
 
   const bySession = new Map(seals.map((s) => [s.sessionId, s]));
@@ -436,9 +447,12 @@ export function synthesizeRollingUnionManifest(
           .map((entry) => entry.seal);
 
   const submissionFiles = new Map<string, SubmissionFileEntry>();
+  const fileSources = new Map<string, RollingFileSource>();
   for (const seal of fileMergeOrder) {
+    const final = isFinalRollingSeal(seal.manifest);
     for (const f of seal.manifest.submission_files ?? []) {
       submissionFiles.set(f.path, f);
+      fileSources.set(f.path, { sessionId: seal.sessionId, final });
     }
   }
 
@@ -464,5 +478,17 @@ export function synthesizeRollingUnionManifest(
     ...(scopeCapped ? { scope_capped: true } : {}),
   };
 
-  return { manifest, defects };
+  return { manifest, defects, fileSources };
 }
+
+/**
+ * Which rolling seal supplied the union's `submission_files` entry for a path.
+ *
+ * `final` is `isFinalRollingSeal` of THAT seal. A non-final seal is rewritten
+ * only at checkpoints, so its file hash is the on-disk state as of the last
+ * checkpoint — a genuine earlier state, but not necessarily the bytes the
+ * student went on to save and commit while the editor was still open. Check 8
+ * must treat such a hash as provisional rather than as a commitment to the
+ * submitted bytes; see `validation/verify-submitted-code.ts`.
+ */
+export type RollingFileSource = { sessionId: LogicalSessionId; final: boolean };

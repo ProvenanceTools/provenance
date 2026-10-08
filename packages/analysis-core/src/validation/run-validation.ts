@@ -31,6 +31,7 @@ import { verifyMonotonicT } from './verify-monotonic-t.js';
 import { verifyMonotonicWall } from './verify-monotonic-wall.js';
 import { verifyDocSaveHashes } from './verify-doc-save-hashes.js';
 import { verifySubmittedCode } from './verify-submitted-code.js';
+import type { SubmittedShas } from './verify-submitted-code.js';
 import { verifyLogBytes } from './verify-log-bytes.js';
 import { verifyCheckpointChain } from './verify-checkpoint-chain.js';
 import { verifyManifestDowngrade } from './verify-manifest-downgrade.js';
@@ -56,8 +57,15 @@ function computeOverall(checks: ValidationCheck[]): 'pass' | 'warn' | 'fail' {
  * by check 2. It is a parameter and never a constant in this package —
  * `analysis-core` is isomorphic and must stay pure, and one deployment's root
  * key is not another's. 1.x bundles ignore it entirely.
+ *
+ * `submittedShas` is the `computeSubmittedShas(bundle)` record persisted at
+ * ingest, passed back when re-running against a source-stripped bundle. Check 8
+ * uses it only where the seal is PROVISIONAL and the bytes are gone; without it
+ * such a file is `unknown`, never `mismatch`. See `verify-submitted-code.ts`.
  */
-export type ValidationOptions = SessionBindingOptions;
+export type ValidationOptions = SessionBindingOptions & {
+  submittedShas?: SubmittedShas;
+};
 
 export async function runValidation(
   bundle: Bundle,
@@ -71,7 +79,10 @@ export async function runValidation(
   const check5 = verifyMonotonicT(bundle);
   const check6 = verifyMonotonicWall(bundle);
   const check7 = verifyDocSaveHashes(bundle);
-  const check8 = verifySubmittedCode(bundle, { chainIntact: check3.status === 'pass' });
+  const check8 = verifySubmittedCode(bundle, {
+    chainIntact: check3.status === 'pass',
+    ...(options.submittedShas !== undefined ? { submittedShas: options.submittedShas } : {}),
+  });
 
   const checks: ValidationCheck[] = [
     check1,
