@@ -11,8 +11,9 @@
  *   chain broken        → skip  (Check 3 already fails this)
  *   no usable events    → skip
  *   status 'missing'    → skip  (nothing submitted to compare)
- *   bytes present but
- *     hashOk === false  → fail  (bundle bytes don't match their own manifest hash;
+ *   bytes present (or
+ *     persisted sha) but
+ *     ≠ manifest sha    → fail  (bundle bytes don't match their own manifest hash;
  *                                classic or FINAL seal only — see PROVISIONAL SEALS)
  *
  * No reconstruction: we compare recorded hashes only, so reconstruction taint
@@ -53,6 +54,13 @@
  * wrong bytes, so any re-run reported every stored bundle as tampered — hence
  * the old "never re-run check 8" rule.)
  *
+ * A re-run that should reproduce the INGEST verdict passes the per-path shas
+ * recorded at ingest (`computeSubmittedShas` → the `submittedShas` option).
+ * With the bytes absent, a persisted sha stands in for them exactly — same
+ * verdict, same detail, every seal kind — so a tampered bundle found at ingest
+ * stays a tampered bundle on the stored copy. Without one, the tamper sub-check
+ * has no evidence and is skipped, as above.
+ *
  * PROVISIONAL SEALS. A git-submitted bundle carries rolling seals, and a
  * NON-FINAL one is rewritten only at checkpoints. Students save and commit while
  * the editor is still open, so the committed seal's file hash is routinely an
@@ -77,12 +85,13 @@
  * NOTE: 1.0 bundles (no submission_files) → check is skipped entirely.
  * 1.1 bundles with at least one matching file can reach overall 'pass'.
  */
+import { sha256Hex } from '@provenance/log-core';
 import type { HashedEnvelope } from '@provenance/log-core';
 import { buildObservedDag } from '../git/observed-dag.js';
 import { contributorOf } from '../identity/resolve-contributors.js';
 import { compareContributors, type SessionContributor } from '../identity/types.js';
 import { resolveAliasesForBundle } from '../index/build-index.js';
-import type { Bundle, SubmissionFile } from '../loader/types.js';
+import type { Bundle } from '../loader/types.js';
 import { buildEventOrdering, compareEvents, type EventOrdering } from '../order/happens-before.js';
 import type { ValidationCheck } from './check-types.js';
 
@@ -276,28 +285,26 @@ export type SubmittedCodeOptions = {
   chainIntact: boolean;
   /**
    * Previously persisted {@link computeSubmittedShas} output, for a bundle whose
-   * source bytes have since been stripped. Consulted ONLY for an entry whose
-   * seal is provisional and whose bytes are absent; bytes, when present, always
-   * win. A FINAL or classic seal's hash is a commitment and keeps its existing
-   * bytes-absent behaviour, so this cannot change those verdicts. A value that
-   * is not a lowercase 64-hex sha256 is ignored (the entry then reads as
-   * unknowable, never as a mismatch).
+   * source bytes have since been stripped. For an entry whose bytes are absent,
+   * a valid persisted sha stands in for them EXACTLY as the bytes did at ingest
+   * — same verdict, same detail — for every seal kind: a classic or FINAL seal
+   * it disagrees with is a tampered bundle, a PROVISIONAL one goes to the
+   * comparison against the recording. That is what lets a re-run on the stored
+   * copy reproduce the ingest verdict instead of silently dropping a tamper
+   * finding. Bytes, when present, always win. A value that is not a lowercase
+   * 64-hex sha256 is ignored, and the entry is then read exactly as if nothing
+   * had been persisted for it.
    */
   submittedShas?: SubmittedShas;
 };
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
-/**
- * The actual submitted sha for a PROVISIONAL entry: from the bytes when the
- * bundle still has them, otherwise from the caller's persisted record.
- */
-function actualSubmittedSha(
+/** The caller's persisted sha for `path`, if one was supplied and is well formed. */
+function persistedSubmittedSha(
   path: string,
-  f: SubmissionFile,
   submittedShas: SubmittedShas | undefined,
 ): string | undefined {
-  if (f.bytes !== undefined) return f.submittedSha256;
   if (submittedShas === undefined || !Object.prototype.hasOwnProperty.call(submittedShas, path)) {
     return undefined;
   }
@@ -326,6 +333,19 @@ export function submittedFileVerdicts(
   const verdicts: SubmittedFileVerdict[] = [];
 
   for (const [path, f] of bundle.submissionFiles) {
+    // What was actually submitted, as far as it is knowable: the bytes when the
+    // bundle still carries them, else the sha persisted for them at ingest.
+    // `persisted` is only ever read when the bytes are gone, so bytes win.
+    const persisted =
+      f.bytes === undefined && f.status === 'present'
+        ? persistedSubmittedSha(path, opts.submittedShas)
+        : undefined;
+    // Do the submitted bytes disagree with the manifest's own sha256? From the
+    // loader's `hashOk` when bytes are present (unchanged), from the persisted
+    // sha when they are not, and "no evidence" when neither exists.
+    const submittedDisagrees =
+      f.bytes !== undefined ? !f.hashOk : persisted !== undefined && persisted !== f.sha256;
+
     // PROVISIONAL seal (see the module docstring): the actual submitted sha when
     // it is knowable, and `staleProvisional` when it also DIFFERS from the seal.
     // Both stay unset for every classic/final entry, and `staleProvisional` for
@@ -333,7 +353,9 @@ export function submittedFileVerdicts(
     // the path they always took.
     const actual =
       f.provisional === true && f.status === 'present'
-        ? actualSubmittedSha(path, f, opts.submittedShas)
+        ? f.bytes !== undefined
+          ? (f.submittedSha256 ?? sha256Hex(f.bytes))
+          : persisted
         : undefined;
     const staleProvisional = actual !== undefined && actual !== f.sha256 ? actual : null;
 
@@ -367,7 +389,7 @@ export function submittedFileVerdicts(
       // tamper sub-check as the non-attachment path below; it must run before
       // the branch returns, because no attachment may reach the reconstruction
       // comparison the rest of this function performs.
-      if (f.bytes !== undefined && !f.hashOk && f.provisional !== true) {
+      if (submittedDisagrees && f.provisional !== true) {
         verdicts.push({
           path,
           status: 'present',
@@ -419,10 +441,15 @@ export function submittedFileVerdicts(
     // signature) and the recorded event hashes. Both survive stripping, so the
     // match verdict is fully computable against a stored bundle.
     //
+    // A sha persisted at ingest (`submittedShas`) is the stored record of those
+    // bytes, so with the bytes gone it answers this question exactly as they
+    // did. Without it, a tamper finding made at ingest would vanish the first
+    // time the stored bundle was re-validated.
+    //
     // Not for a PROVISIONAL seal: its hash is an earlier recorded state, not a
     // commitment to these bytes, so disagreeing with it is what an honest
     // save-after-the-last-checkpoint looks like. Those are handled just below.
-    if (f.bytes !== undefined && !f.hashOk && f.provisional !== true) {
+    if (submittedDisagrees && f.provisional !== true) {
       verdicts.push({
         path,
         status: 'present',

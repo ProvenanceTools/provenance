@@ -59,9 +59,11 @@ function computeOverall(checks: ValidationCheck[]): 'pass' | 'warn' | 'fail' {
  * key is not another's. 1.x bundles ignore it entirely.
  *
  * `submittedShas` is the `computeSubmittedShas(bundle)` record persisted at
- * ingest, passed back when re-running against a source-stripped bundle. Check 8
- * uses it only where the seal is PROVISIONAL and the bytes are gone; without it
- * such a file is `unknown`, never `mismatch`. See `verify-submitted-code.ts`.
+ * ingest, passed back when re-running against a source-stripped bundle. Where
+ * the bytes are gone, check 8 reads a persisted sha exactly as it read the bytes
+ * at ingest, so the re-run reproduces the ingest verdict (a tampered bundle
+ * included). Without it, a file under a PROVISIONAL seal is `unknown`, never
+ * `mismatch`. See `verify-submitted-code.ts`.
  */
 export type ValidationOptions = SessionBindingOptions & {
   submittedShas?: SubmittedShas;

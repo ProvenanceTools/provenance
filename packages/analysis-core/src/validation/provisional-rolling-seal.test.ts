@@ -203,7 +203,7 @@ describe('non-final rolling seal, bytes present', () => {
   });
 });
 
-describe('FINAL rolling seal is a commitment (unchanged)', () => {
+describe('FINAL rolling seal is a commitment', () => {
   it('is not provisional', async () => {
     const bundle = await build({ seal: 'rolling-final', submitted: V2, sealedAs: V1 });
     expect(bundle.submissionFiles.get(FILE)!.provisional).toBeUndefined();
@@ -226,15 +226,42 @@ describe('FINAL rolling seal is a commitment (unchanged)', () => {
     expect(flags[0]!.severity).toBe('high');
   });
 
-  it('ignores persisted shas when the bytes are stripped', async () => {
+  it('compares the seal sha when stripped and nothing was persisted (unchanged)', async () => {
     const bundle = await build({ seal: 'rolling-final', submitted: null, sealedAs: V1 });
-    const [v] = submittedFileVerdicts(bundle, {
-      chainIntact: true,
-      submittedShas: { [FILE]: shaOf(V2) },
-    });
+    const [v] = submittedFileVerdicts(bundle, { chainIntact: true });
     // The seal's own sha against the recording, exactly as before.
     expect(v!.verdict).toBe('mismatch');
     expect(v!.submittedSha).toBe(shaOf(V1));
+    expect(v!.detail).not.toMatch(/tampered bundle/);
+  });
+
+  it('reproduces the ingest tamper verdict on the stripped bundle from persisted shas', async () => {
+    // Recompute re-validates the STORED copy. Without the persisted sha the
+    // ingest finding (bytes != final seal) would silently disappear there.
+    const atIngest = await build({ seal: 'rolling-final', submitted: V2, sealedAs: V1 });
+    const stored = await build({ seal: 'rolling-final', submitted: null, sealedAs: V1 });
+    const submittedShas = computeSubmittedShas(atIngest);
+
+    const ingest = submittedFileVerdicts(atIngest, { chainIntact: true });
+    const rerun = submittedFileVerdicts(stored, { chainIntact: true, submittedShas });
+    expect(ingest[0]!.detail).toMatch(/tampered bundle/);
+    expect(rerun).toEqual(ingest);
+
+    const ingestCheck = await check8(atIngest);
+    const rerunCheck = await check8(stored, { submittedShas });
+    expect(rerunCheck.check).toEqual(ingestCheck.check);
+    expect(rerunCheck.flags).toEqual(ingestCheck.flags);
+    expect(rerunCheck.flags[0]!.severity).toBe('high');
+  });
+
+  it('a persisted sha equal to the seal reads exactly like matching bytes', async () => {
+    const stored = await build({ seal: 'rolling-final', submitted: null, sealedAs: V2 });
+    const [v] = submittedFileVerdicts(stored, {
+      chainIntact: true,
+      submittedShas: { [FILE]: shaOf(V2) },
+    });
+    expect(v!.verdict).toBe('match');
+    expect(v!.submittedSha).toBe(shaOf(V2));
   });
 });
 
@@ -322,7 +349,7 @@ describe('both-shapes bundle (classic manifest.json beside rolling seals)', () =
   });
 });
 
-describe('classic-only bundle (unchanged)', () => {
+describe('classic-only bundle', () => {
   it('is never provisional', async () => {
     const bundle = await build({ seal: 'classic', submitted: V2, sealedAs: V1 });
     expect(bundle.rollingSeal).toBeUndefined();
@@ -339,12 +366,9 @@ describe('classic-only bundle (unchanged)', () => {
     );
   });
 
-  it('compares the manifest sha when stripped, ignoring persisted shas', async () => {
+  it('compares the manifest sha when stripped and nothing was persisted (unchanged)', async () => {
     const bundle = await build({ seal: 'classic', submitted: null, sealedAs: V2 });
-    const [v] = submittedFileVerdicts(bundle, {
-      chainIntact: true,
-      submittedShas: { [FILE]: shaOf(FOREIGN) },
-    });
+    const [v] = submittedFileVerdicts(bundle, { chainIntact: true });
     expect(v).toEqual({
       path: FILE,
       status: 'present',
@@ -355,4 +379,73 @@ describe('classic-only bundle (unchanged)', () => {
       supportingSeqs: [v!.supportingSeqs[0]!],
     });
   });
+
+  it('reproduces the ingest tamper verdict on the stripped bundle from persisted shas', async () => {
+    // The manifest sha alone matches the recording, so without the persisted
+    // sha the re-run would turn the ingest-time tamper finding into a PASS.
+    const atIngest = await build({ seal: 'classic', submitted: FOREIGN, sealedAs: V2 });
+    const stored = await build({ seal: 'classic', submitted: null, sealedAs: V2 });
+    const submittedShas = computeSubmittedShas(atIngest);
+
+    expect((await check8(stored)).check.status).toBe('pass');
+
+    const ingest = submittedFileVerdicts(atIngest, { chainIntact: true });
+    const rerun = submittedFileVerdicts(stored, { chainIntact: true, submittedShas });
+    expect(ingest[0]!.detail).toBe(
+      'Submitted bytes do not match their own manifest sha256 (tampered bundle).',
+    );
+    expect(rerun).toEqual(ingest);
+
+    const ingestCheck = await check8(atIngest);
+    const rerunCheck = await check8(stored, { submittedShas });
+    expect(rerunCheck.check).toEqual(ingestCheck.check);
+    expect(rerunCheck.flags).toEqual(ingestCheck.flags);
+    expect(rerunCheck.check.status).toBe('fail');
+  });
+
+  it('ignores a malformed persisted sha (reads as nothing persisted)', async () => {
+    const bundle = await build({ seal: 'classic', submitted: null, sealedAs: V2 });
+    const [v] = submittedFileVerdicts(bundle, {
+      chainIntact: true,
+      submittedShas: { [FILE]: 'NOT-A-SHA' },
+    });
+    expect(v!.verdict).toBe('match');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ingest → strip → re-run. The server persists computeSubmittedShas at ingest
+// and passes it back on every re-validation of the stored, source-stripped
+// copy. For every seal kind and every kind of submitted content, the re-run
+// must say exactly what ingest said — verdicts, check 8 and its flag.
+// ---------------------------------------------------------------------------
+
+describe('ingest → strip → re-run reproduces the ingest verdict', () => {
+  const seals: Shape['seal'][] = ['classic', 'rolling-final', 'rolling-provisional', 'both-shapes'];
+  const contents: Array<[string, string]> = [
+    ['the sealed state', V1],
+    ['the last recorded save', V2],
+    ['an earlier recorded state', V0],
+    ['foreign bytes', FOREIGN],
+  ];
+
+  for (const seal of seals) {
+    for (const [label, submitted] of contents) {
+      it(`${seal}, submitted = ${label}`, async () => {
+        const atIngest = await build({ seal, submitted, sealedAs: V1 });
+        const stored = await build({ seal, submitted: null, sealedAs: V1 });
+        const submittedShas = computeSubmittedShas(atIngest);
+        expect(submittedShas).toEqual({ [FILE]: shaOf(submitted) });
+
+        expect(submittedFileVerdicts(stored, { chainIntact: true, submittedShas })).toEqual(
+          submittedFileVerdicts(atIngest, { chainIntact: true }),
+        );
+
+        const ingest = await check8(atIngest);
+        const rerun = await check8(stored, { submittedShas });
+        expect(rerun.check).toEqual(ingest.check);
+        expect(rerun.flags).toEqual(ingest.flags);
+      });
+    }
+  }
 });

@@ -612,8 +612,11 @@ export type Bundle = {
   loadedAt: string;
   /**
    * Submitted files from the bundle (1.1+). Keyed by manifest path. `bytes` is
-   * present only for status 'present' files whose zip entry verified against the
-   * manifest sha256. `hashOk` records whether the bundle self-check passed.
+   * present for every status 'present' file the archive actually carries,
+   * WHETHER OR NOT it verified against the manifest sha256 — absent only when
+   * the archive has no entry for the path (a source-stripped stored bundle, or
+   * a file never shipped). `hashOk` records whether the bundle self-check passed,
+   * and is false both for bytes that disagree and for bytes that are absent.
    * `role` is always populated, defaulting to `'reviewed'` when the manifest
    * entry omits it (every bundle sealed before path scope).
    */
