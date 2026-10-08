@@ -893,6 +893,33 @@ describe('synthesizeRollingUnionManifest', () => {
     expect(out.manifest.sessions.map((s) => s.session_id)).toEqual(['a', 'b']);
   });
 
+  // Check 8 needs to know whether the hash it reads for a path is a commitment
+  // (FINAL seal) or a provisional checkpoint-time attestation, so the merge
+  // reports which seal won each path rather than leaving it to be re-derived.
+  it('reports which seal won each path and whether that seal was final', () => {
+    const a = seal('a', [
+      ['f.py', '1'.repeat(64)],
+      ['g.py', '3'.repeat(64)],
+    ]);
+    const b = { ...seal('b', [['f.py', '2'.repeat(64)]]) };
+    b.manifest = { ...b.manifest, final: true };
+    const out = synthesizeRollingUnionManifest([a, b], order('a', 'b'))!;
+    expect(out.fileSources).toEqual(
+      new Map([
+        ['f.py', { sessionId: 'b', final: true }],
+        ['g.py', { sessionId: 'a', final: false }],
+      ]),
+    );
+
+    // Recency flips the winner for f.py, and the provenance follows it.
+    const recency = new Map([
+      [asLogicalSessionId('a'), Date.parse('2026-01-01T23:57:26.000Z')],
+      [asLogicalSessionId('b'), Date.parse('2026-01-01T23:48:58.000Z')],
+    ]);
+    const flipped = synthesizeRollingUnionManifest([a, b], order('a', 'b'), recency)!;
+    expect(flipped.fileSources.get('f.py')).toEqual({ sessionId: 'a', final: false });
+  });
+
   it('keeps session order for the merge when recency agrees with it', () => {
     const a = seal('a', [['f.py', '1'.repeat(64)]]);
     const b = seal('b', [['f.py', '2'.repeat(64)]]);

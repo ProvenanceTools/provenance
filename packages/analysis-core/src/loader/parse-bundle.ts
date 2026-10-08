@@ -40,6 +40,7 @@ import {
   reconcileRollingSealsWithSessions,
   synthesizeRollingUnionManifest,
 } from './rolling-seal.js';
+import type { RollingFileSource } from './rolling-seal.js';
 import {
   computeSlogCoverage,
   computeMetaCoverage,
@@ -58,6 +59,7 @@ import type {
   RollingSealDefect,
   SessionFiles,
   SessionParseError,
+  SubmissionFile,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -336,6 +338,9 @@ export async function loadBundle(
   // ---------------------------------------------------------------------------
   let rollingSeal: BundleRollingSeal | undefined;
   let unionManifest: BundleManifest | null = null;
+  // Per union path: which seal's entry won, and whether that seal was final.
+  // Read in step 5 to mark provisional file hashes.
+  let unionFileSources: ReadonlyMap<string, RollingFileSource> | null = null;
 
   if (rollingValidation !== null) {
     const defects: RollingSealDefect[] = [...rollingValidation.defects];
@@ -382,6 +387,7 @@ export async function loadBundle(
     );
     if (synthesized !== null) {
       unionManifest = synthesized.manifest;
+      unionFileSources = synthesized.fileSources;
       defects.push(...synthesized.defects);
     }
 
@@ -609,32 +615,58 @@ export async function loadBundle(
   // bundled bytes against the manifest's sha256 (bundle self-check). Missing
   // entries have no bytes, so hashOk is trivially true (nothing to check).
   // 1.0 bundles lack submission_files entirely → empty map, same as before.
+  //
+  // PROVISIONAL hashes. Whether the manifest's sha256 for a path is a
+  // commitment to the submitted bytes or only an attestation of an earlier
+  // state depends on which seal wrote it — see `SubmissionFile.provisional`:
+  //
+  //   - classic-only bundle                → commitment (never provisional);
+  //   - rolling-only, entry from a FINAL seal → commitment;
+  //   - rolling-only, entry from a NON-FINAL seal → provisional. The seal is
+  //     rewritten only at checkpoints, so a student who saves and commits while
+  //     the editor is open ships a seal that predates their last save(s);
+  //   - both shapes (classic `manifest.json` beside rolling seals) → provisional.
+  //     `manifest` is the classic one there (step 4c), and it is a leftover of
+  //     an earlier seal command on what is otherwise the git path — the same
+  //     staleness step 4b documents for its log digests applies to its file
+  //     hashes. Which rolling seal is fresher says nothing about the classic
+  //     entry, so the classic hashes are provisional across the board.
+  //
+  // `hashOk` keeps its meaning — bytes agree with the manifest's own sha256 —
+  // and is still computed for every entry. Check 8 decides what a disagreement
+  // means given `provisional`.
   // ---------------------------------------------------------------------------
-  const submissionFiles = new Map<
-    string,
-    {
-      status: 'present' | 'missing';
-      sha256: string | null;
-      bytes?: Uint8Array;
-      hashOk: boolean;
-      role: 'reviewed' | 'attachment';
-    }
-  >();
+  const bothShapes = classicManifest !== null && rollingValidation !== null;
+  const isProvisional = (path: string): boolean => {
+    if (bothShapes) return true;
+    if (classicManifest !== null) return false;
+    return unionFileSources?.get(path)?.final === false;
+  };
+  const submissionFiles = new Map<string, SubmissionFile>();
   for (const f of manifest.submission_files ?? []) {
     // Absent role reads as 'reviewed' — every bundle sealed before path scope.
     const role = f.role ?? 'reviewed';
+    const provisional = isProvisional(f.path) ? ({ provisional: true } as const) : {};
     if (f.status === 'missing') {
-      submissionFiles.set(f.path, { status: 'missing', sha256: null, hashOk: true, role });
+      submissionFiles.set(f.path, {
+        status: 'missing',
+        sha256: null,
+        hashOk: true,
+        role,
+        ...provisional,
+      });
       continue;
     }
     const bytes = bundleSubmissionFiles.get(f.path);
-    const hashOk = bytes !== undefined && sha256Hex(bytes) === f.sha256;
+    const carried = bytes !== undefined ? { bytes, submittedSha256: sha256Hex(bytes) } : null;
+    const hashOk = carried !== null && carried.submittedSha256 === f.sha256;
     submissionFiles.set(f.path, {
       status: 'present',
       sha256: f.sha256,
-      ...(bytes !== undefined ? { bytes } : {}),
+      ...(carried ?? {}),
       hashOk,
       role,
+      ...provisional,
     });
   }
 

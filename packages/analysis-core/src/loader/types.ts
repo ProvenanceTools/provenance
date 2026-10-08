@@ -612,19 +612,50 @@ export type Bundle = {
   loadedAt: string;
   /**
    * Submitted files from the bundle (1.1+). Keyed by manifest path. `bytes` is
-   * present only for status 'present' files whose zip entry verified against the
-   * manifest sha256. `hashOk` records whether the bundle self-check passed.
+   * present for every status 'present' file the archive actually carries,
+   * WHETHER OR NOT it verified against the manifest sha256 — absent only when
+   * the archive has no entry for the path (a source-stripped stored bundle, or
+   * a file never shipped). `hashOk` records whether the bundle self-check passed,
+   * and is false both for bytes that disagree and for bytes that are absent.
    * `role` is always populated, defaulting to `'reviewed'` when the manifest
    * entry omits it (every bundle sealed before path scope).
    */
-  submissionFiles: Map<
-    string,
-    {
-      status: 'present' | 'missing';
-      sha256: string | null;
-      bytes?: Uint8Array;
-      hashOk: boolean;
-      role: 'reviewed' | 'attachment';
-    }
-  >;
+  submissionFiles: Map<string, SubmissionFile>;
+};
+
+/** One entry of {@link Bundle.submissionFiles}. */
+export type SubmissionFile = {
+  status: 'present' | 'missing';
+  /** The sha256 the manifest (classic, or the synthesized rolling union) records. */
+  sha256: string | null;
+  bytes?: Uint8Array;
+  hashOk: boolean;
+  role: 'reviewed' | 'attachment';
+  /**
+   * sha256 of the bytes actually carried in the archive. Present iff `bytes` is.
+   * Equal to `sha256` exactly when `hashOk` is true.
+   */
+  submittedSha256?: string;
+  /**
+   * `true` when `sha256` is a PROVISIONAL attestation of an earlier on-disk
+   * state rather than a commitment to the submitted bytes. Absent otherwise —
+   * never written as `false` — so nothing that reads a classic-only bundle's
+   * entries sees a new value.
+   *
+   * Set when the entry came from:
+   *   - a NON-FINAL rolling seal (`isFinalRollingSeal` false). The recorder
+   *     rewrites it only at checkpoints, and a git-submitted student saves and
+   *     commits while the editor is still open, so the committed seal routinely
+   *     predates the last save(s) of the very file it hashes;
+   *   - the classic `manifest.json` of a bundle that ALSO carries rolling seals.
+   *     Rolling seals mean the git path, which has no seal step, and the classic
+   *     manifest there is a leftover of an earlier "Prepare Submission Bundle"
+   *     that is never removed (see parse-bundle.ts step 4b) — it attests the
+   *     files as they stood THEN, not what was pushed.
+   *
+   * A classic-only bundle and a FINAL rolling seal are never provisional: both
+   * are written once, over finished work, and commit to the submitted bytes.
+   * See `validation/verify-submitted-code.ts` for how check 8 reads this.
+   */
+  provisional?: true;
 };
