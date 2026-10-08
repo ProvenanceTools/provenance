@@ -44,6 +44,7 @@ import type { HeuristicConfig } from './config.js';
 import { establishedReplayState } from './reconstruction-gate.js';
 import { externalChangeClassificationFor } from '../index/classify-external-changes.js';
 import { mergedInCharCount } from './merged-in-content.js';
+import { reviewedPathPredicate } from './reviewed-scope.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -128,6 +129,8 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
   // Tier 3.1. Empty for a solo bundle — the pass does not run there.
   const { gitMergeIn } = externalChangeClassificationFor(bundle, index);
 
+  const isReviewed = reviewedPathPredicate(bundle);
+
   // Collect save records with file path and sha256.
   type SaveRecord = { event: IndexedEvent; filePath: string; sha256: string };
   const saveRecords: SaveRecord[] = [];
@@ -136,6 +139,7 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
     const path = typeof p?.['path'] === 'string' ? (p['path'] as string) : undefined;
     const sha256 = typeof p?.['sha256'] === 'string' ? (p['sha256'] as string) : undefined;
     if (path === undefined || sha256 === undefined) continue;
+    if (!isReviewed(path)) continue;
     saveRecords.push({ event: e, filePath: path, sha256 });
   }
   if (saveRecords.length === 0) return [];

@@ -47,6 +47,7 @@ import type { HeuristicConfig } from './config.js';
 import { establishedReplayState } from './reconstruction-gate.js';
 import { externalChangeClassificationFor } from '../index/classify-external-changes.js';
 import { charsWrittenAfter } from './merged-in-content.js';
+import { reviewedPathPredicate } from './reviewed-scope.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -75,6 +76,8 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
   // Tier 3.1. Empty for a solo bundle — the pass does not run there.
   const { gitMergeIn } = externalChangeClassificationFor(bundle, index);
 
+  const isReviewed = reviewedPathPredicate(bundle);
+
   // Build a lookup: filePath → ordered list of {t, globalIdx, sessionId} for saves.
   type SaveEntry = { t: number; globalIdx: number; sessionId: string; seq: number };
   const savesByFile = new Map<string, SaveEntry[]>();
@@ -97,6 +100,7 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
     const p = openEvent.payload as Record<string, unknown> | null;
     const filePath = typeof p?.['path'] === 'string' ? (p['path'] as string) : undefined;
     if (filePath === undefined) continue;
+    if (!isReviewed(filePath)) continue;
 
     const checkKey = `${openEvent.sessionId}:${filePath}:${openEvent.seq}`;
     if (checkedKey.has(checkKey)) continue;

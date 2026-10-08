@@ -12,6 +12,25 @@ A single entry point — [`runHeuristics`](../packages/analysis-core/src/heurist
 2. confidence descending
 3. supporting seq key ascending (stable tie-break — deterministic across runs and snapshot-test-friendly)
 
+### Files under review
+
+Per-file heuristics only evaluate paths whose role is `reviewed` in the assignment manifest. A build or test artifact written by a tool, a workspace settings file, or a scratch file the student merely opened is not graded and is often machine-written, so flags on it (a "paste" of generated output, "low typing, high output" on a file a harness wrote) are noise. The scope is read by [`reviewed-scope.ts`](../packages/analysis-core/src/heuristics/reviewed-scope.ts) and resolved with log-core's `resolvePathRole`, the same matcher the recorders use:
+
+The scope is the manifest each session embedded in `session.start` (`files_under_review`, `ignore`, `attachments`), unioned across sessions, and it is honoured **only if that manifest's signature verified** (`Bundle.manifestScopeTrust`, stamped by `establishBundleTrust`): scope can only suppress flags, so an unproven claim narrows nothing and every path is evaluated.
+
+- 2.0: the trust chain verified against the configured root key.
+- 1.x: a root public key is configured, every session embeds a manifest, each verifies against that key, and each session's `manifest_sig` is that manifest's own `sig`. (Check 2 alone only compares sigs across 1.x sessions, so it is not enough.) A deployment whose 1.x course key differs from its root key leaves 1.x scope unverified.
+- The sealed manifest's `submission_files` is not used: it is not course-signed.
+- No scope information (all three lists empty, no embedded manifest, or unverified): every path is evaluated, as before. `attachment` paths are never captured and count as not reviewed.
+
+| Treatment                      | Heuristics                                                                                                                                                                                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Per-file, filtered to reviewed | `large_paste`, `paste_is_solution`, `paste_matches_known_source`, `external_edits`, `inter_session_external_change`, `low_typing_high_output`, `mass_external_replacement`, `time_to_first_save_anomaly`, `idle_then_complete`, `terminal_active_during_external_change` |
+| Session / global, not filtered | `no_intermediate_errors`, `ai_extension_active`, `shell_integration_disabled`, `extension_set_changed_mid_assignment`, `clock_jumps`, `gap_in_heartbeats`, `multiple_sessions_overlap`, `extension_hash_mismatch`, all validation-derived integrity flags                |
+| Cross-submission, not filtered | `editing_pattern_clone`, `paste_shared_across_students`                                                                                                                                                                                                                  |
+
+The filter is applied to which file a flag is about, not to the event index: the internal-move classifier and session-level heuristics still see every event, so a paste sourced from an out-of-scope scratch file is still recognised as the student relocating their own text.
+
 Cross-submission heuristics run separately via [`runCrossHeuristics`](../packages/analysis-core/src/heuristics/cross/run-cross-heuristics.ts), only when more than one bundle is loaded into the `/compare` view.
 
 Configuration defaults live in [`config.ts`](../packages/analysis-core/src/heuristics/config.ts). Course staff can override per-heuristic via the `HeuristicConfig` shape passed to `runHeuristics`.

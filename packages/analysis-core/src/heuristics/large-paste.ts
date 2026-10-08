@@ -31,6 +31,7 @@ import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic, Severity } from './types.js';
 import type { HeuristicConfig } from './config.js';
+import { reviewedPathPredicate } from './reviewed-scope.js';
 import { iterateCandidatePastes } from './candidate-pastes.js';
 import { classifyInternalMoves } from './internal-move.js';
 
@@ -79,7 +80,7 @@ function flagId(seq0: string, index: number): string {
 // Heuristic implementation
 // ---------------------------------------------------------------------------
 
-function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
   const { minChars, minLines, highSeverityChars, highSeverityLines } = config.largePaste;
 
   const anomalyWindows = buildAnomalyWindows(index);
@@ -88,7 +89,7 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
   const flags: Flag[] = [];
   let flagIndex = 0;
 
-  for (const c of iterateCandidatePastes(index)) {
+  for (const c of iterateCandidatePastes(index, reviewedPathPredicate(bundle))) {
     // `length` is authoritative — present even when content was omitted (paste
     // events that exceeded the recorder's inline cap).
     const length = c.length;

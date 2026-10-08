@@ -43,6 +43,7 @@ import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
 import { establishedReplayState } from './reconstruction-gate.js';
+import { reviewedPathPredicate } from './reviewed-scope.js';
 import { iterateCandidatePastes } from './candidate-pastes.js';
 import { classifyInternalMoves } from './internal-move.js';
 
@@ -107,7 +108,7 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
   const flags: Flag[] = [];
   let flagIndex = 0;
 
-  for (const c of iterateCandidatePastes(index)) {
+  for (const c of iterateCandidatePastes(index, reviewedPathPredicate(bundle))) {
     // Only candidates with inline content can be compared. Paste events that
     // exceeded the recorder's inline cap omit content; doc.change deltas always carry text.
     if (c.content === undefined || c.content.length === 0) continue;

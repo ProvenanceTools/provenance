@@ -90,7 +90,15 @@ export type CandidatePaste = {
  *     `source` is `'paste_likely'` or `'paste_confirmed'`
  * Other events are skipped.
  */
-export function* iterateCandidatePastes(index: EventIndex): Generator<CandidatePaste> {
+export function* iterateCandidatePastes(
+  index: EventIndex,
+  /**
+   * Optional path filter (per-file heuristics pass the reviewed-scope
+   * predicate). `ordinal` is assigned BEFORE filtering, so it stays the same
+   * join key into `classifyInternalMoves` whether or not a filter is applied.
+   */
+  includePath?: (path: string) => boolean,
+): Generator<CandidatePaste> {
   let ordinal = 0;
   for (const e of index.ordered) {
     if (e.kind === 'paste') {
@@ -103,6 +111,8 @@ export function* iterateCandidatePastes(index: EventIndex): Generator<CandidateP
       const length = typeof p['length'] === 'number' ? (p['length'] as number) : 0;
       const content = typeof p['content'] === 'string' ? (p['content'] as string) : undefined;
       const sha256 = typeof p['sha256'] === 'string' ? (p['sha256'] as string) : undefined;
+      const ord = ordinal++;
+      if (includePath !== undefined && !includePath(path)) continue;
       yield {
         sessionId: e.sessionId,
         seq: e.seq,
@@ -115,7 +125,7 @@ export function* iterateCandidatePastes(index: EventIndex): Generator<CandidateP
         sha256,
         origin: 'paste',
         globalIdx: e.globalIdx,
-        ordinal: ordinal++,
+        ordinal: ord,
       };
       continue;
     }
@@ -136,6 +146,8 @@ export function* iterateCandidatePastes(index: EventIndex): Generator<CandidateP
         if (typeof d.text !== 'string') continue;
         const range = d.range as Range | undefined;
         if (range === undefined) continue;
+        const ord = ordinal++;
+        if (includePath !== undefined && !includePath(path)) continue;
         yield {
           sessionId: e.sessionId,
           seq: e.seq,
@@ -148,7 +160,7 @@ export function* iterateCandidatePastes(index: EventIndex): Generator<CandidateP
           sha256: undefined,
           origin: 'doc.change',
           globalIdx: e.globalIdx,
-          ordinal: ordinal++,
+          ordinal: ord,
         };
       }
     }

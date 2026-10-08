@@ -80,6 +80,7 @@ import type { EventIndex, IndexedEvent } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic, Severity } from './types.js';
 import type { HeuristicConfig } from './config.js';
+import { reviewedPathPredicate } from './reviewed-scope.js';
 import {
   externalChangeClassificationFor,
   describeClassification,
@@ -244,6 +245,7 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
 
   const externalEvents = index.byKind.get('fs.external_change') ?? [];
   const classification = externalChangeClassificationFor(bundle, index);
+  const isReviewed = reviewedPathPredicate(bundle);
 
   // Separate by file, collecting only unexplained events.
   const unexplainedByFile = new Map<string, IndexedEvent[]>();
@@ -269,6 +271,7 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
       tagOverridden.add(e.globalIdx);
     }
     const file = getFilePath(e.payload);
+    if (!isReviewed(file)) continue;
     let arr = unexplainedByFile.get(file);
     if (arr === undefined) {
       arr = [];
