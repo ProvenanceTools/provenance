@@ -191,7 +191,7 @@ digraph master {
   ckpt  -> slog   [style=dashed color="#9d7bf5" constraint=false]
   slog  -> seal   [label="on submit"]
   seal  -> bundle [color="#17bfae"]
-  ckpt  -> push   [label="a rolling seal per session, rewritten on\nEVERY checkpoint — so whatever is committed\nis always a valid seal of that moment"
+  ckpt  -> push   [label="a rolling seal per session, rewritten after checkpoints\n(at most a minute apart, never dropped) and shortly\nafter every save — so what is committed is a fresh seal"
                    color="#17bfae" constraint=false]
   push  -> upl    [label="a clone, zipped. Ingest declares the batch\na repo and fans it out per assignment scope" color="#17bfae"]
 
