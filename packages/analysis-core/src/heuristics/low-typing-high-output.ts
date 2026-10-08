@@ -93,6 +93,7 @@ import { computeStats } from '../index/stats.js';
 import { establishedReplayState } from './reconstruction-gate.js';
 import { externalChangeClassificationFor } from '../index/classify-external-changes.js';
 import { mergedInCharCount } from './merged-in-content.js';
+import { reviewedPathPredicate } from './reviewed-scope.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -119,10 +120,12 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
   // Tier 3.1. Empty for a solo bundle — the pass does not run there.
   const { gitMergeIn } = externalChangeClassificationFor(bundle, index);
 
+  const isReviewed = reviewedPathPredicate(bundle);
   const flags: Flag[] = [];
   let flagIndex = 0;
 
   for (const [filePath, fileStats] of bundleStats.perFile) {
+    if (!isReviewed(filePath)) continue;
     // Skip tainted files — reconstruction is unreliable.
     if (fileStats.reconstructionTainted) continue;
 

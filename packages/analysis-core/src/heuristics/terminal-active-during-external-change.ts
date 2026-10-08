@@ -71,6 +71,7 @@ import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
+import { reviewedPathPredicate } from './reviewed-scope.js';
 import { isSignalCaptured } from '../manifest/bundle-manifest.js';
 import {
   externalChangeClassificationFor,
@@ -96,6 +97,7 @@ function run(index: EventIndex, bundle: Bundle, _config: HeuristicConfig): Flag[
   if (!isSignalCaptured(bundle, 'terminal')) return [];
 
   const classification = externalChangeClassificationFor(bundle, index);
+  const isReviewed = reviewedPathPredicate(bundle);
   const flags: Flag[] = [];
 
   for (const [, sessionEvents] of index.bySessionId) {
@@ -125,6 +127,7 @@ function run(index: EventIndex, bundle: Bundle, _config: HeuristicConfig): Flag[
 
       const payload = ev.payload as Record<string, unknown> | null;
       const filePath = typeof payload?.['path'] === 'string' ? payload['path'] : 'unknown';
+      if (!isReviewed(filePath)) continue;
       const diffSize = typeof payload?.['diff_size'] === 'number' ? payload['diff_size'] : null;
 
       // Tier 3.1. Empty for a solo scope and for `external` — those

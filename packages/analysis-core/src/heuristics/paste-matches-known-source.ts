@@ -39,6 +39,7 @@ import type { EventIndex } from '../index/event-index.js';
 import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig, KnownSource } from './config.js';
+import { reviewedPathPredicate } from './reviewed-scope.js';
 import { iterateCandidatePastes, sha256OfCandidate } from './candidate-pastes.js';
 
 // ---------------------------------------------------------------------------
@@ -214,7 +215,7 @@ function flagId(kind: 'hash' | 'fuzzy', seqKey: string, entryName: string, idx: 
   return `paste_matches_known_source-${kind}-${seqKey}-${idx}-${entryName.slice(0, 20).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
 }
 
-function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[] {
+function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[] {
   const { corpus, fuzzyThreshold } = config.pasteMatchesKnownSource;
 
   // When no corpus is provided, emit 0 flags.
@@ -227,7 +228,7 @@ function run(index: EventIndex, _bundle: Bundle, config: HeuristicConfig): Flag[
   // `doc.change` events with `source: 'paste_likely' | 'paste_confirmed'`.
   // For doc.change-derived candidates we compute the sha256 lazily (recorder
   // doesn't pre-compute it for delta text).
-  for (const c of iterateCandidatePastes(index)) {
+  for (const c of iterateCandidatePastes(index, reviewedPathPredicate(bundle))) {
     const pasteSha256 = sha256OfCandidate(c);
     const pasteContent = c.content;
     const filePath = c.path;

@@ -55,6 +55,7 @@ import type { Bundle } from '../loader/types.js';
 import type { Flag, Heuristic } from './types.js';
 import type { HeuristicConfig } from './config.js';
 import { establishedReplayState } from './reconstruction-gate.js';
+import { reviewedPathPredicate } from './reviewed-scope.js';
 import {
   externalChangeClassificationFor,
   describeClassification,
@@ -146,6 +147,7 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
   if (externalEvents.length === 0) return [];
 
   const classification = externalChangeClassificationFor(bundle, index);
+  const isReviewed = reviewedPathPredicate(bundle);
 
   // Cache reconstructed content at specific globalIdx boundaries.
   // `null` = no established content at that boundary (Tier 2.2). This
@@ -170,6 +172,7 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
   for (const e of externalEvents) {
     const filePath = getFilePath(e.payload);
     if (filePath === undefined) continue;
+    if (!isReviewed(filePath)) continue;
 
     // D1: the recorder reporting the editor's own save -- never a replacement.
     if (index.selfInflictedExternalChanges?.has(e.globalIdx)) continue;
