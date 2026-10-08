@@ -39,7 +39,6 @@ import { getBoss, stopBoss, JOB_KINDS } from './pg-boss.js';
 import { getLogger } from '../logging.js';
 import { getDb, type DrizzleDb } from '../db/client.js';
 import { getConfig } from '../config/index.js';
-import { configuredValidationOptions } from '../config/root-key.js';
 import { checkPoolMargin } from '../config/pool-margin.js';
 import { ingest_files, ingest_jobs, semesters } from '../db/schema.js';
 import { createStorageClient, storageConfigFromEnv } from '../services/storage/client.js';
@@ -65,8 +64,9 @@ import {
   type MatchStudentResult,
 } from '../services/ingest/match-student.js';
 import { createSubmission } from '../services/ingest/create-submission.js';
+import { settleDuplicateWithRefresh } from '../services/ingest/refresh-duplicate.js';
 import { computeAndStoreStats } from '../services/ingest/stats.js';
-import { runAndStoreValidation } from '../services/ingest/validation.js';
+import { runAndStoreValidation, ingestValidationOptions } from '../services/ingest/validation.js';
 import { runAndStoreHeuristics } from '../services/heuristics/run-per-submission.js';
 import { finalizeContributors } from '../services/contributors/finalize.js';
 import { withTransaction } from '../db/client.js';
@@ -407,15 +407,32 @@ export async function startWorker(): Promise<() => Promise<void>> {
           await markIngestFilesSuperseded(db, superseded);
         }
 
-        await db
-          .update(ingest_files)
-          .set({
-            status: 'duplicate',
-            submission_id: dedupResult.existingSubmissionId,
-            matched_student_id: duplicateStudentId,
-            resolved_at: new Date(),
-          })
-          .where(eq(ingest_files.id, ingestFileId));
+        // A re-upload of the same artifact can restore check-8 evidence the
+        // existing (pre-shas) submission lacks; settle the duplicate through
+        // the refresh, which is a cheap no-op when there is nothing to restore.
+        await timePhase('duplicate_refresh', () =>
+          settleDuplicateWithRefresh(
+            { db, storage: storageClient, logger },
+            {
+              existingSubmissionId: dedupResult.existingSubmissionId,
+              semesterId,
+              stagingKey: ingestStagingKey(ingestJobId, ingestFileId),
+              ingestJobId,
+              ingestFileId,
+            },
+            (h) =>
+              h
+                .update(ingest_files)
+                .set({
+                  status: 'duplicate',
+                  submission_id: dedupResult.existingSubmissionId,
+                  matched_student_id: duplicateStudentId,
+                  resolved_at: new Date(),
+                })
+                .where(eq(ingest_files.id, ingestFileId))
+                .then(() => undefined),
+          ),
+        );
 
         logger.info(
           { ingestFileId, attachedCoSubmitter: duplicateStudentId !== null },
@@ -540,17 +557,33 @@ export async function startWorker(): Promise<() => Promise<void>> {
           await markIngestFilesSuperseded(db, superseded);
         }
 
-        await db
-          .update(ingest_files)
-          .set({
-            status: 'duplicate',
-            submission_id: createOutcome.existingSubmissionId,
-            matched_student_id: studentId,
-            matched_assignment_id: null,
-            filename_capture: filenameCapture,
-            resolved_at: new Date(),
-          })
-          .where(eq(ingest_files.id, ingestFileId));
+        // Same refresh as the phase-2 hit; the upload is already parsed here.
+        await timePhase('duplicate_refresh', () =>
+          settleDuplicateWithRefresh(
+            { db, storage: storageClient, logger },
+            {
+              existingSubmissionId: createOutcome.existingSubmissionId,
+              semesterId,
+              stagingKey,
+              ingestJobId,
+              ingestFileId,
+              uploadedBundle: bundle,
+            },
+            (h) =>
+              h
+                .update(ingest_files)
+                .set({
+                  status: 'duplicate',
+                  submission_id: createOutcome.existingSubmissionId,
+                  matched_student_id: studentId,
+                  matched_assignment_id: null,
+                  filename_capture: filenameCapture,
+                  resolved_at: new Date(),
+                })
+                .where(eq(ingest_files.id, ingestFileId))
+                .then(() => undefined),
+          ),
+        );
 
         logger.info(
           { ingestFileId, attachedCoSubmitter: studentId !== null },
@@ -606,7 +639,7 @@ export async function startWorker(): Promise<() => Promise<void>> {
                   tx,
                   submissionResult.submissionId,
                   bundle,
-                  configuredValidationOptions(),
+                  ingestValidationOptions(bundle),
                 ),
               );
             } catch (e) {

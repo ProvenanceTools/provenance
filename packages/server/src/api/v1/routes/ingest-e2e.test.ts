@@ -24,7 +24,8 @@ import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
+import { loadStoredSubmittedShas } from '../../../services/ingest/submitted-shas.js';
 import { withTestRustfs } from '../../../../test/helpers/rustfs.js';
 import { _setConfigForTest, _resetConfigForTest } from '../../../config/index.js';
 import { _resetLoggerForTest } from '../../../logging.js';
@@ -42,6 +43,8 @@ import {
   ingest_jobs,
   ingest_files,
   submissions,
+  validation_results,
+  audit_log,
 } from '../../../db/schema.js';
 import * as schema from '../../../db/schema.js';
 import { startWorker } from '../../../jobs/worker.js';
@@ -329,6 +332,19 @@ describe('ingest e2e pipeline (POST → worker → status=succeeded)', () => {
       expect(apiFile.matched_student?.sid).toBe('123456');
       expect(apiFile.matched_assignment?.assignment_id_str).toBe('hw01');
 
+      // Ingest recorded the submitted shas (this 1.0 bundle submits no files,
+      // so the record is empty — but present, which is what dedup keys off).
+      const subId = fileRow!.submission_id!;
+      expect(await loadStoredSubmittedShas(db, subId)).toEqual({});
+
+      // Make the row look like one ingested before shas were recorded, so the
+      // re-upload below takes the refresh path through the real worker.
+      await db
+        .update(validation_results)
+        .set({ detail: sql`jsonb_set(detail, '{7}', (detail -> 7) - 'submitted_shas')` })
+        .where(eq(validation_results.submission_id, subId));
+      expect(await loadStoredSubmittedShas(db, subId)).toBeUndefined();
+
       // -----------------------------------------------------------------------
       // Re-upload the same bundle → dedup → status='duplicate', no new submission.
       // -----------------------------------------------------------------------
@@ -396,6 +412,17 @@ describe('ingest e2e pipeline (POST → worker → status=succeeded)', () => {
           ),
         );
       expect(allSubs).toHaveLength(1);
+
+      // ...and the duplicate restored the shas and left an audit row saying so.
+      expect(await loadStoredSubmittedShas(db, subId)).toEqual({});
+      const refreshAudits = await db
+        .select({ detail: audit_log.detail })
+        .from(audit_log)
+        .where(
+          and(eq(audit_log.action, 'ingest.duplicate.refresh'), eq(audit_log.target_id, subId)),
+        );
+      expect(refreshAudits).toHaveLength(1);
+      expect(refreshAudits[0]!.detail).toMatchObject({ ingest_job_id: job_id2 });
     });
   });
 });

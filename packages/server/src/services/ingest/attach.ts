@@ -55,8 +55,7 @@ import { ingestStagingKey } from '../storage/keys.js';
 import { parseBundlePhase } from './parse-bundle-phase.js';
 import { createSubmission } from './create-submission.js';
 import { computeAndStoreStats } from './stats.js';
-import { runAndStoreValidation } from './validation.js';
-import { configuredValidationOptions } from '../../config/root-key.js';
+import { runAndStoreValidation, ingestValidationOptions } from './validation.js';
 import { runAndStoreHeuristics } from '../heuristics/run-per-submission.js';
 import { finalizeContributors } from '../contributors/finalize.js';
 import { enqueueCrossFlagsJob } from '../../jobs/recompute-cross-flags.js';
@@ -302,7 +301,7 @@ export async function attachUnmatchedFile(
         tx,
         submissionResult.submissionId,
         bundle,
-        configuredValidationOptions(),
+        ingestValidationOptions(bundle),
       );
     } catch (e) {
       const cause = e instanceof Error ? e.message : String(e);

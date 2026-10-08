@@ -367,6 +367,25 @@ Whichever path is used, monitor progress via `GET /semesters/<id>/ingest/jobs/<j
 the analyzer's Ingest job view; unmatched submissions land in the unmatched tray for manual
 resolution.
 
+### 5.2 Restoring check-8 verification by re-uploading the original export
+
+Stored bundles are source-stripped, so check 8 (`submitted_code_match`) relies on the
+sha256 of each submitted file that ingest records before stripping. Submissions ingested
+before those shas were recorded have none: when they are re-validated (any recompute), a
+file whose submitted state the stripped bundle cannot establish reads `unknown` and check 8
+is reported `skipped` rather than verified.
+
+To restore full verification, **re-upload the original export** through either ingest path.
+Each re-sent bundle is still reported as a `duplicate` (no new submission is created), but
+when the existing submission lacks stored shas and the upload is proven to be the same
+artifact — its seal, signatures and `.slog`/`.slog.meta` entries byte-identical to the stored
+bundle's — the server records the shas from the upload and re-runs validation, heuristics and
+scoring for that submission under the semester's active heuristic config. Each refresh writes
+an `ingest.duplicate.refresh` row to the audit log (target: the submission; detail: the
+ingest job/file and check 8's status before and after). Uploads whose entries differ, and
+submissions whose stored blob has been swept by retention, are left unchanged. Re-uploading
+submissions that already have stored shas does nothing beyond the usual duplicate.
+
 ---
 
 ## 6. Retention policy

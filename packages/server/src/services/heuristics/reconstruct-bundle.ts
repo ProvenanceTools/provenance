@@ -8,12 +8,12 @@
  * extension-hash sentinel/recovery hack (needed when only events were persisted)
  * is gone: recompute/cross see the exact same manifest the original ingest did.
  *
- * The ValidationReport is still reconstructed from the persisted
- * `validation_results` row — validation is computed once at ingest and read
- * paths always serve that stored row rather than recomputing it. (Check 8,
- * submitted_code_match, is in fact re-runnable against a source-stripped
- * bundle as of 2026-07 — see verify-submitted-code.ts — but that doesn't change
- * this: nothing here re-runs validation.)
+ * The ValidationReport is reconstructed from the persisted `validation_results`
+ * row; nothing here re-runs validation. (Per-submission recompute does re-run
+ * it, against the stripped bundle plus the submitted shas ingest persisted —
+ * see recompute-submission.ts and services/ingest/submitted-shas.ts.) The
+ * persisted shas are stripped from the rebuilt checks: they are storage-side
+ * evidence, not part of a `ValidationCheck`.
  *
  * Used by:
  *   - reconstruction.ts (file replay)
@@ -32,6 +32,7 @@ import { validation_results } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import type { StorageClient } from '../storage/client.js';
 import { loadSubmissionIndex } from '../bundle/load-index.js';
+import { stripSubmittedShas } from '../ingest/submitted-shas.js';
 
 // ---------------------------------------------------------------------------
 // Return type
@@ -128,7 +129,7 @@ async function reconstructValidationReport(
   if (detailChecks && detailChecks.length === 8) {
     return {
       overall: row.overall as ValidationReport['overall'],
-      checks: detailChecks,
+      checks: stripSubmittedShas(detailChecks),
     };
   }
 
