@@ -87,6 +87,7 @@ import { reconstructBundleFromDb } from '../heuristics/reconstruct-bundle.js';
 import { runValidation } from '@provenance/analysis-core/validation/run-validation.js';
 import { runAndStoreValidation } from '../ingest/validation.js';
 import { loadStoredSubmittedShas } from '../ingest/submitted-shas.js';
+import type { SubmittedShas } from '../ingest/submitted-shas.js';
 import { configuredValidationOptions } from '../../config/root-key.js';
 import { computeAndStoreStats } from '../ingest/stats.js';
 import { computeScore } from './compute.js';
@@ -263,6 +264,11 @@ export function translateFlagsToRows(
  * @param config - The ServerHeuristicConfig to apply.
  * @param configVersion - The version number to write to flags.heuristic_config_version.
  * @param options.simulate - If true, skip all writes (dry-run mode).
+ * @param options.submittedShas - Submitted-file shas to use INSTEAD of the
+ *   stored ones, and to persist in their place. Only for a caller that has just
+ *   established them from the submitted bytes themselves — the duplicate
+ *   re-upload refresh (services/ingest/refresh-duplicate.ts). Omitted, the
+ *   stored shas are read back and re-persisted.
  */
 export async function recomputeSubmission(
   db: DrizzleDb,
@@ -271,7 +277,7 @@ export async function recomputeSubmission(
   semesterId: string,
   config: ServerHeuristicConfig,
   configVersion: number,
-  { simulate = false }: { simulate?: boolean } = {},
+  { simulate = false, submittedShas }: { simulate?: boolean; submittedShas?: SubmittedShas } = {},
 ): Promise<RecomputeResult> {
   // -------------------------------------------------------------------------
   // Step 1: Reconstruct Bundle + EventIndex + ValidationReport from DB.
@@ -303,10 +309,10 @@ export async function recomputeSubmission(
   //
   // simulate = dry-run: compute the report but persist nothing.
   // -------------------------------------------------------------------------
-  const storedShas = await loadStoredSubmittedShas(db, submissionId);
+  const shas = submittedShas ?? (await loadStoredSubmittedShas(db, submissionId));
   const validationOptions = {
     ...configuredValidationOptions(),
-    ...(storedShas !== undefined ? { submittedShas: storedShas } : {}),
+    ...(shas !== undefined ? { submittedShas: shas } : {}),
   };
   const validationReport = simulate
     ? await runValidation(bundle, validationOptions)

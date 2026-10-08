@@ -68,15 +68,17 @@ export function isProvenanceEntry(name: string): boolean {
 }
 
 /**
- * Return a new ZIP containing only the provenance entries of `zipBytes`
- * (manifest.json, manifest.sig, manifest-<session_id>.json/.sig, *.slog,
- * *.slog.meta). Source files are dropped.
+ * The provenance entries of `zipBytes` — manifest.json, manifest.sig,
+ * manifest-<session_id>.json/.sig, *.slog, *.slog.meta — with their
+ * DECOMPRESSED bytes, sorted by name. Source entries are never inflated.
  *
- * JSZip reads the input so entry bytes are extracted verbatim (source entries
- * are never inflated — `.async` is only called on provenance entries); the
- * output is (re)built with the native zlib writer.
+ * This is the one definition of "what a stored bundle keeps":
+ * {@link stripBundleSourceFiles} writes exactly these entries, and the
+ * duplicate-refresh path compares an upload's entries against a stored blob's
+ * with it (zip bytes themselves are not comparable — entry timestamps and
+ * compression differ between writers).
  */
-export async function stripBundleSourceFiles(zipBytes: Uint8Array): Promise<Uint8Array> {
+export async function readProvenanceEntries(zipBytes: Uint8Array): Promise<ZipEntryInput[]> {
   const input = await JSZip.loadAsync(zipBytes);
 
   // Stable order for deterministic output.
@@ -89,6 +91,18 @@ export async function stripBundleSourceFiles(zipBytes: Uint8Array): Promise<Uint
     if (!isProvenanceEntry(name)) continue;
     entries.push({ name, data: await entry.async('uint8array') });
   }
+  return entries;
+}
 
-  return writeDeflateZip(entries);
+/**
+ * Return a new ZIP containing only the provenance entries of `zipBytes`
+ * (manifest.json, manifest.sig, manifest-<session_id>.json/.sig, *.slog,
+ * *.slog.meta). Source files are dropped.
+ *
+ * JSZip reads the input so entry bytes are extracted verbatim (source entries
+ * are never inflated — `.async` is only called on provenance entries); the
+ * output is (re)built with the native zlib writer.
+ */
+export async function stripBundleSourceFiles(zipBytes: Uint8Array): Promise<Uint8Array> {
+  return writeDeflateZip(await readProvenanceEntries(zipBytes));
 }
