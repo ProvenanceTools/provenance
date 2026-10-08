@@ -61,7 +61,7 @@ digraph ingest {
     bgcolor="#0a130d" labeljust="l"
     node [fillcolor="#0d2416" color="#3fbf62" fontsize=9.5]
     stats [label="per-file statistics"]
-    val   [label="8 validation checks\ncheck 2 walks the trust chain against the\nconfigured ROOT public key — unset ⇒ skipped\ncheck 8 needs the submitted bytes"]
+    val   [label="8 validation checks\ncheck 2 walks the trust chain against the\nconfigured ROOT public key — unset ⇒ skipped\ncheck 8 needs the submitted bytes —\nand records their sha256s, so a later\nre-run on the stripped blob agrees"]
     heur  [label="18 heuristics + integrity flags\nlifted from failed checks"]
   }
 
@@ -74,7 +74,7 @@ digraph ingest {
     mv    [label="move blob\nstaging key → final key, inside the\ntransaction"]
     strip [label="STRIP student source\nthe stored blob becomes provenance-only"
            fillcolor="#241a0c" color="#F97316" penwidth=2.0]
-    ins   [label="insert submission, per_file_stats,\nvalidation_results, flags"]
+    ins   [label="insert submission, per_file_stats,\nvalidation_results (+ submitted shas), flags"]
     contrib[label="finalizeContributors — AFTER heuristics, deliberately\nestablishBundleContributors MUTATES the bundle and several\nheuristics read that stamp, so stamping earlier would change\nwhich flags an ingest produces. Roster side and bundle side\nreconcile onto ONE row per person; unattributed and\nunverifiable sessions get NO row."
             fillcolor="#1e1830" color="#9d7bf5" fontsize=9]
     lock  [label="pg_advisory_xact_lock — TWO of them\n(semester_id, blob_sha256), then, for a grouped file only,\n(semester_id, 'group:' + source_group_key). Always in that\norder, so two writers can never hold them crosswise and\ndeadlock; a file with no group key takes exactly one.\nTwo co-submitters carry byte-identical bundles, so both\ncleared dedup before either committed and both created a\nsubmission. Serial execution looked perfect; only\nconcurrency reinstated the fan-out."
