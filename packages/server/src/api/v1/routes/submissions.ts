@@ -33,7 +33,7 @@ import { getSubmissionFlags } from '../../../services/submissions/flags.js';
 import { getSubmissionStats } from '../../../services/submissions/stats.js';
 import {
   getSubmissionValidation,
-  getStoredChainIntact,
+  getStoredSourceGate,
 } from '../../../services/submissions/validation.js';
 import { getSubmissionFiles } from '../../../services/submissions/files.js';
 import { getBlob } from '../../../services/storage/blobs.js';
@@ -303,8 +303,9 @@ export function createSubmissionsRouter(): Hono {
       return c.json({ available: false, files: [] });
     }
     // Gate the per-file verdicts on the STORED chain_integrity verdict, so this
-    // tab and the Validation tab cannot disagree about it on one page load.
-    const gate = await getStoredChainIntact(db, submissionId);
+    // tab and the Validation tab cannot disagree about it on one page load, and
+    // hand check 8 the submitted shas ingest persisted (the blob is stripped).
+    const gate = await getStoredSourceGate(db, submissionId);
     return c.json(await extractSubmittedFiles(blob, gate));
   });
 
@@ -351,7 +352,7 @@ export function createSubmissionsRouter(): Hono {
         return c.json(Errors.notFound().toBody(), 404);
       }
 
-      const gate = await getStoredChainIntact(db, submissionId);
+      const gate = await getStoredSourceGate(db, submissionId);
       const content = await extractSubmittedFileContent(blob, filePath, gate);
       if (content === null) {
         return c.json(Errors.notFound().toBody(), 404);

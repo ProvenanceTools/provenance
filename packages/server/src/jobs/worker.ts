@@ -39,7 +39,6 @@ import { getBoss, stopBoss, JOB_KINDS } from './pg-boss.js';
 import { getLogger } from '../logging.js';
 import { getDb, type DrizzleDb } from '../db/client.js';
 import { getConfig } from '../config/index.js';
-import { configuredValidationOptions } from '../config/root-key.js';
 import { checkPoolMargin } from '../config/pool-margin.js';
 import { ingest_files, ingest_jobs, semesters } from '../db/schema.js';
 import { createStorageClient, storageConfigFromEnv } from '../services/storage/client.js';
@@ -66,7 +65,7 @@ import {
 } from '../services/ingest/match-student.js';
 import { createSubmission } from '../services/ingest/create-submission.js';
 import { computeAndStoreStats } from '../services/ingest/stats.js';
-import { runAndStoreValidation } from '../services/ingest/validation.js';
+import { runAndStoreValidation, ingestValidationOptions } from '../services/ingest/validation.js';
 import { runAndStoreHeuristics } from '../services/heuristics/run-per-submission.js';
 import { finalizeContributors } from '../services/contributors/finalize.js';
 import { withTransaction } from '../db/client.js';
@@ -606,7 +605,7 @@ export async function startWorker(): Promise<() => Promise<void>> {
                   tx,
                   submissionResult.submissionId,
                   bundle,
-                  configuredValidationOptions(),
+                  ingestValidationOptions(bundle),
                 ),
               );
             } catch (e) {
