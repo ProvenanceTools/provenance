@@ -27,8 +27,15 @@
 // single-quoted scalars whose closing quote lands at column 0, below the parent
 // node's indentation (see the autograder-output note above). A spec-strict
 // parser rejects that terminator as missing; js-yaml accepts it, as Psych does.
-// v4's `load` uses the safe default schema — no `!!js/*` construction.
-import { load as parseYaml } from 'js-yaml';
+// v4's `loadAll` uses the safe default schema — no `!!js/*` construction.
+//
+// `loadAll`, not `load`: a real Gradescope export carried a bare `...`
+// document-end marker at column 0 mid-file, splitting it into two documents.
+// It followed the only submissions whose autograder output Psych writes as a
+// keep-chomped `|+` block scalar — consistent with Gradescope concatenating
+// per-batch Psych dumps, where libyaml closes an open-ended document with `...`
+// and the next batch's mapping continues without a `---`.
+import { loadAll as parseYamlStream } from 'js-yaml';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -117,15 +124,34 @@ function parseSubmitters(raw: unknown): GradescopeSubmitter[] {
  * decides how to treat them (no submitter → cannot match).
  */
 export function parseSubmissionMetadata(yamlText: string): ParseMetadataResult {
-  let doc: unknown;
+  let docs: unknown[];
   try {
-    doc = parseYaml(yamlText);
+    docs = parseYamlStream(yamlText);
   } catch (e) {
     return { ok: false, error: 'invalid_yaml', detail: e instanceof Error ? e.message : String(e) };
   }
 
-  if (!isObject(doc)) {
+  // Gradescope can split the file into several documents with a bare `...`
+  // (see the stream note above); each is a mapping of submission folders, so
+  // merge them. A folder repeated across documents is refused rather than
+  // letting one silently overwrite the other — the same stance js-yaml takes on
+  // a duplicate key within a single document.
+  const nonEmpty = docs.filter((d) => d !== null && d !== undefined);
+  if (nonEmpty.length === 0 || !nonEmpty.every(isObject)) {
     return { ok: false, error: 'unexpected_shape', detail: 'top level is not a mapping' };
+  }
+  const doc: Record<string, unknown> = {};
+  for (const part of nonEmpty) {
+    for (const [key, value] of Object.entries(part)) {
+      if (Object.prototype.hasOwnProperty.call(doc, key)) {
+        return {
+          ok: false,
+          error: 'unexpected_shape',
+          detail: `duplicate submission key across documents: ${key}`,
+        };
+      }
+      doc[key] = value;
+    }
   }
 
   const submissions: GradescopeSubmissionMeta[] = [];
