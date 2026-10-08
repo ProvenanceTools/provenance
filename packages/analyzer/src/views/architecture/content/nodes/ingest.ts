@@ -155,12 +155,33 @@ export const nodes: Record<string, ArchNode> = {
   },
   ddskip: {
     title: 'Skip · already ingested',
-    body: 'Nothing is thrown away. The row is marked duplicate and linked to the submission whose bytes it matched, so the upload still appears in the job’s summary and still resolves to something a reviewer can open. Skip means "produce no second submission", not "forget this happened". Because duplicate is a clean outcome, a job made entirely of re-sends finalizes as succeeded rather than partial.\n\nOne subtlety about the key: the recorded sha256 is of the bundle as it arrived, not of the object the server ends up storing. Stripping rewrites the archive, so the stored blob’s own hash differs by design. The recorded value is the stable identity of what the student submitted, and it doubles as the cache key for re-parsing, which is what stops a superseded or re-ingested blob from ever serving a stale parse.',
+    body: 'Nothing is thrown away. The row is marked duplicate and linked to the submission whose bytes it matched, so the upload still appears in the job’s summary and still resolves to something a reviewer can open. Skip means "produce no second submission", not "forget this happened" — and, for a submission ingested before submitted shas were recorded, a proven re-upload is also used to restore them (see the refresh node). Because duplicate is a clean outcome, a job made entirely of re-sends finalizes as succeeded rather than partial.\n\nOne subtlety about the key: the recorded sha256 is of the bundle as it arrived, not of the object the server ends up storing. Stripping rewrites the archive, so the stored blob’s own hash differs by design. The recorded value is the stable identity of what the student submitted, and it doubles as the cache key for re-parsing, which is what stops a superseded or re-ingested blob from ever serving a stale parse.',
     links: [
       { label: 'dedup.ts', href: `${GH}/packages/server/src/services/ingest/dedup.ts` },
       {
         label: 'create-submission.ts',
         href: `${GH}/packages/server/src/services/ingest/create-submission.ts`,
+      },
+    ],
+  },
+
+  ddrefresh: {
+    title: 'Refresh a pre-shas submission from its re-upload',
+    body: 'A duplicate is normally a no-op, and for a submission ingested after submitted shas were recorded it still is: one indexed read of the stored validation row, then the plain duplicate. The exception exists because of rows ingested BEFORE that. Their stored bundle is stripped and carries no record of what was submitted, so every re-run of check 8 on them can only say unknown wherever the stripped copy cannot establish the submitted state — and a bundle whose bytes disagreed with a final seal reads as a clean pass. The original export still has the bytes, so re-uploading it is how staff restore full verification.\n\nNothing from the upload is trusted until it is proven to be the stored artifact. Its provenance entries — the seal and its signatures, every .slog and .slog.meta, read with the same function the strip uses — must be byte-identical, by name and decompressed content, to the stored blob’s. The zip bytes are deliberately not compared: the export path rebuilds archives, and entry timestamps make two copies of one artifact differ. A mismatch, an unreadable upload, or a stored blob already swept by retention leaves the duplicate exactly as it always was, with an info log saying why.\n\nWhen it is proven, the shas are computed from the upload’s bytes and handed to recomputeSubmission — the same entry point a config recompute uses, under the semester’s active config with the same version-0 fallback ingest uses — which persists them and re-runs validation, heuristics and scoring. That, an ingest.duplicate.refresh audit row (check 8 before and after), and the file’s duplicate status commit in one transaction, so a pg-boss retry either redoes all of it or finds the file settled. A Gradescope group fans out into several identical rows that hit dedup together; a per-submission advisory lock and a second look at the stored shas under it make exactly one of them do the work.',
+    invariant:
+      'An upload may change a stored submission’s verdicts only after its provenance entries are proven identical to the stored blob’s, and only to supply the submitted shas that submission lacks.',
+    links: [
+      {
+        label: 'refresh-duplicate.ts',
+        href: `${GH}/packages/server/src/services/ingest/refresh-duplicate.ts`,
+      },
+      {
+        label: 'submitted-shas.ts',
+        href: `${GH}/packages/server/src/services/ingest/submitted-shas.ts`,
+      },
+      {
+        label: 'recompute-submission.ts',
+        href: `${GH}/packages/server/src/services/scoring/recompute-submission.ts`,
       },
     ],
   },
