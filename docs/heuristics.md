@@ -16,9 +16,12 @@ A single entry point — [`runHeuristics`](../packages/analysis-core/src/heurist
 
 Per-file heuristics only evaluate paths whose role is `reviewed` in the assignment manifest. A build or test artifact written by a tool, a workspace settings file, or a scratch file the student merely opened is not graded and is often machine-written, so flags on it (a "paste" of generated output, "low typing, high output" on a file a harness wrote) are noise. The scope is read by [`reviewed-scope.ts`](../packages/analysis-core/src/heuristics/reviewed-scope.ts) and resolved with log-core's `resolvePathRole`, the same matcher the recorders use:
 
-1. the manifest each session embedded in `session.start` (`files_under_review`, `ignore`, `attachments`), unioned across sessions. A 2.0 manifest is honoured only once the bundle's trust chain verified, since scope can only suppress flags; an unverified claim narrows nothing. A 1.x manifest is read as it stands.
-2. otherwise the sealed manifest's `submission_files` (entries with role `attachment` are not reviewed).
-3. with neither (or all three lists empty, i.e. old bundles) every path is evaluated, as before.
+The scope is the manifest each session embedded in `session.start` (`files_under_review`, `ignore`, `attachments`), unioned across sessions, and it is honoured **only if that manifest's signature verified** (`Bundle.manifestScopeTrust`, stamped by `establishBundleTrust`): scope can only suppress flags, so an unproven claim narrows nothing and every path is evaluated.
+
+- 2.0: the trust chain verified against the configured root key.
+- 1.x: a root public key is configured, every session embeds a manifest, each verifies against that key, and each session's `manifest_sig` is that manifest's own `sig`. (Check 2 alone only compares sigs across 1.x sessions, so it is not enough.) A deployment whose 1.x course key differs from its root key leaves 1.x scope unverified.
+- The sealed manifest's `submission_files` is not used: it is not course-signed.
+- No scope information (all three lists empty, no embedded manifest, or unverified): every path is evaluated, as before. `attachment` paths are never captured and count as not reviewed.
 
 | Treatment                      | Heuristics                                                                                                                                                                                                                                                               |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

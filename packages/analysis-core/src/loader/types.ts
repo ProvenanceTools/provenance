@@ -539,6 +539,19 @@ export type Bundle = {
    */
   capturePolicyTrust?: CapturePolicyTrust;
   /**
+   * Whether the scope (`files_under_review`, `ignore`, `attachments`) embedded in
+   * the sessions' manifests may NARROW what heuristics evaluate. Stamped by
+   * `establishBundleTrust` alongside {@link Bundle.capturePolicyTrust}, and read
+   * the same way: absent means `'unverified'`.
+   *
+   * Unlike the capture policy this also covers 1.x: it is `'verified'` for a 2.0
+   * bundle whose trust chain verified, and for a 1.x bundle only when a root
+   * public key is configured, EVERY session embeds a manifest, each verifies
+   * against that key, and each session's `manifest_sig` is that manifest's own
+   * `sig`. Anything less leaves scope unable to suppress a flag.
+   */
+  manifestScopeTrust?: CapturePolicyTrust;
+  /**
    * Contributor verdict per session, stamped by `establishBundleContributors`
    * (`identity/resolve-contributors.ts`). Deliberately mutable and deliberately
    * absent from the loader's output, for the same reason as
