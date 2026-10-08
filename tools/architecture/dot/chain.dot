@@ -79,7 +79,7 @@ digraph chain {
     bsig [label="manifest.sig\ned25519 over JCS(manifest)" shape=note]
     zip  [label="bundle .zip" shape=note penwidth=2.0]
 
-    rseal[label="ROLLING SEAL — format_version 1.2\nmanifest-<session_id>.json + .sig, ONE session per\nfile, rewritten at start, at every checkpoint and at\ndispose. Its digests commit to a PREFIX — except the\ndispose-time roll, which carries final: true inside the\nsigned payload and commits to the WHOLE file." shape=note]
+    rseal[label="ROLLING SEAL — format_version 1.2\nmanifest-<session_id>.json + .sig, ONE session per\nfile, rewritten at start, after checkpoints (min 60 s apart,\nlate ones deferred), ~1 s after a save, and at dispose. Its digests commit to a PREFIX — except the\ndispose-time roll, which carries final: true inside the\nsigned payload and commits to the WHOLE file." shape=note]
     push [label="git push\n.provenance/ IS the submission.\nNo seal step ever runs, so the archived\nlog routinely runs past its own last seal."
           shape=note penwidth=2.0]
   }
@@ -136,7 +136,7 @@ digraph chain {
   bman -> zip
   bsig -> zip
 
-  e100 -> rseal [label="on EVERY checkpoint —\nthere is no submit moment\nto wait for" color="#17bfae"]
+  e100 -> rseal [label="after checkpoints (60 s floor,\ndeferred) and ~1 s after a save —\nthere is no submit moment\nto wait for" color="#17bfae"]
   skey -> rseal [label="each session signs its OWN seal,\nso no key can vouch for another" color="#e8559c" style=dashed]
   rseal -> push [color="#17bfae"]
   rseal -> zip  [label="a classically sealed bundle carries\nBOTH shapes, and check 1 requires\nboth — neither excuses the other"

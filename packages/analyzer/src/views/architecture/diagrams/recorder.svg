@@ -1,5 +1,5 @@
-<svg width="2481pt" height="1775pt"
- viewBox="0.00 0.00 2481.00 1775.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<svg width="2522pt" height="1775pt"
+ viewBox="0.00 0.00 2522.00 1775.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
 <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(21.6 1753.69)">
 <title>recorder</title>
 <g id="clust1" class="cluster">
@@ -24,8 +24,8 @@
 </g>
 <g id="clust5" class="cluster">
 
-<path stroke-width="1.5" d="M1812,-8C1812,-8 2418,-8 2418,-8 2424,-8 2430,-14 2430,-20 2430,-20 2430,-250.92 2430,-250.92 2430,-256.92 2424,-262.92 2418,-262.92 2418,-262.92 1812,-262.92 1812,-262.92 1806,-262.92 1800,-256.92 1800,-250.92 1800,-250.92 1800,-20 1800,-20 1800,-14 1806,-8 1812,-8" class="f-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="1841.38" y="-249.89" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-srv"> &#160;DURABILITY &#160;</text>
+<path stroke-width="1.5" d="M1784,-8C1784,-8 2390,-8 2390,-8 2396,-8 2402,-14 2402,-20 2402,-20 2402,-250.92 2402,-250.92 2402,-256.92 2396,-262.92 2390,-262.92 2390,-262.92 1784,-262.92 1784,-262.92 1778,-262.92 1772,-256.92 1772,-250.92 1772,-250.92 1772,-20 1772,-20 1772,-14 1778,-8 1784,-8" class="f-srv s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="1813.38" y="-249.89" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-srv"> &#160;DURABILITY &#160;</text>
 </g>
 
 <g id="node1" class="node">
@@ -442,96 +442,96 @@
 
 <g id="node24" class="node">
 <title>atomic</title>
-<path stroke-width="1.3" d="M2409.71,-70.21C2409.71,-70.21 2232.29,-70.21 2232.29,-70.21 2226.29,-70.21 2220.29,-64.21 2220.29,-58.21 2220.29,-58.21 2220.29,-28 2220.29,-28 2220.29,-22 2226.29,-16 2232.29,-16 2232.29,-16 2409.71,-16 2409.71,-16 2415.71,-16 2421.71,-22 2421.71,-28 2421.71,-28 2421.71,-58.21 2421.71,-58.21 2421.71,-64.21 2415.71,-70.21 2409.71,-70.21" class="f-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="2321" y="-54.71" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">atomic replace — WHOLE files only</text>
-<text xml:space="preserve" text-anchor="middle" x="2321" y="-44.96" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">*.slog.meta · manifest.json · manifest.sig</text>
-<text xml:space="preserve" text-anchor="middle" x="2321" y="-35.21" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">manifest&#45;&lt;session_id&gt;.json · .sig</text>
-<text xml:space="preserve" text-anchor="middle" x="2321" y="-25.46" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">temp → fsync → rename</text>
+<path stroke-width="1.3" d="M2381.71,-70.21C2381.71,-70.21 2204.29,-70.21 2204.29,-70.21 2198.29,-70.21 2192.29,-64.21 2192.29,-58.21 2192.29,-58.21 2192.29,-28 2192.29,-28 2192.29,-22 2198.29,-16 2204.29,-16 2204.29,-16 2381.71,-16 2381.71,-16 2387.71,-16 2393.71,-22 2393.71,-28 2393.71,-28 2393.71,-58.21 2393.71,-58.21 2393.71,-64.21 2387.71,-70.21 2381.71,-70.21" class="f-srv s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="2293" y="-54.71" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">atomic replace — WHOLE files only</text>
+<text xml:space="preserve" text-anchor="middle" x="2293" y="-44.96" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">*.slog.meta · manifest.json · manifest.sig</text>
+<text xml:space="preserve" text-anchor="middle" x="2293" y="-35.21" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">manifest&#45;&lt;session_id&gt;.json · .sig</text>
+<text xml:space="preserve" text-anchor="middle" x="2293" y="-25.46" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">temp → fsync → rename</text>
 </g>
 
 <g id="edge33" class="edge">
 
-<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M2182.28,-460.55C2227.13,-446.4 2292.95,-418 2325,-367.17 2382.36,-276.21 2351.57,-140.31 2332.48,-77.79" class="s-fmt"/>
-<polygon stroke-width="1.1" points="2334.51,-77.23 2330.72,-72.13 2330.5,-78.48 2334.51,-77.23" class="a-fmt s-fmt"/>
-<text xml:space="preserve" text-anchor="middle" x="2386.93" y="-285.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">every 100:</text>
-<text xml:space="preserve" text-anchor="middle" x="2386.93" y="-276.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">signed checkpoint</text>
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M2205.56,-460.54C2259.3,-447.43 2330.63,-420.64 2368,-367.17 2434.09,-272.61 2439.65,-210.35 2386,-108.21 2379.03,-94.93 2367.92,-83.87 2355.77,-74.87" class="s-fmt"/>
+<polygon stroke-width="1.1" points="2357.21,-73.32 2351.09,-71.59 2354.79,-76.76 2357.21,-73.32" class="a-fmt s-fmt"/>
+<text xml:space="preserve" text-anchor="middle" x="2446.98" y="-285.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">every 100:</text>
+<text xml:space="preserve" text-anchor="middle" x="2446.98" y="-276.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">signed checkpoint</text>
 </g>
 
 <g id="node25" class="node">
 <title>roll</title>
-<path stroke-width="1.3" d="M2287.84,-237.17C2287.84,-237.17 2060.16,-237.17 2060.16,-237.17 2054.16,-237.17 2048.16,-231.17 2048.16,-225.17 2048.16,-225.17 2048.16,-177.71 2048.16,-177.71 2048.16,-171.71 2054.16,-165.71 2060.16,-165.71 2060.16,-165.71 2287.84,-165.71 2287.84,-165.71 2293.84,-165.71 2299.84,-171.71 2299.84,-177.71 2299.84,-177.71 2299.84,-225.17 2299.84,-225.17 2299.84,-231.17 2293.84,-237.17 2287.84,-237.17" class="f-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="2174" y="-222.14" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">ROLLING SEAL — rewritten, not written once</text>
-<text xml:space="preserve" text-anchor="middle" x="2174" y="-212.39" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">manifest&#45;&lt;session_id&gt;.json + .sig, ONE session per file,</text>
-<text xml:space="preserve" text-anchor="middle" x="2174" y="-202.64" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">signed by that session&#39;s OWN ephemeral key.</text>
-<text xml:space="preserve" text-anchor="middle" x="2174" y="-192.89" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">At session start · on every checkpoint · once more at</text>
-<text xml:space="preserve" text-anchor="middle" x="2174" y="-183.14" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">dispose, and ONLY that last one carries final: true.</text>
-<text xml:space="preserve" text-anchor="middle" x="2174" y="-173.39" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">The git path never runs seal — this IS its seal.</text>
+<path stroke-width="1.3" d="M2335.34,-237.17C2335.34,-237.17 2002.66,-237.17 2002.66,-237.17 1996.66,-237.17 1990.66,-231.17 1990.66,-225.17 1990.66,-225.17 1990.66,-177.71 1990.66,-177.71 1990.66,-171.71 1996.66,-165.71 2002.66,-165.71 2002.66,-165.71 2335.34,-165.71 2335.34,-165.71 2341.34,-165.71 2347.34,-171.71 2347.34,-177.71 2347.34,-177.71 2347.34,-225.17 2347.34,-225.17 2347.34,-231.17 2341.34,-237.17 2335.34,-237.17" class="f-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="2169" y="-222.14" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">ROLLING SEAL — rewritten, not written once</text>
+<text xml:space="preserve" text-anchor="middle" x="2169" y="-212.39" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">manifest&#45;&lt;session_id&gt;.json + .sig, ONE session per file,</text>
+<text xml:space="preserve" text-anchor="middle" x="2169" y="-202.64" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">signed by that session&#39;s OWN ephemeral key.</text>
+<text xml:space="preserve" text-anchor="middle" x="2169" y="-192.89" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">At session start · after checkpoints (60 s floor, deferred) ·</text>
+<text xml:space="preserve" text-anchor="middle" x="2169" y="-183.14" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">~1 s after a save · once more at dispose, and ONLY that last one carries final: true.</text>
+<text xml:space="preserve" text-anchor="middle" x="2169" y="-173.39" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">The git path never runs seal — this IS its seal.</text>
 </g>
 
 <g id="edge34" class="edge">
 
-<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M2137.63,-460.81C2142.82,-423.96 2159.11,-308.25 2168.02,-244.91" class="s-tra"/>
-<polygon stroke-width="1.1" points="2170.08,-245.34 2168.84,-239.11 2165.92,-244.75 2170.08,-245.34" class="a-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="2235.39" y="-359.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">at session start, on every checkpoint,</text>
-<text xml:space="preserve" text-anchor="middle" x="2235.39" y="-350.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">and once more at dispose — always AFTER</text>
-<text xml:space="preserve" text-anchor="middle" x="2235.39" y="-341.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the peer drain, so the observations land in</text>
-<text xml:space="preserve" text-anchor="middle" x="2235.39" y="-332.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the bytes this seal is about to commit to</text>
+<path fill="none" stroke-width="1.1" stroke-dasharray="5,2" d="M2137.42,-460.81C2141.92,-423.96 2156.07,-308.25 2163.81,-244.91" class="s-tra"/>
+<polygon stroke-width="1.1" points="2165.87,-245.32 2164.52,-239.11 2161.71,-244.81 2165.87,-245.32" class="a-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="2255.6" y="-359.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">at session start, after checkpoints (60 s floor),</text>
+<text xml:space="preserve" text-anchor="middle" x="2255.6" y="-350.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">shortly after a save, and once more at dispose — AFTER</text>
+<text xml:space="preserve" text-anchor="middle" x="2255.6" y="-341.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the peer drain, so the observations land in</text>
+<text xml:space="preserve" text-anchor="middle" x="2255.6" y="-332.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the bytes this seal is about to commit to</text>
 </g>
 
 <g id="node27" class="node">
 <title>full</title>
-<path stroke-width="1.3" d="M1947.57,-222.51C1947.57,-222.51 1920.94,-207.37 1920.94,-207.37 1915.73,-204.41 1915.73,-198.47 1920.94,-195.51 1920.94,-195.51 1947.57,-180.37 1947.57,-180.37 1952.78,-177.41 1963.22,-177.41 1968.43,-180.37 1968.43,-180.37 1995.06,-195.51 1995.06,-195.51 2000.27,-198.47 2000.27,-204.41 1995.06,-207.37 1995.06,-207.37 1968.43,-222.51 1968.43,-222.51 1963.22,-225.47 1952.78,-225.47 1947.57,-222.51" class="f-panel s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="1958" y="-202.64" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">write</text>
-<text xml:space="preserve" text-anchor="middle" x="1958" y="-192.89" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">failed?</text>
+<path stroke-width="1.3" d="M1889.57,-222.51C1889.57,-222.51 1862.94,-207.37 1862.94,-207.37 1857.73,-204.41 1857.73,-198.47 1862.94,-195.51 1862.94,-195.51 1889.57,-180.37 1889.57,-180.37 1894.78,-177.41 1905.22,-177.41 1910.43,-180.37 1910.43,-180.37 1937.06,-195.51 1937.06,-195.51 1942.27,-198.47 1942.27,-204.41 1937.06,-207.37 1937.06,-207.37 1910.43,-222.51 1910.43,-222.51 1905.22,-225.47 1894.78,-225.47 1889.57,-222.51" class="f-panel s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="1900" y="-202.64" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">write</text>
+<text xml:space="preserve" text-anchor="middle" x="1900" y="-192.89" font-family="Helvetica,sans-Serif" font-size="9.00" class="t-ink">failed?</text>
 </g>
 
 <g id="edge30" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M1964.24,-332.3C1963.13,-309.24 1961.05,-265.95 1959.6,-235.72" class="s-srv"/>
-<polygon stroke-width="1.1" points="1961.71,-235.89 1959.32,-230 1957.51,-236.09 1961.71,-235.89" class="a-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="1997.58" y="-285.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">flush: append to the</text>
-<text xml:space="preserve" text-anchor="middle" x="1997.58" y="-276.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">open handle</text>
+<path fill="none" stroke-width="1.1" d="M1957.92,-332.3C1947.01,-307.85 1925.96,-260.64 1912.46,-230.38" class="s-srv"/>
+<polygon stroke-width="1.1" points="1914.41,-229.59 1910.05,-224.97 1910.58,-231.3 1914.41,-229.59" class="a-srv s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="1975.48" y="-285.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">flush: append to the</text>
+<text xml:space="preserve" text-anchor="middle" x="1975.48" y="-276.38" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">open handle</text>
 </g>
 
 <g id="edge35" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M2162.61,-165.38C2158.84,-146.94 2158.01,-124.78 2169,-108.21 2179.86,-91.84 2195.81,-79.65 2213.34,-70.56" class="s-tra"/>
-<polygon stroke-width="1.1" points="2213.91,-72.62 2218.37,-68.08 2212.06,-68.85 2213.91,-72.62" class="a-tra s-tra"/>
-<text xml:space="preserve" text-anchor="middle" x="2251.5" y="-119.17" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">a PAIR commit — a signature and the payload</text>
-<text xml:space="preserve" text-anchor="middle" x="2251.5" y="-110.17" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">it covers only mean anything together</text>
+<path fill="none" stroke-width="1.1" d="M2182.43,-165.12C2190.31,-147.03 2201.4,-125.28 2215,-108.21 2224.57,-96.19 2236.74,-84.89 2248.59,-75.22" class="s-tra"/>
+<polygon stroke-width="1.1" points="2249.69,-77.03 2253.07,-71.65 2247.07,-73.75 2249.69,-77.03" class="a-tra s-tra"/>
+<text xml:space="preserve" text-anchor="middle" x="2297.5" y="-119.17" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">a PAIR commit — a signature and the payload</text>
+<text xml:space="preserve" text-anchor="middle" x="2297.5" y="-110.17" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">it covers only mean anything together</text>
 </g>
 
 <g id="node26" class="node">
 <title>disk</title>
-<polygon stroke-width="1.3" points="1967.71,-64.21 1808.29,-64.21 1808.29,-22 1973.71,-22 1973.71,-58.21 1967.71,-64.21" class="f-srv s-srv"/>
-<polyline fill="none" stroke-width="1.3" points="1967.71,-64.21 1967.71,-58.21" class="s-srv"/>
-<polyline fill="none" stroke-width="1.3" points="1973.71,-58.21 1967.71,-58.21" class="s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="1891" y="-48.71" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">*.slog</text>
-<text xml:space="preserve" text-anchor="middle" x="1891" y="-38.96" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">append&#45;only, one handle open &#39;a&#39;</text>
-<text xml:space="preserve" text-anchor="middle" x="1891" y="-29.21" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">never rewritten</text>
+<polygon stroke-width="1.3" points="1939.71,-64.21 1780.29,-64.21 1780.29,-22 1945.71,-22 1945.71,-58.21 1939.71,-64.21" class="f-srv s-srv"/>
+<polyline fill="none" stroke-width="1.3" points="1939.71,-64.21 1939.71,-58.21" class="s-srv"/>
+<polyline fill="none" stroke-width="1.3" points="1945.71,-58.21 1939.71,-58.21" class="s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="1863" y="-48.71" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">*.slog</text>
+<text xml:space="preserve" text-anchor="middle" x="1863" y="-38.96" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">append&#45;only, one handle open &#39;a&#39;</text>
+<text xml:space="preserve" text-anchor="middle" x="1863" y="-29.21" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">never rewritten</text>
 </g>
 
 <g id="edge31" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M1948.82,-179.03C1936.88,-151.16 1915.98,-102.4 1902.85,-71.76" class="s-srv"/>
-<polygon stroke-width="1.1" points="1904.8,-70.98 1900.51,-66.29 1900.94,-72.63 1904.8,-70.98" class="a-srv s-srv"/>
-<text xml:space="preserve" text-anchor="middle" x="1931.01" y="-114.67" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">no</text>
+<path fill="none" stroke-width="1.1" d="M1894.46,-177.04C1887.81,-148.92 1876.66,-101.82 1869.58,-71.89" class="s-srv"/>
+<polygon stroke-width="1.1" points="1871.68,-71.65 1868.25,-66.29 1867.59,-72.61 1871.68,-71.65" class="a-srv s-srv"/>
+<text xml:space="preserve" text-anchor="middle" x="1887.11" y="-114.67" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">no</text>
 </g>
 
 <g id="node28" class="node">
 <title>degr</title>
-<path stroke-width="1.3" d="M2165.46,-64.21C2165.46,-64.21 2028.54,-64.21 2028.54,-64.21 2022.54,-64.21 2016.54,-58.21 2016.54,-52.21 2016.54,-52.21 2016.54,-34 2016.54,-34 2016.54,-28 2022.54,-22 2028.54,-22 2028.54,-22 2165.46,-22 2165.46,-22 2171.46,-22 2177.46,-28 2177.46,-34 2177.46,-34 2177.46,-52.21 2177.46,-52.21 2177.46,-58.21 2171.46,-64.21 2165.46,-64.21" class="f-bad s-bad"/>
-<text xml:space="preserve" text-anchor="middle" x="2097" y="-48.71" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">recorder.degraded</text>
-<text xml:space="preserve" text-anchor="middle" x="2097" y="-38.96" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">stop appending, tell the student</text>
-<text xml:space="preserve" text-anchor="middle" x="2097" y="-29.21" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">— never partial&#45;write</text>
+<path stroke-width="1.3" d="M2137.46,-64.21C2137.46,-64.21 2000.54,-64.21 2000.54,-64.21 1994.54,-64.21 1988.54,-58.21 1988.54,-52.21 1988.54,-52.21 1988.54,-34 1988.54,-34 1988.54,-28 1994.54,-22 2000.54,-22 2000.54,-22 2137.46,-22 2137.46,-22 2143.46,-22 2149.46,-28 2149.46,-34 2149.46,-34 2149.46,-52.21 2149.46,-52.21 2149.46,-58.21 2143.46,-64.21 2137.46,-64.21" class="f-bad s-bad"/>
+<text xml:space="preserve" text-anchor="middle" x="2069" y="-48.71" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">recorder.degraded</text>
+<text xml:space="preserve" text-anchor="middle" x="2069" y="-38.96" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">stop appending, tell the student</text>
+<text xml:space="preserve" text-anchor="middle" x="2069" y="-29.21" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">— never partial&#45;write</text>
 </g>
 
 <g id="edge32" class="edge">
 
-<path fill="none" stroke-width="1.1" d="M1973.67,-182.81C1998.07,-155.37 2045.27,-102.29 2073.67,-70.34" class="s-bad"/>
-<polygon stroke-width="1.1" points="2075.22,-71.76 2077.64,-65.88 2072.09,-68.97 2075.22,-71.76" class="a-bad s-bad"/>
-<text xml:space="preserve" text-anchor="middle" x="2060.57" y="-119.92" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">yes → drop</text>
-<text xml:space="preserve" text-anchor="middle" x="2060.57" y="-109.42" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the buffer</text>
+<path fill="none" stroke-width="1.1" d="M1917.77,-184C1947.21,-156.77 2006.33,-102.08 2041.29,-69.74" class="s-bad"/>
+<polygon stroke-width="1.1" points="2042.49,-71.49 2045.47,-65.88 2039.63,-68.41 2042.49,-71.49" class="a-bad s-bad"/>
+<text xml:space="preserve" text-anchor="middle" x="2020.26" y="-119.92" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">yes → drop</text>
+<text xml:space="preserve" text-anchor="middle" x="2020.26" y="-109.42" font-family="Helvetica,sans-Serif" font-size="8.20" class="t-hum">the buffer</text>
 </g>
 </g>
 </svg>
