@@ -1462,7 +1462,7 @@ When a job's per-file phases complete:
 - That job:
   - Acquires a semester-scoped advisory lock.
   - Selects all non-superseded submissions in the semester.
-  - Runs each cross-heuristic (`paste_shared_across_students`, `editing_pattern_clone`, plus any v3.1+ additions).
+  - Runs each cross-heuristic (`paste_shared_across_students`, plus any v3.1+ additions; `editing_pattern_clone` was retired 2026-09).
   - Replaces `cross_flags` + `cross_flag_participants` rows for this semester atomically in a single transaction.
   - Releases the lock.
 
@@ -1482,7 +1482,7 @@ Environment (per-submission): `ai_extension_active`, `terminal_active_during_ext
 
 Integrity (per-submission): `chain_broken`, `clock_jumps`, `gap_in_heartbeats`, `multiple_sessions_overlap`, `extension_hash_mismatch`.
 
-Cross-submission: `paste_shared_across_students`, `editing_pattern_clone`.
+Cross-submission: `paste_shared_across_students`. (`editing_pattern_clone` was retired 2026-09; see `docs/heuristics.md`.)
 
 Each heuristic is a pure function in `packages/analyzer/src/heuristics/<id>.ts` that already takes `(EventIndex, Bundle, Config)` and returns `Flag[]`. The server wraps these unchanged.
 
@@ -1868,7 +1868,7 @@ These need answers before or during implementation:
 - **OQ-B (carried from design).** Real scale per semester: median bundle size, peak submissions per assignment, peak events per bundle. Affects partition strategy, worker sizing.
 - **OQ-D.** Retention defaults: this PRD proposes 540 days for blobs, 1825 days for derived rows. Confirm with course staff / Berkeley legal.
 - **OQ-K.** Saved-view storage: client-only for v3.0 (this PRD); add server storage in v3.1 if usage data warrants.
-- **OQ-L.** Cross-flag scaling: `editing_pattern_clone` is O(N²) per assignment; v2 has early-termination but is unmeasured at scale. Confirm during ingest-pipeline implementation; if it blows the budget, add an LSH bucketing pass.
+- **OQ-L.** Cross-flag scaling: `editing_pattern_clone` is O(N²) per assignment; v2 has early-termination but is unmeasured at scale. Confirm during ingest-pipeline implementation; if it blows the budget, add an LSH bucketing pass. **Resolved 2026-09:** it did — ~5.9M pairs on a ~7.7k-submission semester exhausted the worker heap on every attempt, and since it also fired on 94% of pairs the heuristic was retired rather than bucketed. `paste_shared_across_students`'s fuzzy grouping is also quadratic in paste count and remains unmeasured at that scale.
 - **OQ-M.** PDF rendering on the server: `jspdf` + `html2canvas` is browser-native. Implementation can either (a) move to Puppeteer rendering of an HTML report, or (b) keep `jspdf` plus a Node-canvas polyfill. Decision deferred to the implementation plan; both produce identical content.
 - **OQ-N.** Roster size limits: this PRD has none. Should there be a per-row count cap or per-CSV byte cap?
 - **OQ-O.** Subdomain emails in the `hd` check: Berkeley uses `berkeley.edu` for the Workspace `hd` value, but some accounts have `@<sub>.berkeley.edu` _email_ with `hd: 'berkeley.edu'`. This PRD relies only on `hd`, not on email suffix, so subdomain emails are accepted as long as `hd` matches. Confirm.

@@ -31,28 +31,9 @@ import { noIntermediateErrorsHeuristic } from './no-intermediate-errors.js';
 import { shellIntegrationDisabledHeuristic } from './shell-integration-disabled.js';
 import { terminalActiveDuringExternalChangeHeuristic } from './terminal-active-during-external-change.js';
 import { gapInHeartbeatsHeuristic, effectiveGapThresholdMs } from './gap-in-heartbeats.js';
-import { editingPatternCloneHeuristic as realEditingPatternCloneHeuristic } from './cross/editing-pattern-clone.js';
-import { partitionCrossScopes } from '../coverage/cross-scope.js';
-
-/**
- * The heuristic under test, driven with the repository-lineage partition of its
- * own features — what `runCrossHeuristics` hands it in production (spec S20).
- * None of the fixtures below records a `git.event`, so every submission is its
- * own lineage and nothing here is suppressed; the suppression path itself is
- * covered in `heuristics/cross/same-scope-exclusion.test.ts`.
- */
-const editingPatternCloneHeuristic = {
-  ...realEditingPatternCloneHeuristic,
-  run: (
-    features: Parameters<typeof realEditingPatternCloneHeuristic.run>[0],
-    config: Parameters<typeof realEditingPatternCloneHeuristic.run>[1],
-  ) => realEditingPatternCloneHeuristic.run(features, config, partitionCrossScopes(features)),
-};
 import { classifyInternalMoves } from './internal-move.js';
 import { iterateCandidatePastes } from './candidate-pastes.js';
 import { resolveBundleCapturePolicy, establishBundleTrust } from '../manifest/bundle-manifest.js';
-import { DEFAULT_CROSS_HEURISTIC_CONFIG } from './cross/types.js';
-import type { CrossSubmissionFeatures } from './cross/types.js';
 
 const config = mergeConfig();
 
@@ -485,65 +466,5 @@ describe('gap_in_heartbeats derives its threshold from the recorded cadence', ()
     expect(legacyFlags[0]!.detail?.['thresholdMs']).toBe(300_000);
 
     expect(gapInHeartbeatsHeuristic.run(gated.index, gated.bundle, config)).toEqual([]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// editing_pattern_clone (cross)
-// ---------------------------------------------------------------------------
-
-describe('editing_pattern_clone', () => {
-  function features(
-    bundleId: string,
-    ngrams: string[],
-    disabled?: readonly string[],
-  ): CrossSubmissionFeatures {
-    return {
-      bundleId,
-      sourceFilename: `${bundleId}.zip`,
-      pastes: [],
-      kindNgrams: new Set(ngrams),
-      eventCount: 100,
-      representativeSeqKeys: [`${bundleId}:0`],
-      ...(disabled === undefined ? {} : { disabledCaptureSignals: disabled }),
-    };
-  }
-
-  const shared = ['a|b|c', 'b|c|d', 'c|d|e'];
-
-  it('flags identical fingerprints when no capture signal was disabled', () => {
-    const flags = editingPatternCloneHeuristic.run(
-      [features('A', shared), features('B', shared)],
-      DEFAULT_CROSS_HEURISTIC_CONFIG,
-    );
-    expect(flags).toHaveLength(1);
-  });
-
-  it('treats an empty disabled list exactly like a 1.x submission', () => {
-    const flags = editingPatternCloneHeuristic.run(
-      [features('A', shared, []), features('B', shared, [])],
-      DEFAULT_CROSS_HEURISTIC_CONFIG,
-    );
-    expect(flags).toHaveLength(1);
-  });
-
-  it('is not-applicable when either side had a kind-stream signal disabled', () => {
-    const flags = editingPatternCloneHeuristic.run(
-      [features('A', shared, ['terminal']), features('B', shared)],
-      DEFAULT_CROSS_HEURISTIC_CONFIG,
-    );
-    expect(flags).toEqual([]);
-  });
-
-  it('ignores a retired signal name that no longer exists in the policy', () => {
-    // `inline_content` was removed from CapturePolicy, so resolveBundleCapturePolicy
-    // can never report it. If one reaches this heuristic anyway — a hand-edited
-    // feature blob, a stale caller — it must not distort the kind-stream verdict,
-    // because it never removed a kind from the stream in the first place.
-    const flags = editingPatternCloneHeuristic.run(
-      [features('A', shared, ['inline_content']), features('B', shared, ['inline_content'])],
-      DEFAULT_CROSS_HEURISTIC_CONFIG,
-    );
-    expect(flags).toHaveLength(1);
   });
 });

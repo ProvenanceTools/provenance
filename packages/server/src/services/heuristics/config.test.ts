@@ -14,6 +14,7 @@ import {
   DEFAULT_PER_FLAG_ENTRY,
   resolvePerFlag,
   normalizeStoredConfig,
+  RETIRED_HEURISTIC_IDS,
 } from './config.js';
 import type { ServerHeuristicConfig } from './config.js';
 
@@ -441,5 +442,63 @@ describe('normalizeStoredConfig', () => {
     const normalized = normalizeStoredConfig(stored);
     expect(normalized.severity_weights).toEqual({ info: 1, low: 2, medium: 4, high: 9 });
     expect(normalized.config_format_version).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retired ids (editing_pattern_clone, 2026-09)
+//
+// Every semester configured while editing_pattern_clone existed stores a
+// per_flag entry for it. normalizeStoredConfig keeps that entry on read and the
+// tuning UI PUTs the whole map back, so if validateConfig treated the id as
+// unknown, "Save & Recompute" would 422 on every one of those semesters.
+// ---------------------------------------------------------------------------
+
+describe('validateConfig — retired ids', () => {
+  /** A config row as stored before the retirement: every live id plus the retired one. */
+  function preRetirementConfig(): ServerHeuristicConfig {
+    const config = JSON.parse(JSON.stringify(DEFAULT_SERVER_CONFIG)) as ServerHeuristicConfig;
+    config.per_flag['editing_pattern_clone'] = { enabled: false, weight: 1.0 };
+    return config;
+  }
+
+  it('lists editing_pattern_clone as retired and not as known', () => {
+    expect(RETIRED_HEURISTIC_IDS.has('editing_pattern_clone')).toBe(true);
+    expect(KNOWN_HEURISTIC_IDS.has('editing_pattern_clone')).toBe(false);
+  });
+
+  it('accepts a stored pre-retirement config read back and PUT unchanged', () => {
+    const roundTripped = normalizeStoredConfig(preRetirementConfig());
+    // The staff setting survives the read...
+    expect(roundTripped.per_flag['editing_pattern_clone']).toEqual({
+      enabled: false,
+      weight: 1.0,
+    });
+    // ...and the write accepts it.
+    expect(validateConfig(roundTripped)).toEqual({ ok: true, config: roundTripped });
+  });
+
+  it('does not require an entry for a retired id', () => {
+    expect(DEFAULT_SERVER_CONFIG.per_flag['editing_pattern_clone']).toBeUndefined();
+    expect(validateConfig(validCandidate()).ok).toBe(true);
+  });
+
+  it('still shape-checks a retired id entry', () => {
+    const candidate = preRetirementConfig();
+    candidate.per_flag['editing_pattern_clone'] = { enabled: true, weight: 500 };
+    const result = validateConfig(candidate);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toContain(
+        "per_flag['editing_pattern_clone'].weight must be a number in [0, 100]",
+      );
+    }
+  });
+
+  it('still rejects an id that is neither known nor retired', () => {
+    const candidate = preRetirementConfig();
+    candidate.per_flag['super_fake_heuristic'] = { enabled: true, weight: 1.0 };
+    const result = validateConfig(candidate);
+    expect(result.ok).toBe(false);
   });
 });

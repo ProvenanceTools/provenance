@@ -1,9 +1,10 @@
 /**
  * CrossFlag — a heuristic finding that spans multiple bundles.
  *
- * Phase 18 introduces cross-bundle heuristics (paste_shared_across_students,
- * editing_pattern_clone). Unlike a per-bundle Flag (which references events in
- * one bundle), a CrossFlag names the involved bundles and, per bundle, the
+ * Phase 18 introduced cross-bundle heuristics (today only
+ * paste_shared_across_students; editing_pattern_clone was retired 2026-09).
+ * Unlike a per-bundle Flag (which references events in one bundle), a
+ * CrossFlag names the involved bundles and, per bundle, the
  * supporting event seq keys.
  *
  * Shape choices (A59):
@@ -24,7 +25,7 @@ import type { CrossScopePartition } from '../../coverage/cross-scope.js';
  * `id` — deterministic: `${heuristic}-${bundleIds.sort().join('|')}-${index}`
  *
  * `heuristic` — matches the registered cross-heuristic id
- *   (e.g. `paste_shared_across_students`, `editing_pattern_clone`).
+ *   (e.g. `paste_shared_across_students`).
  *
  * `bundleIds` — the Bundle.id values involved. Always length >= 2.
  *
@@ -59,36 +60,13 @@ export type CrossPasteFeature = {
  * The compact, memory-bounded representation of one submission that the
  * cross-heuristics consume in place of a full Bundle + EventIndex.
  *
- * See `features.ts` for extraction. `kindNgrams` is the editing-pattern
- * fingerprint (a Set whose size is bounded by the event-kind alphabet, not the
- * event count); `pastes` carry the paste-sharing inputs; `representativeSeqKeys`
- * are the first few events used as deep-link references in editing-pattern flags.
+ * See `features.ts` for extraction. `pastes` carry the paste-sharing inputs;
+ * the two key lists are the same-scope exclusion keys.
  */
 export type CrossSubmissionFeatures = {
   bundleId: string;
   sourceFilename: string;
   pastes: CrossPasteFeature[];
-  kindNgrams: Set<string>;
-  /** Total event count (used to skip submissions with too few events to n-gram). */
-  eventCount: number;
-  representativeSeqKeys: string[];
-  /**
-   * Gated capture signals the course disabled for this submission (program spec
-   * §4), e.g. `['terminal', 'selection_change']`. Empty or absent means nothing
-   * was disabled — which is the truth for every 1.x bundle.
-   *
-   * `editing_pattern_clone` fingerprints the event-KIND stream, so a course that
-   * switches a gated kind off shrinks the kind alphabet and inflates Jaccard
-   * similarity between two unrelated students. The heuristic consults this and
-   * returns not-applicable rather than flagging on a policy-distorted
-   * fingerprint.
-   *
-   * Optional because this shape is produced in two places (the browser from a
-   * Bundle, the server by streaming) and round-trips through plain JSON; absent
-   * is read as "nothing disabled", which keeps every existing construction site
-   * — and every 1.x submission — behaving exactly as before.
-   */
-  disabledCaptureSignals?: readonly string[];
   /**
    * Every commit this submission's sessions were OBSERVED at, as
    * `commitNodeKey(repository, sha)` values — the `(repository, sha)` node keys
@@ -103,9 +81,9 @@ export type CrossSubmissionFeatures = {
    * commits are deliberately excluded from this list and why the
    * `ASSUMED_SINGLE_REPOSITORY` sentinel can never match on its own.
    *
-   * Optional for the same reason `disabledCaptureSignals` is: this shape is
-   * produced in two places and round-trips through plain JSON. **Absent means
-   * "never computed", NOT "no commits"** — both read as no exclusion, so a
+   * Optional because this shape is produced in two places (the browser from a
+   * Bundle, the server by streaming) and round-trips through plain JSON.
+   * **Absent means "never computed", NOT "no commits"** — both read as no exclusion, so a
    * construction site that predates the field behaves exactly as it did before,
    * which fails toward comparing rather than toward silent suppression.
    */
@@ -147,14 +125,11 @@ export type CrossHeuristicConfig = {
   pasteSharedMinLength: number;
   /** paste_shared_across_students: minimum diffLines ratio for fuzzy grouping. */
   pasteSharedFuzzyThreshold: number;
-  /** editing_pattern_clone: 3-gram Jaccard threshold above which to flag. */
-  editingPatternCloneThreshold: number;
 };
 
 export const DEFAULT_CROSS_HEURISTIC_CONFIG: CrossHeuristicConfig = {
   pasteSharedMinLength: 100,
   pasteSharedFuzzyThreshold: 0.9,
-  editingPatternCloneThreshold: 0.3,
 };
 
 export type CrossHeuristic = {

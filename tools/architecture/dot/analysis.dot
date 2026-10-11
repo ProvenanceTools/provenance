@@ -72,7 +72,6 @@ digraph analysis {
     bgcolor="#150a10" labeljust="l"
     node [fillcolor="#2a0f1e" color="#e8559c" fontsize=9]
     c1 [label="paste_shared_across_students\nsha256 exact → high · fuzzy line match → medium"]
-    c2 [label="editing_pattern_clone\nJaccard over event-kind 3-grams —\nnot-applicable when either side had a\nkind-stream signal disabled by policy"]
     xscope [label="cross-scope partition — S20 + D18a\nONE enumeration, ONE suppression decision.\nlineageOf is an OPAQUE class id: a heuristic can\nask ‘same scope?’ and cannot re-derive the rule.\nTWO KEYS: the OBSERVED commit (repository, sha) —\nnever ancestry, which would put a whole cohort's\nshared skeleton in one lineage — and the SESSION\nkey (session_pubkey, session_id), for the honest\npair that never ran a recorded git command.\nThe session key is capped by a COHORT-FRACTION\nCEILING, k·2 &lt; n, inert below n = 5: no single key\ncan move more than ⌈n/2⌉−1 submissions, so a\ncohort-wide switch-off is structurally unreachable.\nAbsence is its own singleton, so it never suppresses."
             fillcolor="#0d2416" color="#3fbf62" fontsize=9]
     cx [label="cross_flags + participants\nCOMPARED per assignment. The DELETE-then-INSERT\nstays semester-wide — the rows are semester-scoped." shape=note]
@@ -160,7 +159,6 @@ digraph analysis {
                  color="#9d7bf5"]
   unzip -> xscope [label="recordedSessionKeys — (session_pubkey, session_id)\nfor every session the archive carries. NOT the .slog\ndigest: .provenance/ is add-only, so a partner who\npulled yesterday holds a PREFIX and a different sha,\nwhile the pubkey sits in session.start, the first\nevent of every prefix" color="#3fbf62" style=dashed constraint=false]
   xscope -> c1 [label="two bundles in one lineage\nare not compared at all" color="#e8559c"]
-  xscope -> c2 [label="same" color="#e8559c" style=dashed]
   index -> v1 [lhead=cluster_val color="#9d7bf5"]
   v1 -> report [ltail=cluster_val color="#9d7bf5"]
   report -> integ
@@ -177,7 +175,6 @@ digraph analysis {
   pol -> hp [label="terminal off ⇒\nno_intermediate_errors\nstands down" color="#9d7bf5" style=dashed]
   pol -> he [label="⇒ shell_integration_disabled and\nterminal_active_during_external_change\nstand down too" color="#9d7bf5" style=dashed]
   pol -> hi [label="the recorded heartbeat cadence\nraises the gap threshold" color="#9d7bf5" style=dashed]
-  pol -> c2 [label="a thinned event-kind alphabet\nis not a comparable fingerprint" color="#9d7bf5" style=dashed]
 
   hp -> imove [label="large_paste and\npaste_is_solution only" color="#F97316"]
   imove -> down [label="yes" color="#F97316"]
@@ -192,6 +189,4 @@ digraph analysis {
 
   out -> c1 [label="only when several bundles\nare loaded together" color="#e8559c" style=dashed]
   c1 -> cx
-  c2 -> cx
-  out -> c2 [style=invis]
 }

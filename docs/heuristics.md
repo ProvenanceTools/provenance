@@ -62,7 +62,6 @@ hand-edited log cannot re-enable a heuristic the course turned off.
 | `shell_integration_disabled`             | `terminal`              | no flags                                                    |
 | `terminal_active_during_external_change` | `terminal`              | no flags                                                    |
 | `gap_in_heartbeats`                      | `heartbeat_interval_ms` | threshold becomes `max(configured, 10 x recorded interval)` |
-| `editing_pattern_clone` (cross)          | any kind-stream signal  | pair skipped — a shrunken kind alphabet inflates Jaccard    |
 
 Every 1.0/1.1 bundle resolves to the default policy (everything on, 30 s
 heartbeat), so archived submissions score exactly as they always did.
@@ -116,7 +115,7 @@ The provenance requirement is load-bearing, not a refinement. Relocating code th
 
 `paste_matches_known_source` is deliberately **not** downgraded — a corpus hash match is a hard signal that does not soften based on where the bytes were sitting a minute earlier.
 
-**`paste_matches_known_source` is inert pending a corpus source.** The heuristic and its corpus loader/validator (`loadKnownSourceCorpus`) are fully implemented and tested, but nothing populates `pasteMatchesKnownSource.corpus` in a deployed system: there is no upload path, no staff-facing config field, and no storage for corpus entries anywhere in `packages/server/src` or `packages/analyzer/src`. The default is `corpus: []`, and an empty corpus makes the heuristic emit exactly 0 flags — always, regardless of its `enabled`/`weight` setting. Building corpus ingestion is a separate, deliberately out-of-scope feature. Until it ships, the analyzer's tuning UI (`TuningView.tsx`) shows this flag with both its weight slider and its enable toggle disabled, with an inline explanation, so staff cannot be misled into thinking either control does anything. The flag stays registered in `ALL_FLAG_IDS` and counted among the 29 known heuristics — removing it would understate what the engine can do once a corpus exists, and a future corpus feature only needs to populate the config, not rebuild the matcher.
+**`paste_matches_known_source` is inert pending a corpus source.** The heuristic and its corpus loader/validator (`loadKnownSourceCorpus`) are fully implemented and tested, but nothing populates `pasteMatchesKnownSource.corpus` in a deployed system: there is no upload path, no staff-facing config field, and no storage for corpus entries anywhere in `packages/server/src` or `packages/analyzer/src`. The default is `corpus: []`, and an empty corpus makes the heuristic emit exactly 0 flags — always, regardless of its `enabled`/`weight` setting. Building corpus ingestion is a separate, deliberately out-of-scope feature. Until it ships, the analyzer's tuning UI (`TuningView.tsx`) shows this flag with both its weight slider and its enable toggle disabled, with an inline explanation, so staff cannot be misled into thinking either control does anything. The flag stays registered in `ALL_FLAG_IDS` and counted among the 28 known heuristics — removing it would understate what the engine can do once a corpus exists, and a future corpus feature only needs to populate the config, not rebuild the matcher.
 
 ## Environment heuristics (Phase 17)
 
@@ -174,7 +173,22 @@ Only run when staff load multiple bundles into the [`/compare` view](../packages
 | Heuristic                      | Severity      | Detects                                                                                                                        | Source                                                                                                                                                                                                                   |
 | ------------------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `paste_shared_across_students` | medium / high | Identical pasted text (high, sha256 match) or near-identical text (medium, fuzzy line match) in two or more students' bundles. | [`cross/paste-shared-across-students.ts`](../packages/analysis-core/src/heuristics/cross/paste-shared-across-students.ts) · [tests](../packages/analysis-core/src/heuristics/cross/paste-shared-across-students.test.ts) |
-| `editing_pattern_clone`        | medium        | Two students' event sequences are anomalously similar in timing and file-switch order.                                         | [`cross/editing-pattern-clone.ts`](../packages/analysis-core/src/heuristics/cross/editing-pattern-clone.ts) · [tests](../packages/analysis-core/src/heuristics/cross/editing-pattern-clone.test.ts)                      |
+
+### Retired: `editing_pattern_clone` (2026-09)
+
+Compared each pair of students in an assignment by the Jaccard similarity of the
+_sets_ of 3-grams in their event-kind streams, flagging at ≥ 0.3. With only ~20 event
+kinds, that set saturates for anyone who works long enough, so the score tracked
+session length rather than collaboration: it fired on 94% of all student pairs in the
+2026 summer pilot (11,320 of 12,090). On the ~7.7k-submission fall semester its ~5.9M
+same-assignment pairs exhausted the worker heap on every attempt, crash-looping the
+server's workers. No threshold or cap fixes it — either keeps the pairs with the
+longest logs, which flags the most diligent students first.
+
+It was removed from the registry rather than disabled. Its id stays in
+`RETIRED_FLAG_IDS` ([`known-flag-ids.ts`](../packages/analysis-core/src/heuristics/known-flag-ids.ts))
+so semester configs stored before the retirement still save. Rows it wrote stay in
+`cross_flags` until the semester's cross pass runs again, which replaces them.
 
 ## Group work: which heuristics can name a person
 
@@ -252,6 +266,6 @@ already exclude pairs within one scope.
 - **None of these are verdicts.** Per PRD §7.4: "the score is never the verdict — it's a sort order for staff triage." Every escalation goes to a human reviewer who verifies via the replay UI.
 - **Process evidence over content classification.** The system intentionally does not run any "is this code AI-generated?" classifier. All signals are about _how_ the code came into existence — pastes, external edits, timing — not about the code itself. This is defensible in an academic integrity hearing in a way that statistical AI-detection scores are not (PRD §1, §2 NG5).
 - **`paste_matches_known_source` cannot fire today.** Its corpus (leaked solutions, common Stack Overflow answers, or whatever else staff would want to match against) has no upload path or storage anywhere in the system, so it is permanently empty and the heuristic emits 0 flags. The tuning UI marks it disabled and explains why rather than offering a weight that does nothing. The matching mechanism is fully built and tested; only corpus ingestion (a separate feature, PRD §10 Q4) is missing.
-- **Cross-submission heuristics require a batch.** They don't run on single-submission review. Staff load multiple bundles into `/compare` to surface `paste_shared_across_students` and `editing_pattern_clone`.
+- **Cross-submission heuristics require a batch.** They don't run on single-submission review. Staff load multiple bundles into `/compare` to surface `paste_shared_across_students`.
 - **Every flag has a "Jump to replay" link.** No claim is shown in the analyzer without a way to verify it against the actual event stream in one click.
 - **Configuration is in code.** Default thresholds are in [`config.ts`](../packages/analysis-core/src/heuristics/config.ts). Tuning is staff's call once a labeled sample exists; PRD §10 Q5 flagged this as an open question.

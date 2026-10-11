@@ -62,8 +62,8 @@
  * heuristics fire and staff review. Never silently fewer flags.
  *
  * That mattered most for the cross-submission heuristics. `editing_pattern_clone`
- * is not-applicable when EITHER side had a kind-stream signal disabled, so
- * before this gate a student could tamper with their own manifest, absorb a
+ * (retired 2026-09) was not-applicable when EITHER side had a kind-stream signal
+ * disabled, so before this gate a student could tamper with their own manifest, absorb a
  * `session_binding_invalid` flag, and in exchange suppress every cross-flag
  * between themselves and a collusion partner — against whom nothing at all
  * would be recorded. That is an evasion path, not an inconsistency.

@@ -408,8 +408,8 @@
 <g id="node29" class="node">
 <title>cross</title>
 <path stroke-width="1.3" d="M1316.56,-1052.87C1316.56,-1052.87 1052.89,-1052.87 1052.89,-1052.87 1046.89,-1052.87 1040.89,-1046.87 1040.89,-1040.87 1040.89,-1040.87 1040.89,-959.66 1040.89,-959.66 1040.89,-953.66 1046.89,-947.66 1052.89,-947.66 1052.89,-947.66 1316.56,-947.66 1316.56,-947.66 1322.56,-947.66 1328.56,-953.66 1328.56,-959.66 1328.56,-959.66 1328.56,-1040.87 1328.56,-1040.87 1328.56,-1046.87 1322.56,-1052.87 1316.56,-1052.87" class="f-ana s-ana"/>
-<text xml:space="preserve" text-anchor="middle" x="1184.73" y="-1036.41" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">2 cross&#45;submission heuristics</text>
-<text xml:space="preserve" text-anchor="middle" x="1184.73" y="-1025.16" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">shared paste · pattern clone</text>
+<text xml:space="preserve" text-anchor="middle" x="1184.73" y="-1036.41" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">1 cross&#45;submission heuristic</text>
+<text xml:space="preserve" text-anchor="middle" x="1184.73" y="-1025.16" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">shared paste (pattern clone retired)</text>
 <text xml:space="preserve" text-anchor="middle" x="1184.73" y="-1013.91" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">NOT a pipeline stage → cross_flags</text>
 <text xml:space="preserve" text-anchor="middle" x="1184.73" y="-1000.41" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">+ cross_flag_exclusions.</text>
 <text xml:space="preserve" text-anchor="middle" x="1184.73" y="-989.16" font-family="Helvetica,sans-Serif" font-size="10.50" class="t-ink">Compared PER ASSIGNMENT, and never across two</text>
@@ -593,7 +593,7 @@
 <title>tune</title>
 <path stroke-width="1.3" d="M1060.19,-58.21C1060.19,-58.21 917.27,-58.21 917.27,-58.21 911.27,-58.21 905.27,-52.21 905.27,-46.21 905.27,-46.21 905.27,-28 905.27,-28 905.27,-22 911.27,-16 917.27,-16 917.27,-16 1060.19,-16 1060.19,-16 1066.19,-16 1072.19,-22 1072.19,-28 1072.19,-28 1072.19,-46.21 1072.19,-46.21 1072.19,-52.21 1066.19,-58.21 1060.19,-58.21" class="f-uix s-uix"/>
 <text xml:space="preserve" text-anchor="middle" x="988.73" y="-42.71" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">tuning UI</text>
-<text xml:space="preserve" text-anchor="middle" x="988.73" y="-32.96" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">29 flag weights (0.0–2.0) + on/off</text>
+<text xml:space="preserve" text-anchor="middle" x="988.73" y="-32.96" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">28 flag weights (0.0–2.0) + on/off</text>
 <text xml:space="preserve" text-anchor="middle" x="988.73" y="-23.21" font-family="Helvetica,sans-Serif" font-size="9.50" class="t-ink">not the heuristics&#39; own thresholds</text>
 </g>
 

@@ -30,6 +30,7 @@ import {
   translateCrossFlagsToRows,
   translateExclusionsToRows,
 } from './run-cross.js';
+import type { CrossGroupProgress } from './run-cross.js';
 import { translateFlagsToRows } from '../scoring/recompute-submission.js';
 import { ALL_FLAG_IDS } from '@provenance/analysis-core/heuristics/known-flag-ids.js';
 import type { CrossFlag } from '@provenance/analysis-core/heuristics/cross/types.js';
@@ -57,7 +58,12 @@ import type { StorageClient } from '../storage/client.js';
 // calls. Inert unless `recording` is set, so every other test in this file runs
 // against the real implementations unchanged.
 // ---------------------------------------------------------------------------
-const streamProbe = vi.hoisted(() => ({ recording: false, events: [] as string[] }));
+const streamProbe = vi.hoisted(() => ({
+  recording: false,
+  events: [] as string[],
+  // The `isEnabled` predicate from the most recent runCrossAnalysis call.
+  lastIsEnabled: undefined as ((heuristicId: string) => boolean) | undefined,
+}));
 
 vi.mock('../bundle/load-index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../bundle/load-index.js')>();
@@ -81,6 +87,7 @@ vi.mock(
       ...actual,
       runCrossAnalysis: (...args: Parameters<typeof actual.runCrossAnalysis>) => {
         if (streamProbe.recording) streamProbe.events.push('analyze');
+        streamProbe.lastIsEnabled = args[2];
         return actual.runCrossAnalysis(...args);
       },
     };
@@ -676,8 +683,8 @@ describe('runAndStoreCrossHeuristics — assignment scoping', () => {
 // per_flag config is honoured (2026-08 regression)
 //
 // run-cross.ts loaded the active config but read only `.version` off it, so the
-// analyzer's on/off toggle for editing_pattern_clone and
-// paste_shared_across_students did nothing: staff could disable a cross
+// analyzer's on/off toggle for the cross heuristics (then editing_pattern_clone
+// and paste_shared_across_students) did nothing: staff could disable a cross
 // heuristic and watch it keep writing rows on the next pass.
 // ---------------------------------------------------------------------------
 
@@ -705,16 +712,41 @@ describe('runAndStoreCrossHeuristics — per_flag config', () => {
     });
   });
 
+  it('skips a disabled heuristic BEFORE it runs, not only when storing (2026-09)', async () => {
+    // The output gate alone let a disabled heuristic exhaust the worker's heap
+    // before anything was filtered. The analysis must be told what is off.
+    await withTestRustfs(async ({ client }) => {
+      await withTestDb(async (db) => {
+        const { semesterId } = await seedSharedPastePair(db, client, 'pregate-sha');
+
+        await setActiveConfig(db, semesterId, {
+          paste_shared_across_students: { enabled: false, weight: 1.0 },
+        });
+
+        streamProbe.lastIsEnabled = undefined;
+        await runAndStoreCrossHeuristics(db, client, semesterId);
+
+        // Re-read through a cast: TS narrowed the field to `undefined` above and
+        // cannot see the mock's write.
+        const isEnabled = streamProbe.lastIsEnabled as ((id: string) => boolean) | undefined;
+        expect(isEnabled, 'runCrossAnalysis must receive the per_flag gate').toBeDefined();
+        expect(isEnabled!('paste_shared_across_students')).toBe(false);
+        // A per_flag entry the config omits keeps resolvePerFlag's meaning.
+        expect(isEnabled!('some_future_cross_heuristic')).toBe(true);
+      });
+    });
+  });
+
   it('still emits when the active config leaves the heuristic enabled', async () => {
     await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const { semesterId } = await seedSharedPastePair(db, client, 'enabled-sha');
 
-        // Explicitly enabled, and the OTHER cross heuristic disabled — proves
-        // the gate is per-id and not an all-or-nothing switch.
+        // Explicitly enabled, and another id disabled — proves the gate is
+        // per-id and not an all-or-nothing switch.
         await setActiveConfig(db, semesterId, {
           paste_shared_across_students: { enabled: true, weight: 1.0 },
-          editing_pattern_clone: { enabled: false, weight: 1.0 },
+          large_paste: { enabled: false, weight: 1.0 },
         });
 
         const result = await runAndStoreCrossHeuristics(db, client, semesterId);
@@ -785,16 +817,22 @@ function fullConfig(): ServerHeuristicConfig {
 }
 
 /**
- * A stored config that predates the cross heuristics entirely: neither cross id
- * has a per_flag entry. This is the shape a semester configured before Phase 14
+ * A stored config that predates the cross heuristics entirely: no cross id has
+ * a per_flag entry. This is the shape a semester configured before Phase 14
  * would carry, and the case `resolvePerFlag` exists to answer.
  */
 function configWithoutCrossIds(): ServerHeuristicConfig {
   const config = fullConfig();
   delete config.per_flag['paste_shared_across_students'];
-  delete config.per_flag['editing_pattern_clone'];
   return config;
 }
+
+/**
+ * A second cross id for the gating tests below. translateCrossFlagsToRows gates
+ * whatever ids it is handed, and proving the gate is per-id needs two of them;
+ * since editing_pattern_clone was retired (2026-09) the registry has only one.
+ */
+const OTHER_CROSS_ID = 'hypothetical_cross_heuristic';
 
 function makeCrossFlag(heuristic: string, overrides: Partial<CrossFlag> = {}): CrossFlag {
   return {
@@ -835,10 +873,10 @@ function translateCross(crossFlags: CrossFlag[], config: ServerHeuristicConfig) 
 describe('translateCrossFlagsToRows', () => {
   it('drops a cross flag the config explicitly disables', () => {
     const config = fullConfig();
-    config.per_flag['editing_pattern_clone'] = { enabled: false, weight: 1.0 };
+    config.per_flag[OTHER_CROSS_ID] = { enabled: false, weight: 1.0 };
 
     const rows = translateCross(
-      [makeCrossFlag('editing_pattern_clone'), makeCrossFlag('paste_shared_across_students')],
+      [makeCrossFlag(OTHER_CROSS_ID), makeCrossFlag('paste_shared_across_students')],
       config,
     );
 
@@ -848,11 +886,11 @@ describe('translateCrossFlagsToRows', () => {
 
   it('drops both cross flags when both are disabled', () => {
     const config = fullConfig();
-    config.per_flag['editing_pattern_clone'] = { enabled: false, weight: 1.0 };
+    config.per_flag[OTHER_CROSS_ID] = { enabled: false, weight: 1.0 };
     config.per_flag['paste_shared_across_students'] = { enabled: false, weight: 2.0 };
 
     const rows = translateCross(
-      [makeCrossFlag('editing_pattern_clone'), makeCrossFlag('paste_shared_across_students')],
+      [makeCrossFlag(OTHER_CROSS_ID), makeCrossFlag('paste_shared_across_students')],
       config,
     );
 
@@ -875,9 +913,9 @@ describe('translateCrossFlagsToRows', () => {
     // Mirrors the per-submission path: weight 0 zeroes the contribution, it
     // does not suppress the row. Only `enabled: false` suppresses.
     const config = fullConfig();
-    config.per_flag['editing_pattern_clone'] = { enabled: true, weight: 0 };
+    config.per_flag[OTHER_CROSS_ID] = { enabled: true, weight: 0 };
 
-    const rows = translateCross([makeCrossFlag('editing_pattern_clone')], config);
+    const rows = translateCross([makeCrossFlag(OTHER_CROSS_ID)], config);
     expect(rows).toHaveLength(1);
   });
 
@@ -929,10 +967,10 @@ describe('cross / per-submission config parity', () => {
   it('both paths drop an explicitly disabled heuristic', () => {
     const config = fullConfig();
     config.per_flag['large_paste'] = { enabled: false, weight: 1.0 };
-    config.per_flag['editing_pattern_clone'] = { enabled: false, weight: 1.0 };
+    config.per_flag[OTHER_CROSS_ID] = { enabled: false, weight: 1.0 };
 
     expect(translatePerSubmission('large_paste', config)).toHaveLength(0);
-    expect(translateCross([makeCrossFlag('editing_pattern_clone')], config)).toHaveLength(0);
+    expect(translateCross([makeCrossFlag(OTHER_CROSS_ID)], config)).toHaveLength(0);
   });
 
   it('both paths keep a heuristic with no per_flag entry', () => {
@@ -940,13 +978,13 @@ describe('cross / per-submission config parity', () => {
     delete config.per_flag['large_paste'];
 
     expect(translatePerSubmission('large_paste', config)).toHaveLength(1);
-    expect(translateCross([makeCrossFlag('editing_pattern_clone')], config)).toHaveLength(1);
+    expect(translateCross([makeCrossFlag(OTHER_CROSS_ID)], config)).toHaveLength(1);
   });
 
   it('both paths keep an enabled heuristic at weight 0', () => {
     const config = fullConfig();
     config.per_flag['large_paste'] = { enabled: true, weight: 0 };
-    config.per_flag['editing_pattern_clone'] = { enabled: true, weight: 0 };
+    config.per_flag[OTHER_CROSS_ID] = { enabled: true, weight: 0 };
 
     const perSubmissionRows = translatePerSubmission('large_paste', config);
     expect(perSubmissionRows).toHaveLength(1);
@@ -954,7 +992,7 @@ describe('cross / per-submission config parity', () => {
     // (cross flags contribute to no score), which is why weight is resolved
     // but not persisted on the cross path.
     expect(perSubmissionRows[0]!.score_contribution).toBe(0);
-    expect(translateCross([makeCrossFlag('editing_pattern_clone')], config)).toHaveLength(1);
+    expect(translateCross([makeCrossFlag(OTHER_CROSS_ID)], config)).toHaveLength(1);
   });
 });
 
@@ -1014,8 +1052,9 @@ describe('runAndStoreCrossHeuristics — the exclusion register', () => {
 
         const result = await runAndStoreCrossHeuristics(db, client, semesterId);
 
-        // Zero, not "no paste flag": editing_pattern_clone consumes the SAME
-        // partition and must be suppressed by the same exclusion.
+        // Zero across every cross heuristic, not just "no paste flag": each one
+        // consumes the SAME partition and must be suppressed by the same
+        // exclusion.
         expect(result.flag_count, 'the partner pair must not be accused').toBe(0);
         expect(result.exclusion_count).toBe(1);
 
@@ -1353,11 +1392,20 @@ describe('runAndStoreCrossHeuristics — memory', () => {
 
         streamProbe.events.length = 0;
         streamProbe.recording = true;
+        const progress: CrossGroupProgress[] = [];
         try {
-          await runAndStoreCrossHeuristics(db, client, semesterId);
+          await runAndStoreCrossHeuristics(db, client, semesterId, (p) => progress.push(p));
         } finally {
           streamProbe.recording = false;
         }
+
+        // One progress report per group, in order — the job logs these so a
+        // long pass on a large semester shows where its time and heap go.
+        expect(progress.map((p) => [p.group, p.groupCount, p.submissions])).toEqual([
+          [1, 2, 2],
+          [2, 2, 2],
+        ]);
+        expect(progress.every((p) => p.pastes === 2)).toBe(true);
 
         expect(
           streamProbe.events.filter((e) => e === 'load'),

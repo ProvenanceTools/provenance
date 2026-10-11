@@ -2,8 +2,9 @@
  * Tests for runCrossHeuristics orchestrator (Phase 18).
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { runCrossAnalysis, runCrossHeuristics } from './run-cross-heuristics.js';
+import { pasteSharedAcrossStudentsHeuristic } from './paste-shared-across-students.js';
 import { extractCrossFeatures } from './features.js';
 import type { Bundle } from '../../loader/types.js';
 import type { EventIndex, IndexedEvent } from '../../index/event-index.js';
@@ -111,8 +112,10 @@ describe('runCrossHeuristics', () => {
     const bundleB = makeBundle('bundle-b');
 
     const sha = 'y'.repeat(64);
-    // The shared paste triggers high-severity paste_shared flag.
-    // The identical kind stream triggers medium-severity editing_pattern_clone.
+    // The shared paste triggers high-severity paste_shared flag. (Until 2026-09
+    // the identical kind stream also produced a medium editing_pattern_clone
+    // flag here; with that heuristic retired the ordering is checked over
+    // whatever the registry emits.)
     const e: IndexedEvent = {
       sessionId: 'sess-a',
       seq: 1,
@@ -130,7 +133,7 @@ describe('runCrossHeuristics', () => {
     const byKind = new Map<EventKind, IndexedEvent[]>();
     byKind.set('paste', [e]);
 
-    // Add extra events so the kind stream forms 3-grams.
+    // Extra non-paste events, so the pair is not paste-only.
     const extraKinds: EventKind[] = ['session.start', 'doc.open', 'doc.change', 'doc.save'];
     const extraEvents: IndexedEvent[] = extraKinds.map((kind, i) => ({
       sessionId: 'sess-a',
@@ -303,5 +306,65 @@ describe('runCrossAnalysis', () => {
 
   it('returns both halves empty below two submissions', () => {
     expect(runCrossAnalysis([])).toEqual({ flags: [], exclusions: [] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isEnabled — a disabled heuristic is never RUN (2026-09)
+//
+// Filtering a heuristic's output after the fact cannot stop the heuristic from
+// exhausting the worker's heap, which is how a cross pass on a ~7.7k-submission
+// semester crash-looped the server workers even though the output gate existed.
+// ---------------------------------------------------------------------------
+
+describe('runCrossAnalysis — isEnabled', () => {
+  function sharedPastePair() {
+    const bundleA = makeBundle('bundle-a');
+    const bundleB = makeBundle('bundle-b');
+    const sha = 'x'.repeat(64);
+    const indices = new Map([
+      [bundleA.id, makeIndexWithPaste('sess-a', 1, sha)],
+      [bundleB.id, makeIndexWithPaste('sess-b', 1, sha)],
+    ]);
+    return toFeatures([bundleA, bundleB], indices);
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does not call run() for a heuristic the predicate rejects', () => {
+    const run = vi.spyOn(pasteSharedAcrossStudentsHeuristic, 'run');
+
+    const { flags } = runCrossAnalysis(
+      sharedPastePair(),
+      undefined,
+      (id) => id !== 'paste_shared_across_students',
+    );
+
+    expect(run).not.toHaveBeenCalled();
+    expect(flags).toEqual([]);
+  });
+
+  it('runs every heuristic when the predicate is absent', () => {
+    const run = vi.spyOn(pasteSharedAcrossStudentsHeuristic, 'run');
+
+    const { flags } = runCrossAnalysis(sharedPastePair());
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(flags.length).toBeGreaterThan(0);
+  });
+
+  it('still returns the exclusion register when every heuristic is disabled', () => {
+    // The register describes the partition, not a heuristic's output; switching
+    // heuristics off must not hide that a comparison was withheld.
+    const key = `repository:assumed-single ${'a'.repeat(40)}`;
+    const features = sharedPastePair().map((f) => ({ ...f, observedCommitKeys: [key] }));
+
+    const { flags, exclusions } = runCrossAnalysis(features, undefined, () => false);
+
+    expect(flags).toEqual([]);
+    expect(exclusions).toHaveLength(1);
+    expect(exclusions[0]!.reason).toBe('same_repository_lineage');
   });
 });

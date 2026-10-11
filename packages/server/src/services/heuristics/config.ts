@@ -33,7 +33,10 @@
  */
 
 import { eq, desc, and, count, sql } from 'drizzle-orm';
-import { ALL_FLAG_IDS } from '@provenance/analysis-core/heuristics/known-flag-ids.js';
+import {
+  ALL_FLAG_IDS,
+  RETIRED_FLAG_IDS,
+} from '@provenance/analysis-core/heuristics/known-flag-ids.js';
 import { heuristic_configs, recompute_jobs, submissions } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import { withTransaction } from '../../db/client.js';
@@ -97,6 +100,16 @@ export const DEFAULT_SEVERITY_WEIGHTS: SeverityWeights = {
  * against it and callers outside this module read `.size` / iterate it.
  */
 export const KNOWN_HEURISTIC_IDS: ReadonlySet<string> = new Set(ALL_FLAG_IDS);
+
+/**
+ * Ids the engine no longer produces but that stored configs may still carry
+ * (analysis-core's `RETIRED_FLAG_IDS`). validateConfig neither requires nor
+ * rejects an entry for one: normalizeStoredConfig deliberately preserves it on
+ * read, and the analyzer PUTs the whole map it read straight back — so
+ * rejecting it would 422 every save on every semester configured while the
+ * heuristic existed.
+ */
+export const RETIRED_HEURISTIC_IDS: ReadonlySet<string> = new Set(RETIRED_FLAG_IDS);
 
 /**
  * What a per_flag entry means when the stored config does not have one.
@@ -318,6 +331,8 @@ export type ValidateConfigResult =
  *   1. config_format_version must be 1.
  *   2. per_flag must have an entry for EVERY known heuristic ID (no missing).
  *   3. per_flag must NOT have entries for UNKNOWN heuristic IDs (no extras).
+ *      A RETIRED id is not unknown: its entry is accepted (and shape-checked
+ *      like any other) but never required. See RETIRED_HEURISTIC_IDS.
  *   4. Each entry's weight must be in [0, 100].
  *   5. Each entry's enabled must be a boolean.
  *   6. severity_weights must have all 4 keys (info, low, medium, high) with
@@ -365,7 +380,7 @@ export function validateConfig(input: unknown): ValidateConfigResult {
 
     // Rule 3: reject unknown IDs
     for (const id of inputIds) {
-      if (!KNOWN_HEURISTIC_IDS.has(id)) {
+      if (!KNOWN_HEURISTIC_IDS.has(id) && !RETIRED_HEURISTIC_IDS.has(id)) {
         errors.push(`per_flag contains unknown heuristic ID: '${id}'`);
       }
     }
@@ -379,7 +394,7 @@ export function validateConfig(input: unknown): ValidateConfigResult {
 
     // Rules 4 and 5: validate each entry
     for (const id of inputIds) {
-      if (!KNOWN_HEURISTIC_IDS.has(id)) continue; // already reported above
+      if (!KNOWN_HEURISTIC_IDS.has(id) && !RETIRED_HEURISTIC_IDS.has(id)) continue; // reported above
       const entry = pfObj[id];
       if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
         errors.push(`per_flag['${id}'] must be an object`);

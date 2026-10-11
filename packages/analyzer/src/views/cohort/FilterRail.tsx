@@ -40,7 +40,6 @@ const COMMON_FLAG_IDS = [
   'chain_broken',
   'idle_then_complete',
   'extension_hash_mismatch',
-  'editing_pattern_clone',
   'paste_shared_across_students',
 ];
 

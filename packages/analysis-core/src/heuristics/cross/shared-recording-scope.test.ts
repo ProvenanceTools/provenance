@@ -141,18 +141,8 @@ describe('two honest partners sharing a workspace, with no git at all', () => {
     expect(byId(runCrossHeuristics(features), 'paste_shared_across_students')).toEqual([]);
   });
 
-  it('does not fire editing_pattern_clone on the pair either', async () => {
-    const sha = await sha256Hex(PASTED_CODE);
-    const specs = partnerSessions(sha);
-    const alice = await buildSubmission('alice_proj1.zip', specs, SHARED_SEED);
-    const bob = await buildSubmission('bob_proj1.zip', specs, SHARED_SEED);
-
-    const flags = runCrossHeuristics([featuresOf(alice), featuresOf(bob)]);
-    expect(byId(flags, 'editing_pattern_clone')).toEqual([]);
-  });
-
   it('states the exclusion visibly, naming the sessions and claiming no repository', async () => {
-    // The assertion that makes the two above honest: a grader reading "no
+    // The assertion that makes the one above honest: a grader reading "no
     // findings" must be able to tell a searched comparison from a withheld one.
     // And the reason must be the narrow one — these two never ran git, so
     // "same repository lineage" would be a claim the record cannot support.

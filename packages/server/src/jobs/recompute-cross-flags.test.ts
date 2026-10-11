@@ -42,7 +42,7 @@ import * as schema from '../db/schema.js';
 import { startWorker } from './worker.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import type { DrizzleDb } from '../db/client.js';
-import { enqueueCrossFlagsJob } from './recompute-cross-flags.js';
+import { enqueueCrossFlagsJob, CROSS_FLAGS_EXPIRE_IN_SECONDS } from './recompute-cross-flags.js';
 
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
 
@@ -296,6 +296,18 @@ describe('recompute_cross_flags handler (pg-boss integration)', () => {
       // Enqueue twice for the same semester.
       await enqueueCrossFlagsJob(boss, semester!.id);
       await enqueueCrossFlagsJob(boss, semester!.id);
+
+      // The job carries its own expiry, not pg-boss's 15-minute default — an
+      // expiry shorter than the pass re-dispatches it while it is still running
+      // (2026-09 worker crash loop). See CROSS_FLAGS_EXPIRE_IN_SECONDS.
+      const expiryRows = (await db.execute(sql`
+        SELECT extract(epoch FROM expire_in)::int AS seconds
+        FROM pgboss.job
+        WHERE name = 'recompute_cross_flags'
+          AND singleton_key = ${semester!.id}
+      `)) as unknown as Array<{ seconds: number }>;
+      expect(expiryRows).toHaveLength(1);
+      expect(expiryRows[0]!.seconds).toBe(CROSS_FLAGS_EXPIRE_IN_SECONDS);
 
       // Wait for the worker to pick up and complete the (single) job.
       const POLL_TIMEOUT_MS = 30_000;
