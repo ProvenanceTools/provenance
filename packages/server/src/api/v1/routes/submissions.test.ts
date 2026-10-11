@@ -14,7 +14,7 @@
 
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { withTestDb } from '../../../../test/helpers/db.js';
-import { withTestMinio } from '../../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../../test/helpers/rustfs.js';
 import { putSubmissionBundle } from '../../../../test/helpers/seed-bundle.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { _resetConfigForTest, _setConfigForTest } from '../../../config/index.js';
@@ -74,8 +74,8 @@ function makeTestEnv(extra?: Record<string, string>) {
     DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance',
     OBJECT_STORAGE_ENDPOINT: 'http://localhost:9000',
     OBJECT_STORAGE_BUCKET: 'test-bucket',
-    OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+    OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
     OBJECT_STORAGE_REGION: 'us-east-1',
     GOOGLE_OAUTH_CLIENT_ID: 'client-id',
     GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -223,7 +223,7 @@ async function seedSubmission(
 
 describe('GET /submissions/:id', () => {
   it('returns full summary for a seeded submission', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(
@@ -528,7 +528,7 @@ describe('GET /submissions/:id/flags', () => {
 
 describe('GET /submissions/:id/stats', () => {
   it('returns per_file and aggregate stats', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
         _setConfigForTest(

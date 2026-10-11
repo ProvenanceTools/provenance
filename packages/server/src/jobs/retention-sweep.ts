@@ -6,7 +6,7 @@
  * are deleted from object storage.
  *
  * Contract:
- *   - ONLY deletes blobs from object storage (MinIO / S3).
+ *   - ONLY deletes blobs from object storage (RustFS / S3).
  *   - NEVER deletes DB rows. The submissions table retains its rows forever
  *     for audit/re-analysis purposes; only the raw zip blobs are purged.
  *   - Idempotent: re-running on an already-purged submission is a no-op
@@ -41,7 +41,7 @@ export interface RetentionSweepResult {
  * storage.
  *
  * @param db      - Drizzle DB instance
- * @param storage - Object storage client (MinIO / S3)
+ * @param storage - Object storage client (RustFS / S3)
  * @returns       Summary with counts of purged blobs, bytes freed, and errors.
  */
 export async function runRetentionSweep(

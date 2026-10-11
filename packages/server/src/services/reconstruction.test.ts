@@ -20,7 +20,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { withTestDb } from '../../test/helpers/db.js';
-import { withTestMinio } from '../../test/helpers/minio.js';
+import { withTestRustfs } from '../../test/helpers/rustfs.js';
 import { putSubmissionBundle } from '../../test/helpers/seed-bundle.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import {
@@ -58,8 +58,8 @@ function makeTestEnv(extra?: Record<string, string>) {
     DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance',
     OBJECT_STORAGE_ENDPOINT: 'http://localhost:9000',
     OBJECT_STORAGE_BUCKET: 'test-bucket',
-    OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+    OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
     OBJECT_STORAGE_REGION: 'us-east-1',
     GOOGLE_OAUTH_CLIENT_ID: 'client-id',
     GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -192,7 +192,7 @@ beforeEach(() => {
 
 describe('reconstructFile — cold reconstruction', () => {
   it('returns expected content from doc.open + doc.change events', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         _setConfigForTest(parseEnv(makeTestEnv()));
 
@@ -222,7 +222,7 @@ describe('reconstructFile — cold reconstruction', () => {
 
 describe('reconstructFile — cache hit', () => {
   it('returns same object reference on second call', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         _setConfigForTest(parseEnv(makeTestEnv()));
 
@@ -250,7 +250,7 @@ describe('reconstructFile — cache hit', () => {
 
 describe('reconstructFile — cache eviction', () => {
   it('evicts oldest entry when capacity is exceeded', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         // Set cache capacity to 2 so we can test eviction easily.
         _setConfigForTest(parseEnv(makeTestEnv({ RECONSTRUCTION_CACHE_SIZE: '2' })));
@@ -283,7 +283,7 @@ describe('reconstructFile — cache eviction', () => {
 
 describe('reconstructFile — tainted file', () => {
   it('returns tainted=true when per_file_stats.reconstruction_tainted is true', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         _setConfigForTest(parseEnv(makeTestEnv()));
 
@@ -305,7 +305,7 @@ describe('reconstructFile — tainted file', () => {
 
 describe('reconstructFile — missing file path', () => {
   it('throws FILE_NOT_FOUND for path not in per_file_stats', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         _setConfigForTest(parseEnv(makeTestEnv()));
 
@@ -378,7 +378,7 @@ async function putConcurrentPartnersBundle(
 describe('reconstructFile — two contributors, unordered lineages', () => {
   it('refuses to linearize: no content, no provenance, a concurrent verdict', async () => {
     const k = await buildIdentityKeys();
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         _setConfigForTest(
           parseEnv(makeTestEnv({ PROVENANCE_ROOT_PUBLIC_KEY_HEX: k.root.pubkeyHex })),
@@ -410,7 +410,7 @@ describe('reconstructFile — two contributors, unordered lineages', () => {
    */
   it('leaves a solo submission byte-identical on the same deployment', async () => {
     const k = await buildIdentityKeys();
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         _setConfigForTest(
           parseEnv(makeTestEnv({ PROVENANCE_ROOT_PUBLIC_KEY_HEX: k.root.pubkeyHex })),

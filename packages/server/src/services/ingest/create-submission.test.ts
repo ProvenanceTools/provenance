@@ -1,13 +1,13 @@
 /**
  * Integration tests for createSubmission (PRD §9.3 phase 5).
  *
- * Uses withTestDb (Postgres) + withTestMinio (blob storage).
+ * Uses withTestDb (Postgres) + withTestRustfs (blob storage).
  */
 
 import { vi, describe, it, expect, beforeAll } from 'vitest';
 import { eq, and, asc } from 'drizzle-orm';
 import { withTestDb } from '../../../test/helpers/db.js';
-import { withTestMinio } from '../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../test/helpers/rustfs.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { createSubmission } from './create-submission.js';
 import type { CreateSubmissionOutcome, CreateSubmissionResult } from './create-submission.js';
@@ -135,7 +135,7 @@ async function collectStream(stream: ReadableStream<Uint8Array>): Promise<Uint8A
 describe('createSubmission', () => {
   it('inserts a submission row with version_index=1 for a new student-assignment', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client }) => {
+      await withTestRustfs(async ({ client }) => {
         const user = await seedUser(db);
         const semester = await seedSemester(db);
         const student = await seedStudent(db, semester.id);
@@ -176,7 +176,7 @@ describe('createSubmission', () => {
 
   it('allocates version_index=2 for a re-upload by the same student', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client }) => {
+      await withTestRustfs(async ({ client }) => {
         const user = await seedUser(db);
         const semester = await seedSemester(db);
         const student = await seedStudent(db, semester.id);
@@ -230,7 +230,7 @@ describe('createSubmission', () => {
 
   it('sets superseded_by_submission_id on prior versions after a re-upload', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client }) => {
+      await withTestRustfs(async ({ client }) => {
         const user = await seedUser(db);
         const semester = await seedSemester(db);
         const student = await seedStudent(db, semester.id);
@@ -282,7 +282,7 @@ describe('createSubmission', () => {
 
   it('moves blob from staging to final key, staging key no longer accessible', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client }) => {
+      await withTestRustfs(async ({ client }) => {
         const user = await seedUser(db);
         const semester = await seedSemester(db);
         const student = await seedStudent(db, semester.id);
@@ -322,7 +322,7 @@ describe('createSubmission', () => {
 
   it('upserts the assignments row and reuses it on subsequent uploads', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client }) => {
+      await withTestRustfs(async ({ client }) => {
         const user = await seedUser(db);
         const semester = await seedSemester(db);
         const student1 = await seedStudent(db, semester.id, '111111');
@@ -391,7 +391,7 @@ describe('createSubmission', () => {
 
   it('stores recorder_version and format_version from manifest', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client }) => {
+      await withTestRustfs(async ({ client }) => {
         const user = await seedUser(db);
         const semester = await seedSemester(db);
         const student = await seedStudent(db, semester.id);
@@ -439,7 +439,7 @@ describe('createSubmission', () => {
     //   - version_indexes are exactly {2, 3, 4} (an existing submission was #1)
     //   - the supersede chain is linear (each points to the next)
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client }) => {
+      await withTestRustfs(async ({ client }) => {
         const user = await seedUser(db);
         const semester = await seedSemester(db);
         const student = await seedStudent(db, semester.id);

@@ -100,6 +100,7 @@
 
 import {
   parseManifestValue,
+  verifyManifest,
   manifestFormatVersion,
   verifyManifestChain,
   resolveCapturePolicy,
@@ -507,6 +508,34 @@ export async function verifyBundleTrustChain(
 }
 
 /**
+ * May this bundle's embedded scope narrow what is evaluated? See
+ * {@link Bundle.manifestScopeTrust}. A manifest that narrows scope suppresses
+ * flags, so an unproven one must not be believed, including a 1.x manifest,
+ * which check 2 only compares for equality across sessions.
+ *
+ * The 1.x course key is not a separate input here: deployments sign 1.x with the
+ * key they configure as the root, so a deployment where the two differ simply
+ * leaves 1.x scope unverified and every path is evaluated.
+ */
+async function scopeIsTrusted(
+  bundle: Bundle,
+  chain: BundleTrustChain,
+  rootPubkeyHex?: string,
+): Promise<boolean> {
+  if (chain.kind === 'verified') return true;
+  if (chain.kind !== 'legacy') return false;
+  if (rootPubkeyHex === undefined || rootPubkeyHex.length === 0) return false;
+  const bindings = readSessionManifests(bundle);
+  if (bindings.length === 0) return false;
+  for (const b of bindings) {
+    if (b.manifest === null || b.manifestSig !== b.manifest.sig) return false;
+    const ok = await verifyManifest(b.manifest, rootPubkeyHex);
+    if (!ok.ok) return false;
+  }
+  return true;
+}
+
+/**
  * Walk the trust chain AND stamp the verdict onto the bundle, so that the
  * synchronous, crypto-free {@link resolveBundleCapturePolicy} can consult it.
  *
@@ -529,6 +558,9 @@ export async function establishBundleTrust(
   // honour, so the two verdicts are indistinguishable for policy resolution and
   // the narrower one is the honest label.
   bundle.capturePolicyTrust = chain.kind === 'verified' ? 'verified' : 'unverified';
+  bundle.manifestScopeTrust = (await scopeIsTrusted(bundle, chain, rootPubkeyHex))
+    ? 'verified'
+    : 'unverified';
   return chain;
 }
 

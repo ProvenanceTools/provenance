@@ -2,7 +2,7 @@
  * bench-stages — empirical time-complexity probe for the CPU-bound ingest stages.
  *
  * DEV TOOLING — not shipped server code. Unlike `profile:large` (which runs the
- * full route + worker against Postgres/MinIO), this needs NO infra: it generates
+ * full route + worker against Postgres/RustFS), this needs NO infra: it generates
  * one faithful signed bundle at a sweep of event counts and times the pure
  * pipeline stages in-process:
  *

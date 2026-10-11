@@ -154,6 +154,7 @@ import {
 } from '../identity/resolve-contributors.js';
 import type { Flag, Heuristic, Severity } from './types.js';
 import type { HeuristicConfig } from './config.js';
+import { reviewedPathPredicate } from './reviewed-scope.js';
 
 const CONFIDENCE = 0.85;
 
@@ -232,6 +233,7 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
   const sessionIds = Array.from(index.bySessionId.keys());
   if (sessionIds.length < 2) return [];
 
+  const isReviewed = reviewedPathPredicate(bundle);
   const flags: Flag[] = [];
   let flagIndex = 0;
 
@@ -273,6 +275,7 @@ function run(index: EventIndex, bundle: Bundle, config: HeuristicConfig): Flag[]
       if (e.kind !== 'doc.open') continue;
       const file = e.file;
       if (file === undefined) continue;
+      if (!isReviewed(file)) continue;
       if (seenFiles.has(file)) continue;
       seenFiles.add(file);
 

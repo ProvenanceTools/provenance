@@ -1,7 +1,7 @@
 /**
  * Tests for parseBundlePhase (PRD §9.3 phase 3).
  *
- * Uses withTestMinio for real blob I/O and buildTestBundle from the analyzer
+ * Uses withTestRustfs for real blob I/O and buildTestBundle from the analyzer
  * test helpers for in-memory bundle construction.
  *
  * NOTE: No committed fixture ZIP exists yet — the analyzer test helpers
@@ -12,7 +12,7 @@
 
 import { vi, describe, it, expect } from 'vitest';
 import JSZip from 'jszip';
-import { withTestMinio } from '../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../test/helpers/rustfs.js';
 import { parseBundlePhase, errorDetail } from './parse-bundle-phase.js';
 import { putBlob } from '../storage/blobs.js';
 import { ingestStagingKey } from '../storage/keys.js';
@@ -25,7 +25,7 @@ vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 // ---------------------------------------------------------------------------
 
 async function stageBundle(
-  client: import('../../../test/helpers/minio.js').TestMinioContext['client'],
+  client: import('../../../test/helpers/rustfs.js').TestRustfsContext['client'],
   jobId: string,
   fileId: string,
   bundleBuffer: ArrayBuffer,
@@ -41,7 +41,7 @@ async function stageBundle(
 
 describe('parseBundlePhase', () => {
   it('returns ok:true with a parsed Bundle for a valid bundle ZIP', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       const { zipBuffer, manifest } = await buildTestBundle({
         sessions: [{ eventCount: 3 }],
       });
@@ -61,7 +61,7 @@ describe('parseBundlePhase', () => {
   });
 
   it('returns ok:false with cause=not_a_zip for garbage bytes', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       const jobId = crypto.randomUUID();
       const fileId = crypto.randomUUID();
       const garbage = new Uint8Array([0x00, 0x01, 0x02, 0x03]);
@@ -78,7 +78,7 @@ describe('parseBundlePhase', () => {
   });
 
   it('returns ok:false with cause=missing_manifest for a ZIP without manifest.json', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       const { zipBuffer } = await buildTestBundle({ tamper: { omitManifest: true } });
 
       const jobId = crypto.randomUUID();
@@ -95,7 +95,7 @@ describe('parseBundlePhase', () => {
   });
 
   it('returns ok:false with cause=invalid_manifest for a ZIP with bad manifest JSON', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       const { zipBuffer } = await buildTestBundle({ sessions: [{}] });
       // Replace manifest.json with invalid JSON.
       const zip = await JSZip.loadAsync(zipBuffer);
@@ -116,7 +116,7 @@ describe('parseBundlePhase', () => {
   });
 
   it('returns ok:false with cause=blob_read_failed for a missing staging key', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       const missingKey = `ingest-staging/${crypto.randomUUID()}/${crypto.randomUUID()}`;
 
       const result = await parseBundlePhase(client, missingKey, 'missing.zip');
@@ -129,7 +129,7 @@ describe('parseBundlePhase', () => {
   });
 
   it('parses a multi-session bundle correctly', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       const { zipBuffer } = await buildTestBundle({
         sessions: [{ eventCount: 2 }, { eventCount: 3 }],
       });
@@ -150,7 +150,7 @@ describe('parseBundlePhase', () => {
 // ---------------------------------------------------------------------------
 // errorDetail — the id space each stored failure string names.
 //
-// Pure; no MinIO. These strings land in `ingest_files.error.detail` and are read
+// Pure; no RustFS. These strings land in `ingest_files.error.detail` and are read
 // by staff on a FAILURE path, which is exactly when someone goes looking through
 // the archive. Printing an id that no file carries makes the tool's own report
 // unverifiable by inspection.

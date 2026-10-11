@@ -4,7 +4,7 @@
  * Builds a faithful Gradescope export ZIP (submission_metadata.yml + one folder
  * per submission, with macOS noise), writes it to a real temp file on disk
  * (yauzl reads from a path), and asserts the streamed roster + per-submission
- * results. No DB/MinIO — this exercises only the on-disk outer read.
+ * results. No DB/RustFS — this exercises only the on-disk outer read.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';

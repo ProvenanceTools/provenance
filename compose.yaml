@@ -23,23 +23,40 @@ services:
       timeout: 5s
       retries: 5
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ':9001'
+  # RustFS runs as uid 10001 but a fresh named volume is root-owned, so this
+  # one-shot chowns it before rustfs starts.
+  rustfs-volume-permissions:
+    image: alpine
+    user: '0:0'
+    volumes:
+      - rustfs_data:/data
+    command: ['sh', '-c', 'chown -R 10001:10001 /data']
+    restart: 'no'
+
+  rustfs:
+    image: rustfs/rustfs:1.0.0
+    depends_on:
+      rustfs-volume-permissions:
+        condition: service_completed_successfully
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: 'true'
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_REGION: us-east-1
     ports:
       - '9000:9000' # S3 API
       - '9001:9001' # Web console
     volumes:
-      - minio_data:/data
+      - rustfs_data:/data
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1:9000/health']
       interval: 5s
       timeout: 5s
       retries: 5
 
 volumes:
   postgres_data:
-  minio_data:
+  rustfs_data:

@@ -14,7 +14,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { withTestDb } from '../../../test/helpers/db.js';
-import { withTestMinio } from '../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../test/helpers/rustfs.js';
 import { seedSubmission } from '../../../test/helpers/seed-submission.js';
 import { putSubmissionBundle } from '../../../test/helpers/seed-bundle.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
@@ -28,7 +28,7 @@ beforeEach(() => {
 
 describe('reconstructBundleFromDb', () => {
   it('loads the Bundle + EventIndex from the stored blob', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const submissionId = await seedSubmission(db);
         const sessionId = crypto.randomUUID();
@@ -49,7 +49,7 @@ describe('reconstructBundleFromDb', () => {
   });
 
   it('handles multiple sessions', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const submissionId = await seedSubmission(db);
         const { zipBuffer } = await buildTestBundle({
@@ -67,7 +67,7 @@ describe('reconstructBundleFromDb', () => {
   });
 
   it('reconstructs the ValidationReport from the persisted validation_results row', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const submissionId = await seedSubmission(db);
         const { zipBuffer } = await buildTestBundle({ sessions: [{ eventCount: 2 }] });
@@ -100,7 +100,7 @@ describe('reconstructBundleFromDb', () => {
   });
 
   it('falls back to an all-skipped ValidationReport when no row exists', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const submissionId = await seedSubmission(db);
         const { zipBuffer } = await buildTestBundle({ sessions: [{ eventCount: 2 }] });

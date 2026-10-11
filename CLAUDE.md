@@ -11,7 +11,7 @@ Provenance: an academic-integrity telemetry and analysis system. Six workspaces 
 - `packages/shared/` — Zod schemas shared between `server` and `analyzer` so API contracts stay in sync.
 - `packages/analysis-core/` — pure-TS analysis engine shared by `analyzer` and `server`: bundle loader (unzip + parse), the 8 validation checks, the EventIndex + file reconstruction, per-submission + cross-submission heuristics. Isomorphic (runs in browser and Node); depends only on `log-core` + a few libs (`jszip`, `diff`, `@noble/ed25519`). This is where the code that used to live inside the analyzer and be imported by the server now lives.
 - `packages/analyzer/` — React/Vite SPA (**v3**). Google OAuth login, semester switcher, cohort list, per-submission drill-in (overview / timeline / replay / validation / export / source), a 28-flag heuristics tuning UI (per-flag **weight** 0.0–2.0 + on/off — _not_ the heuristics' own thresholds, which live in `analysis-core/heuristics/config.ts`; the 28 = 18 per-submission event-stream heuristics + 9 validation-derived integrity flags + 1 cross-submission heuristic, see `analysis-core/heuristics/known-flag-ids.ts`; `editing_pattern_clone` was retired 2026-09 and lives on only in `RETIRED_FLAG_IDS`), cross-flags view. Also a standalone `/local` route that runs entirely in-browser (drop a `.zip`, no server). UI on top of `analysis-core`. Note: the submission **Export tab is a v3.1 stub**; the working findings export (markdown + PDF) exists only under `/local`.
-- `packages/server/` — Node + Hono API server (**v3**). Postgres + Drizzle ORM, Google OAuth + sessions + API tokens, ZIP ingest pipeline (parse → match → heuristics → cross-flags), pg-boss job queue, OpenAPI 3.1 + Redoc, Prometheus metrics, retention sweep + session purge cron jobs. Object storage is S3-compatible (MinIO for dev). **Events are not persisted in Postgres** and **stored bundles are provenance-only** (student source stripped after ingest); read paths re-parse the stored bundle blob on demand (see below).
+- `packages/server/` — Node + Hono API server (**v3**). Postgres + Drizzle ORM, Google OAuth + sessions + API tokens, ZIP ingest pipeline (parse → match → heuristics → cross-flags), pg-boss job queue, OpenAPI 3.1 + Redoc, Prometheus metrics, retention sweep + session purge cron jobs. Object storage is S3-compatible (RustFS for dev). **Events are not persisted in Postgres** and **stored bundles are provenance-only** (student source stripped after ingest); read paths re-parse the stored bundle blob on demand (see below).
 
 The product specs live in `docs/`. The recorder spec is `docs/prd.md`; the analyzer/server spec is `docs/analyzer-v3-prd.md`. Section references like "§4.2" mean the recorder PRD unless the surrounding text says otherwise. **Read the relevant PRD section before implementing anything.** If a PRD and this file disagree, this file wins for code conventions; the PRD wins for product behavior.
 
@@ -61,7 +61,7 @@ The product specs live in `docs/`. The recorder spec is `docs/prd.md`; the analy
 - The log file format (recorder PRD §5) is the contract between recorder and analyzer. Pinned with test vectors in `packages/log-core/src/hash-chain.test.ts`. Changes require a version bump and explicit approval. Do not change the format to make an implementation easier.
 - The HTTP API shape (`packages/shared/src/api-schemas.ts`) is the contract between server and analyzer. Treat schema changes the same way: explicit, versioned, with both ends updated in one diff.
 - **Events are not stored in Postgres.** The `.slog` logs inside the stored bundle blob are the source of the event stream. Server read paths (events API, replay/reconstruction, per-submission recompute, cross-flags, submission summary/stats, Source tab) re-parse the bundle on demand via `loadSubmissionIndex` (LRU-cached), which returns `{ bundle, index }`. Do not reintroduce an `events` table without explicit approval.
-- **Stored bundles are provenance-only.** Ingest strips student source files after all in-memory computation (stats, validation incl. check 8, heuristics) and stores only the signed manifest + `.slog`/`.slog.meta` logs. **Never modify `manifest.json` / `manifest.sig`** — they're signed, and the stored bundle must stay signature/chain verifiable. Validation runs once at ingest and read paths serve the stored `validation_results` row. Check 8 (`submitted_code_match`) **is** re-runnable against a stripped bundle as of 2026-07: its tamper sub-check is gated on submitted bytes actually being present, and the match comparison needs only the signed manifest sha256 plus the recorded event hashes, both of which survive stripping. (Previously absent bytes were indistinguishable from wrong bytes, so any re-run reported every stored bundle as tampered — hence the old "never re-run" rule.) The Source tab reconstructs file content from events and trusts the signed manifest sha for verdicts.
+- **Stored bundles are provenance-only.** Ingest strips student source files after all in-memory computation (stats, validation incl. check 8, heuristics) and stores only the signed manifest + `.slog`/`.slog.meta` logs. **Never modify `manifest.json` / `manifest.sig`** — they're signed, and the stored bundle must stay signature/chain verifiable. Validation runs at ingest on the full bundle; read paths serve the stored `validation_results` row, but per-submission recompute **re-runs** validation against the stripped bundle and overwrites that row, and the Source tab re-runs check 8's per-file verdicts. Check 8 (`submitted_code_match`) needs to know what was submitted, which stripping removes, so ingest persists `computeSubmittedShas(bundle)` — the sha256 of each submitted file's actual bytes — as `submitted_shas` on the check-8 entry of `validation_results.detail` (read/write only via `services/ingest/submitted-shas.ts`; stripped from every API response). Every re-run passes them back as `submittedShas`, which reproduces the ingest verdict for every seal kind, tampering included; a validation rewrite without shas keeps the stored ones. Rows ingested before the shas existed have none: there check 8 falls back to the signed manifest sha where it is a commitment and reads `unknown` (skipped, no flag) where it is not — never a mismatch from missing bytes. Re-uploading the original export restores them: a dedup hit on such a row, once its provenance entries are proven byte-identical to the stored blob's, persists the shas and re-runs validation + heuristics + scoring for it (`services/ingest/refresh-duplicate.ts`; `docs/admin-guide.md` §5.2). The Source tab reconstructs file content from events.
 - Events are append-only. There is no `update` or `delete` operation on a log. Anywhere.
 - The hash chain (PRD §5.2) is the foundation of integrity. Any code path that produces log entries goes through the same chaining function. There is exactly one such function and it lives in `log-core`.
 
@@ -79,7 +79,7 @@ The product specs live in `docs/`. The recorder spec is `docs/prd.md`; the analy
 
 - Vitest for unit tests across every workspace. Co-located: `foo.ts` and `foo.test.ts` in the same directory.
 - `@vscode/test-electron` for recorder integration tests, in `packages/recorder/test/integration/`.
-- Server integration tests use **testcontainers** to spawn ephemeral Postgres + MinIO; they do not depend on `docker compose up`. Never point a test at the dev compose stack.
+- Server integration tests use **testcontainers** to spawn ephemeral Postgres + RustFS; they do not depend on `docker compose up`. Never point a test at the dev compose stack.
 - Every PR-sized change ships with tests. New behavior gets new tests; bug fixes get a regression test that fails before the fix.
 - For `log-core`: aim for full branch coverage. It's small and load-bearing.
 - For event handlers: test the event-to-log-entry transformation as a pure function, separately from the VS Code wiring.
@@ -120,7 +120,7 @@ The product specs live in `docs/`. The recorder spec is `docs/prd.md`; the analy
 Workspace-wide (run from repo root):
 
 - `npm run build` — build all packages.
-- `npm run test` — run the **workspace** Vitest suites (~1200+ tests; server integration tests spin up ephemeral Postgres/MinIO via testcontainers, so Docker must be running). Note this is `--workspaces`, so it does **not** cover `tools/` — see `test:tools`.
+- `npm run test` — run the **workspace** Vitest suites (~1200+ tests; server integration tests spin up ephemeral Postgres/RustFS via testcontainers, so Docker must be running). Note this is `--workspaces`, so it does **not** cover `tools/` — see `test:tools`.
 - `npm run test:tools` — run the `tools/` suites (course-keypair / cert-minting / manifest-signing, and the recorder→analyzer seal conformance gate). `tools/` is not an npm workspace, so these are invisible to `npm run test`; they ran under nothing at all until a root `vitest.config.ts` was added, deliberately scoped to `tools/**` so a bare `vitest` cannot wander into the server's testcontainers suites.
 - `npm run typecheck` — `tsc --noEmit` across the workspace.
 - `npm run lint` — ESLint (only the `src/` trees of the five packages) + Prettier check.
@@ -146,7 +146,7 @@ Per-workspace (run from root with `--workspace=packages/<name>`):
 
 Dev infra:
 
-- `docker compose up -d` — Postgres + MinIO for local server dev (see `compose.yaml`). Not used in tests.
+- `docker compose up -d` — Postgres + RustFS for local server dev (see `compose.yaml`). Not used in tests.
 
 If you need a command that doesn't exist, ask before adding it to `package.json`.
 
@@ -156,7 +156,7 @@ If you need a command that doesn't exist, ask before adding it to `package.json`
 provenance/
 ├── CLAUDE.md                              # this file
 ├── README.md                              # quickstart, status table, key/manifest workflow
-├── compose.yaml                           # dev-only Postgres + MinIO
+├── compose.yaml                           # dev-only Postgres + RustFS
 ├── docs/
 │   ├── prd.md                             # recorder product spec
 │   ├── recorder.md                        # recorder security model + threat notes

@@ -84,7 +84,7 @@ digraph recorder {
     node [fillcolor="#0d1c33" color="#4b90f7" fontsize=9.5]
 
     atomic [label="atomic replace — WHOLE files only\n*.slog.meta · manifest.json · manifest.sig\nmanifest-<session_id>.json · .sig\ntemp → fsync → rename"]
-    roll   [label="ROLLING SEAL — rewritten, not written once\nmanifest-<session_id>.json + .sig, ONE session per file,\nsigned by that session's OWN ephemeral key.\nAt session start · on every checkpoint · once more at\ndispose, and ONLY that last one carries final: true.\nThe git path never runs seal — this IS its seal."
+    roll   [label="ROLLING SEAL — rewritten, not written once\nmanifest-<session_id>.json + .sig, ONE session per file,\nsigned by that session's OWN ephemeral key.\nAt session start · after checkpoints (60 s floor, deferred) ·\n~1 s after a save · once more at dispose, and ONLY that last one carries final: true.\nThe git path never runs seal — this IS its seal."
             fillcolor="#0e2422" color="#17bfae" fontsize=9]
     disk   [label="*.slog\nappend-only, one handle open 'a'\nnever rewritten" shape=note]
     full   [label="write\nfailed?" shape=diamond fillcolor="#12161f" fontsize=9 height=0.75 width=1.2]
@@ -133,7 +133,7 @@ digraph recorder {
   full -> disk   [label="no" color="#4b90f7"]
   full -> degr   [label="yes → drop\nthe buffer" color="#ff6b6b"]
   hash -> atomic [label="every 100:\nsigned checkpoint" color="#9d7bf5" style=dashed]
-  hash -> roll   [label="at session start, on every checkpoint,\nand once more at dispose — always AFTER\nthe peer drain, so the observations land in\nthe bytes this seal is about to commit to"
+  hash -> roll   [label="at session start, after checkpoints (60 s floor),\nshortly after a save, and once more at dispose — AFTER\nthe peer drain, so the observations land in\nthe bytes this seal is about to commit to"
                   color="#17bfae" style=dashed]
   roll -> atomic [label="a PAIR commit — a signature and the payload\nit covers only mean anything together" color="#17bfae"]
 }

@@ -22,12 +22,12 @@
  * and every rolling `manifest-<session_id>.json` / `.sig`) are copied verbatim
  * and never modified — the manifest still lists the (now-absent) submission_files
  * with their hashes, so the bundle remains fully signature- and chain-verifiable
- * (validation checks 1–7). Check 8 (submitted_code_match) is also re-runnable
- * against the stripped bundle as of 2026-07 — its tamper sub-check is gated on
- * submitted bytes actually being present, and the match comparison needs only
- * the signed manifest sha256 plus the recorded event hashes, both of which
- * survive stripping (see verify-submitted-code.ts) — but in practice it still
- * only runs once at ingest; read paths serve the stored validation_results row.
+ * (validation checks 1–7). Check 8 (submitted_code_match) is re-run against
+ * the stripped bundle too — by per-submission recompute and the Source tab —
+ * and the one thing it needs that stripping removes, the sha256 of each
+ * submitted file's actual bytes, is computed from the full bundle at ingest and
+ * persisted in validation_results.detail (see submitted-shas.ts), so those
+ * re-runs reach the ingest-time verdict.
  *
  * Output is deterministic (stable entry order + fixed timestamps) so the stored
  * blob's sha256 is reproducible.
@@ -68,15 +68,17 @@ export function isProvenanceEntry(name: string): boolean {
 }
 
 /**
- * Return a new ZIP containing only the provenance entries of `zipBytes`
- * (manifest.json, manifest.sig, manifest-<session_id>.json/.sig, *.slog,
- * *.slog.meta). Source files are dropped.
+ * The provenance entries of `zipBytes` — manifest.json, manifest.sig,
+ * manifest-<session_id>.json/.sig, *.slog, *.slog.meta — with their
+ * DECOMPRESSED bytes, sorted by name. Source entries are never inflated.
  *
- * JSZip reads the input so entry bytes are extracted verbatim (source entries
- * are never inflated — `.async` is only called on provenance entries); the
- * output is (re)built with the native zlib writer.
+ * This is the one definition of "what a stored bundle keeps":
+ * {@link stripBundleSourceFiles} writes exactly these entries, and the
+ * duplicate-refresh path compares an upload's entries against a stored blob's
+ * with it (zip bytes themselves are not comparable — entry timestamps and
+ * compression differ between writers).
  */
-export async function stripBundleSourceFiles(zipBytes: Uint8Array): Promise<Uint8Array> {
+export async function readProvenanceEntries(zipBytes: Uint8Array): Promise<ZipEntryInput[]> {
   const input = await JSZip.loadAsync(zipBytes);
 
   // Stable order for deterministic output.
@@ -89,6 +91,18 @@ export async function stripBundleSourceFiles(zipBytes: Uint8Array): Promise<Uint
     if (!isProvenanceEntry(name)) continue;
     entries.push({ name, data: await entry.async('uint8array') });
   }
+  return entries;
+}
 
-  return writeDeflateZip(entries);
+/**
+ * Return a new ZIP containing only the provenance entries of `zipBytes`
+ * (manifest.json, manifest.sig, manifest-<session_id>.json/.sig, *.slog,
+ * *.slog.meta). Source files are dropped.
+ *
+ * JSZip reads the input so entry bytes are extracted verbatim (source entries
+ * are never inflated — `.async` is only called on provenance entries); the
+ * output is (re)built with the native zlib writer.
+ */
+export async function stripBundleSourceFiles(zipBytes: Uint8Array): Promise<Uint8Array> {
+  return writeDeflateZip(await readProvenanceEntries(zipBytes));
 }

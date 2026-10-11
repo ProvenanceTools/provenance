@@ -93,9 +93,14 @@
  *
  * ## Cadence and cost
  *
- * This is called at session start, after every checkpoint (every ~100 recorded
- * entries — `session-registry.ts`'s `CHECKPOINT_INTERVAL`), and once more at
- * `dispose()` with `final: true`. Path-scope's walk therefore runs far more
+ * Cadence is owned by `rolling-seal-scheduler.ts`. This is called at session
+ * start; after a checkpoint (every ~100 recorded entries —
+ * `session-registry.ts`'s `CHECKPOINT_INTERVAL`), rate-limited to one per 60 s
+ * with a too-soon checkpoint DEFERRED to when the floor expires rather than
+ * dropped; ~1 s after the last of a burst of `doc.save`s, bypassing the floor
+ * (a student saves, then commits with the editor still open, so the committed
+ * seal must not predate the save); and once more at `dispose()` with
+ * `final: true`. Path-scope's walk therefore runs far more
  * often than `commands/seal.ts`'s single walk at submission time: every
  * checkpoint now recurses the whole workspace tree (pruning only `.git/` and
  * `.provenance/`) and reads+hashes every in-scope file, where the pre-path-scope

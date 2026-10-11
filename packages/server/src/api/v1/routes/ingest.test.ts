@@ -2,16 +2,16 @@
  * Ingest routes integration tests (Phase 9a).
  *
  * Tests all ingest endpoints through createV1App() per V18 rule.
- * Both Postgres (withTestDb) and MinIO (withTestMinio) containers are required.
+ * Both Postgres (withTestDb) and RustFS (withTestRustfs) containers are required.
  * The route handler reads storage config from getConfig(), so we wire the test
- * MinIO endpoint into _setConfigForTest().
+ * RustFS endpoint into _setConfigForTest().
  */
 
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import JSZip from 'jszip';
 import { eq } from 'drizzle-orm';
 import { withTestDb } from '../../../../test/helpers/db.js';
-import { withTestMinio } from '../../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../../test/helpers/rustfs.js';
 
 // ---------------------------------------------------------------------------
 // Mock pg-boss so POST /ingest doesn't require a real pg-boss connection.
@@ -156,18 +156,18 @@ async function seedRosterEntry(
 }
 
 // ---------------------------------------------------------------------------
-// Test env builder (includes MinIO endpoint)
+// Test env builder (includes RustFS endpoint)
 // ---------------------------------------------------------------------------
 
-function makeTestEnv(minioEndpoint: string, minioBucket: string): Record<string, string> {
+function makeTestEnv(rustfsEndpoint: string, rustfsBucket: string): Record<string, string> {
   return {
     NODE_ENV: 'test',
     PUBLIC_BASE_URL: 'http://localhost:3000',
     DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance', // overridden by mock
-    OBJECT_STORAGE_ENDPOINT: minioEndpoint,
-    OBJECT_STORAGE_BUCKET: minioBucket,
-    OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+    OBJECT_STORAGE_ENDPOINT: rustfsEndpoint,
+    OBJECT_STORAGE_BUCKET: rustfsBucket,
+    OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
     OBJECT_STORAGE_REGION: 'us-east-1',
     GOOGLE_OAUTH_CLIENT_ID: 'client-id',
     GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -244,7 +244,7 @@ function makeMultipartRequest(
 describe('POST /semesters/:semesterId/ingest', () => {
   it('returns 202 with job_id when staging multiple files', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -293,9 +293,9 @@ describe('POST /semesters/:semesterId/ingest', () => {
     });
   });
 
-  it('returns 202 and stages blobs in MinIO', async () => {
+  it('returns 202 and stages blobs in RustFS', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -319,14 +319,14 @@ describe('POST /semesters/:semesterId/ingest', () => {
           expect(res.status).toBe(202);
           const { job_id } = (await res.json()) as { job_id: string };
 
-          // Verify blob exists in MinIO by retrieving ingest_files row and checking the staging key.
+          // Verify blob exists in RustFS by retrieving ingest_files row and checking the staging key.
           const [fileRow] = await db
             .select()
             .from(ingest_files)
             .where(eq(ingest_files.ingest_job_id, job_id));
           expect(fileRow).toBeDefined();
 
-          // Verify the blob is retrievable from MinIO.
+          // Verify the blob is retrievable from RustFS.
           const { getBlob } = await import('../../../services/storage/blobs.js');
           const { ingestStagingKey } = await import('../../../services/storage/keys.js');
           const key = ingestStagingKey(job_id, fileRow!.id);
@@ -344,7 +344,7 @@ describe('POST /semesters/:semesterId/ingest', () => {
 
   it('expands zip-of-zips and stages each inner .zip', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -392,7 +392,7 @@ describe('POST /semesters/:semesterId/ingest', () => {
 
   it('creates audit row for ingest.start', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -435,7 +435,7 @@ describe('POST /semesters/:semesterId/ingest', () => {
 
   it('returns 422 ROSTER_REQUIRED when semester has no roster entries', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -468,7 +468,7 @@ describe('POST /semesters/:semesterId/ingest', () => {
 
   it('returns 413 INGEST_BATCH_TOO_LARGE on oversize Content-Length', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           // Set a very small max batch size.
@@ -509,7 +509,7 @@ describe('POST /semesters/:semesterId/ingest', () => {
 
   it('returns 413 INGEST_FILE_TOO_LARGE on oversize individual file', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           // Very small per-file cap.
@@ -546,7 +546,7 @@ describe('POST /semesters/:semesterId/ingest', () => {
 
   it('returns 400 INGEST_TOO_MANY_FILES when file count exceeds cap', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -585,7 +585,7 @@ describe('POST /semesters/:semesterId/ingest', () => {
 
   it('returns 401 for unauthenticated requests', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -609,7 +609,7 @@ describe('POST /semesters/:semesterId/ingest', () => {
 
   it('returns 403 for grader (non-admin) role', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -646,7 +646,7 @@ describe('POST /semesters/:semesterId/ingest', () => {
 describe('GET /semesters/:semesterId/ingest/jobs', () => {
   it('returns paginated job list for a semester member', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -709,7 +709,7 @@ describe('GET /semesters/:semesterId/ingest/jobs', () => {
 describe('POST /semesters/:semesterId/ingest/jobs/:jobId/cancel', () => {
   it('cancels a queued job and creates an audit row', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -768,7 +768,7 @@ describe('POST /semesters/:semesterId/ingest/jobs/:jobId/cancel', () => {
 
   it('returns 404 for non-existent job', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -800,7 +800,7 @@ describe('POST /semesters/:semesterId/ingest/jobs/:jobId/cancel', () => {
 
   it('returns 409 INGEST_JOB_NOT_CANCELLABLE when job is already terminal (Important 4)', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -856,7 +856,7 @@ describe('POST /semesters/:semesterId/ingest/jobs/:jobId/cancel', () => {
 describe('POST /semesters/:semesterId/ingest — staging failure compensation (Critical 1)', () => {
   it('marks job failed (not orphaned as queued) and writes no rows when stageBlob throws on second file', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -877,7 +877,7 @@ describe('POST /semesters/:semesterId/ingest — staging failure compensation (C
             .mockImplementation(async (...args: Parameters<typeof stageBlobModule.stageBlob>) => {
               callCount++;
               if (callCount === 2) {
-                throw new Error('simulated MinIO failure on file 2');
+                throw new Error('simulated RustFS failure on file 2');
               }
               return originalStageBlob(...args);
             });
@@ -906,7 +906,7 @@ describe('POST /semesters/:semesterId/ingest — staging failure compensation (C
 
           // No ingest_files rows: rows are bulk-inserted only after ALL staging
           // succeeds, so a mid-staging failure leaves zero rows (the file-1 blob
-          // staged to MinIO is an orphan the retention sweep reclaims).
+          // staged to RustFS is an orphan the retention sweep reclaims).
           const files = await db
             .select()
             .from(ingest_files)
@@ -927,7 +927,7 @@ describe('POST /semesters/:semesterId/ingest — staging failure compensation (C
 describe('POST /semesters/:semesterId/ingest — zip-bomb guard (Critical 2)', () => {
   it('returns 413 INGEST_BATCH_TOO_LARGE when outer zip decompresses beyond batch cap', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           // Set a small batch cap so we can craft a test zip without actual large data.
@@ -989,7 +989,7 @@ describe('POST /semesters/:semesterId/ingest — zip-bomb guard (Critical 2)', (
 describe('GET /semesters/:semesterId/ingest/jobs/:jobId — protected mode', () => {
   it('masks original_filename and matched_student when user is protected', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -1063,7 +1063,7 @@ describe('GET /semesters/:semesterId/ingest/jobs/:jobId — protected mode', () 
 
   it('returns real filename and matched_student when user is NOT protected (job detail)', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -1128,7 +1128,7 @@ describe('GET /semesters/:semesterId/ingest/jobs/:jobId — protected mode', () 
 describe('GET /semesters/:semesterId/ingest/jobs/:jobId/files — protected mode', () => {
   it('masks filenames and matched_student in files listing when protected', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -1193,7 +1193,7 @@ describe('GET /semesters/:semesterId/ingest/jobs/:jobId/files — protected mode
 
   it('returns real values in files listing when NOT protected', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -1321,7 +1321,7 @@ describe('POST /semesters/:semesterId/ingest — declared submission types', () 
 
   it('fans a git repo zip out into one ingest_files row per scope', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -1363,7 +1363,7 @@ describe('POST /semesters/:semesterId/ingest — declared submission types', () 
 
   it('a per-request override beats the assignment default', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -1430,7 +1430,7 @@ describe('POST /semesters/:semesterId/ingest — declared submission types', () 
 
   it('a heterogeneous batch fails legibly, through skipped and not a new channel', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -1481,7 +1481,7 @@ describe('POST /semesters/:semesterId/ingest — declared submission types', () 
 
   it('re-ingesting the same repo zip stages byte-identical blobs (idempotent)', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -1518,7 +1518,7 @@ describe('POST /semesters/:semesterId/ingest — declared submission types', () 
 
   it('a flat sealed bundle stages the EXACT uploaded bytes — unchanged by this feature', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(
@@ -1560,7 +1560,7 @@ describe('POST /semesters/:semesterId/ingest — declared submission types', () 
 
   it('rejects a scope_* override with no scope_mode rather than ignoring it', async () => {
     await withTestDb(async (db) => {
-      await withTestMinio(async ({ client, bucketName }) => {
+      await withTestRustfs(async ({ client, bucketName }) => {
         _testDb = db;
         try {
           _setConfigForTest(

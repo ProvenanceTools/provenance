@@ -30,13 +30,13 @@
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-// Testcontainers spin up Postgres + MinIO per file; the repo convention is to
+// Testcontainers spin up Postgres + RustFS per file; the repo convention is to
 // raise the 10s unit-test default here rather than let container startup under
 // a loaded full-suite run look like a product failure.
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 import { withTestDb } from '../../../test/helpers/db.js';
-import { withTestMinio } from '../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../test/helpers/rustfs.js';
 import { putSubmissionBundle } from '../../../test/helpers/seed-bundle.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import {
@@ -80,8 +80,8 @@ const BASE_ENV: Record<string, string> = {
   DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance',
   OBJECT_STORAGE_ENDPOINT: 'http://localhost:9000',
   OBJECT_STORAGE_BUCKET: 'provenance',
-  OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-  OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+  OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+  OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
   GOOGLE_OAUTH_CLIENT_ID: 'client-id',
   GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
   AUTH_ALLOWED_HOSTED_DOMAINS: '["berkeley.edu"]',
@@ -227,7 +227,7 @@ const sessionKey = (i: number) => seededKeypair(0x60 + i);
 
 describe('loadSubmissionIndex — attributed contributors', () => {
   it('resolves BOTH contributors of a two-contributor submission through the read path', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const alice = await keysFor('alice');
         const bob = await keysFor('bob');
@@ -286,7 +286,7 @@ describe('loadSubmissionIndex — attributed contributors', () => {
   });
 
   it('passes the DEPLOYMENT root key — a different root does not attribute', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const alice = await keysFor('alice');
         // A root key that is real, well-formed, and simply not the one that
@@ -329,7 +329,7 @@ describe('loadSubmissionIndex — attributed contributors', () => {
 
 describe('loadSubmissionIndex — a bundle with no identity is blameless', () => {
   it('reads unattributed end to end, with nothing that could render as suspicious', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const alice = await keysFor('alice');
         setRootKey(alice.root.pubkeyHex);
@@ -384,7 +384,7 @@ describe('loadSubmissionIndex — a bundle with no identity is blameless', () =>
 
 describe('loadSubmissionIndex — a deployment with no root public key', () => {
   it('still serves the submission, reporting no_root_key rather than a check failure', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const alice = await keysFor('alice');
         setNoRootKey();
@@ -420,7 +420,7 @@ describe('loadSubmissionIndex — a deployment with no root public key', () => {
   });
 
   it('does not turn a session with NO identity block into unverifiable', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         setNoRootKey();
         const sk0 = await sessionKey(0);
@@ -443,7 +443,7 @@ describe('loadSubmissionIndex — a deployment with no root public key', () => {
 
 describe('loadSubmissionIndex — the contributor stamp and the LRU cache', () => {
   it('returns a correctly-stamped bundle on a cache hit', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const alice = await keysFor('alice');
         setRootKey(alice.root.pubkeyHex);
@@ -477,7 +477,7 @@ describe('loadSubmissionIndex — the contributor stamp and the LRU cache', () =
   });
 
   it('never hands one submission the contributor stamp of another', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const alice = await keysFor('alice');
         const bob = await keysFor('bob');
@@ -527,7 +527,7 @@ describe('loadSubmissionIndex — the contributor stamp and the LRU cache', () =
   });
 
   it('re-stamps after the cache is reset, so a cold read is not left unattributed', async () => {
-    await withTestMinio(async ({ client }) => {
+    await withTestRustfs(async ({ client }) => {
       await withTestDb(async (db) => {
         const alice = await keysFor('alice');
         setRootKey(alice.root.pubkeyHex);

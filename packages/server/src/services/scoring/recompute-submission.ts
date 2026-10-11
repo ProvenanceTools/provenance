@@ -28,9 +28,15 @@
  * row. Reusing the stored row meant a recompute could never correct a wrong
  * validation verdict — and since the report feeds runHeuristics, a stale
  * check-8 failure kept re-emitting a high-severity flag on every recompute.
- * Re-running is safe against a stored, source-stripped bundle: every check
- * reads the signed manifest, the .slog chain, or recorded event hashes, none of
- * which are stripped. simulate=true computes the report without persisting it.
+ * Checks 1–7 read only the signed manifest, the .slog chain, or recorded event
+ * hashes, none of which are stripped. Check 8 also needs what was SUBMITTED,
+ * and the stored bundle no longer has the source bytes — so the shas ingest
+ * recorded from them (`validation_results.detail`, see
+ * services/ingest/submitted-shas.ts) are read back first and handed to it, and
+ * re-persisted with the new report. Without them (rows ingested before they
+ * were recorded) a file whose submitted state cannot be established from the
+ * stripped bundle reads `unknown`, never `mismatch`. simulate=true computes the
+ * report without persisting it.
  *
  * ## Transaction contract
  *
@@ -80,6 +86,8 @@ import { resolvePerFlag } from '../heuristics/config.js';
 import { reconstructBundleFromDb } from '../heuristics/reconstruct-bundle.js';
 import { runValidation } from '@provenance/analysis-core/validation/run-validation.js';
 import { runAndStoreValidation } from '../ingest/validation.js';
+import { loadStoredSubmittedShas } from '../ingest/submitted-shas.js';
+import type { SubmittedShas } from '../ingest/submitted-shas.js';
 import { configuredValidationOptions } from '../../config/root-key.js';
 import { computeAndStoreStats } from '../ingest/stats.js';
 import { computeScore } from './compute.js';
@@ -256,6 +264,11 @@ export function translateFlagsToRows(
  * @param config - The ServerHeuristicConfig to apply.
  * @param configVersion - The version number to write to flags.heuristic_config_version.
  * @param options.simulate - If true, skip all writes (dry-run mode).
+ * @param options.submittedShas - Submitted-file shas to use INSTEAD of the
+ *   stored ones, and to persist in their place. Only for a caller that has just
+ *   established them from the submitted bytes themselves — the duplicate
+ *   re-upload refresh (services/ingest/refresh-duplicate.ts). Omitted, the
+ *   stored shas are read back and re-persisted.
  */
 export async function recomputeSubmission(
   db: DrizzleDb,
@@ -264,7 +277,7 @@ export async function recomputeSubmission(
   semesterId: string,
   config: ServerHeuristicConfig,
   configVersion: number,
-  { simulate = false }: { simulate?: boolean } = {},
+  { simulate = false, submittedShas }: { simulate?: boolean; submittedShas?: SubmittedShas } = {},
 ): Promise<RecomputeResult> {
   // -------------------------------------------------------------------------
   // Step 1: Reconstruct Bundle + EventIndex + ValidationReport from DB.
@@ -287,14 +300,20 @@ export async function recomputeSubmission(
   // validation verdict, and (because runHeuristics takes the report as input)
   // a stale check-8 failure keeps re-emitting a high-severity flag forever.
   //
-  // Re-running is safe against a stored, source-stripped bundle: every check
-  // reads the signed manifest, the .slog chain, or recorded event hashes, all
-  // of which survive stripping. Check 8's tamper sub-check is gated on
-  // submitted bytes actually being present (see verify-submitted-code.ts).
+  // Checks 1–7 read only what survives stripping. Check 8 needs the shas of
+  // the submitted bytes, which ingest persisted (submitted-shas.ts): read them
+  // BEFORE re-running, pass them in, and runAndStoreValidation re-persists
+  // them with the new report so a recompute never loses them. With none
+  // stored, check 8 cannot establish a stripped file's submitted state and
+  // reads it `unknown` (see verify-submitted-code.ts) — never `mismatch`.
   //
   // simulate = dry-run: compute the report but persist nothing.
   // -------------------------------------------------------------------------
-  const validationOptions = configuredValidationOptions();
+  const shas = submittedShas ?? (await loadStoredSubmittedShas(db, submissionId));
+  const validationOptions = {
+    ...configuredValidationOptions(),
+    ...(shas !== undefined ? { submittedShas: shas } : {}),
+  };
   const validationReport = simulate
     ? await runValidation(bundle, validationOptions)
     : await runAndStoreValidation(db, submissionId, bundle, validationOptions);

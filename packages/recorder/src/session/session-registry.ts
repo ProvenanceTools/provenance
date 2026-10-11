@@ -44,6 +44,11 @@ import { MetaWriter } from '../io/meta-writer.js';
 import { writeRollingSeal } from '../io/rolling-seal-writer.js';
 import { ensureProvenanceGitAttributes } from '../io/git-attributes-writer.js';
 import { startHeartbeat } from '../events/heartbeat.js';
+import {
+  createRollingSealScheduler,
+  defaultSealTimers,
+  type SealTimers,
+} from '../io/rolling-seal-scheduler.js';
 import { startClockWatcher } from '../events/clock-watcher.js';
 import { startDocWiring } from '../wiring/doc-wiring.js';
 import {
@@ -141,6 +146,8 @@ export type StartSessionDeps = {
   provenanceDirOverride?: string;
   heartbeatDeps?: HeartbeatVscodeDeps;
   extensionDistPath?: string;
+  /** Timer seam for the rolling-seal scheduler (save debounce, floor deferral). Tests inject fakes. */
+  sealTimers?: SealTimers;
   /**
    * Ownership filter for this session's wiring (Tasks 6-8). Defaults to "always
    * owned" (`() => true`) so single-session callers (and this task's own tests)
@@ -559,78 +566,23 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   };
 
   /**
-   * Serializes every rolling-seal rewrite — the one at session start, the one
-   * per checkpoint, and the final one in dispose(). Two concurrent rewrites
-   * would interleave their `.json` and `.sig` renames and could leave a
-   * mismatched pair on disk, which is the one thing the atomic write exists to
-   * prevent. dispose() awaits this chain so the last seal is never lost.
+   * Rolling-seal cadence lives in `rolling-seal-scheduler.ts` (time floor for
+   * checkpoint-driven rolls, deferred rather than dropped; a short trailing
+   * debounce after `doc.save`; coalescing; serialization on one chain; and a
+   * final roll that cancels every timer). Every roll is serialized on the
+   * scheduler's one chain, so two rewrites never interleave their `.json` and
+   * `.sig` renames. `writer` is only touched lazily
+   * inside `prepare`, long after construction.
    */
-  let rollingSealChain: Promise<void> = Promise.resolve();
-
-  /**
-   * The checkpoint-triggered roll's time floor (task 13, fix round 1).
-   *
-   * `CHECKPOINT_INTERVAL` (100 entries) is an EVENT-count bound, not a time
-   * bound — 100 events can be a few seconds of fast typing or several minutes
-   * of thinking. A course scoped with a broad suffix rule (e.g. `track:
-   * ["*.js"]`) against a workspace with a large, non-hard-excluded directory
-   * present on disk (a checked-out `node_modules/`) walks and re-hashes every
-   * matching file on every roll — measured at ~4.2s for one such workspace —
-   * which at a 100-event cadence could mean a multi-MB signed manifest being
-   * atomically rewritten into a git working tree every 10-20s of active
-   * typing. 60s between checkpoint-triggered rolls is ample staleness for a
-   * background artifact whose worst case (data loss window) is already bounded
-   * by the SAME 100-event gap this floor sits behind, and it does not touch
-   * `isHardExcluded` or invent a cache — it only widens an already-unbounded
-   * time gap between rolls.
-   *
-   * Deliberately NOT applied to the session-start roll (step 6c) or the
-   * `dispose()` final roll — see `rewriteRollingSeal`'s `force`/`final`
-   * bypass below.
-   */
-  const ROLLING_SEAL_MIN_INTERVAL_MS = 60_000;
-  /** Monotonic time (`clock.now()`) of the last roll actually performed, or `null` before the first. */
-  let lastRollAt: number | null = null;
-
-  /**
-   * Rewrite the rolling seal. Never throws and never rejects: a seal failure
-   * must not abort the checkpoint that carries it, and must never stop
-   * recording. Recording is more important than sealing.
-   *
-   * `final` marks the seal as the LAST this session will get, which promotes the
-   * reader from prefix to whole-file semantics. ONLY dispose() may pass it, and
-   * only after session.end has been emitted, the writer flushed and the pending
-   * checkpoint drained — see the call site. Every other roll leaves it off,
-   * because the log is still growing and claiming otherwise would make the
-   * student's next keystroke look like an append past a finished seal.
-   *
-   * `force` bypasses the `ROLLING_SEAL_MIN_INTERVAL_MS` time floor. Only the
-   * session-start caller (step 6c) passes it — that first roll is what a
-   * short, checkpoint-free session relies on for coverage at all, so it must
-   * never be skipped. `final: true` bypasses the floor too, unconditionally:
-   * the last seal this session will ever get must always be written, however
-   * recently the previous one landed. The checkpoint call site (below, inside
-   * `onEntry`) passes neither, so it alone is subject to the floor.
-   */
-  function rewriteRollingSeal(opts?: { final?: boolean; force?: boolean }): Promise<void> {
-    if (!rollingSealEnabled) return Promise.resolve();
-    const isFinal = opts?.final === true;
-    const bypassFloor = isFinal || opts?.force === true;
-    if (
-      !bypassFloor &&
-      lastRollAt !== null &&
-      clock.now() - lastRollAt < ROLLING_SEAL_MIN_INTERVAL_MS
-    ) {
-      // Too soon since the last roll. The on-disk seal is still a valid (if
-      // slightly stale) PREFIX seal — never treated as whole-file by a reader,
-      // since only a `final: true` seal makes that claim — and the next
-      // checkpoint, or dispose()'s unconditional final roll, will catch up.
-      return Promise.resolve();
-    }
-    lastRollAt = clock.now();
-    rollingSealChain = rollingSealChain.then(() => rollingSealOnce(isFinal));
-    return rollingSealChain;
-  }
+  const sealScheduler = createRollingSealScheduler({
+    enabled: rollingSealEnabled,
+    now: () => clock.now(),
+    timers: deps.sealTimers ?? defaultSealTimers,
+    // Flush so the seal's slog digest covers every entry chained so far (a
+    // just-recorded doc.save in particular).
+    prepare: () => writer.flush(),
+    roll: ({ final }) => rollingSealOnce(final),
+  });
 
   async function rollingSealOnce(isFinal: boolean): Promise<void> {
     try {
@@ -714,16 +666,13 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
           .then(() => peerWatcher?.drain())
           // The rolling seal runs AFTER the checkpoint has landed in the .meta,
           // so `meta_sha256` covers it, and after the .catch above so a failed
-          // checkpoint still gets the best seal available. rewriteRollingSeal
+          // checkpoint still gets the best seal available. onCheckpoint
           // never rejects, so it cannot poison the chain dispose() awaits.
           //
-          // No `force`/`final` here: this is the ONE call site subject to
-          // `ROLLING_SEAL_MIN_INTERVAL_MS` — a checkpoint fired less than 60s
-          // after the last actual roll is a no-op, since the walk-and-hash
-          // cost that motivates the floor runs at THIS cadence, not the
-          // session-start or dispose() rolls (see `rewriteRollingSeal`'s
-          // docstring).
-          .then(() => rewriteRollingSeal());
+          // Subject to the scheduler's 60 s floor: a checkpoint fired inside
+          // it is DEFERRED to when the floor expires, not dropped. Never
+          // rejects, so it cannot poison pendingCheckpoint.
+          .then(() => sealScheduler.onCheckpoint());
       }
     },
   });
@@ -755,12 +704,8 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
   // dist/ walk plus one ed25519 sign at activation, alongside the keypair
   // generation and encrypted-privkey write already happening here.
   //
-  // `force: true`: this is the FIRST roll, before `lastRollAt` has a baseline,
-  // so the time floor would never actually bite here regardless — but forcing
-  // it explicitly documents that this roll is unconditional, matching
-  // `rewriteRollingSeal`'s own contract, rather than relying on `lastRollAt`
-  // starting `null`.
-  await rewriteRollingSeal({ force: true });
+  // `rollNow()` is unconditional: it is not subject to the checkpoint floor.
+  await sealScheduler.rollNow();
 
   // Step 7: Start heartbeat (PRD §4.2: session.heartbeat every 30s).
   const hbDeps = deps.heartbeatDeps ?? defaultHeartbeatDeps();
@@ -846,7 +791,12 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     workspace: { asRelativePath: (uri) => toAssignmentRelative(uri.fsPath) },
     emitDocOpen: (data) => sessionHost.emit('doc.open', data),
     emitDocChange: (data) => sessionHost.emit('doc.change', data),
-    emitDocSave: (data) => sessionHost.emit('doc.save', data),
+    emitDocSave: (data) => {
+      sessionHost.emit('doc.save', data);
+      // A save followed by `git add`/`commit` with the editor still open must
+      // not leave a seal that predates the save: schedule a debounced re-seal.
+      sealScheduler.onSave();
+    },
     emitDocClose: (data) => sessionHost.emit('doc.close', data),
     emitPaste: (data) => sessionHost.emit('paste', data),
     emitSelectionChange: (data) => sessionHost.emit('selection.change', data),
@@ -1072,8 +1022,10 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     // machine losing power — simply keeps whichever seal the last checkpoint
     // left, which is the whole point of maintaining it continuously.
     //
-    // Awaiting rewriteRollingSeal() also drains any checkpoint seal still in
-    // flight, since both share rollingSealChain.
+    // finalRoll() cancels every pending seal timer (save debounce, floor
+    // deferral), discards any queued roll, and runs after any roll still in
+    // flight, since all rolls share the scheduler's chain. Nothing can land
+    // after it.
     //
     // `final: true` is claimable HERE AND ONLY HERE, and only because of the
     // three awaits above: session.end is emitted, the writer is flushed and
@@ -1092,9 +1044,9 @@ export async function startSession(deps: StartSessionDeps): Promise<ActiveSessio
     // `session.end` lives in the log, and the log's completeness is the very
     // thing in question.
     try {
-      await rewriteRollingSeal({ final: true });
+      await sealScheduler.finalRoll();
     } catch {
-      // Ignore — best effort. rewriteRollingSeal does not reject anyway.
+      // Ignore — best effort. finalRoll does not reject anyway.
     }
     // Dispose this session's own subscriptions in LIFO order.
     for (const d of [...ownDisposables].reverse()) {

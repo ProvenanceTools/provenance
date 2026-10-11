@@ -56,7 +56,7 @@ async function buildPair(sessions: SessionSpec[], policy: CapturePolicyBlock) {
   const legacy = await buildAndIndex(sessions);
 
   const keys = await buildTrustChainKeys();
-  const manifest = await buildManifest2({ keys, policy });
+  const manifest = await buildManifest2({ keys, policy, filesUnderReview: ['hw.py'] });
   const start = sessionStart2(manifest);
   const gated = await buildAndIndex(
     sessions.map((s) => ({ ...s, sessionStart: { ...(s.sessionStart ?? {}), ...start } })),

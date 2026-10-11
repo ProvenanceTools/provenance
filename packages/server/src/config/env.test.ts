@@ -12,8 +12,8 @@ const VALID_BASE: Record<string, string> = {
   DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance',
   OBJECT_STORAGE_ENDPOINT: 'http://localhost:9000',
   OBJECT_STORAGE_BUCKET: 'provenance',
-  OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-  OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+  OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+  OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
   GOOGLE_OAUTH_CLIENT_ID: 'client-id',
   GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
   AUTH_ALLOWED_HOSTED_DOMAINS: '["berkeley.edu"]',
@@ -41,8 +41,8 @@ describe('parseEnv — happy path', () => {
     expect(cfg.OBJECT_STORAGE_ENDPOINT).toBe('http://localhost:9000');
     expect(cfg.OBJECT_STORAGE_REGION).toBe('auto');
     expect(cfg.OBJECT_STORAGE_BUCKET).toBe('provenance');
-    expect(cfg.OBJECT_STORAGE_ACCESS_KEY_ID).toBe('minioadmin');
-    expect(cfg.OBJECT_STORAGE_SECRET_ACCESS_KEY).toBe('minioadmin');
+    expect(cfg.OBJECT_STORAGE_ACCESS_KEY_ID).toBe('rustfsadmin');
+    expect(cfg.OBJECT_STORAGE_SECRET_ACCESS_KEY).toBe('rustfsadmin');
     expect(cfg.GOOGLE_OAUTH_CLIENT_ID).toBe('client-id');
     expect(cfg.GOOGLE_OAUTH_CLIENT_SECRET).toBe('client-secret');
     expect(cfg.AUTH_ALLOWED_HOSTED_DOMAINS).toEqual(['berkeley.edu']);
@@ -279,6 +279,11 @@ describe('alert config', () => {
     });
     expect(env.ALERT_WEBHOOK_URL).toBe('https://discord.test/hook');
     expect(env.ALERT_EMAIL_RECIPIENTS).toEqual(['a@berkeley.edu', 'b@berkeley.edu']);
+  });
+
+  it('treats an empty webhook URL as disabled', () => {
+    const env = parseEnv({ ...VALID_BASE, ALERT_WEBHOOK_URL: '' });
+    expect(env.ALERT_WEBHOOK_URL).toBeUndefined();
   });
 
   it('rejects a bad severity', () => {

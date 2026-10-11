@@ -56,7 +56,8 @@ digraph readpath {
   r_replay -> lsi [color="#e8559c"]
   r_recomp -> lsi [color="#e8559c"]
   r_src    -> fetch [label="own loadBundle + buildIndex —\nbypasses the LRU-cached index" color="#e8559c" style=dashed]
-  r_src    -> pgq [label="chain-integrity GATE read from the stored\nvalidation_results.check_3_status — the tab\nno longer re-derives it with a live runValidation,\nso both surfaces quote one answer" color="#e8559c"]
+  r_src    -> pgq [label="chain-integrity GATE + persisted submitted\nshas read from the stored validation_results —\nthe tab no longer re-derives the gate with a live\nrunValidation, so both surfaces quote one answer" color="#e8559c"]
+  r_recomp -> pgq [label="stored submitted shas, so re-run\ncheck 8 on the stripped blob reaches\nthe ingest verdict" color="#e8559c" style=dashed]
 
   lsi -> cache
   cache -> ret   [label="hit" color="#3fbf62"]

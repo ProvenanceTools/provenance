@@ -13,14 +13,16 @@ Current schema version: **0029** (`submission_contributors` — a submission bel
 docker compose up -d
 ```
 
-This starts Postgres 16 (port 5432) and MinIO (ports 9000/9001).
-The MinIO web console is at http://localhost:9001 (user: `minioadmin`, password: `minioadmin`).
+This starts Postgres 16 (port 5432) and RustFS, an S3-compatible object store (ports 9000/9001).
+The RustFS web console is at http://localhost:9001 (user: `rustfsadmin`, password: `rustfsadmin`).
 
-Create the storage bucket (one-time):
+Create the storage bucket (one-time — uploads 404 without it). Either sign in to the console and
+create a bucket named `provenance`, or use the RustFS `rc` CLI (macOS: `brew install rustfs/tap/rc`;
+other platforms: https://docs.rustfs.com/en/operations/rc):
 
 ```bash
-docker compose exec minio mc alias set local http://localhost:9000 minioadmin minioadmin
-docker compose exec minio mc mb local/provenance
+rc alias set local http://localhost:9000 rustfsadmin rustfsadmin --region us-east-1 --bucket-lookup path
+rc bucket create local/provenance
 ```
 
 ### 2. Configure environment
@@ -28,6 +30,7 @@ docker compose exec minio mc mb local/provenance
 ```bash
 cp .env.example .env
 # Fill in GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET from Google Cloud Console.
+# Dummy values are fine for API/worker/seed work; signing in to the analyzer needs real ones.
 ```
 
 See `docs/analyzer-v3-prd.md §3` for the full env var reference.
@@ -73,7 +76,7 @@ click around the analyzer without hunting for real submissions. It does the real
 thing end to end: it generates a Gradescope export ZIP and runs it through the **real**
 ingest pipeline (the same `POST /ingest:gradescope` route + worker that production uses).
 
-Prerequisites are the same as `npm run dev`: `docker compose up -d`, the MinIO bucket
+Prerequisites are the same as `npm run dev`: `docker compose up -d`, the RustFS bucket
 created (step 1 above), `.env` present, and migrations applied. Then:
 
 ```bash
@@ -319,7 +322,7 @@ upserts the roster from the export metadata automatically).
 
 Both drive the real route + worker in-process and print a per-phase timing table (parse,
 match, heuristics, stats, validation, crypto, DB, S3). They need the same backing services
-as `npm run dev` (Postgres + MinIO up, migrations applied) and set `INGEST_PROFILE=1`
+as `npm run dev` (Postgres + RustFS up, migrations applied) and set `INGEST_PROFILE=1`
 inline. Use them to check the cost model after changing any pipeline stage.
 
 - `profile:ingest` runs the committed ~700-bundle example export against a fresh,

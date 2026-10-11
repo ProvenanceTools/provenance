@@ -5,7 +5,7 @@
  *
  * Events are no longer stored in Postgres: the routes parse the stored bundle
  * blob on demand (via getStorageClient() → loadSubmissionIndex). Each test spins
- * a MinIO container, points the app config at it, and seeds a bundle whose events
+ * a RustFS container, points the app config at it, and seeds a bundle whose events
  * (doc.open 'hello' + doc.change ' world' + doc.save) reconstruct file main.py.
  *
  * globalIdx note: the bundle's session.start is globalIdx 0, so doc.open=1,
@@ -15,7 +15,7 @@
 
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { withTestDb } from '../../../../test/helpers/db.js';
-import { withTestMinio } from '../../../../test/helpers/minio.js';
+import { withTestRustfs } from '../../../../test/helpers/rustfs.js';
 import { putSubmissionBundle } from '../../../../test/helpers/seed-bundle.js';
 import { buildTestBundle } from '@provenance/analysis-core/test-support/build-test-bundle.js';
 import { _resetConfigForTest, _setConfigForTest } from '../../../config/index.js';
@@ -76,8 +76,8 @@ function makeTestEnv(extra?: Record<string, string>) {
     DATABASE_URL: 'postgres://user:pass@localhost:5432/provenance',
     OBJECT_STORAGE_ENDPOINT: 'http://localhost:9000',
     OBJECT_STORAGE_BUCKET: 'test-bucket',
-    OBJECT_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'minioadmin',
+    OBJECT_STORAGE_ACCESS_KEY_ID: 'rustfsadmin',
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'rustfsadmin',
     OBJECT_STORAGE_REGION: 'us-east-1',
     GOOGLE_OAUTH_CLIENT_ID: 'client-id',
     GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
@@ -93,8 +93,8 @@ function makeTestEnv(extra?: Record<string, string>) {
   };
 }
 
-/** Config env wired to the ephemeral MinIO endpoint/bucket. */
-function envForMinio(endpoint: string, bucket: string, extra?: Record<string, string>) {
+/** Config env wired to the ephemeral RustFS endpoint/bucket. */
+function envForRustfs(endpoint: string, bucket: string, extra?: Record<string, string>) {
   return makeTestEnv({
     OBJECT_STORAGE_ENDPOINT: endpoint,
     OBJECT_STORAGE_BUCKET: bucket,
@@ -248,10 +248,10 @@ async function seedSubmissionWithFile(
 
 describe('GET /submissions/:id/files/:path/content', () => {
   it('happy path: returns correct content + metadata', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(envForRustfs(endpoint, bucketName)));
 
         const user = await seedUser(db);
         const sessionId = await seedSession(db, user.id);
@@ -278,10 +278,10 @@ describe('GET /submissions/:id/files/:path/content', () => {
   });
 
   it('with at_seq=2: reconstruction stops before doc.change (only "hello")', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(envForRustfs(endpoint, bucketName)));
 
         const user = await seedUser(db);
         const sessionId = await seedSession(db, user.id);
@@ -310,10 +310,10 @@ describe('GET /submissions/:id/files/:path/content', () => {
   });
 
   it('returns 404 FILE_NOT_FOUND for path not in per_file_stats', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(envForRustfs(endpoint, bucketName)));
 
         const user = await seedUser(db);
         const sessionId = await seedSession(db, user.id);
@@ -338,10 +338,10 @@ describe('GET /submissions/:id/files/:path/content', () => {
   });
 
   it('tainted file returns 200 with content:"" and warning field', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(envForRustfs(endpoint, bucketName)));
 
         const user = await seedUser(db);
         const sessionId = await seedSession(db, user.id);
@@ -369,10 +369,10 @@ describe('GET /submissions/:id/files/:path/content', () => {
   });
 
   it('sets Cache-Control: max-age=60, private', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(envForRustfs(endpoint, bucketName)));
 
         const user = await seedUser(db);
         const sessionId = await seedSession(db, user.id);
@@ -399,7 +399,7 @@ describe('GET /submissions/:id/files/:path/content', () => {
       _testDb = db;
       _setConfigForTest(parseEnv(makeTestEnv()));
 
-      // Auth fails before any storage access — no MinIO needed.
+      // Auth fails before any storage access — no RustFS needed.
       const fakeId = crypto.randomUUID();
       const app = createV1App();
       const res = await app.fetch(
@@ -417,10 +417,10 @@ describe('GET /submissions/:id/files/:path/content', () => {
 
 describe('GET /submissions/:id/files/:path/provenance', () => {
   it('happy path: returns RLE provenance with correct shape', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(envForRustfs(endpoint, bucketName)));
 
         const user = await seedUser(db);
         const sessionId = await seedSession(db, user.id);
@@ -454,10 +454,10 @@ describe('GET /submissions/:id/files/:path/provenance', () => {
   });
 
   it('provenance runs cover the full content length', async () => {
-    await withTestMinio(async ({ client, endpoint, bucketName }) => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
       await withTestDb(async (db) => {
         _testDb = db;
-        _setConfigForTest(parseEnv(envForMinio(endpoint, bucketName)));
+        _setConfigForTest(parseEnv(envForRustfs(endpoint, bucketName)));
 
         const user = await seedUser(db);
         const sessionId = await seedSession(db, user.id);

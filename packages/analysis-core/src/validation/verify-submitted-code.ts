@@ -11,8 +11,10 @@
  *   chain broken        → skip  (Check 3 already fails this)
  *   no usable events    → skip
  *   status 'missing'    → skip  (nothing submitted to compare)
- *   bytes present but
- *     hashOk === false  → fail  (bundle bytes don't match their own manifest hash)
+ *   bytes present (or
+ *     persisted sha) but
+ *     ≠ manifest sha    → fail  (bundle bytes don't match their own manifest hash;
+ *                                classic or FINAL seal only — see PROVISIONAL SEALS)
  *
  * No reconstruction: we compare recorded hashes only, so reconstruction taint
  * is irrelevant here.
@@ -52,9 +54,38 @@
  * wrong bytes, so any re-run reported every stored bundle as tampered — hence
  * the old "never re-run check 8" rule.)
  *
+ * A re-run that should reproduce the INGEST verdict passes the per-path shas
+ * recorded at ingest (`computeSubmittedShas` → the `submittedShas` option).
+ * With the bytes absent, a persisted sha stands in for them exactly — same
+ * verdict, same detail, every seal kind — so a tampered bundle found at ingest
+ * stays a tampered bundle on the stored copy. Without one, the tamper sub-check
+ * has no evidence and is skipped, as above.
+ *
+ * PROVISIONAL SEALS. A git-submitted bundle carries rolling seals, and a
+ * NON-FINAL one is rewritten only at checkpoints. Students save and commit while
+ * the editor is still open, so the committed seal's file hash is routinely an
+ * EARLIER genuine recorded state of the file, and the submitted bytes are the
+ * later save. The loader marks such entries `provisional` (see
+ * `SubmissionFile.provisional`, which also covers the stale classic manifest of
+ * a both-shapes bundle). For them the bytes-vs-seal disagreement is not
+ * tampering, so:
+ *
+ *   - actual submitted sha known (bytes present, or supplied by the caller as
+ *     `submittedShas` for a source-stripped bundle) and it matches neither the
+ *     seal nor ANY recorded state of the file → `mismatch` at full strength:
+ *     nothing in the bundle attests those bytes, exactly as before;
+ *   - otherwise the ACTUAL sha takes the seal's place as `submittedSha` and the
+ *     ordinary event-based comparison below decides, with all its nuance;
+ *   - actual sha unknown (bytes stripped, nothing persisted) → `unknown`. The
+ *     provisional seal cannot stand in for bytes it never committed to.
+ *
+ * A classic-only bundle and a FINAL rolling seal take the unchanged path: their
+ * hash IS a commitment, and bytes that disagree with it are a tampered bundle.
+ *
  * NOTE: 1.0 bundles (no submission_files) → check is skipped entirely.
  * 1.1 bundles with at least one matching file can reach overall 'pass'.
  */
+import { sha256Hex } from '@provenance/log-core';
 import type { HashedEnvelope } from '@provenance/log-core';
 import { buildObservedDag } from '../git/observed-dag.js';
 import { contributorOf } from '../identity/resolve-contributors.js';
@@ -227,10 +258,74 @@ function orderingFor(bundle: Bundle): EventOrdering | null {
   return ordering;
 }
 
+/**
+ * The sha256 of each submitted file's ACTUAL bytes, keyed by manifest path —
+ * {@link computeSubmittedShas}'s output, and the `submittedShas` option's input.
+ */
+export type SubmittedShas = Readonly<Record<string, string>>;
+
+/**
+ * Record what was actually submitted, for re-runs after the source is stripped.
+ *
+ * Call at ingest on the bundle as loaded WITH its source bytes, persist the
+ * result, and pass it back as `submittedShas` whenever check 8 or the Source
+ * tab is re-run against the stored provenance-only copy. Only files whose bytes
+ * are present are included, so an already-stripped bundle yields `{}`.
+ */
+export function computeSubmittedShas(bundle: Bundle): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [path, f] of bundle.submissionFiles) {
+    if (f.submittedSha256 !== undefined) out[path] = f.submittedSha256;
+  }
+  return out;
+}
+
+/** Options for {@link submittedFileVerdicts} / {@link verifySubmittedCode}. */
+export type SubmittedCodeOptions = {
+  chainIntact: boolean;
+  /**
+   * Previously persisted {@link computeSubmittedShas} output, for a bundle whose
+   * source bytes have since been stripped. For an entry whose bytes are absent,
+   * a valid persisted sha stands in for them EXACTLY as the bytes did at ingest
+   * — same verdict, same detail — for every seal kind: a classic or FINAL seal
+   * it disagrees with is a tampered bundle, a PROVISIONAL one goes to the
+   * comparison against the recording. That is what lets a re-run on the stored
+   * copy reproduce the ingest verdict instead of silently dropping a tamper
+   * finding. Bytes, when present, always win. A value that is not a lowercase
+   * 64-hex sha256 is ignored, and the entry is then read exactly as if nothing
+   * had been persisted for it.
+   */
+  submittedShas?: SubmittedShas;
+};
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+/** The caller's persisted sha for `path`, if one was supplied and is well formed. */
+function persistedSubmittedSha(
+  path: string,
+  submittedShas: SubmittedShas | undefined,
+): string | undefined {
+  if (submittedShas === undefined || !Object.prototype.hasOwnProperty.call(submittedShas, path)) {
+    return undefined;
+  }
+  const persisted: unknown = submittedShas[path];
+  return typeof persisted === 'string' && SHA256_HEX.test(persisted) ? persisted : undefined;
+}
+
+/** Appended to every verdict reached through a provisional seal that disagreed. */
+function provisionalNote(sealSha: string | null, submittedSha: string): string {
+  return (
+    `The seal's sha256 for this file (${String(sealSha)}) is from a provisional rolling seal ` +
+    `written at a checkpoint that predates the last recorded save(s), so it attests an earlier ` +
+    `state rather than the submitted bytes; the submitted bytes (sha256 ${submittedSha}) were ` +
+    `compared against the recording instead.`
+  );
+}
+
 /** Per-file verdicts; shared by Check 8 and the Source view. */
 export function submittedFileVerdicts(
   bundle: Bundle,
-  opts: { chainIntact: boolean },
+  opts: SubmittedCodeOptions,
 ): SubmittedFileVerdict[] {
   const recorded = lastRecordedHashes(bundle);
   const observations = recordedObservations(bundle);
@@ -238,7 +333,54 @@ export function submittedFileVerdicts(
   const verdicts: SubmittedFileVerdict[] = [];
 
   for (const [path, f] of bundle.submissionFiles) {
+    // What was actually submitted, as far as it is knowable: the bytes when the
+    // bundle still carries them, else the sha persisted for them at ingest.
+    // `persisted` is only ever read when the bytes are gone, so bytes win.
+    const persisted =
+      f.bytes === undefined && f.status === 'present'
+        ? persistedSubmittedSha(path, opts.submittedShas)
+        : undefined;
+    // Do the submitted bytes disagree with the manifest's own sha256? From the
+    // loader's `hashOk` when bytes are present (unchanged), from the persisted
+    // sha when they are not, and "no evidence" when neither exists.
+    const submittedDisagrees =
+      f.bytes !== undefined ? !f.hashOk : persisted !== undefined && persisted !== f.sha256;
+
+    // PROVISIONAL seal (see the module docstring): the actual submitted sha when
+    // it is knowable, and `staleProvisional` when it also DIFFERS from the seal.
+    // Both stay unset for every classic/final entry, and `staleProvisional` for
+    // a provisional entry whose seal happens to be current — those take exactly
+    // the path they always took.
+    const actual =
+      f.provisional === true && f.status === 'present'
+        ? f.bytes !== undefined
+          ? (f.submittedSha256 ?? sha256Hex(f.bytes))
+          : persisted
+        : undefined;
+    const staleProvisional = actual !== undefined && actual !== f.sha256 ? actual : null;
+
     if (f.role === 'attachment') {
+      // The provisional rule, attachment edition. The seal never committed to
+      // these bytes, so they are not "tampered"; and an attachment is never
+      // captured, so there is no recording to check them against either. Neither
+      // "tampered" nor "covered by the signed manifest" would be true — say we
+      // cannot tell.
+      if (staleProvisional !== null) {
+        verdicts.push({
+          path,
+          status: 'present',
+          verdict: 'unknown',
+          submittedSha: staleProvisional,
+          recordedSha: null,
+          detail:
+            `Attachment whose seal is provisional: the seal's sha256 (${String(f.sha256)}) was ` +
+            `written at a checkpoint and predates the submitted bytes (sha256 ` +
+            `${staleProvisional}), and attachments are never captured, so there is no ` +
+            `recording to verify the submitted bytes against. Not reported as tampering.`,
+          supportingSeqs: [],
+        });
+        continue;
+      }
       // Real, detectable tampering — present bytes that disagree with their own
       // signed manifest sha256 — needs no event provenance to catch, and an
       // attachment is not exempt from it. Reporting 'attachment' here would be
@@ -247,7 +389,7 @@ export function submittedFileVerdicts(
       // tamper sub-check as the non-attachment path below; it must run before
       // the branch returns, because no attachment may reach the reconstruction
       // comparison the rest of this function performs.
-      if (f.bytes !== undefined && !f.hashOk) {
+      if (submittedDisagrees && f.provisional !== true) {
         verdicts.push({
           path,
           status: 'present',
@@ -298,7 +440,16 @@ export function submittedFileVerdicts(
     // needs only `f.sha256` (from the signed manifest — check 1 verifies that
     // signature) and the recorded event hashes. Both survive stripping, so the
     // match verdict is fully computable against a stored bundle.
-    if (f.bytes !== undefined && !f.hashOk) {
+    //
+    // A sha persisted at ingest (`submittedShas`) is the stored record of those
+    // bytes, so with the bytes gone it answers this question exactly as they
+    // did. Without it, a tamper finding made at ingest would vanish the first
+    // time the stored bundle was re-validated.
+    //
+    // Not for a PROVISIONAL seal: its hash is an earlier recorded state, not a
+    // commitment to these bytes, so disagreeing with it is what an honest
+    // save-after-the-last-checkpoint looks like. Those are handled just below.
+    if (submittedDisagrees && f.provisional !== true) {
       verdicts.push({
         path,
         status: 'present',
@@ -310,14 +461,61 @@ export function submittedFileVerdicts(
       });
       continue;
     }
+    // PROVISIONAL seal, submitted state unknowable: the bytes were stripped and
+    // no persisted sha was supplied. Comparing the seal's earlier hash against
+    // the recording would accuse the student of their own last save, so all
+    // that can honestly be said is that we cannot tell.
+    if (f.provisional === true && actual === undefined) {
+      verdicts.push({
+        path,
+        status: 'present',
+        verdict: 'unknown',
+        submittedSha: null,
+        recordedSha: null,
+        detail:
+          'Submitted bytes were not retained and the seal is provisional (written at a ' +
+          'checkpoint, possibly before the last save), so the submitted state cannot be verified.',
+        supportingSeqs: [],
+      });
+      continue;
+    }
+    // From here on the comparison is against the ACTUAL submitted sha whenever a
+    // provisional seal disagreed with it, and the seal's hash otherwise.
+    const submittedSha = staleProvisional ?? f.sha256;
+    const note = staleProvisional !== null ? ` ${provisionalNote(f.sha256, staleProvisional)}` : '';
+    // PROVISIONAL seal, bytes that match NOTHING: they disagree with the seal and
+    // with every state the recorder ever observed for this file, so nothing in
+    // the bundle attests them. That is the tamper sub-check's verdict at full
+    // strength, and it runs where that sub-check ran — before the chain gate and
+    // the concurrent-states nuance below, neither of which may soften it.
+    if (
+      staleProvisional !== null &&
+      !(observations.get(path) ?? []).some((o) => o.sha === staleProvisional)
+    ) {
+      const last = recorded.get(path);
+      verdicts.push({
+        path,
+        status: 'present',
+        verdict: 'mismatch',
+        submittedSha: staleProvisional,
+        recordedSha: last?.sha ?? null,
+        detail:
+          `Submitted sha256 ${staleProvisional} matches neither the seal's sha256 ` +
+          `${String(f.sha256)} nor any on-disk state recorded for this file. File was changed ` +
+          `outside the recording. (The seal is provisional — written at a checkpoint — so a ` +
+          `later recorded save would have been accepted; these bytes match none.)`,
+        supportingSeqs: last !== undefined ? [{ sessionId: last.sessionId, seq: last.seq }] : [],
+      });
+      continue;
+    }
     if (!opts.chainIntact) {
       verdicts.push({
         path,
         status: 'present',
         verdict: 'unknown',
-        submittedSha: f.sha256,
+        submittedSha,
         recordedSha: null,
-        detail: 'Hash chain is broken; cannot trust recorded hashes.',
+        detail: `Hash chain is broken; cannot trust recorded hashes.${note}`,
         supportingSeqs: [],
       });
       continue;
@@ -328,9 +526,9 @@ export function submittedFileVerdicts(
         path,
         status: 'present',
         verdict: 'unknown',
-        submittedSha: f.sha256,
+        submittedSha,
         recordedSha: null,
-        detail: 'No doc.open/doc.save/fs.external_change recorded for this file.',
+        detail: `No doc.open/doc.save/fs.external_change recorded for this file.${note}`,
         supportingSeqs: [],
       });
       continue;
@@ -342,17 +540,17 @@ export function submittedFileVerdicts(
     // cannot tell.
     const concurrent = concurrentRecordedStates(bundle, observations.get(path) ?? [], ordering);
     if (concurrent !== null) {
-      const agreeing = concurrent.find((c) => c.sha === f.sha256);
+      const agreeing = concurrent.find((c) => c.sha === submittedSha);
       if (agreeing !== undefined) {
         verdicts.push({
           path,
           status: 'present',
           verdict: 'match',
-          submittedSha: f.sha256,
+          submittedSha,
           recordedSha: agreeing.sha,
           detail:
             'Submitted file matches one of several concurrently recorded on-disk states ' +
-            '(contributors edited this file on divergent branches).',
+            `(contributors edited this file on divergent branches).${note}`,
           supportingSeqs: [{ sessionId: agreeing.sessionId, seq: agreeing.seq }],
         });
         continue;
@@ -361,27 +559,27 @@ export function submittedFileVerdicts(
         path,
         status: 'present',
         verdict: 'unknown',
-        submittedSha: f.sha256,
+        submittedSha,
         recordedSha: null,
         detail:
           `${concurrent.length} contributors recorded concurrent, unordered on-disk states for ` +
           `this file, so there is no established "last recorded state" to compare against. The ` +
           `submitted bytes match none of them, which is expected when the submission is a merge ` +
           `result no session observed on disk. Not reported as a mismatch: the evidence does ` +
-          `not establish that the file was changed outside the recording.`,
+          `not establish that the file was changed outside the recording.${note}`,
         supportingSeqs: concurrent.map((c) => ({ sessionId: c.sessionId, seq: c.seq })),
       });
       continue;
     }
 
-    if (rec.sha === f.sha256) {
+    if (rec.sha === submittedSha) {
       verdicts.push({
         path,
         status: 'present',
         verdict: 'match',
-        submittedSha: f.sha256,
+        submittedSha,
         recordedSha: rec.sha,
-        detail: 'Submitted file matches the last recorded on-disk state.',
+        detail: `Submitted file matches the last recorded on-disk state.${note}`,
         supportingSeqs: [{ sessionId: rec.sessionId, seq: rec.seq }],
       });
     } else {
@@ -389,9 +587,9 @@ export function submittedFileVerdicts(
         path,
         status: 'present',
         verdict: 'mismatch',
-        submittedSha: f.sha256,
+        submittedSha,
         recordedSha: rec.sha,
-        detail: `Submitted sha256 ${f.sha256} != last recorded on-disk sha256 ${rec.sha}. File was changed outside the recording.`,
+        detail: `Submitted sha256 ${submittedSha} != last recorded on-disk sha256 ${rec.sha}. File was changed outside the recording.${note}`,
         supportingSeqs: [{ sessionId: rec.sessionId, seq: rec.seq }],
       });
     }
@@ -399,10 +597,7 @@ export function submittedFileVerdicts(
   return verdicts;
 }
 
-export function verifySubmittedCode(
-  bundle: Bundle,
-  opts: { chainIntact: boolean },
-): ValidationCheck {
+export function verifySubmittedCode(bundle: Bundle, opts: SubmittedCodeOptions): ValidationCheck {
   // 1.0 bundles / no submission files → nothing to check.
   if (bundle.submissionFiles.size === 0) {
     return {
