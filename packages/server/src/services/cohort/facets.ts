@@ -24,7 +24,7 @@ import type { SQL } from 'drizzle-orm';
 import { submissions, assignments, roster_entries } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import type { CohortFilters } from './list.js';
-import { buildSearchCondition } from './list.js';
+import { appendTimeRangeConditions, buildSearchCondition } from './list.js';
 
 export type CohortFacets = {
   by_severity: { info: number; low: number; medium: number; high: number };
@@ -88,6 +88,8 @@ function buildWhereConditions(
   if (filters.scoreMax !== undefined) {
     conds.push(sql`${submissions.score_total} <= ${filters.scoreMax}`);
   }
+
+  appendTimeRangeConditions(conds, filters);
 
   if (filters.recorderVersion !== undefined) {
     conds.push(eq(submissions.recorder_version, filters.recorderVersion));

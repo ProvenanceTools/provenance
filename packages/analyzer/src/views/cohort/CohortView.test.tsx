@@ -201,6 +201,68 @@ describe('CohortView', () => {
     expect(scoreMinInput.value).toBe('5');
   });
 
+  it('URL reload with active/total minute filters restores values in the rail', async () => {
+    mswServer.use(
+      cohortSubmissionsHandler([], { total_count: 0 }),
+      cohortStudentsHandler([]),
+      assignmentsHandler(),
+    );
+
+    renderCohortView(
+      `/s/${DEFAULT_COURSE_SLUG}/${DEFAULT_SEMESTER_SLUG}?active_minutes_min=15&total_minutes_max=120`,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('cohort-view')).toBeInTheDocument();
+    });
+
+    const activeMin = (await screen.findByTestId(
+      'filter-active-minutes-min',
+    )) as HTMLInputElement;
+    const totalMax = (await screen.findByTestId('filter-total-minutes-max')) as HTMLInputElement;
+    expect(activeMin.value).toBe('15');
+    expect(totalMax.value).toBe('120');
+  });
+
+  it('applying active time filter hits the API with active_minutes_min', async () => {
+    const apiCallUrls: string[] = [];
+
+    mswServer.use(
+      http.get(`/api/v1/semesters/${DEFAULT_SEMESTER_ID}/submissions`, ({ request }) => {
+        apiCallUrls.push(request.url);
+        return HttpResponse.json({
+          items: [],
+          next_cursor: null,
+          total_count: 0,
+          facets: {
+            by_severity: { info: 0, low: 0, medium: 0, high: 0 },
+            by_validation: { pass: 0, warn: 0, fail: 0 },
+            by_assignment: [],
+          },
+        });
+      }),
+      cohortStudentsHandler([]),
+      assignmentsHandler(),
+    );
+
+    renderCohortView();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('cohort-view')).toBeInTheDocument();
+    });
+
+    const activeMinInput = await screen.findByTestId('filter-active-minutes-min');
+    fireEvent.change(activeMinInput, { target: { value: '20' } });
+    fireEvent.click(screen.getByTestId('filter-apply'));
+
+    await waitFor(
+      () => {
+        expect(apiCallUrls.some((url) => url.includes('active_minutes_min=20'))).toBe(true);
+      },
+      { timeout: 3000 },
+    );
+  });
+
   it('"By student" tab toggle switches to student rollup table', async () => {
     const studentRows = [makeStudentRollupRow()];
 

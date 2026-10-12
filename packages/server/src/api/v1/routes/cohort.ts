@@ -110,6 +110,30 @@ export function createCohortRouter(): Hono {
         if (!isNaN(n)) filters.scoreMax = n;
       }
 
+      const activeMinutesMinStr = c.req.query('active_minutes_min');
+      if (activeMinutesMinStr !== undefined) {
+        const n = parseFloat(activeMinutesMinStr);
+        if (!isNaN(n)) filters.activeMinutesMin = n;
+      }
+
+      const activeMinutesMaxStr = c.req.query('active_minutes_max');
+      if (activeMinutesMaxStr !== undefined) {
+        const n = parseFloat(activeMinutesMaxStr);
+        if (!isNaN(n)) filters.activeMinutesMax = n;
+      }
+
+      const totalMinutesMinStr = c.req.query('total_minutes_min');
+      if (totalMinutesMinStr !== undefined) {
+        const n = parseFloat(totalMinutesMinStr);
+        if (!isNaN(n)) filters.totalMinutesMin = n;
+      }
+
+      const totalMinutesMaxStr = c.req.query('total_minutes_max');
+      if (totalMinutesMaxStr !== undefined) {
+        const n = parseFloat(totalMinutesMaxStr);
+        if (!isNaN(n)) filters.totalMinutesMax = n;
+      }
+
       const hasExternalEdits = c.req.query('has_external_edits');
       if (hasExternalEdits === 'true') filters.hasExternalEdits = true;
       else if (hasExternalEdits === 'false') filters.hasExternalEdits = false;
@@ -241,6 +265,30 @@ export function createCohortRouter(): Hono {
       if (scoreMaxStr !== undefined) {
         const n = parseFloat(scoreMaxStr);
         if (!isNaN(n)) filters.scoreMax = n;
+      }
+
+      const activeMinutesMinStr = c.req.query('active_minutes_min');
+      if (activeMinutesMinStr !== undefined) {
+        const n = parseFloat(activeMinutesMinStr);
+        if (!isNaN(n)) filters.activeMinutesMin = n;
+      }
+
+      const activeMinutesMaxStr = c.req.query('active_minutes_max');
+      if (activeMinutesMaxStr !== undefined) {
+        const n = parseFloat(activeMinutesMaxStr);
+        if (!isNaN(n)) filters.activeMinutesMax = n;
+      }
+
+      const totalMinutesMinStr = c.req.query('total_minutes_min');
+      if (totalMinutesMinStr !== undefined) {
+        const n = parseFloat(totalMinutesMinStr);
+        if (!isNaN(n)) filters.totalMinutesMin = n;
+      }
+
+      const totalMinutesMaxStr = c.req.query('total_minutes_max');
+      if (totalMinutesMaxStr !== undefined) {
+        const n = parseFloat(totalMinutesMaxStr);
+        if (!isNaN(n)) filters.totalMinutesMax = n;
       }
 
       const hasExternalEdits = c.req.query('has_external_edits');

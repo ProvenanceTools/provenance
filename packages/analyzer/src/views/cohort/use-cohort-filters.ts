@@ -75,6 +75,10 @@ export function decodeFilters(params: URLSearchParams): CohortFilters {
       : undefined;
   const scoreMin = parseNumber(params.get('score_min'));
   const scoreMax = parseNumber(params.get('score_max'));
+  const activeMinutesMin = parseNumber(params.get('active_minutes_min'));
+  const activeMinutesMax = parseNumber(params.get('active_minutes_max'));
+  const totalMinutesMin = parseNumber(params.get('total_minutes_min'));
+  const totalMinutesMax = parseNumber(params.get('total_minutes_max'));
   const hasExternalEdits = parseBool(params.get('has_external_edits'));
   const hasLargePaste = parseBool(params.get('has_large_paste'));
   const recorderVersion = params.get('recorder_version') ?? undefined;
@@ -89,6 +93,10 @@ export function decodeFilters(params: URLSearchParams): CohortFilters {
     ...(validationStatus !== undefined && { validationStatus }),
     ...(scoreMin !== undefined && { scoreMin }),
     ...(scoreMax !== undefined && { scoreMax }),
+    ...(activeMinutesMin !== undefined && { activeMinutesMin }),
+    ...(activeMinutesMax !== undefined && { activeMinutesMax }),
+    ...(totalMinutesMin !== undefined && { totalMinutesMin }),
+    ...(totalMinutesMax !== undefined && { totalMinutesMax }),
     ...(hasExternalEdits !== undefined && { hasExternalEdits }),
     ...(hasLargePaste !== undefined && { hasLargePaste }),
     ...(recorderVersion !== undefined && { recorderVersion }),
@@ -112,6 +120,14 @@ export function encodeFilters(filters: CohortFilters, sort: CohortSort): URLSear
   if (filters.validationStatus) params.set('validation_status', filters.validationStatus);
   if (filters.scoreMin !== undefined) params.set('score_min', String(filters.scoreMin));
   if (filters.scoreMax !== undefined) params.set('score_max', String(filters.scoreMax));
+  if (filters.activeMinutesMin !== undefined)
+    params.set('active_minutes_min', String(filters.activeMinutesMin));
+  if (filters.activeMinutesMax !== undefined)
+    params.set('active_minutes_max', String(filters.activeMinutesMax));
+  if (filters.totalMinutesMin !== undefined)
+    params.set('total_minutes_min', String(filters.totalMinutesMin));
+  if (filters.totalMinutesMax !== undefined)
+    params.set('total_minutes_max', String(filters.totalMinutesMax));
   if (filters.hasExternalEdits !== undefined)
     params.set('has_external_edits', String(filters.hasExternalEdits));
   if (filters.hasLargePaste !== undefined)

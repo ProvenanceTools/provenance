@@ -190,6 +190,8 @@ async function seedSubmission(
     recorderVersion?: string;
     supersededById?: string;
     versionIndex?: number;
+    totalActiveMs?: number;
+    totalIdleMs?: number;
   },
 ) {
   const id = crypto.randomUUID();
@@ -209,6 +211,8 @@ async function seedSubmission(
       score_max_severity: opts.scoreSeverity ?? 'info',
       validation_status: opts.validationStatus ?? 'pass',
       recorder_version: opts.recorderVersion ?? '1.0.0',
+      ...(opts.totalActiveMs !== undefined && { total_active_ms: opts.totalActiveMs }),
+      ...(opts.totalIdleMs !== undefined && { total_idle_ms: opts.totalIdleMs }),
       ...(opts.supersededById !== undefined && {
         superseded_by_submission_id: opts.supersededById,
       }),
@@ -606,6 +610,73 @@ describe('GET /semesters/:semesterId/submissions', () => {
       const body = (await res.json()) as { items: { score_total: number }[] };
       expect(body.items).toHaveLength(1);
       expect(body.items[0]!.score_total).toBe(10);
+    });
+  });
+
+  it('filters by active_minutes_min and total_minutes_max', async () => {
+    await withTestDb(async (db) => {
+      _testDb = db;
+      _setConfigForTest(parseEnv(makeTestEnv()));
+
+      const user = await seedUser(db);
+      const sessionId = await seedSession(db, user.id);
+      const { semester } = await seedCourseAndSemester(db);
+      await seedMembership(db, user.id, semester.id, 'admin');
+
+      const s1 = await seedStudent(db, semester.id, 'stu001');
+      const s2 = await seedStudent(db, semester.id, 'stu002');
+      const s3 = await seedStudent(db, semester.id, 'stu003');
+      const a = await seedAssignment(db, semester.id);
+      const job = await seedIngestJob(db, semester.id, user.id);
+
+      // 5 min active + 5 min idle = 10 min total — below active floor
+      await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: a.id,
+        studentId: s1.id,
+        ingestJobId: job.id,
+        versionIndex: 1,
+        totalActiveMs: 5 * 60_000,
+        totalIdleMs: 5 * 60_000,
+      });
+      // 30 min active + 10 min idle = 40 min total — matches both bounds
+      await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: a.id,
+        studentId: s2.id,
+        ingestJobId: job.id,
+        versionIndex: 1,
+        totalActiveMs: 30 * 60_000,
+        totalIdleMs: 10 * 60_000,
+      });
+      // 45 min active + 90 min idle = 135 min total — above total ceiling
+      await seedSubmission(db, {
+        semesterId: semester.id,
+        assignmentId: a.id,
+        studentId: s3.id,
+        ingestJobId: job.id,
+        versionIndex: 1,
+        totalActiveMs: 45 * 60_000,
+        totalIdleMs: 90 * 60_000,
+      });
+
+      const app = createV1App();
+      const res = await app.fetch(
+        new Request(
+          `http://localhost/semesters/${semester.id}/submissions?active_minutes_min=20&total_minutes_max=60`,
+          { headers: { Cookie: `__Host-prov_sess=${sessionId}` } },
+        ),
+      );
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        items: { total_active_ms: number | null; total_idle_ms: number | null }[];
+        total_count: number;
+      };
+      expect(body.total_count).toBe(1);
+      expect(body.items).toHaveLength(1);
+      expect(body.items[0]!.total_active_ms).toBe(30 * 60_000);
+      expect(body.items[0]!.total_idle_ms).toBe(10 * 60_000);
     });
   });
 

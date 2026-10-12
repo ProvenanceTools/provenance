@@ -1079,6 +1079,10 @@ severity_min?: 'info'|'low'|'medium'|'high'
 validation_status?: 'pass'|'warn'|'fail'
 score_min?: number
 score_max?: number
+active_minutes_min?: number        // inclusive; minutes of active time (total_active_ms)
+active_minutes_max?: number
+total_minutes_min?: number         // inclusive; minutes of active + idle
+total_minutes_max?: number
 has_external_edits?: boolean
 has_large_paste?: boolean
 recorder_version?: string
