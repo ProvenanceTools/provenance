@@ -232,6 +232,8 @@ for rank, sub in enumerate(flagged, 1):
 | `severity_min`            | string  | `info`, `low`, `medium`, or `high`                           |
 | `validation_status`       | string  | `pass`, `warn`, or `fail`                                    |
 | `score_min` / `score_max` | number  | Score range filter                                           |
+| `active_minutes_min` / `active_minutes_max` | number | Active-time range in minutes (`total_active_ms`) |
+| `total_minutes_min` / `total_minutes_max` | number | Total-time range in minutes (active + idle)        |
 | `include_superseded`      | boolean | Include older submissions (default: false)                   |
 | `sort`                    | string  | `score_desc` (default), `student_asc`, `ingested_desc`, etc. |
 | `limit`                   | int     | 1–500, default 50                                            |

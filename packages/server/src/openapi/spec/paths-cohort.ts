@@ -36,6 +36,34 @@ export const cohortPaths = {
         },
         { name: 'score_min', in: 'query', schema: { type: 'number' } },
         { name: 'score_max', in: 'query', schema: { type: 'number' } },
+        {
+          name: 'active_minutes_min',
+          in: 'query',
+          schema: { type: 'number' },
+          description:
+            'Inclusive lower bound on active time in minutes (compared to total_active_ms).',
+        },
+        {
+          name: 'active_minutes_max',
+          in: 'query',
+          schema: { type: 'number' },
+          description:
+            'Inclusive upper bound on active time in minutes (compared to total_active_ms).',
+        },
+        {
+          name: 'total_minutes_min',
+          in: 'query',
+          schema: { type: 'number' },
+          description:
+            'Inclusive lower bound on total time in minutes (active + idle; both denorm columns must be present).',
+        },
+        {
+          name: 'total_minutes_max',
+          in: 'query',
+          schema: { type: 'number' },
+          description:
+            'Inclusive upper bound on total time in minutes (active + idle; both denorm columns must be present).',
+        },
         { name: 'include_superseded', in: 'query', schema: { type: 'boolean', default: false } },
         {
           name: 'q',

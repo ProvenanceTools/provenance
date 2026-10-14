@@ -24,7 +24,11 @@ import {
   submission_contributors,
 } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
-import type { SubmissionRow, CohortFilters } from './list.js';
+import {
+  appendTimeRangeConditions,
+  type CohortFilters,
+  type SubmissionRow,
+} from './list.js';
 import { listCohortSubmissions } from './list.js';
 import { projectStudent, maskEmail } from '../protect.js';
 
@@ -161,6 +165,7 @@ export async function listStudents(
     if (filters.scoreMax !== undefined) {
       conds.push(sql`${submissions.score_total} <= ${filters.scoreMax}`);
     }
+    appendTimeRangeConditions(conds, filters);
     if (filters.recorderVersion !== undefined) {
       conds.push(eq(submissions.recorder_version, filters.recorderVersion));
     }

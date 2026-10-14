@@ -56,6 +56,17 @@ describe('decodeFilters', () => {
     expect(filters.scoreMax).toBe(20);
   });
 
+  it('decodes active_minutes and total_minutes ranges', () => {
+    const params = new URLSearchParams(
+      'active_minutes_min=10&active_minutes_max=60&total_minutes_min=30&total_minutes_max=120',
+    );
+    const filters = decodeFilters(params);
+    expect(filters.activeMinutesMin).toBe(10);
+    expect(filters.activeMinutesMax).toBe(60);
+    expect(filters.totalMinutesMin).toBe(30);
+    expect(filters.totalMinutesMax).toBe(120);
+  });
+
   it('decodes boolean has_external_edits and has_large_paste', () => {
     const params = new URLSearchParams('has_external_edits=true&has_large_paste=false');
     const filters = decodeFilters(params);
@@ -124,6 +135,10 @@ describe('round-trip', () => {
       validationStatus: 'fail' as const,
       scoreMin: 5,
       scoreMax: 20,
+      activeMinutesMin: 10,
+      activeMinutesMax: 60,
+      totalMinutesMin: 30,
+      totalMinutesMax: 120,
       hasExternalEdits: true,
       hasLargePaste: false,
       recorderVersion: '1.2.3',
@@ -139,6 +154,10 @@ describe('round-trip', () => {
     expect(decoded.validationStatus).toBe(original.validationStatus);
     expect(decoded.scoreMin).toBe(original.scoreMin);
     expect(decoded.scoreMax).toBe(original.scoreMax);
+    expect(decoded.activeMinutesMin).toBe(original.activeMinutesMin);
+    expect(decoded.activeMinutesMax).toBe(original.activeMinutesMax);
+    expect(decoded.totalMinutesMin).toBe(original.totalMinutesMin);
+    expect(decoded.totalMinutesMax).toBe(original.totalMinutesMax);
     expect(decoded.hasExternalEdits).toBe(original.hasExternalEdits);
     expect(decoded.hasLargePaste).toBe(original.hasLargePaste);
     expect(decoded.recorderVersion).toBe(original.recorderVersion);

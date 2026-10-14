@@ -3,8 +3,8 @@
  *
  * Builds the primary GET /semesters/{id}/submissions query with:
  * - Filters (assignmentId, studentId, flagIds, severityMin, validationStatus,
- *   scoreMin, scoreMax, hasExternalEdits, hasLargePaste, recorderVersion,
- *   includeSuperseded, q)
+ *   scoreMin, scoreMax, activeMinutesMin/Max, totalMinutesMin/Max,
+ *   hasExternalEdits, hasLargePaste, recorderVersion, includeSuperseded, q)
  * - Sort (score_desc | score_asc | ingested_desc | student_asc | student_desc | assignment_asc)
  * - Cursor pagination: multi-field (sort_key + id) tuple encoded as base64 JSON
  * - Flag counts and top 3 flags per submission (secondary query, keyed on returned ids)
@@ -42,6 +42,17 @@ export type CohortFilters = {
   validationStatus?: 'pass' | 'warn' | 'fail';
   scoreMin?: number;
   scoreMax?: number;
+  /** Inclusive lower bound on active time, in minutes (staff unit). */
+  activeMinutesMin?: number;
+  /** Inclusive upper bound on active time, in minutes. */
+  activeMinutesMax?: number;
+  /**
+   * Inclusive lower bound on total time (active + idle), in minutes.
+   * Rows with NULL active/idle ms do not match (incomplete denorm).
+   */
+  totalMinutesMin?: number;
+  /** Inclusive upper bound on total time (active + idle), in minutes. */
+  totalMinutesMax?: number;
   hasExternalEdits?: boolean;
   hasLargePaste?: boolean;
   recorderVersion?: string;
@@ -223,6 +234,42 @@ export function buildSearchCondition(q: string | undefined, protectedMode: boole
 }
 
 // ---------------------------------------------------------------------------
+// Active / total time range predicates
+// ---------------------------------------------------------------------------
+
+/**
+ * Append inclusive active-time and total-time range predicates.
+ *
+ * Staff filters are in minutes; the denormalized columns are milliseconds.
+ * Total time is `total_active_ms + total_idle_ms`. A NULL on either column
+ * fails the comparison, so rows that have not yet been written by
+ * `computeAndStoreStats` are excluded when any time filter is set — same
+ * practical outcome as a missing score for score_min/max would be if scores
+ * were nullable.
+ *
+ * Shared by the cohort list (page + COUNT), facets, and student rollup so the
+ * four call sites cannot drift.
+ */
+export function appendTimeRangeConditions(conds: SQL[], filters: CohortFilters): void {
+  if (filters.activeMinutesMin !== undefined) {
+    const ms = Math.round(filters.activeMinutesMin * 60_000);
+    conds.push(sql`${submissions.total_active_ms} >= ${ms}`);
+  }
+  if (filters.activeMinutesMax !== undefined) {
+    const ms = Math.round(filters.activeMinutesMax * 60_000);
+    conds.push(sql`${submissions.total_active_ms} <= ${ms}`);
+  }
+  if (filters.totalMinutesMin !== undefined) {
+    const ms = Math.round(filters.totalMinutesMin * 60_000);
+    conds.push(sql`(${submissions.total_active_ms} + ${submissions.total_idle_ms}) >= ${ms}`);
+  }
+  if (filters.totalMinutesMax !== undefined) {
+    const ms = Math.round(filters.totalMinutesMax * 60_000);
+    conds.push(sql`(${submissions.total_active_ms} + ${submissions.total_idle_ms}) <= ${ms}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main query function
 // ---------------------------------------------------------------------------
 
@@ -284,6 +331,9 @@ export async function listCohortSubmissions(
   if (filters.scoreMax !== undefined) {
     whereConditions.push(sql`${submissions.score_total} <= ${filters.scoreMax}`);
   }
+
+  // active / total time ranges (minutes → ms against denormalized columns)
+  appendTimeRangeConditions(whereConditions, filters);
 
   // recorderVersion
   if (filters.recorderVersion !== undefined) {
@@ -503,6 +553,7 @@ export async function listCohortSubmissions(
   if (filters.scoreMax !== undefined) {
     countConditions.push(sql`${submissions.score_total} <= ${filters.scoreMax}`);
   }
+  appendTimeRangeConditions(countConditions, filters);
   if (filters.recorderVersion !== undefined) {
     countConditions.push(eq(submissions.recorder_version, filters.recorderVersion));
   }

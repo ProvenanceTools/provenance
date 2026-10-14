@@ -7,6 +7,8 @@
  *   a small list of the most common heuristic IDs
  * - Severity threshold radio buttons (info / low / medium / high)
  * - Score range (min/max number inputs)
+ * - Active time range (min/max minutes; maps to total_active_ms)
+ * - Total time range (min/max minutes; maps to active + idle)
  * - Signal toggles: has_external_edits, has_large_paste
  * - Recorder version text input
  * - Include superseded checkbox (default off)
@@ -261,6 +263,91 @@ export function FilterRail({ filters, assignments, onApply, onClear }: FilterRai
             data-testid="filter-score-max"
           />
         </div>
+      </div>
+
+      {/* Active time range (minutes) */}
+      <div>
+        <SectionLabel>Active Time (minutes)</SectionLabel>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            step="any"
+            placeholder="Min"
+            value={draft.activeMinutesMin ?? ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val) {
+                patchDraft({ activeMinutesMin: Number(val) });
+              } else {
+                removeDraftKey('activeMinutesMin');
+              }
+            }}
+            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-orange-500 focus:outline-none"
+            data-testid="filter-active-minutes-min"
+          />
+          <span className="text-xs text-gray-600">to</span>
+          <input
+            type="number"
+            min={0}
+            step="any"
+            placeholder="Max"
+            value={draft.activeMinutesMax ?? ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val) {
+                patchDraft({ activeMinutesMax: Number(val) });
+              } else {
+                removeDraftKey('activeMinutesMax');
+              }
+            }}
+            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-orange-500 focus:outline-none"
+            data-testid="filter-active-minutes-max"
+          />
+        </div>
+      </div>
+
+      {/* Total time range (active + idle, minutes) */}
+      <div>
+        <SectionLabel>Total Time (minutes)</SectionLabel>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            step="any"
+            placeholder="Min"
+            value={draft.totalMinutesMin ?? ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val) {
+                patchDraft({ totalMinutesMin: Number(val) });
+              } else {
+                removeDraftKey('totalMinutesMin');
+              }
+            }}
+            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-orange-500 focus:outline-none"
+            data-testid="filter-total-minutes-min"
+          />
+          <span className="text-xs text-gray-600">to</span>
+          <input
+            type="number"
+            min={0}
+            step="any"
+            placeholder="Max"
+            value={draft.totalMinutesMax ?? ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val) {
+                patchDraft({ totalMinutesMax: Number(val) });
+              } else {
+                removeDraftKey('totalMinutesMax');
+              }
+            }}
+            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-orange-500 focus:outline-none"
+            data-testid="filter-total-minutes-max"
+          />
+        </div>
+        <p className="mt-1 text-xs text-gray-500">Active + idle</p>
       </div>
 
       {/* Signal toggles */}

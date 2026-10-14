@@ -184,6 +184,17 @@ export type CohortFilters = {
   validationStatus?: 'pass' | 'warn' | 'fail';
   scoreMin?: number;
   scoreMax?: number;
+  /** Inclusive lower bound on active time, in minutes (staff unit). */
+  activeMinutesMin?: number;
+  /** Inclusive upper bound on active time, in minutes. */
+  activeMinutesMax?: number;
+  /**
+   * Inclusive lower bound on total time (active + idle), in minutes.
+   * Matches rows whose denormalized active/idle ms both exist.
+   */
+  totalMinutesMin?: number;
+  /** Inclusive upper bound on total time (active + idle), in minutes. */
+  totalMinutesMax?: number;
   hasExternalEdits?: boolean;
   hasLargePaste?: boolean;
   recorderVersion?: string;
@@ -307,6 +318,14 @@ export function buildSubmissionParams(
   if (filters.validationStatus) p['validation_status'] = filters.validationStatus;
   if (filters.scoreMin !== undefined) p['score_min'] = String(filters.scoreMin);
   if (filters.scoreMax !== undefined) p['score_max'] = String(filters.scoreMax);
+  if (filters.activeMinutesMin !== undefined)
+    p['active_minutes_min'] = String(filters.activeMinutesMin);
+  if (filters.activeMinutesMax !== undefined)
+    p['active_minutes_max'] = String(filters.activeMinutesMax);
+  if (filters.totalMinutesMin !== undefined)
+    p['total_minutes_min'] = String(filters.totalMinutesMin);
+  if (filters.totalMinutesMax !== undefined)
+    p['total_minutes_max'] = String(filters.totalMinutesMax);
   if (filters.hasExternalEdits !== undefined)
     p['has_external_edits'] = String(filters.hasExternalEdits);
   if (filters.hasLargePaste !== undefined) p['has_large_paste'] = String(filters.hasLargePaste);
@@ -330,6 +349,14 @@ export function buildStudentParams(
   if (filters.validationStatus) p['validation_status'] = filters.validationStatus;
   if (filters.scoreMin !== undefined) p['score_min'] = String(filters.scoreMin);
   if (filters.scoreMax !== undefined) p['score_max'] = String(filters.scoreMax);
+  if (filters.activeMinutesMin !== undefined)
+    p['active_minutes_min'] = String(filters.activeMinutesMin);
+  if (filters.activeMinutesMax !== undefined)
+    p['active_minutes_max'] = String(filters.activeMinutesMax);
+  if (filters.totalMinutesMin !== undefined)
+    p['total_minutes_min'] = String(filters.totalMinutesMin);
+  if (filters.totalMinutesMax !== undefined)
+    p['total_minutes_max'] = String(filters.totalMinutesMax);
   if (filters.hasExternalEdits !== undefined)
     p['has_external_edits'] = String(filters.hasExternalEdits);
   if (filters.hasLargePaste !== undefined) p['has_large_paste'] = String(filters.hasLargePaste);
