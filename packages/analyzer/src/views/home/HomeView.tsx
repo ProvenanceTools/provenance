@@ -11,6 +11,7 @@ import { Link } from 'react-router-dom';
 import { useSemesters } from '../../api/queries.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
+import { PageContainer, PageHeader } from '@/components/layout/Page';
 
 export function HomeView() {
   const { data: semesters, isLoading, error } = useSemesters();
@@ -59,41 +60,39 @@ export function HomeView() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl px-4 py-10">
-      <div className="mb-8 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Your semesters</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Choose a semester to review its submissions.
-          </p>
-        </div>
-        {/* Both links are reachable only from this branch, which renders only
-            when the principal has at least one membership — i.e. staff. The
-            composer handles the course signing key, so it must not appear in
-            the AppShell top bar, which /home also shows to students. */}
-        <div className="flex flex-wrap gap-2">
-          <Button asChild variant="outline" size="sm">
-            <Link to="/compose/manifest" data-testid="manifest-composer-link">
-              Manifest composer
-              <span aria-hidden="true">→</span>
-            </Link>
-          </Button>
-          <Button asChild variant="outline" size="sm">
-            <Link to="/local/load" data-testid="local-analysis-link">
-              Local analysis
-              <span aria-hidden="true">→</span>
-            </Link>
-          </Button>
-        </div>
-      </div>
+    <PageContainer>
+      {/* Both header links are reachable only from this branch, which renders
+          only when the principal has at least one membership — i.e. staff. The
+          composer handles the course signing key, so it must not appear in the
+          AppShell top bar, which /home also shows to students. */}
+      <PageHeader
+        title="Your semesters"
+        description="Choose a semester to review its submissions."
+        actions={
+          <>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/compose/manifest" data-testid="manifest-composer-link">
+                Manifest composer
+                <span aria-hidden="true">→</span>
+              </Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/local/load" data-testid="local-analysis-link">
+                Local analysis
+                <span aria-hidden="true">→</span>
+              </Link>
+            </Button>
+          </>
+        }
+      />
 
-      <ul className="space-y-2.5" data-testid="semester-list">
+      <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="semester-list">
         {semesters.map((s) => (
           <li key={s.semester_id}>
             <Link
               to={`/s/${s.course_slug}/${s.semester_slug}`}
               data-testid={`semester-link-${s.semester_slug}`}
-              className="group flex items-center justify-between gap-4 rounded-lg border bg-card px-4 py-3.5 shadow-sm transition-colors hover:border-berkeley-300 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              className="group flex h-full items-center justify-between gap-4 rounded-lg border bg-card px-5 py-4 shadow-sm transition-colors hover:border-berkeley-300 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
               <span className="min-w-0">
                 <span className="block truncate text-sm font-medium text-foreground">
@@ -113,6 +112,6 @@ export function HomeView() {
           </li>
         ))}
       </ul>
-    </div>
+    </PageContainer>
   );
 }
