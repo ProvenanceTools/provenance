@@ -20,6 +20,19 @@ import {
 } from '../../api/queries.js';
 import { ApiError } from '../../api/client.js';
 import type { CreateSemesterRequest } from '@provenance/shared/api-schemas';
+import { EmptyState, Panel } from '@/components/layout/Page';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { NativeSelect } from '@/components/ui/native-select';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 
 const TERMS: ReadonlyArray<CreateSemesterRequest['term']> = ['fa', 'sp', 'su', 'wi'];
 
@@ -110,25 +123,27 @@ export function AdminSemestersView() {
   }
 
   return (
-    <AdminLayout>
-      <div className="mb-4 text-xs text-gray-500">
+    <AdminLayout
+      title={
+        <>
+          {course?.name ?? 'Course'} <span className="text-gray-600">/ semesters</span>
+        </>
+      }
+      eyebrow={
         <Link to="/admin/courses" className="hover:underline">
           ← Back to courses
         </Link>
-      </div>
-      <h2 className="mb-4 text-base font-semibold text-gray-900">
-        {course?.name ?? 'Course'} <span className="text-gray-600">/ semesters</span>
-      </h2>
-
-      <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4">
-        <h3 className="mb-3 text-sm font-semibold text-gray-700">Create semester</h3>
-        <form onSubmit={handleCreate} className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <label className="text-xs text-gray-600">
-            Term
-            <select
+      }
+    >
+      <Panel title="Create semester">
+        <form onSubmit={handleCreate} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="semester-term">Term</Label>
+            <NativeSelect
+              id="semester-term"
               value={term}
               onChange={(e) => setTerm(e.target.value as CreateSemesterRequest['term'])}
-              className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
+              className="w-full"
               data-testid="semester-term-select"
             >
               {TERMS.map((t) => (
@@ -136,71 +151,73 @@ export function AdminSemestersView() {
                   {t}
                 </option>
               ))}
-            </select>
-          </label>
+            </NativeSelect>
+          </div>
 
-          <label className="text-xs text-gray-600">
-            Year
-            <input
+          <div className="space-y-1.5">
+            <Label htmlFor="semester-year">Year</Label>
+            <Input
+              id="semester-year"
               type="number"
               value={year}
               min={2000}
               max={2100}
               onChange={(e) => setYear(parseInt(e.target.value, 10))}
-              className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
               data-testid="semester-year-input"
             />
-          </label>
+          </div>
 
-          <label className="text-xs text-gray-600">
-            Slug
-            <input
+          <div className="space-y-1.5">
+            <Label htmlFor="semester-slug">Slug</Label>
+            <Input
+              id="semester-slug"
               type="text"
               value={slug}
               onChange={(e) => setSlug(e.target.value)}
               placeholder="fa26"
               pattern="[a-z0-9-]+"
-              className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
               data-testid="semester-slug-input"
             />
-          </label>
+          </div>
 
-          <label className="text-xs text-gray-600">
-            Display name
-            <input
+          <div className="space-y-1.5">
+            <Label htmlFor="semester-display-name">Display name</Label>
+            <Input
+              id="semester-display-name"
               type="text"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Fall 2026"
-              className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
               data-testid="semester-display-name-input"
             />
-          </label>
+          </div>
 
-          <label className="text-xs text-gray-600 sm:col-span-2">
-            Filename convention (regex with named groups <code>sid</code> and{' '}
-            <code>assignment_id</code>)
-            <input
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label htmlFor="semester-filename">
+              Filename convention (regex with named groups <code>sid</code> and{' '}
+              <code>assignment_id</code>)
+            </Label>
+            <Input
+              id="semester-filename"
               type="text"
               value={filenameConvention}
               onChange={(e) => setFilenameConvention(e.target.value)}
-              className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1.5 font-mono text-xs"
+              className="font-mono text-xs"
               data-testid="semester-filename-input"
             />
-          </label>
+          </div>
 
           <div className="sm:col-span-2">
-            <button
+            <Button
               type="submit"
               disabled={isCreating || slug.trim() === '' || displayName.trim() === ''}
-              className="rounded bg-berkeley-700 px-3 py-1.5 text-sm text-white hover:bg-berkeley-800 disabled:opacity-50"
               data-testid="create-semester-submit"
             >
               {isCreating ? 'Creating…' : 'Create semester'}
-            </button>
+            </Button>
           </div>
         </form>
-      </div>
+      </Panel>
 
       {isLoading && (
         <div className="py-8 text-center text-sm text-gray-600">Loading semesters…</div>
@@ -210,68 +227,65 @@ export function AdminSemestersView() {
       )}
 
       {!isLoading && !error && (
-        <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-          <table className="w-full text-sm" data-testid="semesters-table">
-            <thead className="bg-gray-50 text-xs text-gray-500">
-              <tr>
-                <th className="px-4 py-2 text-left">Slug</th>
-                <th className="px-4 py-2 text-left">Display name</th>
-                <th className="px-4 py-2 text-left">Term/Year</th>
-                <th className="px-4 py-2 text-left">Submissions</th>
-                <th className="px-4 py-2 text-left">Status</th>
-                <th className="px-4 py-2 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {data?.semesters.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-gray-600">
-                    No semesters yet.
-                  </td>
-                </tr>
-              ) : (
-                data?.semesters.map((s) => (
-                  <tr key={s.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-2 font-mono text-xs">{s.slug}</td>
-                    <td className="px-4 py-2 text-xs">{s.display_name}</td>
-                    <td className="px-4 py-2 text-xs text-gray-600">
+        <Panel flush>
+          {data?.semesters.length === 0 ? (
+            <EmptyState title="No semesters yet." />
+          ) : (
+            <Table data-testid="semesters-table">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Slug</TableHead>
+                  <TableHead>Display name</TableHead>
+                  <TableHead>Term/Year</TableHead>
+                  <TableHead>Submissions</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data?.semesters.map((s) => (
+                  <TableRow key={s.id}>
+                    <TableCell className="font-mono text-xs">{s.slug}</TableCell>
+                    <TableCell>{s.display_name}</TableCell>
+                    <TableCell className="text-gray-600">
                       {s.term} {s.year}
-                    </td>
-                    <td className="px-4 py-2 text-xs text-gray-600">{s.submission_count}</td>
-                    <td className="px-4 py-2">
+                    </TableCell>
+                    <TableCell className="text-gray-600">{s.submission_count}</TableCell>
+                    <TableCell>
                       {s.archived ? (
-                        <span className="rounded bg-gray-200 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">
+                        <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2.5 py-0.5 text-xs font-medium text-gray-600">
                           archived
                         </span>
                       ) : (
-                        <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">
+                        <span className="inline-flex items-center rounded-full border border-green-200 bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">
                           active
                         </span>
                       )}
-                    </td>
-                    <td className="px-4 py-2 text-right">
-                      <div className="flex flex-col items-end gap-1.5">
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex flex-col items-end gap-2">
                         {s.my_role === null ? (
                           // Not a member yet: the per-semester pages resolve the
                           // semester from your membership list, so they can't load
                           // until you're added. Add yourself here first.
-                          <button
+                          <Button
                             type="button"
+                            variant="outline"
+                            size="sm"
                             onClick={() => handleAddSelf(s.id)}
                             disabled={
                               myEmail === null || (isAddingSelf && addingVars?.semesterId === s.id)
                             }
-                            className="text-xs text-berkeley-700 hover:underline disabled:opacity-50"
                             data-testid={`add-me-${s.slug}`}
                           >
                             {isAddingSelf && addingVars?.semesterId === s.id
                               ? 'Adding…'
                               : 'Add me as admin'}
-                          </button>
+                          </Button>
                         ) : (
                           <Link
                             to={`/s/${course?.slug ?? ''}/${s.slug}/settings`}
-                            className="text-xs text-berkeley-700 hover:underline"
+                            className="text-berkeley-700 hover:underline"
                           >
                             Open settings →
                           </Link>
@@ -279,47 +293,51 @@ export function AdminSemestersView() {
 
                         {s.archived ? null : archiveConfirm === s.id ? (
                           <div
-                            className="max-w-xs text-left"
+                            className="max-w-xs space-y-2 text-left"
                             data-testid={`semester-archive-confirm-panel-${s.id}`}
                           >
-                            <p className="mb-1.5 text-xs text-gray-600">
+                            <p className="text-xs text-gray-600">
                               Archiving <span className="font-medium">{s.display_name}</span> makes
                               it read-only and starts its data-retention countdown, after which
                               stored recordings are purged. This can’t be undone.
                             </p>
-                            <span className="flex items-center gap-1">
-                              <button
+                            <span className="flex items-center gap-2">
+                              <Button
+                                variant="destructive"
+                                size="sm"
                                 onClick={() => handleArchive(s.id)}
-                                className="rounded bg-red-600 px-2.5 py-1 text-xs text-white hover:bg-red-700"
                                 data-testid={`semester-archive-confirm-${s.id}`}
                               >
                                 Archive semester
-                              </button>
-                              <button
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
                                 onClick={() => setArchiveConfirm(null)}
-                                className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
                               >
                                 Cancel
-                              </button>
+                              </Button>
                             </span>
                           </div>
                         ) : (
-                          <button
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="border-red-300 text-red-700 hover:bg-red-50 hover:text-red-700"
                             onClick={() => setArchiveConfirm(s.id)}
-                            className="rounded border border-red-300 px-2.5 py-1 text-xs text-red-700 hover:bg-red-50"
                             data-testid={`semester-archive-btn-${s.id}`}
                           >
                             Archive
-                          </button>
+                          </Button>
                         )}
                       </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </Panel>
       )}
 
       {toast !== null && <Toast message={toast} onClose={() => setToast(null)} />}

@@ -24,11 +24,11 @@ function Card({
   return (
     <Link
       to={to}
-      className="block rounded-lg border border-gray-200 bg-white p-4 hover:border-berkeley-300 hover:bg-berkeley-50/30 transition-colors"
+      className="block rounded-lg border bg-card p-5 shadow-sm transition-colors hover:border-berkeley-300 hover:bg-berkeley-50/30"
     >
-      <div className="text-xs uppercase tracking-wider text-gray-500">{title}</div>
+      <div className="text-xs font-medium uppercase tracking-wide text-gray-500">{title}</div>
       <div className="mt-1 text-2xl font-semibold text-gray-900">{count}</div>
-      <div className="mt-1 text-xs text-gray-600">{description}</div>
+      <div className="mt-1 text-sm text-muted-foreground">{description}</div>
     </Link>
   );
 }
@@ -38,8 +38,8 @@ export function AdminIndexView() {
   const { data: usersData } = useAdminUsers();
 
   return (
-    <AdminLayout>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+    <AdminLayout title="Overview">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Card
           to="/admin/courses"
           title="Courses"
@@ -60,7 +60,7 @@ export function AdminIndexView() {
         />
       </div>
 
-      <div className="mt-8 rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900">
+      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
         <strong>Heads up.</strong> Actions taken here apply globally — across every course and
         semester. Course-staff admins can manage their own semester from the regular per-semester
         admin nav at <code>/s/&lt;slug&gt;/members</code>; this page is for cross-semester /

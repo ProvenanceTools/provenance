@@ -11,6 +11,18 @@ import { Link } from 'react-router-dom';
 import { AdminLayout } from './AdminLayout.js';
 import { useAdminCourses, useCreateCourse, useArchiveCourse } from '../../api/queries.js';
 import { ApiError } from '../../api/client.js';
+import { EmptyState, Panel } from '@/components/layout/Page';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 
 function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   return (
@@ -65,41 +77,45 @@ export function AdminCoursesView() {
   }
 
   return (
-    <AdminLayout>
-      <div
-        className="mb-6 rounded-lg border border-gray-200 bg-white p-4"
-        data-testid="create-course-form"
-      >
-        <h2 className="mb-3 text-sm font-semibold text-gray-700">Create course</h2>
-        <form onSubmit={handleCreate} className="flex flex-wrap items-start gap-2">
-          <input
-            type="text"
-            placeholder="Course name (e.g. CS 61A)"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="min-w-[200px] flex-1 rounded border border-gray-300 px-3 py-1.5 text-sm"
-            data-testid="course-name-input"
-          />
-          <input
-            type="text"
-            placeholder="Slug (e.g. cs61a)"
-            value={slug}
-            onChange={(e) => setSlug(e.target.value)}
-            pattern="[a-z0-9-]+"
-            title="lowercase letters, digits, and hyphens"
-            className="w-40 rounded border border-gray-300 px-3 py-1.5 text-sm"
-            data-testid="course-slug-input"
-          />
-          <button
+    <AdminLayout
+      title="Courses"
+      description="Create courses, archive courses, manage semesters within each course."
+    >
+      <Panel title="Create course" data-testid="create-course-form">
+        <form onSubmit={handleCreate} className="flex flex-wrap items-end gap-3">
+          <div className="min-w-[200px] flex-1 space-y-1.5">
+            <Label htmlFor="course-name">Course name</Label>
+            <Input
+              id="course-name"
+              type="text"
+              placeholder="Course name (e.g. CS 61A)"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              data-testid="course-name-input"
+            />
+          </div>
+          <div className="w-40 space-y-1.5">
+            <Label htmlFor="course-slug">Slug</Label>
+            <Input
+              id="course-slug"
+              type="text"
+              placeholder="Slug (e.g. cs61a)"
+              value={slug}
+              onChange={(e) => setSlug(e.target.value)}
+              pattern="[a-z0-9-]+"
+              title="lowercase letters, digits, and hyphens"
+              data-testid="course-slug-input"
+            />
+          </div>
+          <Button
             type="submit"
             disabled={isCreating || name.trim() === '' || slug.trim() === ''}
-            className="rounded bg-berkeley-700 px-3 py-1.5 text-sm text-white hover:bg-berkeley-800 disabled:opacity-50"
             data-testid="create-course-submit"
           >
             {isCreating ? 'Creating…' : 'Create'}
-          </button>
+          </Button>
         </form>
-      </div>
+      </Panel>
 
       {isLoading && <div className="py-8 text-center text-sm text-gray-600">Loading courses…</div>}
       {error && (
@@ -109,98 +125,94 @@ export function AdminCoursesView() {
       )}
 
       {!isLoading && !error && (
-        <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-          <table className="w-full text-sm" data-testid="courses-table">
-            <thead className="bg-gray-50 text-xs text-gray-500">
-              <tr>
-                <th className="px-4 py-2 text-left">Name</th>
-                <th className="px-4 py-2 text-left">Slug</th>
-                <th className="px-4 py-2 text-left">Semesters</th>
-                <th className="px-4 py-2 text-left">Status</th>
-                <th className="px-4 py-2 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {data?.courses.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-gray-600">
-                    No courses yet. Create one above.
-                  </td>
-                </tr>
-              ) : (
-                data?.courses.map((course) => (
-                  <tr
-                    key={course.id}
-                    className="hover:bg-gray-50"
-                    data-testid={`course-row-${course.id}`}
-                  >
-                    <td className="px-4 py-2">
+        <Panel flush>
+          {data?.courses.length === 0 ? (
+            <EmptyState title="No courses yet." description="Create one above." />
+          ) : (
+            <Table data-testid="courses-table">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Slug</TableHead>
+                  <TableHead>Semesters</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data?.courses.map((course) => (
+                  <TableRow key={course.id} data-testid={`course-row-${course.id}`}>
+                    <TableCell>
                       <Link
                         to={`/admin/courses/${course.id}/semesters`}
-                        className="text-xs font-medium text-berkeley-700 hover:underline"
+                        className="font-medium text-berkeley-700 hover:underline"
                       >
                         {course.name}
                       </Link>
-                    </td>
-                    <td className="px-4 py-2 font-mono text-xs text-gray-700">{course.slug}</td>
-                    <td className="px-4 py-2 text-xs text-gray-600">{course.semesters_count}</td>
-                    <td className="px-4 py-2">
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{course.slug}</TableCell>
+                    <TableCell>{course.semesters_count}</TableCell>
+                    <TableCell>
                       {course.archived ? (
-                        <span className="rounded bg-gray-200 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">
+                        <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2.5 py-0.5 text-xs font-medium text-gray-600">
                           archived
                         </span>
                       ) : (
-                        <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">
+                        <span className="inline-flex items-center rounded-full border border-green-200 bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">
                           active
                         </span>
                       )}
-                    </td>
-                    <td className="px-4 py-2 text-right">
+                    </TableCell>
+                    <TableCell className="text-right">
                       {course.archived ? (
-                        <span className="text-xs text-gray-600">—</span>
+                        <span className="text-gray-600">—</span>
                       ) : archiveConfirm === course.id ? (
                         <div
-                          className="ml-auto max-w-xs text-left"
+                          className="ml-auto max-w-xs space-y-2 text-left"
                           data-testid={`archive-confirm-panel-${course.id}`}
                         >
-                          <p className="mb-1.5 text-xs text-gray-600">
+                          <p className="text-xs text-gray-600">
                             Archiving <span className="font-medium">{course.name}</span> also
                             archives all of its semesters. They become read-only and their
                             data-retention countdown starts, after which stored recordings are
                             purged. This can’t be undone.
                           </p>
-                          <span className="flex items-center gap-1">
-                            <button
+                          <span className="flex items-center gap-2">
+                            <Button
+                              variant="destructive"
+                              size="sm"
                               onClick={() => handleArchive(course.id)}
-                              className="rounded bg-red-600 px-2.5 py-1 text-xs text-white hover:bg-red-700"
                               data-testid={`archive-confirm-${course.id}`}
                             >
                               Archive course
-                            </button>
-                            <button
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
                               onClick={() => setArchiveConfirm(null)}
-                              className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
                             >
                               Cancel
-                            </button>
+                            </Button>
                           </span>
                         </div>
                       ) : (
-                        <button
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-red-300 text-red-700 hover:bg-red-50 hover:text-red-700"
                           onClick={() => setArchiveConfirm(course.id)}
-                          className="rounded border border-red-300 px-2.5 py-1 text-xs text-red-700 hover:bg-red-50"
                           data-testid={`archive-btn-${course.id}`}
                         >
                           Archive
-                        </button>
+                        </Button>
                       )}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </Panel>
       )}
 
       {toast !== null && <Toast message={toast} onClose={() => setToast(null)} />}
