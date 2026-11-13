@@ -328,7 +328,7 @@ export function UnmatchedView() {
   return (
     <PageContainer>
       <PageHeader
-        title="Unmatched Files"
+        title="Unmatched files"
         meta={
           data && data.items.length > 0
             ? `${data.items.length} ${data.items.length === 1 ? 'file' : 'files'}`

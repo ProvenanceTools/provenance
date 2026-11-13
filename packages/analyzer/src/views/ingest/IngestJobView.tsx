@@ -98,7 +98,7 @@ export function IngestJobView() {
             <span className="font-mono">{jobId.slice(0, 8)}…</span>
           </>
         }
-        title="Ingest Job"
+        title="Ingest job"
         description="Progress and per-file results for one upload."
         meta={
           <span className="inline-flex items-center gap-3" data-testid="job-header">

@@ -156,7 +156,7 @@ export function SemesterSettingsView() {
   return (
     <PageContainer>
       <PageHeader
-        title="Semester Settings"
+        title="Semester settings"
         description="Name this semester, set the filename convention used to match uploaded submissions, and choose how long data is retained."
       />
 

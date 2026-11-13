@@ -103,7 +103,7 @@ export function IngestStartView() {
   return (
     <PageContainer>
       <PageHeader
-        title="Upload Submissions"
+        title="Upload submissions"
         description="Add student submissions to this semester, either from a Gradescope export or as sealed bundle .zip files."
       />
 
