@@ -230,7 +230,7 @@ export const nodes: Record<string, ArchNode> = {
   },
   tune: {
     title: '/tuning',
-    body: 'The page exposes exactly two controls per finding (an enable toggle and a weight from 0.0 to 2.0), one row for each of the known finding ids, which is more than the per-submission heuristics because the list also covers the two cross-submission findings and the integrity findings derived from the validation checks. It does not expose thresholds. The stored config shape does have a per-flag thresholds object, and the recompute worker does forward it into analysis-core’s config, so thresholds are reachable through the API; no screen writes them.\n\nEditing is safe against a second admin. The config is per-semester and versioned, every commit carries the version it was based on, and a stale commit is refused with a conflict rather than merged. The UI’s only offer is to reload, because silently merging two people’s weight changes produces a configuration neither of them chose. Before committing, each adjustment debounces into a dry run over the real cohort, and the first one fires on page load with the config unchanged so the "before" series in the histogram is the actual current distribution rather than a placeholder.',
+    body: 'The page exposes exactly two controls per finding (an enable toggle and a weight from 0.0 to 2.0), one row for each of the known finding ids, which is more than the per-submission heuristics because the list also covers the two cross-submission findings and the integrity findings derived from the validation checks. It does not expose thresholds. The stored config shape does have a per-flag thresholds object, and the recompute worker does forward it into analysis-core’s config, so thresholds are reachable through the API; no screen writes them.\n\nEditing is safe against a second admin. The config is per-semester and versioned, every commit carries the version it was based on, and a stale commit is refused with a conflict rather than merged. The UI’s only offer is to reload, because silently merging two people’s weight changes produces a configuration neither of them chose. Before committing, a change previews as a dry run over the real cohort. Nothing runs on page load; a preview only ever runs for a config that differs from the active one. Weight changes and disables are scored from the stored flag rows, so they preview automatically as the sliders move; re-enabling a heuristic needs the heuristics re-run on every stored bundle, so the page says so and waits for an explicit Preview impact rather than starting a minutes-long job on a slider drag.',
     invariant:
       'A commit carries the version it was based on. Concurrent edits conflict; they are never merged.',
     links: [
@@ -241,6 +241,10 @@ export const nodes: Record<string, ArchNode> = {
       {
         label: 'heuristic-config.ts',
         href: `${GH}/packages/server/src/api/v1/routes/heuristic-config.ts`,
+      },
+      {
+        label: 'dry-run-fast.ts',
+        href: `${GH}/packages/server/src/services/scoring/dry-run-fast.ts`,
       },
     ],
   },
