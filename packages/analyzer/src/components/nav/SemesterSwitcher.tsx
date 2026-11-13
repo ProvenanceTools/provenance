@@ -48,7 +48,8 @@ export function SemesterSwitcher() {
       value={active?.semester_id ?? ''}
       onChange={handleChange}
       aria-label="Switch semester"
-      className="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-berkeley-500"
+      className="w-full max-w-[18rem] truncate rounded-md border border-gray-300 bg-white py-1 pl-2 pr-8 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-berkeley-500"
+      title={active ? `${active.course_name} — ${active.semester_display_name}` : undefined}
       data-testid="semester-switcher"
     >
       {semesters.map((s) => (

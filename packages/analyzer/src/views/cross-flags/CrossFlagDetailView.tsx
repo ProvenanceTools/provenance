@@ -21,26 +21,10 @@ import {
   contributorsSidLabel,
   personLabel,
 } from '../../lib/contributor-display.js';
-
-// ---------------------------------------------------------------------------
-// Severity badge
-// ---------------------------------------------------------------------------
-
-function SeverityBadge({ severity }: { severity: string }) {
-  const colors: Record<string, string> = {
-    high: 'bg-red-100 text-red-700',
-    medium: 'bg-orange-100 text-orange-700',
-    low: 'bg-yellow-100 text-yellow-700',
-    info: 'bg-gray-100 text-gray-600',
-  };
-  return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${colors[severity] ?? 'bg-gray-100 text-gray-600'}`}
-    >
-      {severity}
-    </span>
-  );
-}
+import { ArrowLeft } from 'lucide-react';
+import { PageContainer, PageHeader, Panel } from '@/components/layout/Page';
+import { Card } from '@/components/ui/card';
+import { SeverityBadge } from './SeverityBadge.js';
 
 // ---------------------------------------------------------------------------
 // Participant card
@@ -57,11 +41,8 @@ function ParticipantCard({ participant }: { participant: CrossFlagParticipant })
     .join(', ');
 
   return (
-    <div
-      className="bg-white border border-gray-200 rounded p-4"
-      data-testid={`participant-${participant.submission_id}`}
-    >
-      <div className="mb-2">
+    <Card className="p-4" data-testid={`participant-${participant.submission_id}`}>
+      <div className="mb-3 space-y-0.5">
         {/*
           EVERY contributor, not the submitter of record.
           `participant.student` is one person; a group submission is
@@ -77,7 +58,7 @@ function ParticipantCard({ participant }: { participant: CrossFlagParticipant })
 
           `fallbackStudent` covers a response that predates `contributors`.
         */}
-        <p className="text-sm font-medium text-gray-800">
+        <p className="text-sm font-semibold text-gray-900">
           {contributorsLabel(participant.contributors, {
             fallbackStudent: participant.student,
           }) || personLabel(null)}
@@ -86,19 +67,21 @@ function ParticipantCard({ participant }: { participant: CrossFlagParticipant })
           {sids ? `SID: ${sids} · ` : ''}
           {participant.assignment.assignment_id_str}
         </p>
-        <p className="text-xs text-gray-400 font-mono truncate">sub: {participant.submission_id}</p>
+        <p className="truncate font-mono text-xs text-gray-400">sub: {participant.submission_id}</p>
       </div>
       {participant.supporting_seqs.length > 0 && (
         <div>
-          <p className="text-xs text-gray-500 mb-1">Supporting event seqs:</p>
-          <p className="text-xs font-mono text-gray-600 break-all">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
+            Supporting event seqs
+          </p>
+          <p className="break-all rounded-md bg-gray-50 p-2 font-mono text-xs text-gray-700">
             {participant.supporting_seqs.slice(0, 20).join(', ')}
             {participant.supporting_seqs.length > 20 &&
               ` … (${participant.supporting_seqs.length} total)`}
           </p>
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -113,90 +96,112 @@ export function CrossFlagDetailView() {
 
   const { data, isLoading, isError } = useCrossFlagDetail(crossFlagId);
 
+  const backLink = (
+    <button
+      onClick={() => void navigate(`${basePath}/cross-flags`)}
+      className="inline-flex items-center gap-1 text-sm text-berkeley-700 hover:underline"
+      data-testid="back-to-list"
+    >
+      <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+      Back to cross-flags
+    </button>
+  );
+
   if (isLoading) {
     return (
-      <div
-        className="flex items-center justify-center h-64 text-gray-500"
-        data-testid="cross-flag-detail-loading"
-      >
-        Loading…
-      </div>
+      <PageContainer>
+        <p
+          className="flex h-64 items-center justify-center text-sm text-muted-foreground"
+          data-testid="cross-flag-detail-loading"
+        >
+          Loading…
+        </p>
+      </PageContainer>
     );
   }
 
   if (isError || !data) {
     return (
-      <div className="p-8 text-center text-red-600" data-testid="cross-flag-detail-error">
-        Failed to load cross-flag detail.
-        <button
-          onClick={() => void navigate(`${basePath}/cross-flags`)}
-          className="ml-2 text-blue-600 underline"
-        >
-          Back to list
-        </button>
-      </div>
+      <PageContainer>
+        {backLink}
+        <Panel>
+          <p
+            className="py-6 text-center text-sm text-red-600"
+            data-testid="cross-flag-detail-error"
+          >
+            Failed to load cross-flag detail.
+          </p>
+        </Panel>
+      </PageContainer>
     );
   }
 
   const { item } = data;
 
   return (
-    <div className="p-6 max-w-5xl mx-auto" data-testid="cross-flag-detail-view">
-      {/* Back link */}
-      <button
-        onClick={() => void navigate(`${basePath}/cross-flags`)}
-        className="text-xs text-blue-600 hover:underline mb-4 block"
-        data-testid="back-to-list"
-      >
-        ← Back to cross-flags
-      </button>
+    <PageContainer data-testid="cross-flag-detail-view">
+      <PageHeader
+        eyebrow={backLink}
+        title={<span className="font-mono text-xl">{item.heuristic_id}</span>}
+      />
 
-      {/* Header */}
-      <div className="bg-white border border-gray-200 rounded p-4 mb-6">
-        <div className="flex items-center gap-3 mb-2">
-          <span className="font-mono text-sm font-medium text-gray-800">{item.heuristic_id}</span>
-          <SeverityBadge severity={item.severity} />
-          <span className="text-xs text-gray-400">
-            confidence: {(item.confidence * 100).toFixed(0)}%
-          </span>
-        </div>
-        <p className="text-xs text-gray-400">
-          Created: {new Date(item.created_at).toLocaleString()}
-        </p>
+      {/* Summary */}
+      <Panel>
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+          <div className="space-y-1">
+            <dt className="text-xs font-medium uppercase tracking-wide text-gray-500">Severity</dt>
+            <dd>
+              <SeverityBadge severity={item.severity} />
+            </dd>
+          </div>
+          <div className="space-y-1">
+            <dt className="text-xs font-medium uppercase tracking-wide text-gray-500">
+              Confidence
+            </dt>
+            <dd className="text-sm font-medium text-gray-900 tabular-nums">
+              {(item.confidence * 100).toFixed(0)}%
+            </dd>
+          </div>
+          <div className="space-y-1">
+            <dt className="text-xs font-medium uppercase tracking-wide text-gray-500">
+              Participants
+            </dt>
+            <dd className="text-sm font-medium text-gray-900 tabular-nums">
+              {item.participants.length}
+            </dd>
+          </div>
+          <div className="space-y-1">
+            <dt className="text-xs font-medium uppercase tracking-wide text-gray-500">Created</dt>
+            <dd className="text-sm text-gray-900">{new Date(item.created_at).toLocaleString()}</dd>
+          </div>
+        </dl>
         {item.detail !== null && item.detail !== undefined && (
-          <details className="mt-2">
-            <summary className="text-xs text-gray-500 cursor-pointer hover:underline">
+          <details className="mt-4 border-t pt-3">
+            <summary className="cursor-pointer text-xs font-medium text-gray-600 hover:text-gray-900">
               Detail JSON
             </summary>
-            <pre className="mt-1 text-xs bg-gray-50 rounded p-2 overflow-auto max-h-32">
+            <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-gray-50 p-3 text-xs">
               {JSON.stringify(item.detail, null, 2)}
             </pre>
           </details>
         )}
-      </div>
+      </Panel>
 
       {/* Participants */}
-      <h2 className="text-sm font-semibold text-gray-700 mb-3">
-        Participants ({item.participants.length})
-      </h2>
+      <section className="space-y-3">
+        <h2 className="text-base font-semibold text-gray-900">Participants</h2>
 
-      {/* Two-column layout for pairs (Phase 24: simple listing) */}
-      {/* Phase 25 carry-over: wire v2 CompareView primitives for side-by-side diff */}
-      <div
-        className="grid gap-4"
-        style={{
-          gridTemplateColumns: `repeat(${Math.min(item.participants.length, 2)}, 1fr)`,
-        }}
-        data-testid="participants-grid"
-      >
-        {item.participants.map((p) => (
-          <ParticipantCard key={p.submission_id} participant={p} />
-        ))}
-      </div>
+        {/* Phase 25 carry-over: wire v2 CompareView primitives for side-by-side diff */}
+        <div className="grid gap-4 md:grid-cols-2" data-testid="participants-grid">
+          {item.participants.map((p) => (
+            <ParticipantCard key={p.submission_id} participant={p} />
+          ))}
+        </div>
 
-      {item.participants.length === 0 && (
-        <p className="text-sm text-gray-400">No participants recorded.</p>
-      )}
-    </div>
+        {item.participants.length === 0 && (
+          <p className="text-sm text-muted-foreground">No participants recorded.</p>
+        )}
+      </section>
+    </PageContainer>
   );
 }

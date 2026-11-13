@@ -20,6 +20,20 @@ import {
   useRemoveMember,
 } from '../../api/queries.js';
 import { ApiError } from '../../api/client.js';
+import { UserPlus, Trash2 } from 'lucide-react';
+import { PageContainer, PageHeader, Panel, EmptyState } from '@/components/layout/Page';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { NativeSelect } from '@/components/ui/native-select';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 
 // ---------------------------------------------------------------------------
 // Simple inline toast
@@ -37,6 +51,38 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
         ×
       </button>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Avatar + role badge
+// ---------------------------------------------------------------------------
+
+/** Initial-letter avatar. Decorative: the name beside it carries the meaning. */
+function Avatar({ label, muted = false }: { label: string; muted?: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold uppercase ${
+        muted ? 'bg-gray-100 text-gray-500' : 'bg-berkeley-100 text-berkeley-700'
+      }`}
+    >
+      {label.trim().charAt(0) || '?'}
+    </span>
+  );
+}
+
+function RoleBadge({ role }: { role: string }) {
+  const cls =
+    role === 'admin'
+      ? 'border-berkeley-200 bg-berkeley-50 text-berkeley-700'
+      : 'border-gray-200 bg-gray-50 text-gray-700';
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize ${cls}`}
+    >
+      {role}
+    </span>
   );
 }
 
@@ -115,174 +161,238 @@ export function MembersView() {
   }
 
   const emailIsValid = inviteEmail === '' || isValidEmail(inviteEmail);
+  const showEmailError = emailError !== null || !emailIsValid;
+  const memberCount = data?.members.length ?? 0;
+  const pendingCount = data?.pending.length ?? 0;
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8">
-      <h1 className="mb-6 text-xl font-semibold text-gray-900">Members</h1>
+    <PageContainer>
+      <PageHeader
+        title="Members"
+        meta={
+          data
+            ? `${memberCount} ${memberCount === 1 ? 'member' : 'members'}${
+                pendingCount > 0 ? ` · ${pendingCount} pending` : ''
+              }`
+            : undefined
+        }
+        description="Staff with access to this semester. Admins manage uploads, the roster, and members; graders review submissions."
+      />
 
       {/* Invite form */}
-      <div className="mb-8 rounded-lg border border-gray-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-semibold text-gray-700">Invite Member</h2>
-        <form onSubmit={handleInviteSubmit} className="flex items-start gap-2 flex-wrap">
-          <div className="flex-1 min-w-[200px]">
-            <input
+      <Panel
+        title="Invite a member"
+        description="Someone who has signed in before gets access immediately; anyone else gets it the first time they sign in with that Google account."
+      >
+        <form onSubmit={handleInviteSubmit} className="flex flex-wrap items-start gap-3">
+          <div className="min-w-[240px] flex-1 space-y-1.5">
+            <Label htmlFor="invite-email">Email</Label>
+            <Input
+              id="invite-email"
               type="email"
-              placeholder="email@example.com"
+              placeholder="name@berkeley.edu"
               value={inviteEmail}
               onChange={(e) => {
                 setInviteEmail(e.target.value);
                 setEmailError(null);
               }}
-              className={`w-full rounded border px-3 py-1.5 text-sm ${
-                emailError || (!emailIsValid && inviteEmail !== '')
-                  ? 'border-red-400'
-                  : 'border-gray-300'
-              }`}
+              aria-invalid={showEmailError}
+              aria-describedby={showEmailError ? 'invite-email-error' : undefined}
+              className={showEmailError ? 'border-red-400 focus-visible:ring-red-500' : ''}
               data-testid="invite-email-input"
             />
-            {(emailError || (!emailIsValid && inviteEmail !== '')) && (
-              <p className="mt-0.5 text-xs text-red-600" data-testid="email-error">
+            {showEmailError && (
+              <p id="invite-email-error" className="text-xs text-red-600" data-testid="email-error">
                 {emailError ?? 'Invalid email address.'}
               </p>
             )}
           </div>
 
-          <select
-            value={inviteRole}
-            onChange={(e) => setInviteRole(e.target.value as 'admin' | 'grader')}
-            className="rounded border border-gray-300 px-3 py-1.5 text-sm"
-            data-testid="invite-role-select"
-          >
-            <option value="grader">Grader</option>
-            <option value="admin">Admin</option>
-          </select>
+          <div className="space-y-1.5">
+            <Label htmlFor="invite-role">Role</Label>
+            <NativeSelect
+              id="invite-role"
+              value={inviteRole}
+              onChange={(e) => setInviteRole(e.target.value as 'admin' | 'grader')}
+              className="w-32"
+              data-testid="invite-role-select"
+            >
+              <option value="grader">Grader</option>
+              <option value="admin">Admin</option>
+            </NativeSelect>
+          </div>
 
-          <button
-            type="submit"
-            disabled={isInviting || inviteEmail === '' || !emailIsValid}
-            className="rounded bg-berkeley-700 px-3 py-1.5 text-sm text-white hover:bg-berkeley-800 disabled:opacity-50"
-            data-testid="invite-submit"
-          >
-            {isInviting ? 'Inviting…' : 'Invite'}
-          </button>
+          {/* Spacer label keeps the button aligned with the inputs, not the labels. */}
+          <div className="space-y-1.5">
+            <span aria-hidden="true" className="block text-sm leading-none">
+              &nbsp;
+            </span>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={isInviting || inviteEmail === '' || !emailIsValid}
+              data-testid="invite-submit"
+            >
+              <UserPlus />
+              {isInviting ? 'Inviting…' : 'Send invite'}
+            </Button>
+          </div>
         </form>
-      </div>
+      </Panel>
 
-      {isLoading && <div className="py-8 text-center text-sm text-gray-400">Loading members…</div>}
+      {isLoading && (
+        <Panel>
+          <p className="py-6 text-center text-sm text-muted-foreground">Loading members…</p>
+        </Panel>
+      )}
       {error && (
-        <div className="py-8 text-center text-sm text-red-500" data-testid="members-error">
-          Failed to load members.
-        </div>
+        <Panel>
+          <p className="py-6 text-center text-sm text-red-600" data-testid="members-error">
+            Failed to load members.
+          </p>
+        </Panel>
       )}
 
       {/* Active members */}
       {!isLoading && !error && semesterId && (
         <>
-          <div className="mb-6 rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <table className="w-full text-sm" data-testid="members-table">
-              <thead className="bg-gray-50 text-xs text-gray-500">
-                <tr>
-                  <th className="px-4 py-2 text-left">Name / Email</th>
-                  <th className="px-4 py-2 text-left">Role</th>
-                  <th className="px-4 py-2 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
+          <Panel title="Active members" flush>
+            <Table data-testid="members-table">
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Member</TableHead>
+                  <TableHead className="w-40">Role</TableHead>
+                  <TableHead className="w-48 text-right">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {data?.members.length === 0 ? (
                   <tr>
-                    <td colSpan={3} className="px-4 py-8 text-center text-gray-400">
-                      No members yet.
+                    <td colSpan={3}>
+                      <EmptyState
+                        title="No members yet"
+                        description="Invite course staff above to give them access."
+                      />
                     </td>
                   </tr>
                 ) : (
                   data?.members.map((member) => (
-                    <tr key={member.user_id} className="hover:bg-gray-50">
-                      <td className="px-4 py-2">
-                        <div className="text-xs font-medium text-gray-900">
-                          {member.display_name ?? member.email}
+                    <TableRow key={member.user_id}>
+                      <TableCell>
+                        <div className="flex items-center gap-3">
+                          <Avatar label={member.display_name ?? member.email} />
+                          <div className="min-w-0">
+                            <div className="truncate font-medium text-gray-900">
+                              {member.display_name ?? member.email}
+                            </div>
+                            {member.display_name && (
+                              <div className="truncate text-xs text-muted-foreground">
+                                {member.email}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-xs text-gray-500">{member.email}</div>
-                      </td>
-                      <td className="px-4 py-2">
-                        <select
+                      </TableCell>
+                      <TableCell>
+                        <NativeSelect
                           value={member.role}
                           onChange={(e) =>
                             handleRoleChange(member.user_id, e.target.value as 'admin' | 'grader')
                           }
-                          className="rounded border border-gray-300 px-2 py-0.5 text-xs"
+                          aria-label={`Role for ${member.display_name ?? member.email}`}
+                          className="h-8 w-28"
                           data-testid={`role-select-${member.user_id}`}
                         >
                           <option value="admin">Admin</option>
                           <option value="grader">Grader</option>
-                        </select>
-                      </td>
-                      <td className="px-4 py-2 text-right">
+                        </NativeSelect>
+                      </TableCell>
+                      <TableCell className="text-right">
                         {removeConfirm === member.user_id ? (
-                          <span className="flex items-center justify-end gap-1">
-                            <button
+                          <span className="inline-flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">Remove access?</span>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              className="h-8"
                               onClick={() => handleRemove(member.user_id)}
-                              className="rounded bg-red-600 px-2.5 py-1 text-xs text-white hover:bg-red-700"
                               data-testid={`remove-confirm-${member.user_id}`}
                             >
-                              Confirm
-                            </button>
-                            <button
+                              Remove
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8"
                               onClick={() => setRemoveConfirm(null)}
-                              className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
                             >
                               Cancel
-                            </button>
+                            </Button>
                           </span>
                         ) : (
-                          <button
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 text-red-700 hover:bg-red-50 hover:text-red-800"
                             onClick={() => setRemoveConfirm(member.user_id)}
-                            className="rounded border border-red-300 px-2.5 py-1 text-xs text-red-700 hover:bg-red-50"
+                            aria-label={`Remove ${member.display_name ?? member.email}`}
                             data-testid={`remove-btn-${member.user_id}`}
                           >
+                            <Trash2 />
                             Remove
-                          </button>
+                          </Button>
                         )}
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))
                 )}
-              </tbody>
-            </table>
-          </div>
+              </TableBody>
+            </Table>
+          </Panel>
 
           {/* Pending invitations */}
-          {(data?.pending.length ?? 0) > 0 && (
-            <div>
-              <h2 className="mb-2 text-sm font-semibold text-gray-700">Pending Invitations</h2>
-              <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-                <table className="w-full text-sm" data-testid="pending-table">
-                  <thead className="bg-gray-50 text-xs text-gray-500">
-                    <tr>
-                      <th className="px-4 py-2 text-left">Email</th>
-                      <th className="px-4 py-2 text-left">Role</th>
-                      <th className="px-4 py-2 text-left">Invited</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {data?.pending.map((inv) => (
-                      <tr key={inv.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-2 text-xs">{inv.email}</td>
-                        <td className="px-4 py-2 text-xs capitalize">{inv.role}</td>
-                        <td className="px-4 py-2 text-xs text-gray-500">
-                          {new Date(inv.invited_at).toLocaleDateString()}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+          {pendingCount > 0 && (
+            <Panel
+              title="Pending invitations"
+              description="Invited, but they haven't signed in yet."
+              flush
+            >
+              <Table data-testid="pending-table">
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>Email</TableHead>
+                    <TableHead className="w-40">Role</TableHead>
+                    <TableHead className="w-48 text-right">Invited</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data?.pending.map((inv) => (
+                    <TableRow key={inv.id}>
+                      <TableCell>
+                        <div className="flex items-center gap-3">
+                          <Avatar label={inv.email} muted />
+                          <span className="truncate text-gray-900">{inv.email}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <RoleBadge role={inv.role} />
+                      </TableCell>
+                      <TableCell className="text-right text-muted-foreground">
+                        {new Date(inv.invited_at).toLocaleDateString()}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Panel>
           )}
         </>
       )}
 
       {/* Toast */}
       {toast && <Toast message={toast} onClose={() => setToast(null)} />}
-    </div>
+    </PageContainer>
   );
 }

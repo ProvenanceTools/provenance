@@ -2,8 +2,9 @@
  * AppShell — top navigation bar + content area.
  *
  * Structure:
- * - Top bar: Provenance logo, SemesterSwitcher (if multiple semesters), user menu
- * - User menu: displays email, "API tokens" link to /me/tokens, logout button
+ * - Top bar: Provenance logo, SemesterSwitcher (if multiple semesters), account menu
+ * - Account menu (dropdown): email, Admin (superadmins), API tokens, sign out
+ * - Semester nav: a tab row under the top bar, admins on semester routes only
  * - Children rendered below the top bar in a flex-grow content area
  */
 
@@ -15,6 +16,15 @@ import { SemesterSwitcher } from './SemesterSwitcher.js';
 import { ViewAsBanner } from './ViewAsBanner.js';
 import { ProtectedModeBanner } from './ProtectedModeBanner.js';
 import { ProvenanceMark } from './ProvenanceMark.js';
+import { ChevronDown, KeyRound, LogOut, Shield } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu.js';
 
 interface AppShellProps {
   children: ReactNode;
@@ -32,10 +42,10 @@ function SemesterAdminNav() {
 
   const base = basePath;
   const navClass = ({ isActive }: { isActive: boolean }) =>
-    `text-xs px-2 py-1 rounded transition-colors ${
+    `-mb-px whitespace-nowrap border-b-2 px-3 py-2.5 text-sm transition-colors ${
       isActive
-        ? 'bg-berkeley-100 text-berkeley-700 font-medium'
-        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+        ? 'border-berkeley-700 font-medium text-berkeley-700'
+        : 'border-transparent text-gray-600 hover:border-gray-300 hover:text-gray-900'
     }`;
 
   const adminLinks: Array<{ to: string; label: string; end?: boolean }> = [
@@ -52,7 +62,7 @@ function SemesterAdminNav() {
 
   return (
     <nav
-      className="flex items-center gap-1 ml-4"
+      className="flex flex-wrap items-center gap-x-1 border-b border-gray-200 bg-white px-4"
       aria-label="Semester admin"
       data-testid="admin-nav"
     >
@@ -91,58 +101,85 @@ export function AppShell({ children }: AppShellProps) {
       {/* Protected-mode banner (only renders when current user has protected flag) */}
       <ProtectedModeBanner />
 
-      {/* Top bar */}
-      <header className="flex h-14 items-center border-b border-gray-200 bg-white px-4 overflow-x-auto">
+      {/* Top bar. Never scrolls sideways: the semester switcher truncates
+          and the account actions live behind one menu, so the row's width is
+          bounded regardless of course-name length. */}
+      <header className="flex h-14 shrink-0 items-center gap-4 border-b border-gray-200 bg-white px-4">
         {/* Logo */}
         <Link
           to="/home"
-          className="mr-4 flex shrink-0 items-center gap-2 text-sm font-semibold text-berkeley-700"
+          className="flex shrink-0 items-center gap-2 text-sm font-semibold text-berkeley-700"
           aria-label="Provenance home"
         >
           <ProvenanceMark className="h-6 w-6" />
-          Provenance
+          <span className="hidden sm:inline">Provenance</span>
         </Link>
 
         {/* Semester switcher (renders nothing if <= 1 semester) */}
-        <SemesterSwitcher />
-
-        {/* Admin nav links (only on /s/:courseSlug/:semesterSlug routes for admins) */}
-        <SemesterAdminNav />
+        <div className="min-w-0">
+          <SemesterSwitcher />
+        </div>
 
         {/* Spacer */}
         <div className="flex-1" />
 
-        {/* User menu */}
+        {/* Account menu */}
         {me !== undefined && (
-          <div className="flex shrink-0 items-center gap-3">
-            <span className="text-xs text-gray-500">{me.user.email}</span>
-            {isSuperadmin && (
-              <Link
-                to="/admin"
-                className="rounded-md border border-berkeley-300 bg-white px-3 py-1 text-xs font-medium text-berkeley-700 hover:bg-berkeley-50"
-                data-testid="admin-link"
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex shrink-0 items-center gap-2 rounded-md px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={`Account menu for ${me.user.email}`}
+                data-testid="account-menu-trigger"
               >
-                Admin
-              </Link>
-            )}
-            <Link
-              to="/me/tokens"
-              className="rounded-md border border-gray-300 bg-white px-3 py-1 text-xs text-gray-700 hover:bg-gray-50"
-              data-testid="tokens-link"
-            >
-              API tokens
-            </Link>
-            <button
-              onClick={handleLogout}
-              disabled={isLoggingOut}
-              className="rounded-md border border-gray-300 bg-white px-3 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              data-testid="logout-button"
-            >
-              {isLoggingOut ? 'Signing out…' : 'Sign out'}
-            </button>
-          </div>
+                <span
+                  aria-hidden="true"
+                  className="flex h-7 w-7 items-center justify-center rounded-full bg-berkeley-100 text-xs font-semibold uppercase text-berkeley-700"
+                >
+                  {me.user.email.charAt(0)}
+                </span>
+                <span className="hidden max-w-[14rem] truncate lg:inline">{me.user.email}</span>
+                <ChevronDown className="h-4 w-4 text-gray-500" aria-hidden="true" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              <DropdownMenuLabel className="font-normal">
+                <div className="text-xs text-muted-foreground">Signed in as</div>
+                <div className="truncate text-sm font-medium">{me.user.email}</div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {isSuperadmin && (
+                <DropdownMenuItem asChild className="gap-2">
+                  <Link to="/admin" data-testid="admin-link">
+                    <Shield className="h-4 w-4" aria-hidden="true" />
+                    Admin
+                  </Link>
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem asChild className="gap-2">
+                <Link to="/me/tokens" data-testid="tokens-link">
+                  <KeyRound className="h-4 w-4" aria-hidden="true" />
+                  API tokens
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="gap-2"
+                onSelect={handleLogout}
+                disabled={isLoggingOut}
+                data-testid="logout-button"
+              >
+                <LogOut className="h-4 w-4" aria-hidden="true" />
+                {isLoggingOut ? 'Signing out…' : 'Sign out'}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </header>
+
+      {/* Admin nav tabs (only on /s/:courseSlug/:semesterSlug routes for admins) */}
+      <SemesterAdminNav />
 
       {/* Page content
           - flex-1 + min-h-0: main fills the remaining column space.
