@@ -117,7 +117,7 @@ import type {
 
 const INPUT_CLASS =
   'mt-1 w-full rounded border border-gray-300 px-3 py-1.5 text-sm focus:outline-none ' +
-  'focus:ring-2 focus:ring-orange-500';
+  'focus:ring-2 focus:ring-berkeley-500';
 
 function FieldError({ id, message }: { id: string; message: string | undefined }) {
   if (message === undefined) return null;
@@ -518,7 +518,7 @@ export function ManifestComposerView() {
                       type="button"
                       onClick={() => update({ course_id: cert.course_id })}
                       data-testid="composer-course-id-fill"
-                      className="mt-1 text-xs font-medium text-orange-700 underline-offset-4 hover:underline"
+                      className="mt-1 text-xs font-medium text-berkeley-700 underline-offset-4 hover:underline"
                     >
                       Use the certificate&rsquo;s id ({cert.course_id})
                     </button>
@@ -831,7 +831,7 @@ export function ManifestComposerView() {
           type="submit"
           disabled={busy}
           data-testid="composer-sign"
-          className="mt-6 inline-flex w-full items-center justify-center rounded-md bg-orange-700 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-orange-800 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 disabled:opacity-50"
+          className="mt-6 inline-flex w-full items-center justify-center rounded-md bg-berkeley-700 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-berkeley-800 focus:outline-none focus:ring-2 focus:ring-berkeley-500 focus:ring-offset-2 disabled:opacity-50"
         >
           {busy ? 'Signing…' : 'Sign and verify'}
         </button>
@@ -908,7 +908,7 @@ export function ManifestComposerView() {
                   href={downloadHref}
                   download={result.filename}
                   data-testid="composer-download"
-                  className="inline-flex items-center rounded-md bg-orange-700 px-4 py-2 text-sm font-medium text-white hover:bg-orange-800"
+                  className="inline-flex items-center rounded-md bg-berkeley-700 px-4 py-2 text-sm font-medium text-white hover:bg-berkeley-800"
                 >
                   Download {MANIFEST_DOWNLOAD_FILENAME}
                 </a>
@@ -925,7 +925,7 @@ export function ManifestComposerView() {
                 type="button"
                 onClick={handleStartOver}
                 data-testid="composer-start-over"
-                className="text-xs font-medium text-orange-700 underline-offset-4 hover:underline"
+                className="text-xs font-medium text-berkeley-700 underline-offset-4 hover:underline"
               >
                 Sign another
               </button>

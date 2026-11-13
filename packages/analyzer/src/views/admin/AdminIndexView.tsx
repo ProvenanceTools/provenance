@@ -24,7 +24,7 @@ function Card({
   return (
     <Link
       to={to}
-      className="block rounded-lg border border-gray-200 bg-white p-4 hover:border-orange-300 hover:bg-orange-50/30 transition-colors"
+      className="block rounded-lg border border-gray-200 bg-white p-4 hover:border-berkeley-300 hover:bg-berkeley-50/30 transition-colors"
     >
       <div className="text-xs uppercase tracking-wider text-gray-500">{title}</div>
       <div className="mt-1 text-2xl font-semibold text-gray-900">{count}</div>

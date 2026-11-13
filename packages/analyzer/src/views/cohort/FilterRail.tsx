@@ -141,7 +141,7 @@ export function FilterRail({ filters, assignments, onApply, onClear }: FilterRai
               removeDraftKey('q');
             }
           }}
-          className="w-full rounded-md border border-gray-300 px-2 py-1 text-sm placeholder-gray-400 focus:border-orange-500 focus:outline-none"
+          className="w-full rounded-md border border-gray-300 px-2 py-1 text-sm placeholder-gray-400 focus:border-berkeley-500 focus:outline-none"
           data-testid="filter-q"
         />
       </div>
@@ -159,7 +159,7 @@ export function FilterRail({ filters, assignments, onApply, onClear }: FilterRai
               removeDraftKey('assignmentId');
             }
           }}
-          className="w-full rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-orange-500 focus:outline-none"
+          className="w-full rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-berkeley-500 focus:outline-none"
           data-testid="filter-assignment"
         >
           <option value="">All assignments</option>
@@ -242,7 +242,7 @@ export function FilterRail({ filters, assignments, onApply, onClear }: FilterRai
                 removeDraftKey('scoreMin');
               }
             }}
-            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-orange-500 focus:outline-none"
+            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-berkeley-500 focus:outline-none"
             data-testid="filter-score-min"
           />
           <span className="text-xs text-gray-600">to</span>
@@ -259,7 +259,7 @@ export function FilterRail({ filters, assignments, onApply, onClear }: FilterRai
                 removeDraftKey('scoreMax');
               }
             }}
-            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-orange-500 focus:outline-none"
+            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-berkeley-500 focus:outline-none"
             data-testid="filter-score-max"
           />
         </div>
@@ -283,7 +283,7 @@ export function FilterRail({ filters, assignments, onApply, onClear }: FilterRai
                 removeDraftKey('activeMinutesMin');
               }
             }}
-            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-orange-500 focus:outline-none"
+            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-berkeley-500 focus:outline-none"
             data-testid="filter-active-minutes-min"
           />
           <span className="text-xs text-gray-600">to</span>
@@ -301,7 +301,7 @@ export function FilterRail({ filters, assignments, onApply, onClear }: FilterRai
                 removeDraftKey('activeMinutesMax');
               }
             }}
-            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-orange-500 focus:outline-none"
+            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-berkeley-500 focus:outline-none"
             data-testid="filter-active-minutes-max"
           />
         </div>
@@ -325,7 +325,7 @@ export function FilterRail({ filters, assignments, onApply, onClear }: FilterRai
                 removeDraftKey('totalMinutesMin');
               }
             }}
-            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-orange-500 focus:outline-none"
+            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-berkeley-500 focus:outline-none"
             data-testid="filter-total-minutes-min"
           />
           <span className="text-xs text-gray-600">to</span>
@@ -343,7 +343,7 @@ export function FilterRail({ filters, assignments, onApply, onClear }: FilterRai
                 removeDraftKey('totalMinutesMax');
               }
             }}
-            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-orange-500 focus:outline-none"
+            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-berkeley-500 focus:outline-none"
             data-testid="filter-total-minutes-max"
           />
         </div>
@@ -420,7 +420,7 @@ export function FilterRail({ filters, assignments, onApply, onClear }: FilterRai
               removeDraftKey('recorderVersion');
             }
           }}
-          className="w-full rounded-md border border-gray-300 px-2 py-1 text-sm placeholder-gray-400 focus:border-orange-500 focus:outline-none"
+          className="w-full rounded-md border border-gray-300 px-2 py-1 text-sm placeholder-gray-400 focus:border-berkeley-500 focus:outline-none"
           data-testid="filter-recorder-version"
         />
       </div>
@@ -448,7 +448,7 @@ export function FilterRail({ filters, assignments, onApply, onClear }: FilterRai
       <div className="flex gap-2">
         <button
           onClick={handleApply}
-          className="flex-1 rounded-md bg-orange-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-800"
+          className="flex-1 rounded-md bg-berkeley-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-berkeley-800"
           data-testid="filter-apply"
         >
           Apply

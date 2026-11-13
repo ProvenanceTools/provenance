@@ -193,7 +193,7 @@ export function AdminSemestersView() {
             <button
               type="submit"
               disabled={isCreating || slug.trim() === '' || displayName.trim() === ''}
-              className="rounded bg-orange-700 px-3 py-1.5 text-sm text-white hover:bg-orange-800 disabled:opacity-50"
+              className="rounded bg-berkeley-700 px-3 py-1.5 text-sm text-white hover:bg-berkeley-800 disabled:opacity-50"
               data-testid="create-semester-submit"
             >
               {isCreating ? 'Creating…' : 'Create semester'}
@@ -261,7 +261,7 @@ export function AdminSemestersView() {
                             disabled={
                               myEmail === null || (isAddingSelf && addingVars?.semesterId === s.id)
                             }
-                            className="text-xs text-orange-700 hover:underline disabled:opacity-50"
+                            className="text-xs text-berkeley-700 hover:underline disabled:opacity-50"
                             data-testid={`add-me-${s.slug}`}
                           >
                             {isAddingSelf && addingVars?.semesterId === s.id
@@ -271,7 +271,7 @@ export function AdminSemestersView() {
                         ) : (
                           <Link
                             to={`/s/${course?.slug ?? ''}/${s.slug}/settings`}
-                            className="text-xs text-orange-700 hover:underline"
+                            className="text-xs text-berkeley-700 hover:underline"
                           >
                             Open settings →
                           </Link>

@@ -3,10 +3,10 @@
   <rect x="0" y="0" width="1200" height="630" fill="#ffffff"/>
   <g transform="translate(150,200) scale(0.9)">
     <g>
-      <rect x="50" y="74" width="96" height="104" rx="34" fill="none" stroke="#18181b" stroke-width="18"/>
-      <rect x="110" y="74" width="96" height="104" rx="34" fill="none" stroke="#EA580C" stroke-width="18"/>
-      <g clip-path="url(#tc)"><rect x="50" y="74" width="96" height="104" rx="34" fill="none" stroke="#18181b" stroke-width="18"/></g>
+      <rect x="50" y="74" width="96" height="104" rx="34" fill="none" stroke="#002676" stroke-width="18"/>
+      <rect x="110" y="74" width="96" height="104" rx="34" fill="none" stroke="#FDB515" stroke-width="18"/>
+      <g clip-path="url(#tc)"><rect x="50" y="74" width="96" height="104" rx="34" fill="none" stroke="#002676" stroke-width="18"/></g>
     </g>
-    <text x="296" y="170" font-family='ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif' font-size="132" font-weight="600" letter-spacing="-4" fill="#18181b">Provenance</text>
+    <text x="296" y="170" font-family='ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif' font-size="132" font-weight="600" letter-spacing="-4" fill="#002676">Provenance</text>
   </g>
 </svg>

@@ -207,7 +207,7 @@ function UploadModal({ semesterId, onClose, onCommitted, triggerRef }: UploadMod
             <button
               onClick={handleCommit}
               disabled={isCommitting}
-              className="rounded bg-orange-700 px-3 py-1.5 text-sm text-white hover:bg-orange-800 disabled:opacity-50"
+              className="rounded bg-berkeley-700 px-3 py-1.5 text-sm text-white hover:bg-berkeley-800 disabled:opacity-50"
               data-testid="commit-btn"
               aria-label={
                 diff.to_delete > 0 && acceptDeletions
@@ -246,7 +246,7 @@ export function RosterView() {
         <button
           ref={uploadBtnRef}
           onClick={() => setShowUpload(true)}
-          className="rounded-md bg-orange-700 px-3 py-1.5 text-sm text-white hover:bg-orange-800"
+          className="rounded-md bg-berkeley-700 px-3 py-1.5 text-sm text-white hover:bg-berkeley-800"
           data-testid="upload-csv-btn"
         >
           Upload CSV

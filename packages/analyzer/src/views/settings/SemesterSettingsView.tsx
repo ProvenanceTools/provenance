@@ -266,7 +266,7 @@ export function SemesterSettingsView() {
         <button
           type="submit"
           disabled={isPending || regexError !== null || isLoading || !semesterId}
-          className="rounded-md bg-orange-700 px-4 py-2 text-sm text-white hover:bg-orange-800 disabled:opacity-50"
+          className="rounded-md bg-berkeley-700 px-4 py-2 text-sm text-white hover:bg-berkeley-800 disabled:opacity-50"
           data-testid="save-settings-btn"
         >
           {isPending ? 'Saving…' : 'Save Settings'}

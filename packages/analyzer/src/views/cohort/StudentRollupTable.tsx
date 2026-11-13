@@ -171,7 +171,7 @@ export function StudentRollupTable({
           if (!ws || !basePath) return <span className="text-xs text-gray-600">—</span>;
           return (
             <button
-              className="text-xs text-orange-700 hover:underline"
+              className="text-xs text-berkeley-700 hover:underline"
               onClick={(e) => {
                 e.stopPropagation();
                 void navigate(`${basePath}/sub/${ws.id}`);

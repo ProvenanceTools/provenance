@@ -229,7 +229,7 @@ export function CohortView() {
         data-testid="cohort-no-access"
       >
         <p>You don’t have access to this semester, or it doesn’t exist.</p>
-        <Link to="/home" className="text-orange-700 hover:underline">
+        <Link to="/home" className="text-berkeley-700 hover:underline">
           ← Back to home
         </Link>
       </div>

@@ -3,7 +3,7 @@
    An infinite drafting canvas. All 13 diagrams are plates on one surface; you
    pan, zoom, and fly between them. Chrome is set in IBM Plex Mono (an instrument
    readout); prose is Space Grotesk. Colour bands are semantic and shared with
-   the diagrams; brand orange marks only focus, the seal, and the active node.
+   the diagrams; the brand accent marks only focus, the seal, and the active node.
    ========================================================================== */
 
 @font-face {
@@ -60,8 +60,12 @@
   --mono: 'Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
   --disp: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
 
-  /* brand accent — brand/README.md: #EA580C light, #F97316 dark */
-  --brand: #ea580c;
+  /* brand accent — brand/README.md: Berkeley Blue on light, California Gold
+     on dark (gold is 1.78:1 on paper, so it never carries text there). The
+     mark's links take their own pair: blue/white ink, gold accent always. */
+  --brand: #002676;
+  --mark-ink: #002676;
+  --mark-accent: #fdb515;
 
   /* semantic bands, shared with the diagrams (light values) */
   --rec: #c2410c;
@@ -97,7 +101,8 @@
 }
 
 .arch-root[data-arch-theme='dark'] {
-  --brand: #f97316;
+  --brand: #fdb515;
+  --mark-ink: #ffffff;
   --rec: #f97316;
   --fmt: #9d7bf5;
   --tra: #17bfae;

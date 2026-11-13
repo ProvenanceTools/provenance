@@ -28,7 +28,9 @@ export function LandingView() {
       <div className="mx-auto max-w-2xl px-6 py-16">
         <header className="text-center">
           <ProvenanceMark className="mx-auto h-20 w-20" />
-          <h1 className="mt-4 text-4xl font-semibold tracking-tight text-gray-900">Provenance</h1>
+          <h1 className="mt-4 text-4xl font-semibold tracking-tight text-berkeley-700">
+            Provenance
+          </h1>
           <p className="mt-3 text-lg text-gray-700">See how a submission was actually written.</p>
           <p className="mx-auto mt-4 max-w-xl text-sm text-gray-600">
             Provenance is a VS Code extension for lower-division CS courses. While a student works,
@@ -40,7 +42,7 @@ export function LandingView() {
             {isAuthed ? (
               <Link
                 to="/home"
-                className="inline-flex w-full items-center justify-center rounded-md bg-orange-700 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-orange-800 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+                className="inline-flex w-full items-center justify-center rounded-md bg-berkeley-700 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-berkeley-800 focus:outline-none focus:ring-2 focus:ring-berkeley-500 focus:ring-offset-2"
               >
                 Open dashboard
                 <span aria-hidden="true" className="ml-1.5">
@@ -95,7 +97,7 @@ export function LandingView() {
           Students:{' '}
           <Link
             to="/faq"
-            className="font-medium text-orange-700 underline underline-offset-2 hover:text-orange-800 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+            className="font-medium text-berkeley-700 underline underline-offset-2 hover:text-berkeley-800 focus:outline-none focus:ring-2 focus:ring-berkeley-500 focus:ring-offset-2"
           >
             read the FAQ
           </Link>
@@ -105,7 +107,7 @@ export function LandingView() {
           Questions about Provenance?{' '}
           <a
             href={CONTACT_HREF}
-            className="font-medium text-orange-700 underline underline-offset-2 hover:text-orange-800 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+            className="font-medium text-berkeley-700 underline underline-offset-2 hover:text-berkeley-800 focus:outline-none focus:ring-2 focus:ring-berkeley-500 focus:ring-offset-2"
           >
             reach out
           </a>

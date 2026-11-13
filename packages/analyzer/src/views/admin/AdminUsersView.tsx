@@ -117,7 +117,7 @@ export function AdminUsersView() {
                     <td className="px-4 py-2">
                       <Link
                         to={`/admin/users/${u.id}`}
-                        className="text-xs font-medium text-orange-700 hover:underline"
+                        className="text-xs font-medium text-berkeley-700 hover:underline"
                       >
                         {u.display_name ?? u.email}
                       </Link>
@@ -145,7 +145,7 @@ export function AdminUsersView() {
                         <button
                           onClick={() => handleViewAs(u)}
                           disabled={isStartingViewAs}
-                          className="rounded border border-orange-300 px-2.5 py-1 text-xs text-orange-700 hover:bg-orange-50 disabled:opacity-50"
+                          className="rounded border border-berkeley-300 px-2.5 py-1 text-xs text-berkeley-700 hover:bg-berkeley-50 disabled:opacity-50"
                           data-testid={`view-as-btn-${u.id}`}
                         >
                           View as

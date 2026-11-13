@@ -43,14 +43,14 @@ function EditRow({ assignment, semesterId, onDone }: EditRowProps) {
         type="text"
         value={label}
         onChange={(e) => setLabel(e.target.value)}
-        className="rounded border border-orange-400 px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-orange-400"
+        className="rounded border border-berkeley-400 px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-berkeley-400"
         autoFocus
         data-testid={`label-input-${assignment.id}`}
       />
       <button
         type="submit"
         disabled={isPending || label.trim() === ''}
-        className="rounded bg-orange-700 px-2.5 py-0.5 text-xs text-white hover:bg-orange-800 disabled:opacity-50"
+        className="rounded bg-berkeley-700 px-2.5 py-0.5 text-xs text-white hover:bg-berkeley-800 disabled:opacity-50"
         data-testid={`label-save-${assignment.id}`}
       >
         {isPending ? 'Saving…' : 'Save'}
@@ -123,7 +123,7 @@ function CreateAssignmentForm({ semesterId }: { semesterId: string }) {
         <button
           type="submit"
           disabled={isPending || assignmentIdStr.trim() === ''}
-          className="rounded bg-orange-700 px-3 py-1.5 text-sm text-white hover:bg-orange-800 disabled:opacity-50"
+          className="rounded bg-berkeley-700 px-3 py-1.5 text-sm text-white hover:bg-berkeley-800 disabled:opacity-50"
           data-testid="create-assignment-submit"
         >
           {isPending ? 'Creating…' : 'Create'}
@@ -199,7 +199,7 @@ export function AssignmentsView() {
                       ) : (
                         <button
                           onClick={() => setEditingId(a.id)}
-                          className="text-left text-sm text-gray-900 hover:text-orange-700 hover:underline"
+                          className="text-left text-sm text-gray-900 hover:text-berkeley-700 hover:underline"
                           data-testid={`label-${a.id}`}
                         >
                           {a.label}

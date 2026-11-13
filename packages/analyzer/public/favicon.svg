@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Provenance">
   <style>
-    .link { stroke: #18181b; }
-    .accent { stroke: #EA580C; }
+    .link { stroke: #002676; }
+    .accent { stroke: #FDB515; }
     @media (prefers-color-scheme: dark) {
-      .link { stroke: #fafafa; }
-      .accent { stroke: #F97316; }
+      .link { stroke: #FFFFFF; }
+      .accent { stroke: #FDB515; }
     }
   </style>
   <defs>
