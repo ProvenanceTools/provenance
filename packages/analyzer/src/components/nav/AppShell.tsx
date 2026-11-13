@@ -16,6 +16,7 @@ import { SemesterSwitcher } from './SemesterSwitcher.js';
 import { ViewAsBanner } from './ViewAsBanner.js';
 import { ProtectedModeBanner } from './ProtectedModeBanner.js';
 import { ProvenanceMark } from './ProvenanceMark.js';
+import { initials } from '../../lib/initials.js';
 import { ChevronDown, KeyRound, LogOut, Shield } from 'lucide-react';
 import {
   DropdownMenu,
@@ -135,18 +136,31 @@ export function AppShell({ children }: AppShellProps) {
               >
                 <span
                   aria-hidden="true"
-                  className="flex h-7 w-7 items-center justify-center rounded-full bg-berkeley-100 text-xs font-semibold uppercase text-berkeley-700"
+                  className="flex h-7 w-7 items-center justify-center rounded-full bg-berkeley-100 text-[11px] font-semibold uppercase text-berkeley-700"
                 >
-                  {me.user.email.charAt(0)}
+                  {initials(me.user.display_name, me.user.email)}
                 </span>
-                <span className="hidden max-w-[14rem] truncate lg:inline">{me.user.email}</span>
+                <span className="hidden max-w-[14rem] truncate lg:inline">
+                  {me.user.display_name ?? me.user.email}
+                </span>
                 <ChevronDown className="h-4 w-4 text-gray-500" aria-hidden="true" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-60">
               <DropdownMenuLabel className="font-normal">
                 <div className="text-xs text-muted-foreground">Signed in as</div>
-                <div className="truncate text-sm font-medium">{me.user.email}</div>
+                {me.user.display_name && (
+                  <div className="truncate text-sm font-medium">{me.user.display_name}</div>
+                )}
+                <div
+                  className={
+                    me.user.display_name
+                      ? 'truncate text-xs text-muted-foreground'
+                      : 'truncate text-sm font-medium'
+                  }
+                >
+                  {me.user.email}
+                </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               {isSuperadmin && (
