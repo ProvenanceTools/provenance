@@ -13,6 +13,8 @@ import { useNavigate } from 'react-router-dom';
 import { useStartGradescopeIngest } from '../../api/queries.js';
 import type { GradescopeIngestResponse } from '@provenance/shared/api-schemas';
 import { ApiError } from '../../api/client.js';
+import { UploadCloud } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 interface GradescopeUploadProps {
   /** Course-qualified base path, e.g. `/s/cs61a/sp25`, used for post-ingest navigation. */
@@ -94,10 +96,10 @@ export function GradescopeUpload({ basePath, semesterId }: GradescopeUploadProps
         role="button"
         tabIndex={0}
         data-testid="gs-drop-zone"
-        className={`flex flex-col items-center justify-center rounded-lg border-2 border-dashed px-6 py-10 transition-colors ${
+        className={`flex flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed px-6 py-8 text-center transition-colors ${
           isDragOver
             ? 'border-berkeley-500 bg-berkeley-50'
-            : 'border-gray-300 bg-gray-50 hover:border-gray-400'
+            : 'border-gray-300 bg-gray-50/60 hover:border-berkeley-300 hover:bg-berkeley-50/40'
         }`}
         onDrop={handleDrop}
         onDragOver={(e) => {
@@ -110,11 +112,12 @@ export function GradescopeUpload({ basePath, semesterId }: GradescopeUploadProps
           if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click();
         }}
       >
-        <p className="text-sm text-gray-600">
+        <UploadCloud className="mb-1 h-6 w-6 text-gray-400" aria-hidden />
+        <p className="text-sm text-gray-700">
           Drop the <span className="font-medium">Gradescope export .zip</span> here, or click to
           select
         </p>
-        <p className="mt-1 text-xs text-gray-400">
+        <p className="text-xs text-muted-foreground">
           The ZIP you download from Gradescope’s “Download Submissions”. The roster is populated
           automatically from it.
         </p>
@@ -132,12 +135,12 @@ export function GradescopeUpload({ basePath, semesterId }: GradescopeUploadProps
       {file && (
         <p className="mt-3 flex items-center gap-2 text-xs text-gray-700" data-testid="gs-selected">
           <span className="font-mono">{file.name}</span>
-          <span className="text-gray-400">({(file.size / 1024 / 1024).toFixed(1)} MB)</span>
+          <span className="text-muted-foreground">({(file.size / 1024 / 1024).toFixed(1)} MB)</span>
         </p>
       )}
 
       {validationError && (
-        <p className="mt-2 text-xs text-red-600" data-testid="gs-validation-error">
+        <p className="mt-3 text-xs text-red-600" data-testid="gs-validation-error">
           {validationError}
         </p>
       )}
@@ -158,7 +161,7 @@ export function GradescopeUpload({ basePath, semesterId }: GradescopeUploadProps
       )}
 
       {uploadError && (
-        <p className="mt-2 text-xs text-red-600" data-testid="gs-upload-error">
+        <p className="mt-3 text-xs text-red-600" data-testid="gs-upload-error">
           {uploadError}
         </p>
       )}
@@ -188,14 +191,16 @@ export function GradescopeUpload({ basePath, semesterId }: GradescopeUploadProps
         </div>
       )}
 
-      <button
-        type="submit"
-        disabled={isPending || file === null || validationError !== null || !semesterId}
-        className="mt-4 rounded-md bg-berkeley-700 px-4 py-2 text-sm text-white hover:bg-berkeley-800 disabled:opacity-50"
-        data-testid="gs-upload-button"
-      >
-        {isPending ? 'Uploading…' : 'Upload Gradescope export'}
-      </button>
+      <div className="mt-4 flex justify-end">
+        <Button
+          type="submit"
+          size="sm"
+          disabled={isPending || file === null || validationError !== null || !semesterId}
+          data-testid="gs-upload-button"
+        >
+          {isPending ? 'Uploading…' : 'Upload Gradescope export'}
+        </Button>
+      </div>
     </form>
   );
 }

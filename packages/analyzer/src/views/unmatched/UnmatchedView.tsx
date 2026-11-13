@@ -24,6 +24,17 @@ import {
 } from '../../api/queries.js';
 import type { IngestFileSummary } from '@provenance/shared/api-schemas';
 import { ApiError } from '../../api/client.js';
+import { PageContainer, PageHeader, Panel, EmptyState } from '@/components/layout/Page';
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { Combobox, type ComboboxOption } from '../../components/ui/combobox.js';
 
 // ---------------------------------------------------------------------------
@@ -159,13 +170,8 @@ function AttachModal({ file, semesterId, onClose, onAttached }: AttachModalProps
         <p className="mb-4 text-xs text-gray-500 font-mono break-all">{file.original_filename}</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label
-              htmlFor="attach-student"
-              className="block text-xs font-medium text-gray-700 mb-1"
-            >
-              Student
-            </label>
+          <div className="space-y-1.5">
+            <Label htmlFor="attach-student">Student</Label>
             <Combobox
               id="attach-student"
               data-testid="student-select"
@@ -184,13 +190,8 @@ function AttachModal({ file, semesterId, onClose, onAttached }: AttachModalProps
             />
           </div>
 
-          <div>
-            <label
-              htmlFor="attach-assignment"
-              className="block text-xs font-medium text-gray-700 mb-1"
-            >
-              Assignment
-            </label>
+          <div className="space-y-1.5">
+            <Label htmlFor="attach-assignment">Assignment</Label>
             <Combobox
               id="attach-assignment"
               data-testid="assignment-select"
@@ -239,20 +240,16 @@ function AttachModal({ file, semesterId, onClose, onAttached }: AttachModalProps
           )}
 
           <div className="flex gap-2 justify-end">
-            <button
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
               onClick={onClose}
               disabled={isPending}
-              className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             >
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={submitDisabled}
-              className="rounded bg-berkeley-700 px-3 py-1.5 text-sm text-white hover:bg-berkeley-800 disabled:opacity-50"
-              data-testid="attach-submit"
-            >
+            </Button>
+            <Button type="submit" size="sm" disabled={submitDisabled} data-testid="attach-submit">
               {isPending
                 ? 'Attaching…'
                 : confirmingOverwrite
@@ -260,7 +257,7 @@ function AttachModal({ file, semesterId, onClose, onAttached }: AttachModalProps
                   : hasConflict
                     ? 'Attach (will supersede)'
                     : 'Attach'}
-            </button>
+            </Button>
           </div>
         </form>
 
@@ -329,84 +326,108 @@ export function UnmatchedView() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8">
-      <h1 className="mb-6 text-xl font-semibold text-gray-900">Unmatched Files</h1>
+    <PageContainer>
+      <PageHeader
+        title="Unmatched Files"
+        meta={
+          data && data.items.length > 0
+            ? `${data.items.length} ${data.items.length === 1 ? 'file' : 'files'}`
+            : undefined
+        }
+        description="Uploaded files that could not be matched to a student and assignment. Attach each one manually, or discard it."
+      />
 
-      {isLoading && <div className="py-8 text-center text-sm text-gray-400">Loading…</div>}
+      {isLoading && (
+        <Panel>
+          <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+        </Panel>
+      )}
       {error && (
-        <div className="py-8 text-center text-sm text-red-500" data-testid="unmatched-error">
-          Failed to load unmatched files.
-        </div>
+        <Panel>
+          <p className="py-6 text-center text-sm text-red-600" data-testid="unmatched-error">
+            Failed to load unmatched files.
+          </p>
+        </Panel>
       )}
 
       {!isLoading && !error && semesterId && (
         <>
           {(data?.items ?? []).length === 0 ? (
-            <div className="py-8 text-center text-sm text-gray-400" data-testid="unmatched-empty">
-              No unmatched files. Great job!
-            </div>
+            <Panel>
+              <div data-testid="unmatched-empty">
+                <EmptyState title="No unmatched files. Great job!" />
+              </div>
+            </Panel>
           ) : (
-            <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-              <table className="w-full text-sm" data-testid="unmatched-table">
-                <thead className="bg-gray-50 text-xs text-gray-500">
-                  <tr>
-                    <th className="px-4 py-2 text-left">Filename</th>
-                    <th className="px-4 py-2 text-right">Size</th>
-                    <th className="px-4 py-2 text-left">Error</th>
-                    <th className="px-4 py-2 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
+            <Panel flush>
+              <Table data-testid="unmatched-table">
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>Filename</TableHead>
+                    <TableHead className="text-right">Size</TableHead>
+                    <TableHead>Error</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {data?.items.map((file) => (
-                    <tr key={file.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-2 font-mono text-xs">{file.original_filename}</td>
-                      <td className="px-4 py-2 text-xs text-gray-400 text-right">
+                    <TableRow key={file.id}>
+                      <TableCell className="font-mono text-xs">{file.original_filename}</TableCell>
+                      <TableCell className="text-right text-xs text-muted-foreground">
                         {(file.size_bytes / 1024).toFixed(1)} KB
-                      </td>
-                      <td className="px-4 py-2 text-xs text-gray-500">
+                      </TableCell>
+                      <TableCell className="text-xs text-gray-500">
                         {file.error ? `${file.error.phase}: ${file.error.cause}` : '—'}
-                      </td>
-                      <td className="px-4 py-2 text-right">
+                      </TableCell>
+                      <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">
-                          <button
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8"
                             onClick={() => setAttachFile(file)}
-                            className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
                             data-testid={`attach-btn-${file.id}`}
                           >
                             Attach
-                          </button>
+                          </Button>
                           {discardConfirm === file.id ? (
-                            <span className="flex items-center gap-1">
-                              <button
+                            <span className="flex items-center gap-2">
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                className="h-8"
                                 onClick={() => handleDiscard(file.id)}
-                                className="rounded bg-red-600 px-2.5 py-1 text-xs text-white hover:bg-red-700"
                                 data-testid={`discard-confirm-${file.id}`}
                               >
                                 Confirm
-                              </button>
-                              <button
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8"
                                 onClick={() => setDiscardConfirm(null)}
-                                className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
                               >
                                 Cancel
-                              </button>
+                              </Button>
                             </span>
                           ) : (
-                            <button
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 border-red-300 text-red-700 hover:bg-red-50 hover:text-red-700"
                               onClick={() => setDiscardConfirm(file.id)}
-                              className="rounded border border-red-300 px-2.5 py-1 text-xs text-red-700 hover:bg-red-50"
                               data-testid={`discard-btn-${file.id}`}
                             >
                               Discard
-                            </button>
+                            </Button>
                           )}
                         </div>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </TableBody>
+              </Table>
+            </Panel>
           )}
         </>
       )}
@@ -420,6 +441,6 @@ export function UnmatchedView() {
           onAttached={() => setAttachFile(null)}
         />
       )}
-    </div>
+    </PageContainer>
   );
 }
