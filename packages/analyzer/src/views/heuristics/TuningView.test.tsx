@@ -1,21 +1,28 @@
 /**
- * TuningView tests — Phase 24.
+ * TuningView tests — Phase 24, redesigned 2026-11.
  *
- * Tests:
- * 1. Renders loading state while config loads.
- * 2. Renders heuristic list once config loads.
- * 3. Slider change triggers dry-run after 300ms debounce (fake timers).
- * 4. Slider change within 300ms does NOT trigger dry-run (debounce suppresses).
- * 5. "Save & Recompute" navigates with recompute_job param on success.
+ * Covers:
+ * - Loading state; the full ALL_FLAG_IDS row set; accessible names; the
+ *   cross-submission and inert-heuristic control rules.
+ * - No dry-run on page open (it compared the active config with itself).
+ * - Fast-path candidates (weights / turning off) auto-preview after a 400ms
+ *   debounce; rapid edits collapse to one request.
+ * - A candidate that turns a disabled heuristic ON never auto-previews; the
+ *   footer explains why and offers an explicit [Preview impact].
+ * - A result from a superseded request never overwrites a newer one.
+ * - Footer only with unsaved changes; per-row reset; Discard.
+ * - Details dialog: contributors label logic, zero-delta movers excluded.
+ * - Save & recompute: recompute_job param + progress banner; retired ids
+ *   round-trip untouched.
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { mswServer } from '../../test-setup.js';
-import { TuningView } from './TuningView.js';
+import { TuningView, AUTO_PREVIEW_DEBOUNCE_MS } from './TuningView.js';
 import {
   ALL_FLAG_IDS,
   CROSS_SUBMISSION_HEURISTIC_IDS,
@@ -76,6 +83,15 @@ const DEFAULT_ACTIVE_CONFIG = {
   is_active: true,
 };
 
+/** Same as the default, but `large_paste` is disabled in the ACTIVE config. */
+const ACTIVE_CONFIG_LARGE_PASTE_OFF = {
+  ...DEFAULT_ACTIVE_CONFIG,
+  config: {
+    ...DEFAULT_CONFIG,
+    per_flag: { ...DEFAULT_CONFIG.per_flag, large_paste: { enabled: false, weight: 1.0 } },
+  },
+};
+
 const MOVER_ALICE = {
   id: '30000000-0000-0000-0000-000000000001',
   sid: '3031234',
@@ -114,41 +130,68 @@ const DRY_RUN_DIFF = {
   },
 };
 
+type Mover = (typeof DRY_RUN_DIFF.diff.top_movers)[number];
+
+function diffWith(overrides: Partial<typeof DRY_RUN_DIFF.diff>) {
+  return { ...DRY_RUN_DIFF, diff: { ...DRY_RUN_DIFF.diff, ...overrides } };
+}
+
+const COMMIT_RESPONSE = {
+  new_config: {
+    id: 'cc000000-0000-0000-0000-000000000002',
+    version: 4,
+    set_at: '2025-01-11T00:00:00.000Z',
+    note: '',
+    is_active: true,
+  },
+  recompute_job: {
+    id: 'a1000000-0000-4000-8000-000000000099',
+    status: 'queued',
+  },
+};
+
 // ---------------------------------------------------------------------------
 // MSW setup helpers
 // ---------------------------------------------------------------------------
 
-function setupHandlers() {
+interface Recorded {
+  dryRuns: Record<string, unknown>[];
+  commits: Record<string, unknown>[];
+}
+
+/**
+ * Registers the default handlers and returns a live record of every dry-run
+ * and commit body the view sends. `dryRun` may answer per call (1-based).
+ */
+function setupHandlers(
+  opts: {
+    activeConfig?: typeof DEFAULT_ACTIVE_CONFIG;
+    dryRun?: (callNumber: number) => unknown | Promise<unknown>;
+  } = {},
+): Recorded {
+  const recorded: Recorded = { dryRuns: [], commits: [] };
   mswServer.use(
     meWithMembershipsHandler([defaultMembership]),
     http.get(`/api/v1/semesters/${DEFAULT_SEMESTER_ID}/heuristic-config`, () =>
-      HttpResponse.json(DEFAULT_ACTIVE_CONFIG),
+      HttpResponse.json(opts.activeConfig ?? DEFAULT_ACTIVE_CONFIG),
     ),
     http.put(`/api/v1/semesters/${DEFAULT_SEMESTER_ID}/heuristic-config`, async ({ request }) => {
       const url = new URL(request.url);
-      const isDryRun = url.searchParams.get('dryRun') === 'true';
-      if (isDryRun) {
-        return HttpResponse.json(DRY_RUN_DIFF);
+      const body = (await request.json()) as Record<string, unknown>;
+      if (url.searchParams.get('dryRun') === 'true') {
+        recorded.dryRuns.push(body);
+        const answer = opts.dryRun ? await opts.dryRun(recorded.dryRuns.length) : DRY_RUN_DIFF;
+        return HttpResponse.json(answer as Record<string, unknown>);
       }
-      return HttpResponse.json({
-        new_config: {
-          id: 'cc000000-0000-0000-0000-000000000002',
-          version: 4,
-          set_at: '2025-01-11T00:00:00.000Z',
-          note: '',
-          is_active: true,
-        },
-        recompute_job: {
-          id: 'a1000000-0000-4000-8000-000000000099',
-          status: 'queued',
-        },
-      });
+      recorded.commits.push(body);
+      return HttpResponse.json(COMMIT_RESPONSE);
     }),
   );
+  return recorded;
 }
 
 // ---------------------------------------------------------------------------
-// Render helper
+// Render helpers
 // ---------------------------------------------------------------------------
 
 function renderTuningView(
@@ -168,9 +211,10 @@ function renderTuningView(
   );
 }
 
-// Helper: render, wait for heuristic list to load, return component handles.
-async function renderAndWaitForLoad() {
-  setupHandlers();
+// Helper: render, wait for heuristic list to load, return handles + the
+// recorded request bodies.
+async function renderAndWaitForLoad(opts: Parameters<typeof setupHandlers>[0] = {}) {
+  const recorded = setupHandlers(opts);
   const result = renderTuningView();
   await waitFor(
     () => {
@@ -178,7 +222,35 @@ async function renderAndWaitForLoad() {
     },
     { timeout: 5000 },
   );
-  return result;
+  return { ...result, recorded };
+}
+
+/**
+ * Fake timers that still advance with real time, so React Query's and MSW's
+ * internal scheduling (and `waitFor`) keep working while the test controls
+ * the debounce explicitly.
+ */
+function useDebounceTimers() {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+}
+
+async function advance(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
+function setWeight(id: string, value: string) {
+  fireEvent.change(screen.getByTestId(`slider-${id}`), { target: { value } });
+}
+
+/** Make a fast-path edit, let the debounce fire, and open the Details dialog. */
+async function previewAndOpenDetails() {
+  setWeight('large_paste', '1.5');
+  await advance(AUTO_PREVIEW_DEBOUNCE_MS);
+  const details = await screen.findByTestId('details-btn', {}, { timeout: 5000 });
+  fireEvent.click(details);
+  return screen.findByTestId('impact-details');
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +293,23 @@ describe('TuningView', () => {
       expect(screen.getByTestId(`toggle-${id}`)).toBeInTheDocument();
     }
     expect(screen.getAllByRole('slider')).toHaveLength(ALL_FLAG_IDS.length);
+  });
+
+  it('groups rows into event-stream, integrity, and cross-submission panels with humanized names', async () => {
+    await renderAndWaitForLoad();
+    const eventStream = screen.getByTestId('heuristic-group-event-stream');
+    const integrity = screen.getByTestId('heuristic-group-integrity');
+    const cross = screen.getByTestId('heuristic-group-cross-submission');
+
+    expect(within(eventStream).getByTestId('slider-large_paste')).toBeInTheDocument();
+    expect(within(integrity).getByTestId('slider-chain_broken')).toBeInTheDocument();
+    for (const id of CROSS_SUBMISSION_HEURISTIC_IDS) {
+      expect(within(cross).getByTestId(`slider-${id}`)).toBeInTheDocument();
+    }
+    // Humanized name, with the raw id beneath it.
+    const row = screen.getByTestId('heuristic-row-large_paste');
+    expect(within(row).getByText('Large paste')).toBeInTheDocument();
+    expect(within(row).getByText('large_paste')).toBeInTheDocument();
   });
 
   it('gives each weight slider and enable checkbox an accessible name', async () => {
@@ -313,37 +402,220 @@ describe('TuningView', () => {
     expect(screen.queryByTestId('inert-note-large_paste')).not.toBeInTheDocument();
   });
 
-  it('slider change triggers dry-run after 300ms debounce', async () => {
-    let dryRunCalled = false;
+  // -------------------------------------------------------------------------
+  // When dry-runs fire
+  // -------------------------------------------------------------------------
 
-    // Load first with default handlers (setupHandlers registers PUT)
-    await renderAndWaitForLoad();
+  it('does not fire a dry-run on page open', async () => {
+    // The old page dry-ran the active config against itself on load — a
+    // heavy server call with nothing to show.
+    useDebounceTimers();
+    const { recorded } = await renderAndWaitForLoad();
+    await advance(AUTO_PREVIEW_DEBOUNCE_MS * 5);
+    expect(recorded.dryRuns).toHaveLength(0);
+  });
 
-    // Override PUT handler after load (MSW last-registered wins)
-    mswServer.use(
-      http.put(`/api/v1/semesters/${DEFAULT_SEMESTER_ID}/heuristic-config`, async ({ request }) => {
-        const url = new URL(request.url);
-        if (url.searchParams.get('dryRun') === 'true') {
-          dryRunCalled = true;
-          return HttpResponse.json(DRY_RUN_DIFF);
-        }
-        return HttpResponse.json({});
-      }),
+  it('auto-runs a dry-run 400ms after a weight change, and not before', async () => {
+    useDebounceTimers();
+    const { recorded } = await renderAndWaitForLoad();
+
+    setWeight('large_paste', '1.5');
+
+    // Well inside the debounce window: nothing sent yet.
+    await advance(AUTO_PREVIEW_DEBOUNCE_MS - 100);
+    expect(recorded.dryRuns).toHaveLength(0);
+
+    await advance(100);
+    await waitFor(() => expect(recorded.dryRuns).toHaveLength(1), { timeout: 2000 });
+    const perFlag = recorded.dryRuns[0]!['per_flag'] as Record<string, { weight: number }>;
+    expect(perFlag['large_paste']!.weight).toBe(1.5);
+
+    // The footer then carries the honest summary.
+    expect(await screen.findByTestId('impact-summary')).toHaveTextContent(
+      '2 submissions change tier · 1 score moves by more than 0.05',
     );
+  }, 10000);
 
-    const slider = screen.getByTestId('slider-large_paste');
-    fireEvent.change(slider, { target: { value: '1.5' } });
+  it('collapses rapid slider changes into a single dry-run (debounce)', async () => {
+    useDebounceTimers();
+    const { recorded } = await renderAndWaitForLoad();
 
-    // Immediately after change: no dry-run yet
-    expect(dryRunCalled).toBe(false);
+    // Three rapid changes, each well within the debounce window.
+    setWeight('large_paste', '1.2');
+    await advance(100);
+    setWeight('large_paste', '1.4');
+    await advance(100);
+    setWeight('large_paste', '1.6');
 
-    // Wait for the 300ms debounce + network round-trip (real timers)
-    await waitFor(
-      () => {
-        expect(dryRunCalled).toBe(true);
+    await advance(AUTO_PREVIEW_DEBOUNCE_MS);
+    await waitFor(() => expect(recorded.dryRuns).toHaveLength(1), { timeout: 2000 });
+
+    // Let any stray timer fire: still exactly 1 call (not 3), for the last value.
+    await advance(AUTO_PREVIEW_DEBOUNCE_MS * 3);
+    expect(recorded.dryRuns).toHaveLength(1);
+    const perFlag = recorded.dryRuns[0]!['per_flag'] as Record<string, { weight: number }>;
+    expect(perFlag['large_paste']!.weight).toBe(1.6);
+  }, 10000);
+
+  it('auto-previews turning a heuristic off (server fast path)', async () => {
+    useDebounceTimers();
+    const { recorded } = await renderAndWaitForLoad();
+
+    fireEvent.click(screen.getByTestId('toggle-large_paste'));
+    await advance(AUTO_PREVIEW_DEBOUNCE_MS);
+    await waitFor(() => expect(recorded.dryRuns).toHaveLength(1), { timeout: 2000 });
+    expect(screen.queryByTestId('reenable-note')).not.toBeInTheDocument();
+  }, 10000);
+
+  it('does not auto-run when a heuristic goes off → on; offers an explicit Preview impact instead', async () => {
+    useDebounceTimers();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { recorded } = await renderAndWaitForLoad({
+      activeConfig: ACTIVE_CONFIG_LARGE_PASTE_OFF,
+      dryRun: async () => {
+        await gate;
+        return DRY_RUN_DIFF;
       },
-      { timeout: 2000 },
+    });
+
+    // Re-enable a heuristic that is disabled in the active config…
+    fireEvent.click(screen.getByTestId('toggle-large_paste'));
+    // …and also move a weight, which on its own would be fast-path.
+    setWeight('external_edits', '1.5');
+
+    await advance(AUTO_PREVIEW_DEBOUNCE_MS * 5);
+    expect(recorded.dryRuns).toHaveLength(0);
+
+    expect(screen.getByTestId('reenable-note')).toHaveTextContent(
+      'Re-enabling Large paste requires re-running heuristics on every submission (can take minutes).',
     );
+
+    // Explicit preview: spinner while pending, then the summary.
+    fireEvent.click(screen.getByTestId('preview-impact-btn'));
+    expect(await screen.findByTestId('impact-computing')).toHaveTextContent('Computing impact…');
+    await waitFor(() => expect(recorded.dryRuns).toHaveLength(1), { timeout: 2000 });
+    // Save is held while the current candidate's impact is still computing.
+    expect(screen.getByTestId('save-recompute-btn')).toBeDisabled();
+
+    release();
+    expect(await screen.findByTestId('impact-summary')).toBeInTheDocument();
+    expect(screen.queryByTestId('impact-computing')).not.toBeInTheDocument();
+    expect(screen.getByTestId('save-recompute-btn')).not.toBeDisabled();
+  }, 10000);
+
+  it('never lets a superseded dry-run result overwrite a newer one', async () => {
+    useDebounceTimers();
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const { recorded } = await renderAndWaitForLoad({
+      dryRun: async (n) => {
+        if (n === 1) {
+          await firstGate;
+          return diffWith({ submissions_with_tier_change: 111 });
+        }
+        return diffWith({ submissions_with_tier_change: 7 });
+      },
+    });
+
+    // Request 1 (held open), then request 2 for a newer candidate.
+    setWeight('large_paste', '1.5');
+    await advance(AUTO_PREVIEW_DEBOUNCE_MS);
+    await waitFor(() => expect(recorded.dryRuns).toHaveLength(1), { timeout: 2000 });
+    setWeight('large_paste', '1.8');
+    await advance(AUTO_PREVIEW_DEBOUNCE_MS);
+    await waitFor(() => expect(recorded.dryRuns).toHaveLength(2), { timeout: 2000 });
+    expect(await screen.findByTestId('impact-summary')).toHaveTextContent(
+      /^7 submissions change tier/,
+    );
+
+    // The stale request lands last; the newer result must stand.
+    releaseFirst();
+    await advance(50);
+    await waitFor(() => expect(screen.getByTestId('impact-summary')).toBeInTheDocument());
+    expect(screen.getByTestId('impact-summary')).toHaveTextContent(/^7 submissions change tier/);
+    expect(screen.queryByText(/111 submissions/)).not.toBeInTheDocument();
+  }, 10000);
+
+  // -------------------------------------------------------------------------
+  // Unsaved-changes footer, per-row reset, Discard
+  // -------------------------------------------------------------------------
+
+  it('hides the footer when there are no unsaved changes', async () => {
+    await renderAndWaitForLoad();
+    expect(screen.queryByTestId('tuning-footer')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('save-recompute-btn')).not.toBeInTheDocument();
+
+    setWeight('large_paste', '1.5');
+    expect(screen.getByTestId('tuning-footer')).toBeInTheDocument();
+    expect(screen.getByTestId('unsaved-count')).toHaveTextContent('1 unsaved change');
+
+    // Dragging back to the active value is not a change.
+    setWeight('large_paste', '1');
+    expect(screen.queryByTestId('tuning-footer')).not.toBeInTheDocument();
+  });
+
+  it('shows a modified dot and per-row reset only on a changed row, and reset restores it', async () => {
+    await renderAndWaitForLoad();
+    expect(screen.queryByTestId('modified-large_paste')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('reset-large_paste')).not.toBeInTheDocument();
+
+    setWeight('large_paste', '1.5');
+    fireEvent.click(screen.getByTestId('toggle-external_edits'));
+    expect(screen.getByTestId('modified-large_paste')).toBeInTheDocument();
+    expect(screen.getByTestId('reset-large_paste')).toBeInTheDocument();
+    expect(screen.queryByTestId('reset-low_typing_high_output')).not.toBeInTheDocument();
+    expect(screen.getByTestId('unsaved-count')).toHaveTextContent('2 unsaved changes');
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Reset Large paste to the active setting' }),
+    );
+    expect(screen.getByTestId('slider-large_paste')).toHaveValue('1');
+    expect(screen.queryByTestId('modified-large_paste')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('reset-large_paste')).not.toBeInTheDocument();
+    // Only the other row stays modified.
+    expect(screen.getByTestId('unsaved-count')).toHaveTextContent('1 unsaved change');
+
+    fireEvent.click(screen.getByTestId('reset-external_edits'));
+    expect(screen.getByTestId('toggle-external_edits')).toBeChecked();
+    expect(screen.queryByTestId('tuning-footer')).not.toBeInTheDocument();
+  });
+
+  it('Discard restores every row to the active config, cancels the pending preview, and hides the footer', async () => {
+    useDebounceTimers();
+    const { recorded } = await renderAndWaitForLoad();
+
+    setWeight('large_paste', '1.5');
+    fireEvent.click(screen.getByTestId('toggle-external_edits'));
+    expect(screen.getByTestId('unsaved-count')).toHaveTextContent('2 unsaved changes');
+
+    fireEvent.click(screen.getByTestId('discard-btn'));
+    expect(screen.getByTestId('slider-large_paste')).toHaveValue('1');
+    expect(screen.getByTestId('toggle-external_edits')).toBeChecked();
+    expect(screen.queryByTestId('tuning-footer')).not.toBeInTheDocument();
+
+    // The debounced preview for the discarded candidate never fires.
+    await advance(AUTO_PREVIEW_DEBOUNCE_MS * 3);
+    expect(recorded.dryRuns).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Details dialog
+  // -------------------------------------------------------------------------
+
+  it('Details shows the score histogram and the movers table', async () => {
+    useDebounceTimers();
+    await renderAndWaitForLoad();
+    const dialog = await previewAndOpenDetails();
+    expect(within(dialog).getByTestId('score-histogram')).toBeInTheDocument();
+    const table = within(dialog).getByTestId('top-movers');
+    expect(within(table).getByText('hw1')).toBeInTheDocument();
+    expect(within(table).getByText('3.0 → 5.0')).toBeInTheDocument();
+    expect(within(table).getByText('+2.0')).toBeInTheDocument();
   }, 10000);
 
   it('names every contributor of a group mover, not just the submitter of record', async () => {
@@ -351,108 +623,67 @@ describe('TuningView', () => {
     // the score belongs to the SCOPE. Naming only `student` charged the swing
     // to one partner of a pair — and which partner that was had been decided by
     // an ingest race.
-    //
-    // The override is registered BEFORE render because the view fires a dry run
-    // on load to draw the "before" histogram; MSW takes the last handler
-    // registered, so this one answers that first call.
-    setupHandlers();
-    mswServer.use(
-      http.put(`/api/v1/semesters/${DEFAULT_SEMESTER_ID}/heuristic-config`, async ({ request }) => {
-        const url = new URL(request.url);
-        if (url.searchParams.get('dryRun') !== 'true') return HttpResponse.json({});
-        return HttpResponse.json({
-          ...DRY_RUN_DIFF,
-          diff: {
-            ...DRY_RUN_DIFF.diff,
-            top_movers: [
-              {
-                ...DRY_RUN_DIFF.diff.top_movers[0],
-                contributors: [
-                  makeSoloContributor(MOVER_ALICE, MOVER_NO_SCORE),
-                  makeSoloContributor(MOVER_BOB, MOVER_NO_SCORE),
-                ],
-              },
-            ],
-          },
-        });
-      }),
-    );
-    renderTuningView();
-
-    await waitFor(
-      () => {
-        expect(screen.getByTestId('top-movers')).toBeInTheDocument();
-      },
-      { timeout: 5000 },
-    );
-    expect(screen.getByText('Alice, Bob')).toBeInTheDocument();
+    useDebounceTimers();
+    await renderAndWaitForLoad({
+      dryRun: () =>
+        diffWith({
+          top_movers: [
+            {
+              ...DRY_RUN_DIFF.diff.top_movers[0]!,
+              contributors: [
+                makeSoloContributor(MOVER_ALICE, MOVER_NO_SCORE),
+                makeSoloContributor(MOVER_BOB, MOVER_NO_SCORE),
+              ],
+            },
+          ],
+        }),
+    });
+    const dialog = await previewAndOpenDetails();
+    expect(within(dialog).getByTestId('top-movers')).toBeInTheDocument();
+    expect(within(dialog).getByText('Alice, Bob')).toBeInTheDocument();
   }, 10000);
 
   it('falls back to the submitter of record for a response predating contributors', async () => {
-    setupHandlers();
-    mswServer.use(
-      http.put(`/api/v1/semesters/${DEFAULT_SEMESTER_ID}/heuristic-config`, async ({ request }) => {
-        const url = new URL(request.url);
-        if (url.searchParams.get('dryRun') !== 'true') return HttpResponse.json({});
-        return HttpResponse.json({
-          ...DRY_RUN_DIFF,
-          diff: {
-            ...DRY_RUN_DIFF.diff,
-            top_movers: [{ ...DRY_RUN_DIFF.diff.top_movers[0], contributors: [] }],
-          },
-        });
-      }),
-    );
-    renderTuningView();
-
-    await waitFor(
-      () => {
-        expect(screen.getByTestId('top-movers')).toBeInTheDocument();
-      },
-      { timeout: 5000 },
-    );
-    expect(screen.getByText('Alice')).toBeInTheDocument();
+    useDebounceTimers();
+    await renderAndWaitForLoad({
+      dryRun: () =>
+        diffWith({ top_movers: [{ ...DRY_RUN_DIFF.diff.top_movers[0]!, contributors: [] }] }),
+    });
+    const dialog = await previewAndOpenDetails();
+    expect(within(dialog).getByTestId('top-movers')).toBeInTheDocument();
+    expect(within(dialog).getByText('Alice')).toBeInTheDocument();
   }, 10000);
 
-  it('slider change within 300ms does NOT trigger dry-run (debounce)', async () => {
-    let dryRunCount = 0;
-
-    // Load first, then override PUT handler
-    await renderAndWaitForLoad();
-
-    mswServer.use(
-      http.put(`/api/v1/semesters/${DEFAULT_SEMESTER_ID}/heuristic-config`, ({ request }) => {
-        const url = new URL(request.url);
-        if (url.searchParams.get('dryRun') === 'true') {
-          dryRunCount++;
-          return HttpResponse.json(DRY_RUN_DIFF);
-        }
-        return HttpResponse.json({});
-      }),
-    );
-
-    const slider = screen.getByTestId('slider-large_paste');
-
-    // Fire 3 rapid changes (each < 100ms apart — well within 300ms debounce)
-    fireEvent.change(slider, { target: { value: '1.2' } });
-    fireEvent.change(slider, { target: { value: '1.4' } });
-    fireEvent.change(slider, { target: { value: '1.6' } });
-
-    // After debounce fires, only 1 call should have been made
-    await waitFor(
-      () => {
-        expect(dryRunCount).toBe(1);
-      },
-      { timeout: 2000 },
-    );
-
-    // Confirm exactly 1 call (not 3)
-    expect(dryRunCount).toBe(1);
+  it('excludes movers whose score does not change from the movers table', async () => {
+    useDebounceTimers();
+    const unchanged: Mover = {
+      ...DRY_RUN_DIFF.diff.top_movers[0]!,
+      submission_id: 'aa000000-0000-0000-0000-000000000002',
+      student: { sid: '3032345', display_name: 'Bob' },
+      contributors: [makeSoloContributor(MOVER_BOB, MOVER_NO_SCORE)],
+      assignment: { assignment_id_str: 'hw2', label: 'Homework 2' },
+      old_score: 0,
+      new_score: 0,
+    };
+    await renderAndWaitForLoad({
+      dryRun: () => diffWith({ top_movers: [DRY_RUN_DIFF.diff.top_movers[0]!, unchanged] }),
+    });
+    const dialog = await previewAndOpenDetails();
+    const table = within(dialog).getByTestId('top-movers');
+    expect(within(table).getAllByTestId('top-mover-row')).toHaveLength(1);
+    expect(within(table).getByText('Alice')).toBeInTheDocument();
+    expect(within(table).queryByText('Bob')).not.toBeInTheDocument();
+    expect(within(table).queryByText('hw2')).not.toBeInTheDocument();
   }, 10000);
 
-  it('"Save & Recompute" navigates with recompute_job param on success', async () => {
-    const { container } = await renderAndWaitForLoad();
+  // -------------------------------------------------------------------------
+  // Save & recompute
+  // -------------------------------------------------------------------------
 
+  it('"Save & recompute" navigates with recompute_job param on success', async () => {
+    const { container, recorded } = await renderAndWaitForLoad();
+
+    setWeight('large_paste', '1.5');
     await act(async () => {
       fireEvent.click(screen.getByTestId('save-recompute-btn'));
     });
@@ -466,6 +697,8 @@ describe('TuningView', () => {
       },
       { timeout: 5000 },
     );
+    const perFlag = recorded.commits[0]!['per_flag'] as Record<string, { weight: number }>;
+    expect(perFlag['large_paste']!.weight).toBe(1.5);
   });
 
   it('does not offer a retired id, but sends its stored entry back untouched on save', async () => {
@@ -473,36 +706,19 @@ describe('TuningView', () => {
     // entry. There is nothing to tune — nothing emits it — but the server keeps
     // the staff setting on read and accepts it on write, so the UI must neither
     // render it nor drop it.
-    let committedBody: Record<string, unknown> | undefined;
-    await renderAndWaitForLoad();
-    mswServer.use(
-      http.put(`/api/v1/semesters/${DEFAULT_SEMESTER_ID}/heuristic-config`, async ({ request }) => {
-        if (new URL(request.url).searchParams.get('dryRun') === 'true') {
-          return HttpResponse.json(DRY_RUN_DIFF);
-        }
-        committedBody = (await request.json()) as Record<string, unknown>;
-        return HttpResponse.json({
-          new_config: {
-            id: 'cc000000-0000-0000-0000-000000000002',
-            version: 4,
-            set_at: '2025-01-11T00:00:00.000Z',
-            note: '',
-            is_active: true,
-          },
-          recompute_job: { id: 'a1000000-0000-4000-8000-000000000099', status: 'queued' },
-        });
-      }),
-    );
+    const { recorded } = await renderAndWaitForLoad();
 
     expect(screen.queryByTestId('slider-editing_pattern_clone')).toBeNull();
     expect(screen.queryByTestId('toggle-editing_pattern_clone')).toBeNull();
 
+    // Save is only offered with an unsaved change, so make an unrelated one.
+    setWeight('large_paste', '1.5');
     await act(async () => {
       fireEvent.click(screen.getByTestId('save-recompute-btn'));
     });
 
-    await waitFor(() => expect(committedBody).toBeDefined(), { timeout: 5000 });
-    const perFlag = committedBody!['per_flag'] as Record<string, unknown>;
+    await waitFor(() => expect(recorded.commits).toHaveLength(1), { timeout: 5000 });
+    const perFlag = recorded.commits[0]!['per_flag'] as Record<string, unknown>;
     expect(perFlag['editing_pattern_clone']).toEqual({ enabled: false, weight: 1.0 });
   });
 });
