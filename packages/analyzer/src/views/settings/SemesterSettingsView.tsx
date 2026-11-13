@@ -14,6 +14,10 @@ import { useSemester, useUpdateSemester } from '../../api/queries.js';
 import { useActiveSemester } from '../../api/use-active-semester.js';
 import { ApiError } from '../../api/client.js';
 import { ErrorRegion } from '../../components/a11y/ErrorRegion.js';
+import { PageContainer, PageHeader, Panel } from '@/components/layout/Page';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
 // ---------------------------------------------------------------------------
 // Live regex tester
@@ -43,16 +47,16 @@ function RegexTester({ pattern }: RegexTesterProps) {
   }
 
   return (
-    <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
-      <label htmlFor="regex-tester-sample" className="mb-2 block text-xs font-medium text-gray-600">
+    <div className="mt-3 space-y-2 rounded-lg border bg-gray-50 p-3">
+      <Label htmlFor="regex-tester-sample" className="block text-xs text-gray-600">
         Live Tester
-      </label>
-      <input
+      </Label>
+      <Input
         id="regex-tester-sample"
         type="text"
         value={sample}
         onChange={(e) => setSample(e.target.value)}
-        className="w-full rounded border border-gray-300 px-2 py-1 text-xs font-mono"
+        className="h-8 w-full bg-white font-mono text-xs"
         placeholder="Type a sample filename…"
         data-testid="regex-sample-input"
       />
@@ -150,104 +154,92 @@ export function SemesterSettingsView() {
     error instanceof ApiError ? error.message : error instanceof Error ? error.message : null;
 
   return (
-    <div className="mx-auto max-w-2xl px-4 py-8">
-      <h1 className="mb-6 text-xl font-semibold text-gray-900">Semester Settings</h1>
+    <PageContainer>
+      <PageHeader
+        title="Semester Settings"
+        description="Name this semester, set the filename convention used to match uploaded submissions, and choose how long data is retained."
+      />
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Display name */}
-        <div>
-          <label
-            htmlFor="settings-display-name"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Display Name
-          </label>
-          <input
-            id="settings-display-name"
-            type="text"
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-            data-testid="display-name-input"
-          />
-        </div>
+        <Panel title="General">
+          <div className="space-y-5">
+            {/* Display name */}
+            <div className="space-y-1.5">
+              <Label htmlFor="settings-display-name">Display Name</Label>
+              <Input
+                id="settings-display-name"
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                data-testid="display-name-input"
+              />
+            </div>
 
-        {/* Filename convention */}
-        <div>
-          <label
-            htmlFor="settings-filename-convention"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Filename Convention (regex)
-          </label>
-          <p className="mb-1 text-xs text-gray-500">
-            Named groups <code className="font-mono">(?&lt;sid&gt;...)</code> and{' '}
-            <code className="font-mono">(?&lt;assignment_id&gt;...)</code> are extracted for
-            automatic matching.
-          </p>
-          <input
-            id="settings-filename-convention"
-            type="text"
-            value={filenameConvention}
-            onChange={(e) => handleFilenameConventionChange(e.target.value)}
-            className={`w-full rounded-md border px-3 py-2 text-sm font-mono ${
-              regexError ? 'border-red-400' : 'border-gray-300'
-            }`}
-            aria-invalid={regexError !== null}
-            aria-describedby={regexError ? 'settings-filename-convention-error' : undefined}
-            data-testid="filename-convention-input"
-          />
-          {regexError && (
-            <ErrorRegion className="mt-1 text-xs text-red-600">
-              <p id="settings-filename-convention-error" data-testid="regex-error">
-                {regexError}
+            {/* Filename convention */}
+            <div className="space-y-1.5">
+              <Label htmlFor="settings-filename-convention">Filename Convention (regex)</Label>
+              <p className="text-xs text-muted-foreground">
+                Named groups <code className="font-mono">(?&lt;sid&gt;...)</code> and{' '}
+                <code className="font-mono">(?&lt;assignment_id&gt;...)</code> are extracted for
+                automatic matching.
               </p>
-            </ErrorRegion>
-          )}
+              <Input
+                id="settings-filename-convention"
+                type="text"
+                value={filenameConvention}
+                onChange={(e) => handleFilenameConventionChange(e.target.value)}
+                className={`font-mono ${regexError ? 'border-red-400 focus-visible:ring-red-500' : ''}`}
+                aria-invalid={regexError !== null}
+                aria-describedby={regexError ? 'settings-filename-convention-error' : undefined}
+                data-testid="filename-convention-input"
+              />
+              {regexError && (
+                <ErrorRegion className="text-xs text-red-600">
+                  <p id="settings-filename-convention-error" data-testid="regex-error">
+                    {regexError}
+                  </p>
+                </ErrorRegion>
+              )}
 
-          {/* Live tester */}
-          <RegexTester pattern={filenameConvention} />
-        </div>
+              {/* Live tester */}
+              <RegexTester pattern={filenameConvention} />
+            </div>
+          </div>
+        </Panel>
 
-        {/* Blob retention */}
-        <div>
-          <label
-            htmlFor="settings-blob-retention"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Blob Retention (days)
-          </label>
-          <input
-            id="settings-blob-retention"
-            type="number"
-            min={1}
-            max={3650}
-            value={blobRetentionDays}
-            onChange={(e) => setBlobRetentionDays(Number(e.target.value))}
-            className="w-32 rounded-md border border-gray-300 px-3 py-2 text-sm"
-            data-testid="blob-retention-input"
-          />
-        </div>
+        <Panel title="Retention">
+          <div className="flex flex-wrap gap-6">
+            {/* Blob retention */}
+            <div className="space-y-1.5">
+              <Label htmlFor="settings-blob-retention">Blob Retention (days)</Label>
+              <Input
+                id="settings-blob-retention"
+                type="number"
+                min={1}
+                max={3650}
+                value={blobRetentionDays}
+                onChange={(e) => setBlobRetentionDays(Number(e.target.value))}
+                className="w-32 tabular-nums"
+                data-testid="blob-retention-input"
+              />
+            </div>
 
-        {/* Derived retention */}
-        <div>
-          <label
-            htmlFor="settings-derived-retention"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Derived Data Retention (days)
-          </label>
-          <input
-            id="settings-derived-retention"
-            type="number"
-            min={1}
-            max={3650}
-            value={derivedRetentionDays}
-            onChange={(e) => setDerivedRetentionDays(Number(e.target.value))}
-            className="w-32 rounded-md border border-gray-300 px-3 py-2 text-sm"
-            data-testid="derived-retention-input"
-          />
-        </div>
+            {/* Derived retention */}
+            <div className="space-y-1.5">
+              <Label htmlFor="settings-derived-retention">Derived Data Retention (days)</Label>
+              <Input
+                id="settings-derived-retention"
+                type="number"
+                min={1}
+                max={3650}
+                value={derivedRetentionDays}
+                onChange={(e) => setDerivedRetentionDays(Number(e.target.value))}
+                className="w-32 tabular-nums"
+                data-testid="derived-retention-input"
+              />
+            </div>
+          </div>
+        </Panel>
 
         {/* Error */}
         {submitError && (
@@ -263,15 +255,16 @@ export function SemesterSettingsView() {
           </p>
         )}
 
-        <button
-          type="submit"
-          disabled={isPending || regexError !== null || isLoading || !semesterId}
-          className="rounded-md bg-berkeley-700 px-4 py-2 text-sm text-white hover:bg-berkeley-800 disabled:opacity-50"
-          data-testid="save-settings-btn"
-        >
-          {isPending ? 'Saving…' : 'Save Settings'}
-        </button>
+        <div className="flex justify-end">
+          <Button
+            type="submit"
+            disabled={isPending || regexError !== null || isLoading || !semesterId}
+            data-testid="save-settings-btn"
+          >
+            {isPending ? 'Saving…' : 'Save Settings'}
+          </Button>
+        </div>
       </form>
-    </div>
+    </PageContainer>
   );
 }
