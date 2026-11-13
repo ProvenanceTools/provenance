@@ -249,13 +249,10 @@ export function createHeuristicConfigRouter(): Hono {
       // -----------------------------------------------------------------------
       if (isDryRun) {
         const protectedMode = requirePrincipal(c).user.protected;
-        const diff = await computeDryRunDiff(
-          db,
-          semesterId,
-          candidateConfig,
-          candidateVersion,
+        const diff = await computeDryRunDiff(db, semesterId, candidateConfig, candidateVersion, {
+          active,
           protectedMode,
-        );
+        });
 
         // Fire audit row fire-and-forget.
         void insertAuditRow({

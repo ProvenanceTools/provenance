@@ -1,9 +1,10 @@
 /**
  * dry-run scoring service — Phase 13b (updated from 13a per V30).
  *
- * computeDryRunDiff: given (semesterId, candidateConfig), runs heuristics
- * against DB events for each non-superseded submission (via recomputeSubmission
- * with simulate=true) and returns a diff payload per PRD §8.11.
+ * computeDryRunDiff: given (semesterId, candidateConfig), computes each
+ * non-superseded submission's prospective score — from its stored flags where
+ * that is exact, otherwise via recomputeSubmission(simulate=true) — and
+ * returns a diff payload per PRD §8.11.
  *
  * ## V30 fix: re-runs heuristics from DB events instead of re-weighting flags
  *
@@ -25,19 +26,36 @@
  * histograms share the same bucket boundaries for direct comparison. If all
  * scores are 0, the upper bound is 1.0 to avoid zero-width buckets.
  *
- * ## Performance
+ * ## Performance — fast path first
  *
- * O(n_submissions × heuristic_cost). PRD §10.5 budget: must complete within
- * 800ms server-side for ≤ 1000 submissions. Each simulate call is ~1ms p99
- * for typical bundles (no I/O beyond DB event read). For large semesters the
- * rate limit kicks in.
+ * The full per-submission recompute above fetches, unzips and re-validates
+ * every stored bundle and re-runs every heuristic, sequentially, in the API
+ * process: seconds on seed data, minutes on a real semester. (The old "~1ms
+ * per submission, 800ms budget" note here dated from when events were read
+ * from Postgres and stopped being true when they left it.)
+ *
+ * So each submission is first offered to the fast path (dry-run-fast.ts):
+ * when the candidate only changes weights / severity weights or turns
+ * heuristics OFF, and the submission's stored flags were computed under the
+ * active config, its new score is the stored flags re-weighted — exact, and a
+ * single flags query for the whole semester. Only submissions that fail that
+ * test (stale, errored, ingested before the active config and never
+ * recomputed), or every submission when the candidate re-enables a heuristic
+ * or changes thresholds, take the full recompute.
  */
 
 import { eq, isNull, and } from 'drizzle-orm';
-import { submissions, roster_entries, assignments } from '../../db/schema.js';
+import { submissions, roster_entries, assignments, flags } from '../../db/schema.js';
 import type { DrizzleDb } from '../../db/client.js';
 import type { ServerHeuristicConfig } from '../heuristics/config.js';
 import { recomputeSubmission } from './recompute-submission.js';
+import {
+  fastPathConfigEligible,
+  isScoredUnderActive,
+  rescoreFromStoredFlags,
+  type StoredFlag,
+} from './dry-run-fast.js';
+import { DEFAULT_SERVER_CONFIG } from '../heuristics/config.js';
 import { getStorageClient } from '../storage/default-client.js';
 import { projectStudent } from '../protect.js';
 import { fetchContributorsFor } from '../contributors/fetch-contributors.js';
@@ -117,8 +135,10 @@ function buildHistogram(scores: number[], upperBound: number): number[] {
  *
  * Does NOT write any rows to the DB.
  *
- * V30 fix (Phase 13b): this now calls recomputeSubmission(simulate=true) per
- * submission, which re-runs heuristics from DB events. V46 closed the
+ * Each submission is either re-scored from its stored flags (the fast path,
+ * when that is exact — see dry-run-fast.ts) or recomputed with
+ * recomputeSubmission(simulate=true), which re-runs heuristics on the stored
+ * bundle (V30, Phase 13b). V46 closed the
  * remaining gap so that threshold changes in per_flag[id].thresholds are
  * forwarded to v2's HeuristicConfig — not just weight/enabled changes.
  *
@@ -126,6 +146,8 @@ function buildHistogram(scores: number[], upperBound: number): number[] {
  * @param semesterId - UUID of the semester.
  * @param candidateConfig - Candidate PRD §10.2 config (already validated by caller).
  * @param candidateVersion - The version number this candidate would receive if committed.
+ * @param options.active - The active config row (null: none — DEFAULT at v0).
+ * @param options.protectedMode - Mask student identities in top_movers.
  * @returns DryRunDiff per PRD §8.11.
  */
 export async function computeDryRunDiff(
@@ -133,7 +155,19 @@ export async function computeDryRunDiff(
   semesterId: string,
   candidateConfig: ServerHeuristicConfig,
   candidateVersion: number,
-  protectedMode: boolean = false,
+  {
+    active,
+    protectedMode = false,
+  }: {
+    /**
+     * The semester's active config row, or null when it has none (ingest then
+     * scores with DEFAULT_SERVER_CONFIG at version 0). Required, not
+     * defaulted: treating a semester that HAS a config as if it had none
+     * would silently re-weight against the wrong baseline.
+     */
+    active: { config: ServerHeuristicConfig; version: number; set_at: Date } | null;
+    protectedMode?: boolean;
+  },
 ): Promise<DryRunDiff> {
   // Storage client for reading the stored bundle blobs (recompute reads them).
   const storage = getStorageClient();
@@ -147,6 +181,9 @@ export async function computeDryRunDiff(
       id: submissions.id,
       score_total: submissions.score_total,
       score_max_severity: submissions.score_max_severity,
+      recompute_status: submissions.recompute_status,
+      heuristic_config_version: submissions.heuristic_config_version,
+      ingested_at: submissions.ingested_at,
       student_id: submissions.student_id,
       assignment_id: submissions.assignment_id,
       student_sid: roster_entries.sid,
@@ -186,12 +223,11 @@ export async function computeDryRunDiff(
   }
 
   // -------------------------------------------------------------------------
-  // Step 2: For each submission, run heuristics with simulate=true (no writes)
-  // to get the prospective score under the candidate config.
-  //
-  // This is sequential (Promise.all would be fine for reads-only, but the
-  // heuristic suite is CPU-bound; sequential avoids saturating the thread).
-  // For ≤ 1000 submissions at ~1ms p99 each this stays within the 800ms budget.
+  // Step 2: For each submission, the prospective score under the candidate:
+  // re-weighted stored flags where exact (fast path), otherwise heuristics
+  // re-run with simulate=true (no writes). The slow path is sequential: the
+  // heuristic suite is CPU-bound and Promise.all would only saturate the
+  // thread. See "Performance" in the header for when each path applies.
   // -------------------------------------------------------------------------
   type SubmissionDiff = {
     submission_id: string;
@@ -211,16 +247,49 @@ export async function computeDryRunDiff(
 
   const diffs: SubmissionDiff[] = [];
 
+  // Fast path (dry-run-fast.ts): re-weight stored flags where that is exact.
+  const activeConfig = active?.config ?? DEFAULT_SERVER_CONFIG;
+  const activeStamp = { version: active?.version ?? 0, set_at: active?.set_at ?? null };
+  const configEligible = fastPathConfigEligible(activeConfig, candidateConfig);
+  const fastIds = new Set(
+    configEligible
+      ? filteredSubmissions.filter((s) => isScoredUnderActive(s, activeStamp)).map((s) => s.id)
+      : [],
+  );
+
+  // One query for the whole semester's stored flags (flags_sem_* indexes),
+  // filtered in memory to the fast submissions — not an IN list of hundreds.
+  const storedBySubmission = new Map<string, StoredFlag[]>();
+  if (fastIds.size > 0) {
+    const rows = await db
+      .select({
+        submission_id: flags.submission_id,
+        heuristic_id: flags.heuristic_id,
+        severity: flags.severity,
+        confidence: flags.confidence,
+      })
+      .from(flags)
+      .where(eq(flags.semester_id, semesterId));
+    for (const row of rows) {
+      if (!fastIds.has(row.submission_id)) continue;
+      const list = storedBySubmission.get(row.submission_id);
+      if (list) list.push(row);
+      else storedBySubmission.set(row.submission_id, [row]);
+    }
+  }
+
   for (const sub of filteredSubmissions) {
-    const { score_total: new_score, score_max_severity: new_tier } = await recomputeSubmission(
-      db,
-      storage,
-      sub.id,
-      semesterId,
-      candidateConfig,
-      candidateVersion,
-      { simulate: true },
-    );
+    const { score_total: new_score, score_max_severity: new_tier } = fastIds.has(sub.id)
+      ? rescoreFromStoredFlags(storedBySubmission.get(sub.id) ?? [], candidateConfig)
+      : await recomputeSubmission(
+          db,
+          storage,
+          sub.id,
+          semesterId,
+          candidateConfig,
+          candidateVersion,
+          { simulate: true },
+        );
 
     diffs.push({
       submission_id: sub.id,
