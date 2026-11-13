@@ -2,7 +2,8 @@
  * ProvenanceMark — the Provenance brand symbol (two woven interlocking links).
  *
  * Inline SVG so it stays crisp at any size and needs no asset loading. Colors
- * are the light-surface brand tokens (the app header is white); the ink link
+ * are the light-surface brand tokens — Berkeley Blue ink, California Gold
+ * accent (the app header is white); the ink link
  * weaves over the accent link at the top crossing and under at the bottom.
  *
  * Source master: brand/provenance-mark.svg. Keep geometry in sync with it.
@@ -36,7 +37,7 @@ export function ProvenanceMark({ className }: ProvenanceMarkProps) {
         height="104"
         rx="34"
         fill="none"
-        stroke="#18181b"
+        stroke="#002676"
         strokeWidth="18"
       />
       {/* accent link over (covers ink at both crossings) */}
@@ -47,7 +48,7 @@ export function ProvenanceMark({ className }: ProvenanceMarkProps) {
         height="104"
         rx="34"
         fill="none"
-        stroke="#EA580C"
+        stroke="#FDB515"
         strokeWidth="18"
       />
       {/* re-draw ink at the top crossing so the links weave */}
@@ -59,7 +60,7 @@ export function ProvenanceMark({ className }: ProvenanceMarkProps) {
           height="104"
           rx="34"
           fill="none"
-          stroke="#18181b"
+          stroke="#002676"
           strokeWidth="18"
         />
       </g>

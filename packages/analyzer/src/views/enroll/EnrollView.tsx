@@ -360,7 +360,7 @@ function TokenPanel({
             type="button"
             onClick={handleCopy}
             data-testid="enroll-token-copy"
-            className="shrink-0 self-start rounded bg-orange-700 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-orange-800 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+            className="shrink-0 self-start rounded bg-berkeley-700 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-berkeley-800 focus:outline-none focus:ring-2 focus:ring-berkeley-500 focus:ring-offset-2"
           >
             {copied ? 'Copied' : 'Copy'}
           </button>
@@ -465,7 +465,7 @@ function TokenPanel({
         type="button"
         onClick={onReset}
         data-testid="enroll-reset"
-        className="mt-4 text-xs font-medium text-orange-700 underline-offset-4 hover:underline"
+        className="mt-4 text-xs font-medium text-berkeley-700 underline-offset-4 hover:underline"
       >
         Enroll a different key
       </button>
@@ -521,7 +521,7 @@ export function EnrollView() {
             <p className="mt-3 text-xs text-gray-600" data-testid="enroll-signed-in-as">
               Signed in as <span className="font-medium text-gray-900">{me.user.email}</span>. The
               credential is issued to this account, so make sure it is your university account.{' '}
-              <Link to="/login" className="text-orange-700 underline-offset-4 hover:underline">
+              <Link to="/login" className="text-berkeley-700 underline-offset-4 hover:underline">
                 Not you?
               </Link>
             </p>
@@ -574,7 +574,7 @@ export function EnrollView() {
                 data-testid="enroll-pubkey-input"
                 aria-invalid={showKeyError && !pubkey.ok}
                 aria-describedby={showKeyError && !pubkey.ok ? 'enroll-pubkey-error' : undefined}
-                className="mt-5 w-full rounded border border-gray-300 px-3 py-1.5 font-mono text-sm break-all focus:outline-none focus:ring-2 focus:ring-orange-500"
+                className="mt-5 w-full rounded border border-gray-300 px-3 py-1.5 font-mono text-sm break-all focus:outline-none focus:ring-2 focus:ring-berkeley-500"
               />
               {pubkey.ok && (
                 <StatusRegion className="mt-1.5 text-xs text-green-700">
@@ -614,7 +614,7 @@ export function EnrollView() {
               type="submit"
               disabled={mint.isPending}
               data-testid="enroll-submit"
-              className="mt-6 inline-flex w-full items-center justify-center rounded-md bg-orange-700 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-orange-800 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 disabled:opacity-50"
+              className="mt-6 inline-flex w-full items-center justify-center rounded-md bg-berkeley-700 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-berkeley-800 focus:outline-none focus:ring-2 focus:ring-berkeley-500 focus:ring-offset-2 disabled:opacity-50"
             >
               {mint.isPending ? 'Issuing…' : 'Get my credential'}
             </button>
@@ -630,7 +630,7 @@ export function EnrollView() {
           Wondering what the recorder does or what gets logged?{' '}
           <Link
             to="/faq"
-            className="font-medium text-orange-700 underline underline-offset-2 hover:text-orange-800 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+            className="font-medium text-berkeley-700 underline underline-offset-2 hover:text-berkeley-800 focus:outline-none focus:ring-2 focus:ring-berkeley-500 focus:ring-offset-2"
           >
             Read the FAQ
           </Link>

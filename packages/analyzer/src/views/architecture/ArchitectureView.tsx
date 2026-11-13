@@ -40,7 +40,7 @@ function Mark({ size = 22 }: { size?: number }) {
         height="104"
         rx="34"
         fill="none"
-        stroke="var(--ink)"
+        stroke="var(--mark-ink)"
         strokeWidth="18"
       />
       <rect
@@ -50,7 +50,7 @@ function Mark({ size = 22 }: { size?: number }) {
         height="104"
         rx="34"
         fill="none"
-        stroke="var(--brand)"
+        stroke="var(--mark-accent)"
         strokeWidth="18"
       />
       <g clipPath="url(#arch-mark-cross)">
@@ -61,7 +61,7 @@ function Mark({ size = 22 }: { size?: number }) {
           height="104"
           rx="34"
           fill="none"
-          stroke="var(--ink)"
+          stroke="var(--mark-ink)"
           strokeWidth="18"
         />
       </g>

@@ -9,13 +9,19 @@ Design spec: [`../docs/superpowers/specs/2026-06-18-provenance-brand-mark-design
 
 ## Color tokens
 
-| Token      | Light surface | Dark surface |
-| ---------- | ------------- | ------------ |
-| Ink / line | `#18181b`     | `#fafafa`    |
-| Accent     | `#EA580C`     | `#F97316`    |
-| Background | `#ffffff`     | transparent  |
+UC Berkeley brand colors ([brand.berkeley.edu](https://brand.berkeley.edu/visual-identity/colors/)),
+matching the [landing site](https://github.com/ProvenanceTools/provenance-landing). These
+replaced the original zinc-ink + orange tokens (`#18181b` / `#EA580C`) in issue #36.
 
-The accent brightens on dark surfaces for contrast; same hue family.
+| Token      | Light surface             | Dark surface              |
+| ---------- | ------------------------- | ------------------------- |
+| Ink / line | `#002676` Berkeley Blue   | `#FFFFFF` White           |
+| Accent     | `#FDB515` California Gold | `#FDB515` California Gold |
+| Background | `#ffffff`                 | transparent               |
+
+Gold stays solid on both surfaces. On white it is only 1.78:1, so it is the mark's accent
+link and never text; in the analyzer, interactive color is Berkeley Blue (see the `berkeley`
+scale in `packages/analyzer/tailwind.config.js`).
 
 ## Source masters
 

@@ -77,7 +77,7 @@ describe('FaqView', () => {
     expect(codes).toContain('.provenance/');
     expect(codes).toContain('git pull');
     // The shared-repo answer carries the only callout.
-    expect(container.querySelector('.border-orange-600.bg-orange-50')).not.toBeNull();
+    expect(container.querySelector('.border-gold.bg-berkeley-50')).not.toBeNull();
   });
 
   it('scrolls to the hash on mount, because the lazy chunk misses the browser’s own attempt', () => {

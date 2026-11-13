@@ -22,7 +22,7 @@ export function GoogleSignInButton({ returnTo = '/home' }: GoogleSignInButtonPro
     >
       <button
         type="submit"
-        className="flex w-full items-center justify-center gap-3 rounded-md border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+        className="flex w-full items-center justify-center gap-3 rounded-md border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-berkeley-500 focus:ring-offset-2"
       >
         <GoogleIcon />
         Sign in with Google

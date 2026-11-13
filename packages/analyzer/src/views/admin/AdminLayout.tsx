@@ -23,7 +23,7 @@ const NAV_LINKS: { to: string; label: string; end?: boolean }[] = [
 export function AdminLayout({ children }: AdminLayoutProps) {
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6">
-      <div className="mb-1 text-[10px] uppercase tracking-wider text-orange-700">Superadmin</div>
+      <div className="mb-1 text-[10px] uppercase tracking-wider text-berkeley-700">Superadmin</div>
       <h1 className="mb-4 text-xl font-semibold text-gray-900">Admin</h1>
 
       <nav className="mb-6 flex gap-1 border-b border-gray-200" aria-label="Admin sub-nav">
@@ -35,7 +35,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
             className={({ isActive }) =>
               `px-3 py-1.5 text-xs transition-colors border-b-2 -mb-px ${
                 isActive
-                  ? 'border-orange-600 text-orange-700 font-medium'
+                  ? 'border-gold text-berkeley-700 font-medium'
                   : 'border-transparent text-gray-500 hover:text-gray-900'
               }`
             }

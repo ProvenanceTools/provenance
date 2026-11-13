@@ -104,7 +104,7 @@ export function IngestStartView() {
       {/* Primary path: Gradescope export (populates the roster + all bundles). */}
       <section className="mb-8" data-testid="gradescope-section">
         <h2 className="mb-1 text-sm font-medium text-gray-900">
-          Gradescope export <span className="text-orange-700">(recommended)</span>
+          Gradescope export <span className="text-berkeley-700">(recommended)</span>
         </h2>
         <p className="mb-3 text-xs text-gray-500">
           Upload the ZIP from Gradescope’s “Download Submissions” — the roster and every student
@@ -129,7 +129,7 @@ export function IngestStartView() {
             data-testid="drop-zone"
             className={`flex flex-col items-center justify-center rounded-lg border-2 border-dashed px-6 py-12 transition-colors ${
               isDragOver
-                ? 'border-orange-500 bg-orange-50'
+                ? 'border-berkeley-500 bg-berkeley-50'
                 : 'border-gray-300 bg-gray-50 hover:border-gray-400'
             }`}
             onDrop={handleDrop}
@@ -186,7 +186,7 @@ export function IngestStartView() {
               </div>
               <div className="h-2 w-full rounded-full bg-gray-200">
                 <div
-                  className="h-2 rounded-full bg-orange-700 transition-all"
+                  className="h-2 rounded-full bg-berkeley-700 transition-all"
                   style={{ width: `${uploadProgress}%` }}
                 />
               </div>
@@ -204,7 +204,7 @@ export function IngestStartView() {
           <button
             type="submit"
             disabled={isPending || files.length === 0 || validationError !== null || !semesterId}
-            className="mt-4 rounded-md bg-orange-700 px-4 py-2 text-sm text-white hover:bg-orange-800 disabled:opacity-50"
+            className="mt-4 rounded-md bg-berkeley-700 px-4 py-2 text-sm text-white hover:bg-berkeley-800 disabled:opacity-50"
             data-testid="upload-button"
           >
             {isPending

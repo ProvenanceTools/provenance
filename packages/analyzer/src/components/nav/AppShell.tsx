@@ -34,7 +34,7 @@ function SemesterAdminNav() {
   const navClass = ({ isActive }: { isActive: boolean }) =>
     `text-xs px-2 py-1 rounded transition-colors ${
       isActive
-        ? 'bg-orange-100 text-orange-700 font-medium'
+        ? 'bg-berkeley-100 text-berkeley-700 font-medium'
         : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
     }`;
 
@@ -96,7 +96,7 @@ export function AppShell({ children }: AppShellProps) {
         {/* Logo */}
         <Link
           to="/home"
-          className="mr-4 flex shrink-0 items-center gap-2 text-sm font-semibold text-gray-900"
+          className="mr-4 flex shrink-0 items-center gap-2 text-sm font-semibold text-berkeley-700"
           aria-label="Provenance home"
         >
           <ProvenanceMark className="h-6 w-6" />
@@ -119,7 +119,7 @@ export function AppShell({ children }: AppShellProps) {
             {isSuperadmin && (
               <Link
                 to="/admin"
-                className="rounded-md border border-orange-300 bg-white px-3 py-1 text-xs font-medium text-orange-700 hover:bg-orange-50"
+                className="rounded-md border border-berkeley-300 bg-white px-3 py-1 text-xs font-medium text-berkeley-700 hover:bg-berkeley-50"
                 data-testid="admin-link"
               >
                 Admin

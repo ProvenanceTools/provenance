@@ -8,7 +8,7 @@
  * Copy lives in `faq-content.ts`; this file only renders it. Every question is
  * anchored so staff can link to one answer (`/faq#q-own-paste`).
  *
- * Styling follows LandingView (light-only, gray-50 ground, orange-700 accent)
+ * Styling follows LandingView (light-only, gray-50 ground, Berkeley Blue accent)
  * rather than the analyzer's dark chrome: this is a public page students land on
  * cold, and it should look like the rest of the public surface.
  *
@@ -26,7 +26,7 @@ const CONTACT_HREF = 'mailto:aaryanm@berkeley.edu?subject=Question%20about%20Pro
 const SECTION_IDS: readonly string[] = FAQ_SECTIONS.map((s) => s.id);
 
 const FOCUS_RING =
-  'focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:ring-offset-gray-50';
+  'focus:outline-none focus:ring-2 focus:ring-berkeley-500 focus:ring-offset-2 focus:ring-offset-gray-50';
 
 // ---------------------------------------------------------------------------
 // Inline spans
@@ -60,7 +60,7 @@ function Spans({ spans }: { spans: readonly Span[] }) {
 function AnswerBlock({ block }: { block: Block }) {
   if (block.callout) {
     return (
-      <div className="mt-3 rounded-r-md border-l-2 border-orange-600 bg-orange-50 px-4 py-3 text-sm text-gray-700">
+      <div className="mt-3 rounded-r-md border-l-2 border-gold bg-berkeley-50 px-4 py-3 text-sm text-gray-700">
         <Spans spans={block.spans} />
       </div>
     );
@@ -144,7 +144,7 @@ export function FaqView() {
         <header className="border-b border-gray-200 pb-8">
           <div className="flex items-center gap-2.5">
             <ProvenanceMark className="h-6 w-6" />
-            <span className="text-sm font-semibold text-gray-900">Provenance</span>
+            <span className="text-sm font-semibold text-berkeley-700">Provenance</span>
           </div>
           <h1 className="mt-8 max-w-xl text-3xl font-semibold tracking-tight text-gray-900 sm:text-4xl">
             Questions students ask
@@ -174,7 +174,7 @@ export function FaqView() {
                       'block border-l py-1 pl-3 text-[13px] leading-snug transition',
                       FOCUS_RING,
                       active === section.id
-                        ? 'border-orange-600 font-medium text-gray-900'
+                        ? 'border-gold font-medium text-gray-900'
                         : 'border-transparent text-gray-600 hover:text-gray-900',
                     ].join(' ')}
                   >
@@ -195,7 +195,7 @@ export function FaqView() {
                   <li key={line} className="relative pl-5">
                     <span
                       aria-hidden="true"
-                      className="absolute left-0 top-[0.6em] h-px w-2.5 bg-orange-600"
+                      className="absolute left-0 top-[0.6em] h-px w-2.5 bg-gold"
                     />
                     {line}
                   </li>
@@ -222,7 +222,7 @@ export function FaqView() {
                         <a
                           href={`#${item.id}`}
                           aria-label={`Link to this question`}
-                          className={`ml-2 font-normal text-gray-300 opacity-0 transition group-hover:opacity-100 focus:opacity-100 hover:text-orange-700 ${FOCUS_RING}`}
+                          className={`ml-2 font-normal text-gray-300 opacity-0 transition group-hover:opacity-100 focus:opacity-100 hover:text-berkeley-700 ${FOCUS_RING}`}
                         >
                           #
                         </a>
@@ -240,7 +240,7 @@ export function FaqView() {
               If your question isn&rsquo;t here, ask your course staff, or{' '}
               <a
                 href={CONTACT_HREF}
-                className={`font-medium text-orange-700 underline underline-offset-2 hover:text-orange-800 ${FOCUS_RING}`}
+                className={`font-medium text-berkeley-700 underline underline-offset-2 hover:text-berkeley-800 ${FOCUS_RING}`}
               >
                 reach out
               </a>

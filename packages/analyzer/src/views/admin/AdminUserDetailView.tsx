@@ -93,7 +93,7 @@ export function AdminUserDetailView() {
                       <td className="px-4 py-2 text-right">
                         <Link
                           to={`/s/${m.course_slug}/${m.semester_slug}/members`}
-                          className="text-xs text-orange-700 hover:underline"
+                          className="text-xs text-berkeley-700 hover:underline"
                         >
                           Members →
                         </Link>

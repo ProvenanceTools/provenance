@@ -93,7 +93,7 @@ export function HomeView() {
             <Link
               to={`/s/${s.course_slug}/${s.semester_slug}`}
               data-testid={`semester-link-${s.semester_slug}`}
-              className="group flex items-center justify-between gap-4 rounded-lg border bg-card px-4 py-3.5 shadow-sm transition-colors hover:border-orange-300 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              className="group flex items-center justify-between gap-4 rounded-lg border bg-card px-4 py-3.5 shadow-sm transition-colors hover:border-berkeley-300 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
               <span className="min-w-0">
                 <span className="block truncate text-sm font-medium text-foreground">
@@ -105,7 +105,7 @@ export function HomeView() {
               </span>
               <span
                 aria-hidden="true"
-                className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-orange-700"
+                className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-berkeley-700"
               >
                 →
               </span>

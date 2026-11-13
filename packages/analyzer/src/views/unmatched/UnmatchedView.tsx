@@ -250,7 +250,7 @@ function AttachModal({ file, semesterId, onClose, onAttached }: AttachModalProps
             <button
               type="submit"
               disabled={submitDisabled}
-              className="rounded bg-orange-700 px-3 py-1.5 text-sm text-white hover:bg-orange-800 disabled:opacity-50"
+              className="rounded bg-berkeley-700 px-3 py-1.5 text-sm text-white hover:bg-berkeley-800 disabled:opacity-50"
               data-testid="attach-submit"
             >
               {isPending
@@ -297,7 +297,7 @@ function AttachProgressOverlay() {
       role="status"
       aria-live="polite"
     >
-      <Loader2 className="h-7 w-7 animate-spin text-orange-700" aria-hidden />
+      <Loader2 className="h-7 w-7 animate-spin text-berkeley-700" aria-hidden />
       <p className="text-sm font-medium text-gray-900">Attaching file…</p>
       <p className="px-6 text-center text-xs text-gray-500">
         Re-running parse, materialization, validation, and heuristics. This usually takes 10–60
