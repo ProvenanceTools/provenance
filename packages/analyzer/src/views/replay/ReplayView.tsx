@@ -866,8 +866,9 @@ export function ReplayInner({
 
       {/* Session select + file tabs share one row. SessionSelect renders null for
           single-session bundles, in which case the tabs get the full width.
-          FileTabs is min-w-0 flex-1 so its wrapping tab list can't squeeze the
-          select out of the row. */}
+          FileTabs is min-w-0 flex-1: it shows the tabs that fit on one row and
+          moves the rest into its "+N files" menu, so it never wraps and never
+          squeezes the selects out of the row. */}
       <div className="flex items-center gap-3 px-4 pt-3 pb-1 border-b bg-background shrink-0">
         <ContributorSelect
           contributors={contributors}

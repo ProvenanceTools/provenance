@@ -6,8 +6,8 @@
  * stale tab looks like active work.
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { FileTabs } from './FileTabs.js';
 import type { EventIndex, IndexedEvent } from '@provenance/analysis-core/index/event-index.js';
 import type { EventKind } from '@provenance/log-core';
@@ -48,6 +48,36 @@ const INDEX = buildIndex([
 ]);
 
 const FILES = ['hw1.py', 'hw2.py'];
+
+// test-setup.ts reports EVERY element as 800px wide, which makes each measured
+// tab as wide as the whole row. Give the off-screen measuring spans (the ones
+// carrying data-path) a realistic tab width; the row keeps its 800px, or
+// whatever a test sets via ROW_WIDTH.
+const TAB_WIDTH = 80;
+let ROW_WIDTH = 800;
+let restore: (() => void) | null = null;
+beforeEach(() => {
+  ROW_WIDTH = 800;
+  const offset = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')!;
+  const client = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')!;
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.dataset['path'] !== undefined ? TAB_WIDTH : 800;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+    configurable: true,
+    get() {
+      return ROW_WIDTH;
+    },
+  });
+  restore = () => {
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', offset);
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', client);
+  };
+});
+afterEach(() => restore?.());
 
 function renderTabs(currentGlobalIdx: number, currentSessionId: string, activeFile = 'hw2.py') {
   const onFileChange = vi.fn();
@@ -124,5 +154,68 @@ describe('FileTabs', () => {
   it('shows the empty state when there are no files', () => {
     render(<FileTabs files={[]} activeFile={null} onFileChange={vi.fn()} />);
     expect(screen.getByTestId('file-tabs-empty')).toBeInTheDocument();
+  });
+
+  describe('overflow', () => {
+    // 12 files × (80 + 4 gap) = 1008px; a 400px row fits the most relevant few.
+    const MANY = Array.from({ length: 12 }, (_, i) => `src/f${String(i).padStart(2, '0')}.c`);
+    const MANY_INDEX = buildIndex([
+      ev(0, 'sess-a', 'src/f00.c', '2026-01-01T00:00:00.000Z'),
+      ev(1, 'sess-b', 'src/f07.c', '2026-01-02T00:00:00.000Z'),
+      ev(2, 'sess-b', 'src/f09.c', '2026-01-02T00:01:00.000Z'),
+    ]);
+
+    function renderMany(activeFile: string) {
+      ROW_WIDTH = 400;
+      const onFileChange = vi.fn();
+      render(
+        <FileTabs
+          files={MANY}
+          activeFile={activeFile}
+          onFileChange={onFileChange}
+          index={MANY_INDEX}
+          currentGlobalIdx={2}
+          currentSessionId="sess-b"
+        />,
+      );
+      return { onFileChange };
+    }
+
+    it('keeps one row: shows what fits and counts the rest in a "+N files" button', () => {
+      renderMany('src/f11.c');
+      // budget 400 - 104 = 296 → three 84px tabs.
+      const shown = MANY.filter((f) => screen.queryByTestId(`file-tab-${f}`) !== null);
+      expect(shown).toHaveLength(3);
+      expect(screen.getByTestId('file-tabs-more')).toHaveTextContent('+9 files');
+    });
+
+    it('prioritises the active file, then files edited this session', () => {
+      renderMany('src/f11.c');
+      expect(screen.getByTestId('file-tab-src/f11.c')).toBeInTheDocument(); // active
+      expect(screen.getByTestId('file-tab-src/f09.c')).toBeInTheDocument(); // edited now
+      expect(screen.getByTestId('file-tab-src/f07.c')).toBeInTheDocument(); // edited this session
+      expect(screen.queryByTestId('file-tab-src/f00.c')).toBeNull(); // earlier session
+    });
+
+    it('shows visible tabs in bundle order, not relevance order', () => {
+      renderMany('src/f11.c');
+      const order = screen.getAllByRole('tab').map((t) => t.getAttribute('aria-label'));
+      expect(order).toEqual(['src/f07.c', 'src/f09.c', 'src/f11.c']);
+    });
+
+    it('picks a file from the overflow menu', () => {
+      const { onFileChange } = renderMany('src/f11.c');
+      // Radix opens on keyboard in jsdom (pointer events need real layout).
+      fireEvent.keyDown(screen.getByTestId('file-tabs-more'), { key: 'Enter' });
+      fireEvent.click(screen.getByTestId('file-menu-item-src/f00.c'));
+      expect(onFileChange).toHaveBeenCalledWith('src/f00.c');
+    });
+
+    it('shows every tab and no overflow button when they all fit', () => {
+      ROW_WIDTH = 2000;
+      render(<FileTabs files={MANY} activeFile="src/f00.c" onFileChange={vi.fn()} />);
+      expect(screen.getAllByRole('tab')).toHaveLength(12);
+      expect(screen.queryByTestId('file-tabs-more')).toBeNull();
+    });
   });
 });
