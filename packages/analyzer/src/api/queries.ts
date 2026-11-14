@@ -15,7 +15,7 @@
  * memberships array to SemesterSummary objects.
  */
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, UnauthorizedError } from './client.js';
 import { uploadGradescopeResumable, RESUMABLE_THRESHOLD_BYTES } from './resumable-upload.js';
 import {
@@ -1384,20 +1384,30 @@ export function useCreateSemester(courseId: string) {
 }
 
 /** Lists audit-log rows; supports the standard filter set + cursor. */
+/**
+ * Audit log, newest first, 100 rows per page. Infinite: `fetchNextPage()`
+ * follows the server's `next_cursor`, so the view can load older rows on
+ * scroll without dropping the ones already shown.
+ */
 export function useAdminAudit(params: {
   semester_id?: string;
   actor_user_id?: string;
   action?: string;
   since?: string;
   until?: string;
-  cursor?: string;
 }) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: queryKeys.adminAudit(params),
-    queryFn: () => {
-      const qs = buildQueryString({ ...params, limit: '100' });
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => {
+      const qs = buildQueryString({
+        ...params,
+        ...(pageParam !== null ? { cursor: pageParam } : {}),
+        limit: '100',
+      });
       return apiFetch(`/audit${qs ? `?${qs}` : ''}`, undefined, AuditListResponseSchema);
     },
+    getNextPageParam: (lastPage) => lastPage.next_cursor,
     staleTime: 10 * 1000,
     retry: noRetryOn401,
   });

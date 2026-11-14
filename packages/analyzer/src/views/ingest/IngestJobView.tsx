@@ -12,6 +12,16 @@
 import { useParams, Link } from 'react-router-dom';
 import { useIngestJob, useCancelIngest } from '../../api/queries.js';
 import { useActiveSemester } from '../../api/use-active-semester.js';
+import { PageContainer, PageHeader, Panel, EmptyState } from '@/components/layout/Page';
+import { Button } from '@/components/ui/button';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 
 const STATUS_LABELS: Record<string, string> = {
   queued: 'Queued',
@@ -23,12 +33,12 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  queued: 'text-yellow-700 bg-yellow-50',
-  running: 'text-blue-700 bg-blue-50',
-  succeeded: 'text-green-700 bg-green-50',
-  partial: 'text-orange-700 bg-orange-50',
-  failed: 'text-red-700 bg-red-50',
-  cancelled: 'text-gray-700 bg-gray-100',
+  queued: 'border-yellow-200 bg-yellow-50 text-yellow-700',
+  running: 'border-blue-200 bg-blue-50 text-blue-700',
+  succeeded: 'border-green-200 bg-green-50 text-green-700',
+  partial: 'border-orange-200 bg-orange-50 text-orange-700',
+  failed: 'border-red-200 bg-red-50 text-red-700',
+  cancelled: 'border-gray-200 bg-gray-100 text-gray-700',
 };
 
 const FILE_STATUS_COLORS: Record<string, string> = {
@@ -77,107 +87,109 @@ export function IngestJobView() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8">
-      {/* Breadcrumb */}
-      <div className="mb-4 text-xs text-gray-500">
-        <Link to={`${basePath}/ingest`} className="hover:underline">
-          Ingest
-        </Link>
-        {' / '}
-        <span className="font-mono">{jobId.slice(0, 8)}…</span>
-      </div>
-
-      {/* Header */}
-      <div className="mb-6 flex items-center gap-4" data-testid="job-header">
-        <h1 className="text-xl font-semibold text-gray-900">Ingest Job</h1>
-        <span
-          className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[job.status] ?? 'text-gray-700 bg-gray-100'}`}
-          data-testid="job-status"
-        >
-          {STATUS_LABELS[job.status] ?? job.status}
-        </span>
-        {!isTerminal && (
-          <span className="text-xs text-gray-600 animate-pulse">Polling every 3s…</span>
-        )}
-      </div>
+    <PageContainer>
+      <PageHeader
+        eyebrow={
+          <>
+            <Link to={`${basePath}/ingest`} className="hover:underline">
+              Ingest
+            </Link>
+            {' / '}
+            <span className="font-mono">{jobId.slice(0, 8)}…</span>
+          </>
+        }
+        title="Ingest job"
+        description="Progress and per-file results for one upload."
+        meta={
+          <span className="inline-flex items-center gap-3" data-testid="job-header">
+            <span
+              className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[job.status] ?? 'border-gray-200 bg-gray-100 text-gray-700'}`}
+              data-testid="job-status"
+            >
+              {STATUS_LABELS[job.status] ?? job.status}
+            </span>
+            {!isTerminal && <span className="animate-pulse text-xs">Polling every 3s…</span>}
+          </span>
+        }
+        actions={
+          canCancel ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-red-300 text-red-700 hover:bg-red-50 hover:text-red-700"
+              onClick={() => cancelJob(jobId)}
+              disabled={isCancelling}
+              data-testid="cancel-button"
+            >
+              {isCancelling ? 'Cancelling…' : 'Cancel Job'}
+            </Button>
+          ) : undefined
+        }
+      />
 
       {/* Summary counts */}
-      <div className="mb-6 grid grid-cols-3 gap-3 sm:grid-cols-7" data-testid="job-summary">
+      <div className="grid grid-cols-3 gap-3 sm:grid-cols-7" data-testid="job-summary">
         {Object.entries(job.summary).map(([key, count]) => (
-          <div key={key} className="rounded-lg border border-gray-200 bg-white p-3 text-center">
+          <div key={key} className="rounded-lg border bg-white p-3 text-center shadow-sm">
             <div className="text-lg font-semibold text-gray-900">{count}</div>
-            <div className="text-xs text-gray-500 capitalize">{key}</div>
+            <div className="text-xs capitalize text-muted-foreground">{key}</div>
           </div>
         ))}
       </div>
 
-      {/* Cancel button */}
-      {canCancel && (
-        <div className="mb-4">
-          <button
-            onClick={() => cancelJob(jobId)}
-            disabled={isCancelling}
-            className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50"
-            data-testid="cancel-button"
-          >
-            {isCancelling ? 'Cancelling…' : 'Cancel Job'}
-          </button>
-        </div>
-      )}
-
       {/* Files table */}
-      <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-        <table className="w-full text-sm" data-testid="files-table">
-          <thead className="bg-gray-50 text-xs text-gray-500">
-            <tr>
-              <th className="px-4 py-2 text-left">Filename</th>
-              <th className="px-4 py-2 text-left">Status</th>
-              <th className="px-4 py-2 text-left">Student</th>
-              <th className="px-4 py-2 text-left">Assignment</th>
-              <th className="px-4 py-2 text-right">Size</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
+      <Panel title="Files" flush>
+        <Table data-testid="files-table">
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Filename</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Student</TableHead>
+              <TableHead>Assignment</TableHead>
+              <TableHead className="text-right">Size</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {job.files.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-gray-600">
-                  No files yet.
+                <td colSpan={5}>
+                  <EmptyState title="No files yet." />
                 </td>
               </tr>
             ) : (
               job.files.map((file) => (
-                <tr key={file.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-2 font-mono text-xs">{file.original_filename}</td>
-                  <td
-                    className={`px-4 py-2 text-xs font-medium capitalize ${FILE_STATUS_COLORS[file.status] ?? 'text-gray-700'}`}
+                <TableRow key={file.id}>
+                  <TableCell className="font-mono text-xs">{file.original_filename}</TableCell>
+                  <TableCell
+                    className={`text-xs font-medium capitalize ${FILE_STATUS_COLORS[file.status] ?? 'text-gray-700'}`}
                   >
                     {file.status}
-                  </td>
-                  <td className="px-4 py-2 text-xs text-gray-600">
+                  </TableCell>
+                  <TableCell className="text-xs text-gray-600">
                     {file.matched_student
                       ? `${file.matched_student.sid} — ${file.matched_student.display_name}`
                       : '—'}
-                  </td>
-                  <td className="px-4 py-2 text-xs text-gray-600">
+                  </TableCell>
+                  <TableCell className="text-xs text-gray-600">
                     {file.matched_assignment
                       ? file.matched_assignment.label || file.matched_assignment.assignment_id_str
                       : '—'}
-                  </td>
-                  <td className="px-4 py-2 text-xs text-gray-600 text-right">
+                  </TableCell>
+                  <TableCell className="text-right text-xs text-gray-600">
                     {(file.size_bytes / 1024).toFixed(1)} KB
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))
             )}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
+      </Panel>
 
       {job.files.length === 200 && (
-        <p className="mt-2 text-xs text-gray-600">
+        <p className="text-xs text-muted-foreground">
           Showing first 200 files. Use the API to retrieve more.
         </p>
       )}
-    </div>
+    </PageContainer>
   );
 }

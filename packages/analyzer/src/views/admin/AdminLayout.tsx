@@ -1,16 +1,24 @@
 /**
  * V45 — AdminLayout
  *
- * Wraps every /admin/* page with the same sub-nav (Overview / Courses /
- * Users / Audit). Sits inside the regular AppShell — RequireSuperadmin
- * gates the route upstream.
+ * Wraps every /admin/* page with the shared page container, a PageHeader and
+ * the same sub-nav (Overview / Courses / Users / Audit). Sits inside the
+ * regular AppShell — RequireSuperadmin gates the route upstream.
  */
 
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
+import { PageContainer, PageHeader } from '@/components/layout/Page';
 
 interface AdminLayoutProps {
   children: ReactNode;
+  /** Page `<h1>`; defaults to "Admin". */
+  title?: ReactNode;
+  description?: ReactNode;
+  meta?: ReactNode;
+  actions?: ReactNode;
+  /** Line above the title (e.g. a back link); defaults to "Superadmin". */
+  eyebrow?: ReactNode;
 }
 
 const NAV_LINKS: { to: string; label: string; end?: boolean }[] = [
@@ -20,22 +28,34 @@ const NAV_LINKS: { to: string; label: string; end?: boolean }[] = [
   { to: '/admin/audit', label: 'Audit log' },
 ];
 
-export function AdminLayout({ children }: AdminLayoutProps) {
+export function AdminLayout({
+  children,
+  title = 'Admin',
+  description,
+  meta,
+  actions,
+  eyebrow = 'Superadmin',
+}: AdminLayoutProps) {
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-6">
-      <div className="mb-1 text-[10px] uppercase tracking-wider text-berkeley-700">Superadmin</div>
-      <h1 className="mb-4 text-xl font-semibold text-gray-900">Admin</h1>
+    <PageContainer>
+      <PageHeader
+        title={title}
+        description={description}
+        meta={meta}
+        actions={actions}
+        eyebrow={eyebrow}
+      />
 
-      <nav className="mb-6 flex gap-1 border-b border-gray-200" aria-label="Admin sub-nav">
+      <nav className="flex gap-1 border-b border-gray-200" aria-label="Admin sub-nav">
         {NAV_LINKS.map(({ to, label, end }) => (
           <NavLink
             key={to}
             to={to}
             end={end ?? false}
             className={({ isActive }) =>
-              `px-3 py-1.5 text-xs transition-colors border-b-2 -mb-px ${
+              `-mb-px border-b-2 px-3 py-2 text-sm transition-colors ${
                 isActive
-                  ? 'border-gold text-berkeley-700 font-medium'
+                  ? 'border-berkeley-700 font-medium text-berkeley-700'
                   : 'border-transparent text-gray-500 hover:text-gray-900'
               }`
             }
@@ -45,7 +65,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
         ))}
       </nav>
 
-      <div>{children}</div>
-    </div>
+      {children}
+    </PageContainer>
   );
 }

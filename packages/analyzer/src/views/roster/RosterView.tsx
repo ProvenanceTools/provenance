@@ -18,6 +18,16 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog.js';
+import { PageContainer, PageHeader, Panel, EmptyState } from '@/components/layout/Page';
+import { Button } from '@/components/ui/button';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import type { RosterDiff } from '@provenance/shared/api-schemas';
 
 // ---------------------------------------------------------------------------
@@ -118,14 +128,14 @@ function UploadModal({ semesterId, onClose, onCommitted, triggerRef }: UploadMod
               data-testid="csv-input"
             />
 
-            <button
+            <Button
+              variant="outline"
               onClick={() => fileInputRef.current?.click()}
               disabled={isUploading}
-              className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               data-testid="select-csv-btn"
             >
               {isUploading ? 'Parsing CSV…' : 'Select CSV file'}
-            </button>
+            </Button>
 
             {errorMsg && (
               <p className="mt-2 text-xs text-red-600" data-testid="upload-error">
@@ -197,17 +207,14 @@ function UploadModal({ semesterId, onClose, onCommitted, triggerRef }: UploadMod
         )}
 
         <div className="mt-4 flex gap-2 justify-end">
-          <button
-            onClick={onClose}
-            className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
-          >
+          <Button variant="outline" size="sm" onClick={onClose}>
             Cancel
-          </button>
+          </Button>
           {diff && (
-            <button
+            <Button
+              size="sm"
               onClick={handleCommit}
               disabled={isCommitting}
-              className="rounded bg-berkeley-700 px-3 py-1.5 text-sm text-white hover:bg-berkeley-800 disabled:opacity-50"
               data-testid="commit-btn"
               aria-label={
                 diff.to_delete > 0 && acceptDeletions
@@ -216,7 +223,7 @@ function UploadModal({ semesterId, onClose, onCommitted, triggerRef }: UploadMod
               }
             >
               {isCommitting ? 'Committing…' : 'Commit'}
-            </button>
+            </Button>
           )}
         </div>
       </DialogContent>
@@ -236,59 +243,67 @@ export function RosterView() {
   const uploadBtnRef = useRef<HTMLButtonElement>(null);
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8">
-      <div className="mb-6 flex items-center gap-4">
-        <h1 className="text-xl font-semibold text-gray-900">Roster</h1>
-        <span className="text-sm text-gray-500">
-          {data?.total_count !== undefined ? `${data.total_count} entries` : ''}
-        </span>
-        <div className="flex-1" />
-        <button
-          ref={uploadBtnRef}
-          onClick={() => setShowUpload(true)}
-          className="rounded-md bg-berkeley-700 px-3 py-1.5 text-sm text-white hover:bg-berkeley-800"
-          data-testid="upload-csv-btn"
-        >
-          Upload CSV
-        </button>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="Roster"
+        meta={data?.total_count !== undefined ? `${data.total_count} entries` : undefined}
+        description="Students enrolled in this semester, used to match submissions to student IDs. Upload a CSV to preview and commit changes."
+        actions={
+          <Button
+            ref={uploadBtnRef}
+            size="sm"
+            onClick={() => setShowUpload(true)}
+            data-testid="upload-csv-btn"
+          >
+            Upload CSV
+          </Button>
+        }
+      />
 
-      {isLoading && <div className="py-8 text-center text-sm text-gray-400">Loading roster…</div>}
+      {isLoading && (
+        <Panel>
+          <p className="py-6 text-center text-sm text-muted-foreground">Loading roster…</p>
+        </Panel>
+      )}
       {error && (
-        <div className="py-8 text-center text-sm text-red-500" data-testid="roster-error">
-          Failed to load roster.
-        </div>
+        <Panel>
+          <p className="py-6 text-center text-sm text-red-600" data-testid="roster-error">
+            Failed to load roster.
+          </p>
+        </Panel>
       )}
 
       {!isLoading && !error && semesterId && (
-        <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-          <table className="w-full text-sm" data-testid="roster-table">
-            <thead className="bg-gray-50 text-xs text-gray-500">
-              <tr>
-                <th className="px-4 py-2 text-left">SID</th>
-                <th className="px-4 py-2 text-left">Display Name</th>
-                <th className="px-4 py-2 text-left">Email</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
+        <Panel flush>
+          <Table data-testid="roster-table">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>SID</TableHead>
+                <TableHead>Display Name</TableHead>
+                <TableHead>Email</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {data?.entries.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="px-4 py-8 text-center text-gray-400">
-                    No roster entries. Upload a CSV to get started.
+                  <td colSpan={3}>
+                    <EmptyState title="No roster entries. Upload a CSV to get started." />
                   </td>
                 </tr>
               ) : (
                 data?.entries.map((entry) => (
-                  <tr key={entry.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-2 font-mono text-xs">{entry.sid}</td>
-                    <td className="px-4 py-2 text-xs">{entry.display_name}</td>
-                    <td className="px-4 py-2 text-xs text-gray-500">{entry.email ?? '—'}</td>
-                  </tr>
+                  <TableRow key={entry.id}>
+                    <TableCell className="font-mono tabular-nums">{entry.sid}</TableCell>
+                    <TableCell className="font-medium text-gray-900">
+                      {entry.display_name}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{entry.email ?? '—'}</TableCell>
+                  </TableRow>
                 ))
               )}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
+        </Panel>
       )}
 
       {showUpload && (
@@ -299,6 +314,6 @@ export function RosterView() {
           triggerRef={uploadBtnRef}
         />
       )}
-    </div>
+    </PageContainer>
   );
 }

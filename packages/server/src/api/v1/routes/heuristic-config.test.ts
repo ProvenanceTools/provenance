@@ -970,7 +970,9 @@ describe('computeDryRunDiff', () => {
       const course = await insertCourse(db);
       const semester = await insertSemester(db, course.id);
 
-      const result = await computeDryRunDiff(db, semester.id, DEFAULT_SERVER_CONFIG, 2);
+      const result = await computeDryRunDiff(db, semester.id, DEFAULT_SERVER_CONFIG, 2, {
+        active: null,
+      });
 
       expect(result.candidate_version).toBe(2);
       expect(result.diff.submissions_with_tier_change).toBe(0);
@@ -1055,7 +1057,9 @@ describe('computeDryRunDiff', () => {
         candidateConfig.per_flag['extension_hash_mismatch']!.enabled = false;
 
         // Same config → all scores identical → no tier change
-        const result = await computeDryRunDiff(db, semester.id, candidateConfig, 2);
+        const result = await computeDryRunDiff(db, semester.id, candidateConfig, 2, {
+          active: null,
+        });
         expect(result.diff.submissions_with_tier_change).toBe(0);
         expect(result.diff.top_movers[0]?.old_score).toBe(0);
         expect(result.diff.top_movers[0]?.new_score).toBe(0);
@@ -1167,7 +1171,9 @@ describe('computeDryRunDiff', () => {
           });
         }
 
-        const result = await computeDryRunDiff(db, semester.id, candidateConfig, 2);
+        const result = await computeDryRunDiff(db, semester.id, candidateConfig, 2, {
+          active: null,
+        });
 
         expect(result.diff.submissions_with_tier_change).toBe(1);
         expect(result.diff.top_movers).toHaveLength(1);
@@ -1234,6 +1240,17 @@ describe('computeDryRunDiff — threshold forwarding (V46 regression)', () => {
         // itself so computeDryRunDiff's recompute can re-parse it on demand.
         await putSubmissionBundle(db, client, submissionId, new Uint8Array(zipBuffer));
 
+        // This test is about the FULL (re-run heuristics) path forwarding
+        // thresholds. The fixture stores a bundle whose paste fires
+        // large_paste but no matching flag rows, so its stored flags do not
+        // reflect its detections — mark it 'stale', which is exactly the state
+        // that sends a submission down the full path. (Run 2 changes
+        // thresholds and would take the full path regardless.)
+        await db
+          .update(submissions)
+          .set({ recompute_status: 'stale' })
+          .where(eq(submissions.id, submissionId));
+
         // Build a config where ONLY large_paste contributes (disable everything
         // else so other heuristics that fire on the test bundle — e.g.
         // extension_hash_mismatch — don't pollute new_score).
@@ -1249,7 +1266,9 @@ describe('computeDryRunDiff — threshold forwarding (V46 regression)', () => {
 
         // Run 1: default thresholds → large_paste fires.
         const baseline = isolateLargePaste();
-        const baselineResult = await computeDryRunDiff(db, semesterId, baseline, 2);
+        const baselineResult = await computeDryRunDiff(db, semesterId, baseline, 2, {
+          active: null,
+        });
         const baselineMover = baselineResult.diff.top_movers.find(
           (m) => m.submission_id === submissionId,
         );
@@ -1260,7 +1279,9 @@ describe('computeDryRunDiff — threshold forwarding (V46 regression)', () => {
         // Run 2: raise minChars above paste size → large_paste must NOT fire.
         const raised = isolateLargePaste();
         raised.per_flag['large_paste']!.thresholds = { minChars: 300 };
-        const raisedResult = await computeDryRunDiff(db, semesterId, raised, 2);
+        const raisedResult = await computeDryRunDiff(db, semesterId, raised, 2, {
+          active: null,
+        });
         const raisedMover = raisedResult.diff.top_movers.find(
           (m) => m.submission_id === submissionId,
         );
@@ -1645,13 +1666,10 @@ describe('computeDryRunDiff — protected mode masks top_movers student identity
         candidateConfig.per_flag['large_paste']!.enabled = false;
 
         // Protected mode = true: student identity must be masked.
-        const protectedResult = await computeDryRunDiff(
-          db,
-          semester.id,
-          candidateConfig,
-          2,
-          true, // protectedMode
-        );
+        const protectedResult = await computeDryRunDiff(db, semester.id, candidateConfig, 2, {
+          active: null,
+          protectedMode: true,
+        });
 
         expect(protectedResult.diff.top_movers).toHaveLength(1);
         const mover = protectedResult.diff.top_movers[0]!;
@@ -1663,13 +1681,10 @@ describe('computeDryRunDiff — protected mode masks top_movers student identity
         expect(mover.student!.sid).not.toBe('real_sid_001');
 
         // Non-protected mode: real values must appear.
-        const realResult = await computeDryRunDiff(
-          db,
-          semester.id,
-          candidateConfig,
-          2,
-          false, // protectedMode
-        );
+        const realResult = await computeDryRunDiff(db, semester.id, candidateConfig, 2, {
+          active: null,
+          protectedMode: false,
+        });
 
         expect(realResult.diff.top_movers).toHaveLength(1);
         const realMover = realResult.diff.top_movers[0]!;
@@ -1789,6 +1804,154 @@ describe('computeDryRunDiff — protected mode masks top_movers student identity
         } finally {
           _testDb = null;
         }
+      });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeDryRunDiff — fast path selection (dry-run-fast.ts)
+//
+// The fast path re-weights stored flag rows; the full path re-runs heuristics
+// on the stored bundle. These fixtures make the two paths give DIFFERENT
+// answers on purpose, so each test proves which path a submission took:
+// - "no bundle stored" → the full path would throw, so success = fast path;
+// - "bundle fires large_paste but no flag row stored" → the fast path scores
+//   0 and the full path scores > 0.
+// ---------------------------------------------------------------------------
+
+describe('computeDryRunDiff — fast path selection', () => {
+  /** Only large_paste contributes; everything else (incl. the
+   *  extension_hash_mismatch that always fires on synthetic bundles) is off. */
+  function onlyLargePaste(enabled = true): typeof DEFAULT_SERVER_CONFIG {
+    const cfg = JSON.parse(JSON.stringify(DEFAULT_SERVER_CONFIG)) as typeof DEFAULT_SERVER_CONFIG;
+    for (const id of Object.keys(cfg.per_flag)) cfg.per_flag[id]!.enabled = false;
+    cfg.per_flag['large_paste']!.enabled = enabled;
+    return cfg;
+  }
+
+  async function storePasteBundle(
+    db: DrizzleDb,
+    client: Parameters<typeof putSubmissionBundle>[1],
+    submissionId: string,
+  ): Promise<void> {
+    const pasteContent = 'x'.repeat(250); // fires large_paste at medium by default
+    const { zipBuffer } = await buildTestBundle({
+      sessions: [
+        {
+          events: [
+            {
+              kind: 'paste',
+              data: {
+                path: '/hw1.py',
+                content: pasteContent,
+                length: pasteContent.length,
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+              },
+            },
+          ],
+        },
+      ],
+    });
+    await putSubmissionBundle(db, client, submissionId, new Uint8Array(zipBuffer));
+  }
+
+  async function semesterOf(db: DrizzleDb, submissionId: string): Promise<string> {
+    const [row] = await db
+      .select({ semester_id: submissions.semester_id })
+      .from(submissions)
+      .where(eq(submissions.id, submissionId));
+    return row!.semester_id;
+  }
+
+  it('weight change on a current submission re-weights stored flags without reading the bundle', async () => {
+    await withTestDb(async (db) => {
+      const submissionId = await seedSubmission(db);
+      const semesterId = await semesterOf(db, submissionId);
+      // Stored state under the active config: one medium large_paste flag at
+      // confidence 0.5 → 3 × 0.5 × 1.0 = 1.5. NO bundle is stored: if this
+      // submission went down the full path, the recompute would throw.
+      await db.insert(flags).values({
+        submission_id: submissionId,
+        semester_id: semesterId,
+        heuristic_id: 'large_paste',
+        severity: 'medium',
+        confidence: 0.5,
+        weight_at_compute: 1.0,
+        score_contribution: 1.5,
+        heuristic_config_version: 1,
+      });
+      await db
+        .update(submissions)
+        .set({ score_total: 1.5, score_max_severity: 'medium' })
+        .where(eq(submissions.id, submissionId));
+
+      const candidate = JSON.parse(
+        JSON.stringify(DEFAULT_SERVER_CONFIG),
+      ) as typeof DEFAULT_SERVER_CONFIG;
+      candidate.per_flag['large_paste']!.weight = 2;
+
+      const result = await computeDryRunDiff(db, semesterId, candidate, 2, {
+        active: { config: DEFAULT_SERVER_CONFIG, version: 1, set_at: new Date(0) },
+      });
+
+      const mover = result.diff.top_movers.find((m) => m.submission_id === submissionId);
+      expect(mover!.old_score).toBe(1.5);
+      expect(mover!.new_score).toBeCloseTo(3, 10);
+      expect(mover!.new_tier).toBe('medium');
+    });
+  });
+
+  it('re-enabling a heuristic takes the full path (disabled flags are never stored)', async () => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
+      await withTestDb(async (db) => {
+        _setConfigForTest(parseEnv(rustfsEnv(endpoint, bucketName)));
+        const submissionId = await seedSubmission(db);
+        const semesterId = await semesterOf(db, submissionId);
+        await storePasteBundle(db, client, submissionId);
+        // Active config has large_paste OFF, so no flag row exists for it.
+
+        const result = await computeDryRunDiff(db, semesterId, onlyLargePaste(true), 2, {
+          active: { config: onlyLargePaste(false), version: 1, set_at: new Date(0) },
+        });
+
+        const mover = result.diff.top_movers.find((m) => m.submission_id === submissionId);
+        // Full path re-ran large_paste on the bundle; the fast path would say 0.
+        expect(mover!.new_score).toBeGreaterThan(0);
+        expect(mover!.new_tier).toBe('medium');
+      });
+    });
+  });
+
+  it('a submission ingested before the active config and never recomputed takes the full path', async () => {
+    await withTestRustfs(async ({ client, endpoint, bucketName }) => {
+      await withTestDb(async (db) => {
+        _setConfigForTest(parseEnv(rustfsEnv(endpoint, bucketName)));
+        const submissionId = await seedSubmission(db);
+        const semesterId = await semesterOf(db, submissionId);
+        await storePasteBundle(db, client, submissionId);
+        // No flag rows stored: whatever was stored predates the active config.
+
+        const candidate = onlyLargePaste(true);
+        candidate.per_flag['large_paste']!.weight = 2; // weight-only change
+
+        // Active config set AFTER the submission was ingested; the submission
+        // is still at heuristic_config_version 0 → not scored under it.
+        const later = new Date(Date.UTC(2999, 0, 1));
+        const stale = await computeDryRunDiff(db, semesterId, candidate, 3, {
+          active: { config: onlyLargePaste(true), version: 2, set_at: later },
+        });
+        const staleMover = stale.diff.top_movers.find((m) => m.submission_id === submissionId);
+        expect(staleMover!.new_score).toBeGreaterThan(0);
+
+        // Control: same everything, but the active config predates ingest →
+        // the submission counts as scored under it → fast path → its (empty)
+        // stored flags score 0.
+        const current = await computeDryRunDiff(db, semesterId, candidate, 3, {
+          active: { config: onlyLargePaste(true), version: 2, set_at: new Date(0) },
+        });
+        const currentMover = current.diff.top_movers.find((m) => m.submission_id === submissionId);
+        expect(currentMover!.new_score).toBe(0);
       });
     });
   });

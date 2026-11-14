@@ -14,6 +14,9 @@ import { useNavigate } from 'react-router-dom';
 import { useStartIngest } from '../../api/queries.js';
 import { useActiveSemester } from '../../api/use-active-semester.js';
 import { ApiError } from '../../api/client.js';
+import { UploadCloud } from 'lucide-react';
+import { PageContainer, PageHeader, Panel } from '@/components/layout/Page';
+import { Button } from '@/components/ui/button';
 import { GradescopeUpload } from './GradescopeUpload.js';
 
 export function IngestStartView() {
@@ -98,121 +101,139 @@ export function IngestStartView() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl px-4 py-8">
-      <h1 className="mb-6 text-xl font-semibold text-gray-900">Upload Submissions</h1>
+    <PageContainer>
+      <PageHeader
+        title="Upload submissions"
+        description="Add student submissions to this semester, either from a Gradescope export or as sealed bundle .zip files."
+      />
 
-      {/* Primary path: Gradescope export (populates the roster + all bundles). */}
-      <section className="mb-8" data-testid="gradescope-section">
-        <h2 className="mb-1 text-sm font-medium text-gray-900">
-          Gradescope export <span className="text-berkeley-700">(recommended)</span>
-        </h2>
-        <p className="mb-3 text-xs text-gray-500">
-          Upload the ZIP from Gradescope’s “Download Submissions” — the roster and every student
-          bundle are processed in one step.
-        </p>
-        <GradescopeUpload basePath={basePath} semesterId={semesterId} />
-      </section>
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* Primary path: Gradescope export (populates the roster + all bundles). */}
+        <Panel
+          data-testid="gradescope-section"
+          title={
+            <span className="flex flex-wrap items-center gap-2">
+              Gradescope export
+              <span className="inline-flex items-center rounded-full border border-berkeley-200 bg-berkeley-50 px-2.5 py-0.5 text-xs font-medium text-berkeley-700">
+                Recommended
+              </span>
+            </span>
+          }
+          description="Upload the ZIP from Gradescope’s “Download Submissions” — the roster and every student bundle are processed in one step."
+        >
+          <GradescopeUpload basePath={basePath} semesterId={semesterId} />
+        </Panel>
 
-      {/* Secondary path: direct bundle .zip upload (requires an existing roster). */}
-      <section className="border-t border-gray-200 pt-6" data-testid="bundles-section">
-        <h2 className="mb-1 text-sm font-medium text-gray-900">Bundle .zip files</h2>
-        <p className="mb-3 text-xs text-gray-500">
-          Upload sealed bundle <span className="font-medium">.zip</span> files directly (or a
-          zip-of-zips). Requires the roster to be uploaded already.
-        </p>
-
-        <form onSubmit={handleSubmit}>
-          {/* Drop zone */}
-          <div
-            role="button"
-            tabIndex={0}
-            data-testid="drop-zone"
-            className={`flex flex-col items-center justify-center rounded-lg border-2 border-dashed px-6 py-12 transition-colors ${
-              isDragOver
-                ? 'border-berkeley-500 bg-berkeley-50'
-                : 'border-gray-300 bg-gray-50 hover:border-gray-400'
-            }`}
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onClick={() => fileInputRef.current?.click()}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click();
-            }}
-          >
-            <p className="text-sm text-gray-600">
-              Drag and drop <span className="font-medium">.zip</span> files here, or click to select
-            </p>
-            <p className="mt-1 text-xs text-gray-400">
-              You can upload a zip-of-zips (one outer archive containing many student bundles)
-            </p>
-          </div>
-
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".zip"
-            multiple
-            className="hidden"
-            onChange={handleFileChange}
-            data-testid="file-input"
-          />
-
-          {/* Selected files list */}
-          {files.length > 0 && (
-            <ul className="mt-3 space-y-1" data-testid="selected-files">
-              {files.map((f, i) => (
-                <li key={i} className="flex items-center gap-2 text-xs text-gray-700">
-                  <span className="font-mono">{f.name}</span>
-                  <span className="text-gray-400">({(f.size / 1024).toFixed(1)} KB)</span>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {/* Validation error */}
-          {validationError && (
-            <p className="mt-2 text-xs text-red-600" data-testid="validation-error">
-              {validationError}
-            </p>
-          )}
-
-          {/* Upload progress */}
-          {uploadProgress !== null && (
-            <div className="mt-4" data-testid="upload-progress">
-              <div className="flex justify-between text-xs text-gray-600 mb-1">
-                <span>Uploading…</span>
-                <span>{uploadProgress}%</span>
-              </div>
-              <div className="h-2 w-full rounded-full bg-gray-200">
-                <div
-                  className="h-2 rounded-full bg-berkeley-700 transition-all"
-                  style={{ width: `${uploadProgress}%` }}
-                />
-              </div>
+        {/* Secondary path: direct bundle .zip upload (requires an existing roster). */}
+        <Panel
+          data-testid="bundles-section"
+          title="Bundle .zip files"
+          description={
+            <>
+              Upload sealed bundle <span className="font-medium">.zip</span> files directly (or a
+              zip-of-zips). Requires the roster to be uploaded already.
+            </>
+          }
+        >
+          <form onSubmit={handleSubmit}>
+            {/* Drop zone */}
+            <div
+              role="button"
+              tabIndex={0}
+              data-testid="drop-zone"
+              className={`flex flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed px-6 py-8 text-center transition-colors ${
+                isDragOver
+                  ? 'border-berkeley-500 bg-berkeley-50'
+                  : 'border-gray-300 bg-gray-50/60 hover:border-berkeley-300 hover:bg-berkeley-50/40'
+              }`}
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onClick={() => fileInputRef.current?.click()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click();
+              }}
+            >
+              <UploadCloud className="mb-1 h-6 w-6 text-gray-400" aria-hidden />
+              <p className="text-sm text-gray-700">
+                Drag and drop <span className="font-medium">.zip</span> files here, or click to
+                select
+              </p>
+              <p className="text-xs text-muted-foreground">
+                You can upload a zip-of-zips (one outer archive containing many student bundles)
+              </p>
             </div>
-          )}
 
-          {/* Upload error */}
-          {uploadError && (
-            <p className="mt-2 text-xs text-red-600" data-testid="upload-error">
-              {uploadError}
-            </p>
-          )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".zip"
+              multiple
+              className="hidden"
+              onChange={handleFileChange}
+              data-testid="file-input"
+            />
 
-          {/* Submit */}
-          <button
-            type="submit"
-            disabled={isPending || files.length === 0 || validationError !== null || !semesterId}
-            className="mt-4 rounded-md bg-berkeley-700 px-4 py-2 text-sm text-white hover:bg-berkeley-800 disabled:opacity-50"
-            data-testid="upload-button"
-          >
-            {isPending
-              ? 'Uploading…'
-              : `Upload ${files.length > 0 ? `${files.length} file(s)` : ''}`}
-          </button>
-        </form>
-      </section>
-    </div>
+            {/* Selected files list */}
+            {files.length > 0 && (
+              <ul className="mt-3 space-y-1" data-testid="selected-files">
+                {files.map((f, i) => (
+                  <li key={i} className="flex items-center gap-2 text-xs text-gray-700">
+                    <span className="font-mono">{f.name}</span>
+                    <span className="text-muted-foreground">({(f.size / 1024).toFixed(1)} KB)</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {/* Validation error */}
+            {validationError && (
+              <p className="mt-3 text-xs text-red-600" data-testid="validation-error">
+                {validationError}
+              </p>
+            )}
+
+            {/* Upload progress */}
+            {uploadProgress !== null && (
+              <div className="mt-4" data-testid="upload-progress">
+                <div className="mb-1 flex justify-between text-xs text-gray-600">
+                  <span>Uploading…</span>
+                  <span>{uploadProgress}%</span>
+                </div>
+                <div className="h-2 w-full rounded-full bg-gray-200">
+                  <div
+                    className="h-2 rounded-full bg-berkeley-700 transition-all"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Upload error */}
+            {uploadError && (
+              <p className="mt-3 text-xs text-red-600" data-testid="upload-error">
+                {uploadError}
+              </p>
+            )}
+
+            {/* Submit */}
+            <div className="mt-4 flex justify-end">
+              <Button
+                type="submit"
+                size="sm"
+                disabled={
+                  isPending || files.length === 0 || validationError !== null || !semesterId
+                }
+                data-testid="upload-button"
+              >
+                {isPending
+                  ? 'Uploading…'
+                  : `Upload ${files.length > 0 ? `${files.length} file(s)` : ''}`}
+              </Button>
+            </div>
+          </form>
+        </Panel>
+      </div>
+    </PageContainer>
   );
 }

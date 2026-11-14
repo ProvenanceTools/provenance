@@ -22,6 +22,17 @@ import {
 } from '../../api/queries.js';
 import { ApiError } from '../../api/client.js';
 import type { AdminUserSummary } from '@provenance/shared/api-schemas';
+import { EmptyState, Panel } from '@/components/layout/Page';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 
 function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   return (
@@ -73,17 +84,18 @@ export function AdminUsersView() {
   }
 
   return (
-    <AdminLayout>
-      <div className="mb-4 flex items-center gap-2">
-        <input
-          type="text"
-          placeholder="Search by email or name…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          className="flex-1 rounded border border-gray-300 px-3 py-1.5 text-sm"
-          data-testid="user-search-input"
-        />
-      </div>
+    <AdminLayout
+      title="Users"
+      description="List, search, view memberships, delete users, view-as another user."
+    >
+      <Input
+        type="text"
+        placeholder="Search by email or name…"
+        aria-label="Search users"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        data-testid="user-search-input"
+      />
 
       {isLoading && <div className="py-8 text-center text-sm text-gray-600">Loading users…</div>}
       {error && (
@@ -93,105 +105,107 @@ export function AdminUsersView() {
       )}
 
       {!isLoading && !error && (
-        <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-          <table className="w-full text-sm" data-testid="users-table">
-            <thead className="bg-gray-50 text-xs text-gray-500">
-              <tr>
-                <th className="px-4 py-2 text-left">Name / Email</th>
-                <th className="px-4 py-2 text-left">Role</th>
-                <th className="px-4 py-2 text-left">Last login</th>
-                <th className="px-4 py-2 text-left">Created</th>
-                <th className="px-4 py-2 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {data?.items.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-gray-600">
-                    No users match.
-                  </td>
-                </tr>
-              ) : (
-                data?.items.map((u) => (
-                  <tr key={u.id} className="hover:bg-gray-50" data-testid={`user-row-${u.id}`}>
-                    <td className="px-4 py-2">
+        <Panel flush>
+          {data?.items.length === 0 ? (
+            <EmptyState title="No users match." />
+          ) : (
+            <Table data-testid="users-table">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name / Email</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Last login</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data?.items.map((u) => (
+                  <TableRow key={u.id} data-testid={`user-row-${u.id}`}>
+                    <TableCell>
                       <Link
                         to={`/admin/users/${u.id}`}
-                        className="text-xs font-medium text-berkeley-700 hover:underline"
+                        className="font-medium text-berkeley-700 hover:underline"
                       >
                         {u.display_name ?? u.email}
                       </Link>
                       <div className="text-xs text-gray-500">{u.email}</div>
-                    </td>
-                    <td className="px-4 py-2">
+                    </TableCell>
+                    <TableCell>
                       {u.is_superadmin ? (
-                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                        <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700">
                           superadmin
                         </span>
                       ) : (
-                        <span className="text-xs text-gray-600">user</span>
+                        <span className="text-gray-600">user</span>
                       )}
-                    </td>
-                    <td className="px-4 py-2 text-xs text-gray-500">
+                    </TableCell>
+                    <TableCell className="text-gray-500">
                       {u.last_login_at !== null
                         ? new Date(u.last_login_at).toLocaleDateString()
                         : 'never'}
-                    </td>
-                    <td className="px-4 py-2 text-xs text-gray-500">
+                    </TableCell>
+                    <TableCell className="text-gray-500">
                       {new Date(u.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="px-4 py-2 text-right">
-                      <span className="flex items-center justify-end gap-1">
-                        <button
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <span className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
                           onClick={() => handleViewAs(u)}
                           disabled={isStartingViewAs}
-                          className="rounded border border-berkeley-300 px-2.5 py-1 text-xs text-berkeley-700 hover:bg-berkeley-50 disabled:opacity-50"
                           data-testid={`view-as-btn-${u.id}`}
                         >
                           View as
-                        </button>
-                        <button
+                        </Button>
+                        <Button
                           type="button"
+                          variant="outline"
+                          size="sm"
                           onClick={() => setProtected({ userId: u.id, protected: !u.protected })}
                           disabled={u.id === me?.user.id}
-                          className="rounded border border-amber-300 px-2.5 py-1 text-xs text-amber-800 hover:bg-amber-50 disabled:opacity-50"
                           data-testid={`protected-toggle-${u.id}`}
                         >
                           {u.protected ? 'Unprotect' : 'Protect'}
-                        </button>
+                        </Button>
                         {deleteConfirm === u.id ? (
                           <>
-                            <button
+                            <Button
+                              variant="destructive"
+                              size="sm"
                               onClick={() => handleDelete(u.id)}
-                              className="rounded bg-red-600 px-2.5 py-1 text-xs text-white hover:bg-red-700"
                               data-testid={`delete-confirm-${u.id}`}
                             >
                               Confirm
-                            </button>
-                            <button
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
                               onClick={() => setDeleteConfirm(null)}
-                              className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
                             >
                               Cancel
-                            </button>
+                            </Button>
                           </>
                         ) : (
-                          <button
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="border-red-300 text-red-700 hover:bg-red-50 hover:text-red-700"
                             onClick={() => setDeleteConfirm(u.id)}
-                            className="rounded border border-red-300 px-2.5 py-1 text-xs text-red-700 hover:bg-red-50"
                             data-testid={`delete-btn-${u.id}`}
                           >
                             Delete
-                          </button>
+                          </Button>
                         )}
                       </span>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </Panel>
       )}
 
       {toast !== null && <Toast message={toast} onClose={() => setToast(null)} />}

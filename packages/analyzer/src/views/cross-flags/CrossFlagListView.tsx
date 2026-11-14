@@ -18,26 +18,20 @@ import type { CrossFlagDetailItem, CrossScopeExclusionItem } from '@provenance/s
 import type { CrossFlagFilters } from '../../api/queries.js';
 import { contributorsLabel } from '../../lib/contributor-display.js';
 import { exclusionCopy, EXCLUSION_PANEL_INTRO } from '@/lib/exclusion-copy.js';
-
-// ---------------------------------------------------------------------------
-// Severity badge
-// ---------------------------------------------------------------------------
-
-function SeverityBadge({ severity }: { severity: string }) {
-  const colors: Record<string, string> = {
-    high: 'bg-red-100 text-red-700',
-    medium: 'bg-orange-100 text-orange-700',
-    low: 'bg-yellow-100 text-yellow-700',
-    info: 'bg-gray-100 text-gray-600',
-  };
-  return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${colors[severity] ?? 'bg-gray-100 text-gray-600'}`}
-    >
-      {severity}
-    </span>
-  );
-}
+import { PageContainer, PageHeader, Panel, EmptyState } from '@/components/layout/Page';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { NativeSelect } from '@/components/ui/native-select';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { SeverityBadge } from './SeverityBadge.js';
 
 // ---------------------------------------------------------------------------
 // CrossScopeExclusionPanel — what was NOT compared, and why.
@@ -61,7 +55,7 @@ function CrossScopeExclusionPanel({ exclusions }: { exclusions: CrossScopeExclus
   return (
     <section
       aria-labelledby="cross-exclusions-heading"
-      className="mb-4 rounded border border-gray-200 bg-gray-50 p-3"
+      className="rounded-lg border border-gray-200 bg-gray-50 p-4"
       data-testid="cross-scope-exclusions"
     >
       <h2 id="cross-exclusions-heading" className="text-sm font-semibold text-gray-900">
@@ -174,137 +168,150 @@ export function CrossFlagListView() {
   }
 
   return (
-    <div className="flex flex-col min-h-0 p-4" data-testid="cross-flag-list-view">
-      <h1 className="text-lg font-semibold text-gray-900 mb-4">Cross-Submission Flags</h1>
+    <PageContainer data-testid="cross-flag-list-view">
+      <PageHeader
+        title="Cross-submission flags"
+        description="Findings that link two or more submissions, such as the same paste appearing in several students' work. Open a row to see who is involved and the supporting events."
+      />
 
       {/* Filter bar */}
-      <div className="flex gap-3 mb-4 flex-wrap" data-testid="cross-flag-filters">
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-gray-500">Heuristic ID</label>
-          <input
-            type="text"
-            value={heuristicId}
-            onChange={(e) => setHeuristicId(e.target.value)}
-            placeholder="e.g. paste_shared_across_students"
-            className="border border-gray-200 rounded px-2 py-1 text-xs w-56"
-            data-testid="filter-heuristic-id"
-          />
-        </div>
+      <Panel>
+        <form
+          className="flex flex-wrap items-end gap-3"
+          data-testid="cross-flag-filters"
+          onSubmit={(e) => {
+            e.preventDefault();
+            applyFilters();
+          }}
+        >
+          <div className="space-y-1.5">
+            <Label htmlFor="cf-heuristic">Heuristic</Label>
+            <Input
+              id="cf-heuristic"
+              type="text"
+              value={heuristicId}
+              onChange={(e) => setHeuristicId(e.target.value)}
+              placeholder="e.g. paste_shared_across_students"
+              className="w-72"
+              data-testid="filter-heuristic-id"
+            />
+          </div>
 
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-gray-500">Min Severity</label>
-          <select
-            value={severityMin ?? ''}
-            onChange={(e) => {
-              setSeverityMin((e.target.value as CrossFlagFilters['severityMin']) || undefined);
-            }}
-            className="border border-gray-200 rounded px-2 py-1 text-xs"
-            data-testid="filter-severity-min"
-          >
-            <option value="">Any</option>
-            <option value="info">Info</option>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-          </select>
-        </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="cf-severity">Min severity</Label>
+            <NativeSelect
+              id="cf-severity"
+              value={severityMin ?? ''}
+              onChange={(e) => {
+                setSeverityMin((e.target.value as CrossFlagFilters['severityMin']) || undefined);
+              }}
+              className="w-36"
+              data-testid="filter-severity-min"
+            >
+              <option value="">Any</option>
+              <option value="info">Info</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </NativeSelect>
+          </div>
 
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-gray-500">Submission ID</label>
-          <input
-            type="text"
-            value={submissionId}
-            onChange={(e) => setSubmissionId(e.target.value)}
-            placeholder="UUID"
-            className="border border-gray-200 rounded px-2 py-1 text-xs w-72"
-            data-testid="filter-submission-id"
-          />
-        </div>
+          <div className="min-w-[16rem] flex-1 space-y-1.5">
+            <Label htmlFor="cf-submission">Submission ID</Label>
+            <Input
+              id="cf-submission"
+              type="text"
+              value={submissionId}
+              onChange={(e) => setSubmissionId(e.target.value)}
+              placeholder="UUID"
+              className="font-mono"
+              data-testid="filter-submission-id"
+            />
+          </div>
 
-        <div className="flex flex-col gap-1 justify-end">
-          <button
-            onClick={applyFilters}
-            className="px-3 py-1 border border-gray-300 text-xs rounded hover:bg-gray-50"
-            data-testid="apply-filters-btn"
-          >
-            Apply
-          </button>
-        </div>
-      </div>
+          <Button type="submit" variant="outline" size="sm" data-testid="apply-filters-btn">
+            Apply filters
+          </Button>
+        </form>
+      </Panel>
 
       {/* Table */}
       {isLoading ? (
-        <div className="text-sm text-gray-500" data-testid="cross-flag-loading">
-          Loading cross-flags…
-        </div>
+        <Panel>
+          <p
+            className="py-6 text-center text-sm text-muted-foreground"
+            data-testid="cross-flag-loading"
+          >
+            Loading cross-flags…
+          </p>
+        </Panel>
       ) : (
         <>
           {/* Above the table on purpose: "no findings" must not be read before
               the reason some comparisons were never made. */}
           <CrossScopeExclusionPanel exclusions={displayExclusions} />
 
-          <div className="bg-white border border-gray-200 rounded overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">
-                    Heuristic
-                  </th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">
-                    Severity
-                  </th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">
-                    Participants
-                  </th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Created</th>
-                </tr>
-              </thead>
-              <tbody data-testid="cross-flag-rows">
+          <Panel flush>
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Heuristic</TableHead>
+                  <TableHead className="w-32">Severity</TableHead>
+                  <TableHead className="w-32 text-right">Participants</TableHead>
+                  <TableHead className="w-36 text-right">Created</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody data-testid="cross-flag-rows">
                 {displayItems.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="px-4 py-8 text-center text-gray-600 text-sm">
-                      No cross-flags found.
+                    <td colSpan={4}>
+                      <EmptyState
+                        title="No cross-flags found."
+                        description="Nothing links submissions under the current filters."
+                      />
                     </td>
                   </tr>
                 )}
                 {displayItems.map((item) => (
-                  <tr
-                    key={item.id}
-                    className="border-b border-gray-100 hover:bg-gray-50"
-                    data-testid={`cross-flag-row-${item.id}`}
-                  >
-                    <td className="px-4 py-2 font-mono text-xs">
-                      <RowLink to={`${basePath}/cross-flags/${item.id}`} className="block">
+                  <TableRow key={item.id} data-testid={`cross-flag-row-${item.id}`}>
+                    <TableCell className="font-mono text-xs text-gray-900">
+                      <RowLink
+                        to={`${basePath}/cross-flags/${item.id}`}
+                        className="block rounded-sm hover:text-berkeley-700 hover:underline"
+                      >
                         {item.heuristic_id}
                       </RowLink>
-                    </td>
-                    <td className="px-4 py-2">
+                    </TableCell>
+                    <TableCell>
                       <SeverityBadge severity={item.severity} />
-                    </td>
-                    <td className="px-4 py-2 text-gray-600">{item.participants.length}</td>
-                    <td className="px-4 py-2 text-gray-600 text-xs">
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {item.participants.length}
+                    </TableCell>
+                    <TableCell className="text-right text-muted-foreground tabular-nums">
                       {new Date(item.created_at).toLocaleDateString()}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </TableBody>
+            </Table>
+          </Panel>
 
           {data?.next_cursor && (
-            <div className="mt-3 flex justify-center">
-              <button
+            <div className="flex justify-center">
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={handleLoadMore}
                 disabled={isFetching}
-                className="px-4 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
                 data-testid="load-more-btn"
               >
                 {isFetching ? 'Loading…' : 'Load more'}
-              </button>
+              </Button>
             </div>
           )}
         </>
       )}
-    </div>
+    </PageContainer>
   );
 }
